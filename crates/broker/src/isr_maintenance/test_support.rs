@@ -24,7 +24,7 @@ pub(super) fn reg(id: NodeId) -> MetadataRecord { reg_at(id, &format!("b{id}"), 
 pub(super) fn reg_at(id: NodeId, host: &str, port: u16) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         broker_epoch: i64::try_from(id.0).unwrap(),
-        host: host.to_string(),
+        host: host.to_owned(),
         port,
         ..broker_registration(id)
     })
@@ -32,7 +32,7 @@ pub(super) fn reg_at(id: NodeId, host: &str, port: u16) -> MetadataRecord {
 
 pub(super) fn topic(name: &str, topic_id: uuid::Uuid) -> MetadataRecord {
     MetadataRecord::V1Topic(TopicRecord {
-        name: name.to_string(),
+        name: name.to_owned(),
         topic_id,
         partitions: 1,
         replication_factor: 3,
@@ -121,10 +121,9 @@ pub(super) fn partition(
         leader,
         leader_epoch,
         partition_epoch,
-        ..
     } = setup;
     MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: 0,
         leader,
         replicas: replicas.to_vec(),

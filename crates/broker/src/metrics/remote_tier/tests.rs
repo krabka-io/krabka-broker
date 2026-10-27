@@ -1,16 +1,12 @@
 //! Each path's counters land on their own series, a zero-byte move records
 //! nothing, and the lag gauges are set rather than accumulated.
 
-use {super::*, assert2::check};
+use {super::*, assert2::check, prometheus_client::encoding::text};
 
 /// The `krabka_broker_*` sample lines a fresh registry renders.
 fn body(metrics: &BrokerMetrics) -> String {
     let mut out = String::new();
-    prometheus_client::encoding::text::encode(
-        &mut out,
-        &metrics.registry.try_lock().expect("registry"),
-    )
-    .expect("encode");
+    text::encode(&mut out, &metrics.registry.try_lock().expect("registry")).expect("encode");
     out
 }
 

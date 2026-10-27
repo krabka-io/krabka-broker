@@ -1,6 +1,7 @@
 use {
     super::*,
     crate::{jwks::JwksCacheFacts, oauth::*},
+    proptest::option,
 };
 
 fn cache_snapshot_ok(at: i64, c: JwksCacheFacts) -> bool {
@@ -205,7 +206,7 @@ proptest! {
     fn completed_oauth_snapshot_matches_independent_wide_integer_oracle(
         times in any::<[i64; 2]>(), expiry in any::<i64>(), cap in any::<i64>(),
         enabled in any::<bool>(), reauth in any::<bool>(), matching in any::<bool>(), present in any::<bool>(),
-        raw in proptest::option::of((any::<u64>(), any::<u64>(), any::<i64>(), any::<i64>(), any::<bool>())),
+        raw in option::of((any::<u64>(), any::<u64>(), any::<i64>(), any::<i64>(), any::<bool>())),
         generation in any::<u64>(),
     ) {
         let f = OAuthSessionFacts { expiry: if present { OAuthExpiryPresence::Present } else { OAuthExpiryPresence::Missing },

@@ -5,12 +5,11 @@
 //! a level (`FeatureControlManager.reasonNotSupported`) and whether the
 //! KIP-1022 dependencies of a level hold (`Feature.validateVersion`).
 
-use std::collections::BTreeMap;
+use {krabka_metadata::metadata_version, std::collections::BTreeMap};
 
 /// `MetadataVersion.isControllerRegistrationSupported`: controllers
 /// register from `3.7-IV0`.
-const CONTROLLER_REGISTRATION_MIN_LEVEL: i16 =
-    krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL;
+const CONTROLLER_REGISTRATION_MIN_LEVEL: i16 = metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL;
 
 /// The inclusive range of levels that a node supports for a feature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +150,7 @@ mod tests {
         krabka_metadata::{
             BrokerRegistrationRecord, ControllerRegistrationRecord, FeatureLevelRecord,
             MetadataImage, MetadataRecord, NodeId,
+            voters::{KRaftVersionRange, Voter, VoterSet},
         },
     };
 
@@ -247,13 +247,11 @@ mod tests {
 
     fn voters(ids: &[u64]) -> MetadataRecord {
         MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
-            voters: krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-                krabka_metadata::voters::Voter {
-                    id: NodeId(id),
-                    directory_id: uuid::Uuid::from_u128(u128::from(id)),
-                    endpoints: vec![],
-                    kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-                }
+            voters: VoterSet::from_voters(ids.iter().map(|&id| Voter {
+                id: NodeId(id),
+                directory_id: uuid::Uuid::from_u128(u128::from(id)),
+                endpoints: vec![],
+                kraft_version: KRaftVersionRange::default(),
             })),
         })
     }
@@ -323,7 +321,7 @@ mod tests {
             (
                 "unregistered voter",
                 30,
-                vec![controller(3, all.clone()), voters(&[1, 3, 4])],
+                vec![controller(3, all), voters(&[1, 3, 4])],
                 "group.version",
                 1,
                 Some("controller 4 has not registered, and may not support this feature"),
@@ -360,7 +358,7 @@ mod tests {
     fn dependencies_read_the_proposed_levels(mv: Option<i16>, expected: Option<&str>) {
         let deps: &[(&str, i16)] = &[("metadata.version", 23)];
         let proposed = |mv: Option<i16>| -> BTreeMap<String, i16> {
-            mv.map(|level| ("metadata.version".to_string(), level))
+            mv.map(|level| ("metadata.version".to_owned(), level))
                 .into_iter()
                 .collect()
         };

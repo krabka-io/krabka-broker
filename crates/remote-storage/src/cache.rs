@@ -88,11 +88,12 @@ impl EpochIndex {
         entries.sort_unstable();
         self.0 = entries
             .chunk_by(|a, b| a.0 == b.0)
-            .map(|run| {
-                (
-                    run[0].0,
+            .filter_map(|run| {
+                let &(epoch, ..) = run.first()?;
+                Some((
+                    epoch,
                     run.iter().map(|&(_, start, id)| (start, id)).collect(),
-                )
+                ))
             })
             .collect();
     }
@@ -129,7 +130,7 @@ impl EpochIndex {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct RemoteLogMetadataCache {
+pub struct RemoteLogMetadataCache {
     /// Every known segment, keyed by its per-segment UUID.
     id_to_metadata: HashMap<Uuid, RemoteLogSegmentMetadata>,
     /// The per-epoch offset index. Only finished, readable segments appear
@@ -221,7 +222,7 @@ impl RemoteLogMetadataCache {
         let id = self.epoch_index.floor(leader_epoch, offset)?;
         let md = self.id_to_metadata.get(&id)?;
         let (epoch_start, next_epoch_start) = md.epoch_bounds(leader_epoch);
-        if remote_read_relative_offset(
+        remote_read_relative_offset(
             md.start_offset(),
             md.end_offset(),
             offset,
@@ -230,11 +231,7 @@ impl RemoteLogMetadataCache {
             next_epoch_start,
         )
         .is_some()
-        {
-            Some(md.clone())
-        } else {
-            None
-        }
+        .then(|| md.clone())
     }
 
     pub(crate) fn highest_offset_for_epoch(&self, leader_epoch: LeaderEpoch) -> Option<i64> {
@@ -322,7 +319,7 @@ impl RemoteLogMetadataCache {
     }
 }
 
-pub(crate) fn sort_by_start_offset(segments: &mut [RemoteLogSegmentMetadata]) {
+pub fn sort_by_start_offset(segments: &mut [RemoteLogSegmentMetadata]) {
     segments.sort_by(|a, b| {
         a.start_offset().cmp(&b.start_offset()).then_with(|| {
             a.remote_log_segment_id()

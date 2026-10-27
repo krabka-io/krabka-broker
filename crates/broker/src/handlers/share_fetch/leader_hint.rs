@@ -13,7 +13,7 @@ use crate::{codes, share_partition::manager::SharePartitionLeaderManager};
 
 /// Whether a row with this error names the partition's current leader.
 #[must_use]
-pub(crate) fn names_the_leader(error_code: i16) -> bool {
+pub fn names_the_leader(error_code: i16) -> bool {
     matches!(
         error_code,
         codes::NOT_LEADER_OR_FOLLOWER | codes::FENCED_LEADER_EPOCH
@@ -22,7 +22,7 @@ pub(crate) fn names_the_leader(error_code: i16) -> bool {
 
 /// The `(leader_id, leader_epoch)` hint of `(topic_id, partition)`.
 #[must_use]
-pub(crate) fn current_leader(
+pub fn current_leader(
     manager: &SharePartitionLeaderManager,
     topic_id: uuid::Uuid,
     partition: i32,

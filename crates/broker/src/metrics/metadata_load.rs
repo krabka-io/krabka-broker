@@ -17,7 +17,7 @@ impl BrokerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, prometheus_client::encoding::text};
 
     /// The count scrapes under the broker prefix and the Kafka-mirrored name,
     /// at zero on a fresh broker and at the sampled count after.
@@ -32,7 +32,7 @@ mod tests {
 
             let mut scraped = String::new();
             let registry = metrics.registry.lock().await;
-            prometheus_client::encoding::text::encode(&mut scraped, &registry).expect("encode");
+            text::encode(&mut scraped, &registry).expect("encode");
             drop(registry);
 
             let line = scraped

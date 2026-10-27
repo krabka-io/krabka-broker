@@ -11,7 +11,12 @@ use {
         routes::{pprof_router, pprof_router_with_config},
     },
     axum::Router,
-    std::net::SocketAddr,
+    std::{
+        env,
+        io::{self, Error},
+        net::SocketAddr,
+    },
+    tokio::{net::TcpListener, task::JoinHandle},
 };
 
 /// Bind an admin HTTP server on `addr`.
@@ -21,11 +26,11 @@ use {
 /// bind.
 /// # Errors
 /// Returns an error if the listener cannot bind or the HTTP server fails.
-pub async fn serve_admin(addr: SocketAddr, extra: Router) -> std::io::Result<()> {
+pub async fn serve_admin(addr: SocketAddr, extra: Router) -> io::Result<()> {
     serve_router(addr, pprof_router().merge(extra)).await
 }
 
-async fn serve_router(addr: SocketAddr, app: Router) -> std::io::Result<()> {
+async fn serve_router(addr: SocketAddr, app: Router) -> io::Result<()> {
     let task = spawn_router(addr, app).await?;
     tokio::spawn(async move {
         match task.await {
@@ -37,11 +42,8 @@ async fn serve_router(addr: SocketAddr, app: Router) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn spawn_router(
-    addr: SocketAddr,
-    app: Router,
-) -> std::io::Result<tokio::task::JoinHandle<std::io::Result<()>>> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+async fn spawn_router(addr: SocketAddr, app: Router) -> io::Result<JoinHandle<io::Result<()>>> {
+    let listener = TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, "profiling admin server listening");
     Ok(tokio::spawn(
@@ -71,7 +73,7 @@ pub async fn spawn_admin_with_config(
     addr: SocketAddr,
     extra: Router,
     config: ProfilingConfig,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ProfilingError> {
+) -> Result<JoinHandle<io::Result<()>>, ProfilingError> {
     let app = pprof_router_with_config(config)?.merge(extra);
     Ok(spawn_router(addr, app).await?)
 }
@@ -80,21 +82,16 @@ pub async fn spawn_admin_with_config(
 ///
 /// # Errors
 /// Returns the server error, join error, or an unexpected clean-exit error.
-pub async fn await_admin_exit(
-    task: tokio::task::JoinHandle<std::io::Result<()>>,
-) -> std::io::Result<()> {
+pub async fn await_admin_exit(task: JoinHandle<io::Result<()>>) -> io::Result<()> {
     match task.await {
-        Ok(Ok(())) => Err(std::io::Error::other("admin server stopped unexpectedly")),
+        Ok(Ok(())) => Err(Error::other("admin server stopped unexpectedly")),
         Ok(Err(error)) => Err(error),
-        Err(error) => Err(std::io::Error::other(format!(
-            "admin server task failed: {error}"
-        ))),
+        Err(error) => Err(Error::other(format!("admin server task failed: {error}"))),
     }
 }
 
 fn admin_address(default_addr: &str) -> SocketAddr {
-    let raw =
-        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
+    let raw = env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_owned());
     raw.parse()
         .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"))
 }
@@ -110,7 +107,7 @@ fn admin_address(default_addr: &str) -> SocketAddr {
 ///
 /// Panics if the environment variable, or `default_addr` when it is absent,
 /// is not a socket address.
-pub async fn serve_admin_from_env(default_addr: &str) -> std::io::Result<()> {
+pub async fn serve_admin_from_env(default_addr: &str) -> io::Result<()> {
     serve_admin_from_env_with(default_addr, Router::new()).await
 }
 
@@ -125,7 +122,7 @@ pub async fn serve_admin_from_env(default_addr: &str) -> std::io::Result<()> {
 /// Panics if `KRABKA_ADMIN_LISTEN_ADDR`, or `default_addr` when it is absent,
 /// is not a socket address. Router merging also panics if `extra` conflicts
 /// with an existing profiling route.
-pub async fn serve_admin_from_env_with(default_addr: &str, extra: Router) -> std::io::Result<()> {
+pub async fn serve_admin_from_env_with(default_addr: &str, extra: Router) -> io::Result<()> {
     let addr = admin_address(default_addr);
     serve_admin(addr, extra).await
 }
@@ -158,14 +155,14 @@ pub async fn spawn_admin_from_env_with_config(
     default_addr: &str,
     extra: Router,
     config: ProfilingConfig,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ProfilingError> {
+) -> Result<JoinHandle<io::Result<()>>, ProfilingError> {
     let addr = admin_address(default_addr);
     spawn_admin_with_config(addr, extra, config).await
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, std::io::Error};
 
     #[tokio::test]
     async fn supervised_admin_exit_classifies_clean_error_and_join_outcomes() {
@@ -175,7 +172,7 @@ mod tests {
                 == "admin server stopped unexpectedly"
         );
 
-        let io_error = tokio::spawn(async { Err(std::io::Error::other("socket failed")) });
+        let io_error = tokio::spawn(async { Err(Error::other("socket failed")) });
         assert!(await_admin_exit(io_error).await.unwrap_err().to_string() == "socket failed");
 
         let panic = tokio::spawn(async {

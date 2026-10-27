@@ -26,7 +26,7 @@ use {
 
 // cargo-mutants: coordinator-backed request orchestration; integration-tested.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DeleteGroupsRequest,
     _version: ApiVersion,
@@ -108,6 +108,7 @@ mod tests {
             },
         },
         assert2::assert,
+        krabka_protocol::api_key::ApiKey,
         std::sync::Arc,
     };
 
@@ -209,7 +210,7 @@ mod tests {
             results: rows
                 .iter()
                 .map(|row| DeletableGroupResult {
-                    group_id: row.group_id.to_string(),
+                    group_id: row.group_id.to_owned(),
                     error_code: row.error_code,
                     ..Default::default()
                 })
@@ -315,14 +316,8 @@ mod tests {
         for version in [2_i16, 3] {
             let mut body = bytes::BytesMut::new();
             req.encode(&mut body, version).expect("encode request");
-            let bytes = dispatch_context(
-                &broker,
-                krabka_protocol::api_key::ApiKey::DeleteGroups as i16,
-                version,
-                &body,
-                &ctx,
-            )
-            .await;
+            let bytes =
+                dispatch_context(&broker, ApiKey::DeleteGroups as i16, version, &body, &ctx).await;
             let decoded =
                 DeleteGroupsResponse::decode(&mut &bytes[..], version).expect("decode response");
             answers.push((version, bytes.len(), decoded));
@@ -330,7 +325,7 @@ mod tests {
 
         let denied = |group_id: &str| {
             krabka_macros::tagged_wire!(DeletableGroupResult {
-                group_id: group_id.to_string(),
+                group_id: group_id.to_owned(),
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 error_message: None,
             })

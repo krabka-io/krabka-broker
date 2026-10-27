@@ -14,6 +14,8 @@ use {
     krabka_log::Log,
     krabka_protocol::records::RecordBatch,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    krabka_verified::wal,
+    std::num::NonZeroUsize,
 };
 
 fn read_batches(
@@ -61,7 +63,7 @@ pub(in crate::wal::quorum) fn read_log_batches_covering(
     let batches = split_batches(&raw.bytes)?;
     let bases: Vec<i64> = batches.iter().map(|batch| batch.base_offset.0).collect();
     let lasts: Vec<i64> = batches.iter().map(|batch| batch.last_offset.0).collect();
-    if krabka_verified::wal::wal_covering_batch_range(&bases, &lasts, start.0, target.0).is_none() {
+    if wal::wal_covering_batch_range(&bases, &lasts, start.0, target.0).is_none() {
         return Err(BrokerError::Replication(format!(
             "wal source does not contain whole batches covering {}..{}",
             start.0, target.0
@@ -96,7 +98,7 @@ pub(in crate::wal::quorum) fn split_batches(bytes: &Bytes) -> Result<Vec<BatchBy
             .map_err(|err| BrokerError::Replication(format!("decode WAL batch: {err}")))?;
         let consumed = remaining
             .checked_sub(cur.len())
-            .and_then(std::num::NonZeroUsize::new)
+            .and_then(NonZeroUsize::new)
             .ok_or_else(|| BrokerError::Replication("invalid WAL batch length".into()))?;
         let end = offset
             .checked_add(consumed.get())

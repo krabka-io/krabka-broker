@@ -36,7 +36,7 @@ use {
 /// `.checkpoint` byte layout: header, `KRaftVersion`, and `Voters` control
 /// batches, one data batch of `MetadataRecord` values, then a footer control
 /// batch — concatenated encoded Kafka `RecordBatch`es.
-pub(crate) struct SnapshotWriter;
+pub struct SnapshotWriter;
 
 impl SnapshotWriter {
     /// Produce the full `.checkpoint` bytes for `image`.

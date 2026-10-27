@@ -42,9 +42,10 @@ use {
     krabka_units::convert::TimeExt as _,
     std::{
         collections::{BTreeMap, HashSet},
+        iter,
         sync::Arc,
     },
-    tokio::time::Instant,
+    tokio::{time, time::Instant},
     tokio_util::sync::CancellationToken,
 };
 
@@ -147,7 +148,7 @@ async fn create_audit_topic(
         krabka_format::random_uuid(),
         &replicas,
         &image,
-    );
+    )?;
     match controller.submit_change(records).await {
         // Idempotent: another node or a restart already created it.
         Ok(_) | Err(RaftError::Metadata(MetadataError::TopicExists(_))) => Ok(()),
@@ -170,7 +171,7 @@ async fn create_audit_topic(
 /// A node without the controller role never leads, and a node with audit
 /// disabled does not place, so neither starts the task. The task stops when
 /// `shutdown` is cancelled or the metadata source closes.
-pub(crate) fn spawn_audit_placement(
+pub fn spawn_audit_placement(
     config: &BrokerConfig,
     controller: &Arc<dyn MetadataSource>,
     shutdown: CancellationToken,
@@ -312,11 +313,17 @@ fn audit_topic_records(
     topic_id: uuid::Uuid,
     replicas: &[NodeId],
     image: &MetadataImage,
-) -> Vec<MetadataRecord> {
+) -> Result<Vec<MetadataRecord>, BrokerError> {
+    let partitions = i32::try_from(replicas.len()).map_err(|_| {
+        BrokerError::Startup(format!(
+            "audit topic {topic} would have {} partitions, more than an i32 holds",
+            replicas.len()
+        ))
+    })?;
     let topic_record = MetadataRecord::V1Topic(TopicRecord {
         name: topic.to_owned(),
         topic_id,
-        partitions: i32::try_from(replicas.len()).expect("audit partition count overflows i32"),
+        partitions,
         replication_factor: 1,
     });
     let partition_records = (0_i32..)
@@ -333,10 +340,10 @@ fn audit_topic_records(
         topic: topic.to_owned(),
         overrides,
     });
-    std::iter::once(topic_record)
+    Ok(iter::once(topic_record)
         .chain(partition_records)
-        .chain(std::iter::once(config_record))
-        .collect()
+        .chain(iter::once(config_record))
+        .collect())
 }
 
 /// Audit partition `partition` with `replica` as its one replica, leader and
@@ -369,7 +376,7 @@ fn audit_partition_record(topic: &str, partition: i32, replica: NodeId) -> Metad
 ///
 /// Chosen by replica, not by leader: a restarted broker reads the image before
 /// it is unfenced, while its one-replica partition still has no leader.
-pub(crate) fn hosted_audit_partition(
+pub fn hosted_audit_partition(
     image: &MetadataImage,
     topic: &str,
     node: NodeId,
@@ -383,7 +390,7 @@ pub(crate) fn hosted_audit_partition(
 async fn wait_for_local_audit_partition(config: &BrokerConfig, controller: &dyn MetadataSource) {
     let timeout = config.audit_partition_wait_timeout.to_std();
     let mut images = controller.watch_image();
-    let published = tokio::time::timeout(
+    let published = time::timeout(
         timeout,
         images.wait_for(|image| {
             hosted_audit_partition(image, &config.audit_topic, config.node_id).is_some()

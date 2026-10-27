@@ -1,7 +1,7 @@
 //! Small expression contracts that retain caller-level returns and assertion policies.
 
 use {
-    crate::meta::{arguments, native_expression},
+    crate::meta::{argument_array, native_expression},
     moxy::{
         ast::{Parse, ParseError, Parser},
         token::{Group, Ident, Span, TokenStream},
@@ -9,10 +9,10 @@ use {
     proc_macro::{TokenStream as NativeTokenStream, TokenTree},
 };
 
-pub(crate) fn guard_response(input: &TokenStream) -> Result<TokenStream, ParseError> {
-    let values = arguments(input.clone(), 2)?;
-    let client: Ident = moxy::parse!({ &values[0] })?;
-    let request: Ident = moxy::parse!({ &values[1] })?;
+pub fn guard_response(input: &TokenStream) -> Result<TokenStream, ParseError> {
+    let [client, request] = argument_array(input.clone())?;
+    let client: Ident = moxy::parse!({ &client })?;
+    let request: Ident = moxy::parse!({ &request })?;
     let response = Ident::new("checked_response").with_span(Span::mixed_site());
     Ok(moxy::template! {
         {
@@ -25,21 +25,21 @@ pub(crate) fn guard_response(input: &TokenStream) -> Result<TokenStream, ParseEr
     })
 }
 
-pub(crate) fn evicted_segments(input: &TokenStream) -> Result<TokenStream, ParseError> {
-    let values = arguments(input.clone(), 4)?;
-    let assertion: Ident = moxy::parse!({ &values[0] })?;
+pub fn evicted_segments(input: &TokenStream) -> Result<TokenStream, ParseError> {
+    let [assertion, removed, exports, partition] = argument_array(input.clone())?;
+    let assertion: Ident = moxy::parse!({ &assertion })?;
     if !matches!(assertion.text(), "assert" | "check") {
         return Err(ParseError::new(
             assertion.span(),
             "eviction checks need assert or check",
         ));
     }
-    let removed: Ident = moxy::parse!({ &values[1] })?;
-    let exports: Ident = moxy::parse!({ &values[2] })?;
-    let partition = &values[3];
+    let removed: Ident = moxy::parse!({ &removed })?;
+    let exports: Ident = moxy::parse!({ &exports })?;
     let log = Ident::new("retained_log").with_span(Span::mixed_site());
     let active = Ident::new("active_base").with_span(Span::mixed_site());
     let sealed = Ident::new("sealed").with_span(Span::mixed_site());
+    let end = Ident::new("log_end").with_span(Span::mixed_site());
     Ok(moxy::template! {
         {
             {{ assertion }}!({{ removed }} == {{ exports }}.len());
@@ -47,7 +47,9 @@ pub(crate) fn evicted_segments(input: &TokenStream) -> Result<TokenStream, Parse
             let {{ active }} = {{ exports }}.last().unwrap().last_offset + 1;
             {{ assertion }}!({{ log }}.local_log_start_offset() == {{ active }});
             let {{ sealed }} = sealed_ranges(&mut {{ log }});
-            {{ assertion }}!({{ sealed }} == vec![SealedRange::new({{ active }}, {{ log }}.log_end_offset() - 1)]);
+            let {{ end }} = {{ log }}.log_end_offset();
+            drop({{ log }});
+            {{ assertion }}!({{ sealed }} == vec![SealedRange::new({{ active }}, {{ end }} - 1)]);
         }
     })
 }
@@ -70,7 +72,7 @@ fn check_sources(input: &TokenStream) -> Result<(), ParseError> {
     Ok(())
 }
 
-pub(crate) fn reassignment(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn reassignment(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     check_sources(&input.clone().into())?;
     let source: Vec<_> = input.into_iter().collect();
     let [

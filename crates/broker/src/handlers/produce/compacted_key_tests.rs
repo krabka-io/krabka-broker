@@ -39,7 +39,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str, cleanup_policy: &str) {
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 num_partitions: 1,
                 replication_factor: 1,
                 configs: vec![CreatableTopicConfig {
@@ -86,7 +86,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, records: RecordsPayload) ->
         acks: 1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
+            name: topic.to_owned(),
             partition_data: vec![part_data],
             ..Default::default()
         }],
@@ -98,7 +98,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, records: RecordsPayload) ->
 fn response(topic: &str, partition: PartitionProduceResponse) -> ProduceResponse {
     ProduceResponse {
         responses: vec![TopicProduceResponse {
-            name: topic.to_string(),
+            name: topic.to_owned(),
             partition_responses: vec![partition],
             ..Default::default()
         }],

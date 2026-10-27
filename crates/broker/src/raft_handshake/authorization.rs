@@ -17,7 +17,7 @@ use {
     },
     krabka_metadata::{AclOperation, ResourceType},
     krabka_raft::{ClusterGrants, ClusterOperation},
-    std::sync::Arc,
+    std::{net::SocketAddr, sync::Arc},
 };
 
 /// The cluster grants of one controller-listener connection.
@@ -26,7 +26,7 @@ pub(super) struct ControllerPeerGrants {
     pub(super) controller: ControllerHandleArc,
     /// The SASL principal, the mTLS principal, or `ANONYMOUS`.
     pub(super) principal: krabka_security::Principal,
-    pub(super) peer: std::net::SocketAddr,
+    pub(super) peer: SocketAddr,
 }
 
 impl ClusterGrants for ControllerPeerGrants {
@@ -115,7 +115,7 @@ mod tests {
             (
                 "Cluster:Alter+Cluster:Describe",
                 [false, true, true],
-                1 << 7 | 1 << 8,
+                (1 << 7) | (1 << 8),
             ),
             ("Topic:ClusterAction+Group:Alter", [false, false, false], 0),
         ];

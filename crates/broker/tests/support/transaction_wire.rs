@@ -23,23 +23,30 @@ use {
             },
             add_partitions_to_txn_response::AddPartitionsToTxnResponse,
             common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+            create_topics_request::CreatableTopic,
             init_producer_id_request::InitProducerIdRequest,
+            init_producer_id_response::InitProducerIdResponse,
             produce_request::ProduceRequest,
+            produce_response::ProduceResponse,
         },
         primitives::uuid::Uuid,
         records::{Attributes, RecordBatch},
     },
-    std::time::{Duration, Instant},
+    std::{
+        fmt,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
-pub(crate) fn init_producer_request(transactional_id: &str) -> InitProducerIdRequest {
+pub fn init_producer_request(transactional_id: &str) -> InitProducerIdRequest {
     producer_initialization()
         .maybe_transactional_id(Some(transactional_id.into()))
         .call()
 }
 
 /// Supply both layouts so the client can negotiate either protocol version.
-pub(crate) fn add_partition_request(
+pub fn add_partition_request(
     transactional_id: &str,
     topic: &str,
     (producer_id, epoch): (i64, i16),
@@ -51,7 +58,7 @@ pub(crate) fn add_partition_request(
         .call()
 }
 
-pub(crate) fn transaction_topic(name: &str, partitions: Vec<i32>) -> AddPartitionsToTxnTopic {
+pub fn transaction_topic(name: &str, partitions: Vec<i32>) -> AddPartitionsToTxnTopic {
     AddPartitionsToTxnTopic {
         name: name.into(),
         partitions,
@@ -61,7 +68,7 @@ pub(crate) fn transaction_topic(name: &str, partitions: Vec<i32>) -> AddPartitio
 
 /// Both request layouts carry the same explicit transaction and partition set.
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct TransactionPartitionsSetup<'a> {
+pub struct TransactionPartitionsSetup<'a> {
     #[default("transaction")]
     pub transactional_id: &'a str,
     pub producer: ProducerIdentity,
@@ -71,7 +78,7 @@ pub(crate) struct TransactionPartitionsSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn partitions_request(
+pub fn partitions_request(
     #[builder(default = "transaction")] transactional_id: &'_ str,
     #[builder(default)] producer: ProducerIdentity,
     #[builder(default)] registration: PartitionRegistration,
@@ -108,13 +115,13 @@ pub(crate) fn partitions_request(
     }
 }
 
-pub(crate) fn assert_partition_added(response: &AddPartitionsToTxnResponse) {
+pub fn assert_partition_added(response: &AddPartitionsToTxnResponse) {
     let code = partition_error(response, false);
     assert!(code == 0, "AddPartitionsToTxn: {response:?}");
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct TransactionProduceSetup<'a> {
+pub struct TransactionProduceSetup<'a> {
     #[default("transaction")]
     pub transactional_id: &'a str,
     #[default("orders")]
@@ -139,7 +146,7 @@ fn build_produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequest {
     );
     ProduceRequest {
         // KIP-890 verification needs the transactional id for transactional batches.
-        transactional_id: producer.map(|_| transactional_id.to_string()),
+        transactional_id: producer.map(|_| transactional_id.to_owned()),
         ..batch_request(batch, SinglePartitionProduceSetup {
             topic: (topic).into(),
             topic_id,
@@ -148,7 +155,7 @@ fn build_produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequest {
     }
 }
 
-pub(crate) fn records_batch(producer: Option<(i64, i16)>, values: &[&'static str]) -> RecordBatch {
+pub fn records_batch(producer: Option<(i64, i16)>, values: &[&'static str]) -> RecordBatch {
     let records = i32::try_from(values.len()).expect("record count");
     RecordBatch {
         attributes: Attributes::default().with_transactional(producer.is_some()),
@@ -170,13 +177,13 @@ pub(crate) fn records_batch(producer: Option<(i64, i16)>, values: &[&'static str
 }
 
 /// Read the first partition error, with the legacy fallback only in fixtures that originally used it.
-pub(crate) fn partition_error(response: &AddPartitionsToTxnResponse, legacy: bool) -> i16 {
+pub fn partition_error(response: &AddPartitionsToTxnResponse, legacy: bool) -> i16 {
     let topic = response
         .results_by_transaction
         .first()
         .and_then(|transaction| transaction.topic_results.first());
     let topic = if legacy {
-        topic.or(response.results_by_topic_v3_and_below.first())
+        topic.or_else(|| response.results_by_topic_v3_and_below.first())
     } else {
         topic
     };
@@ -191,7 +198,7 @@ use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 pub struct TransactionTopicSetup<'a> {
     #[default("orders")]
     pub name: &'a str,
-    #[default(crate::support::topics::TopicPartitionCount(1))]
+    #[default(TopicPartitionCount(1))]
     pub partitions: TopicPartitionCount,
     pub configs: Vec<CreatableTopicConfig>,
     #[default("CreateTopics")]
@@ -202,8 +209,7 @@ pub struct TransactionTopicSetup<'a> {
 pub async fn create_topic(
     client: &krabka_client_core::Client,
     #[builder(default = "orders")] name: &'_ str,
-    #[builder(default = crate :: support :: topics :: TopicPartitionCount (1))]
-    partitions: TopicPartitionCount,
+    #[builder(default = TopicPartitionCount(1))] partitions: TopicPartitionCount,
     #[builder(default)] configs: Vec<CreatableTopicConfig>,
     #[builder(default = "CreateTopics")] context: &'_ str,
 ) {
@@ -220,15 +226,13 @@ pub async fn create_topic(
         context,
     } = setup;
     let response = client
-        .send(create_topic_request(
-            krabka_protocol::owned::create_topics_request::CreatableTopic {
-                configs,
-                ..creatable_topic()
-                    .name((name).into())
-                    .partitions(partitions.0)
-                    .call()
-            },
-        ))
+        .send(create_topic_request(CreatableTopic {
+            configs,
+            ..creatable_topic()
+                .name((name).into())
+                .partitions(partitions.0)
+                .call()
+        }))
         .await
         .unwrap();
     assert!(
@@ -239,36 +243,34 @@ pub async fn create_topic(
 }
 
 /// Loading answers are shared by the coordinator readiness probes, not their response oracles.
-pub(crate) fn coordinator_loading(code: i16) -> bool { matches!(code, 14..=16) }
+pub fn coordinator_loading(code: i16) -> bool { matches!(code, 14..=16) }
 
 /// Poll the RPC answer: coordinator loading has no materialization awaiter.
-pub(crate) async fn retry_coordinator<R, F: std::future::Future<Output = R>>(
+pub async fn retry_coordinator<R, F: Future<Output = R>>(
     mut send: impl FnMut() -> F,
     code: impl Fn(&R) -> i16,
     retriable: impl Fn(i16) -> bool,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> R {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         let response = send().await;
-        if retriable(code(&response)) && std::time::Instant::now() < deadline {
+        if retriable(code(&response)) && Instant::now() < deadline {
             // Intentional: only the RPC answer signals coordinator readiness.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
             continue;
         }
         return response;
     }
 }
 
-pub(crate) async fn initialize_producer<F>(
+pub async fn initialize_producer<F>(
     send: impl FnMut() -> F,
     retriable: impl Fn(i16) -> bool,
-    timeout: std::time::Duration,
-) -> krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse
+    timeout: Duration,
+) -> InitProducerIdResponse
 where
-    F: std::future::Future<
-            Output = krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
-        >,
+    F: Future<Output = InitProducerIdResponse>,
 {
     let response =
         retry_coordinator(send, |response| response.error_code, retriable, timeout).await;
@@ -277,30 +279,25 @@ where
 }
 
 /// The image watch has no awaiter for any leader, so preserve the bounded 100ms probe.
-pub(crate) async fn partition_leader(
+pub async fn partition_leader(
     handle: &krabka_broker::BrokerHandle,
     topic: &str,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> u64 {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(leader) = handle.partition_leader_for_test(topic, 0) {
             return leader;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{topic}-0 has no leader"
-        );
+        assert!(Instant::now() < deadline, "{topic}-0 has no leader");
         // Intentional: the image watch has no awaiter for any leader.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
 /// The same Produce success oracle for client-routed and direct-connection requests.
-pub(crate) async fn produce_succeeds<E: std::fmt::Debug>(
-    response: impl std::future::Future<
-        Output = Result<krabka_protocol::owned::produce_response::ProduceResponse, E>,
-    >,
+pub async fn produce_succeeds<E: fmt::Debug>(
+    response: impl Future<Output = Result<ProduceResponse, E>>,
 ) {
     let response = response.await.expect("Produce");
     let code = response.responses[0].partition_responses[0].error_code;
@@ -309,7 +306,7 @@ pub(crate) async fn produce_succeeds<E: std::fmt::Debug>(
 
 /// Send the fixture through either a client or a direct connection, keeping the success oracle.
 #[bon::builder]
-pub(crate) async fn produce_fixture<E: std::fmt::Debug, F>(
+pub async fn produce_fixture<E: fmt::Debug, F>(
     #[builder(default = "transaction")] transactional_id: &'_ str,
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default)] topic_id: Uuid,
@@ -317,9 +314,7 @@ pub(crate) async fn produce_fixture<E: std::fmt::Debug, F>(
     #[builder(default = & ["v"])] values: &'_ [&'static str],
     send: impl FnOnce(ProduceRequest) -> F,
 ) where
-    F: std::future::Future<
-            Output = Result<krabka_protocol::owned::produce_response::ProduceResponse, E>,
-        >,
+    F: Future<Output = Result<ProduceResponse, E>>,
 {
     let setup = TransactionProduceSetup {
         transactional_id,
@@ -331,37 +326,30 @@ pub(crate) async fn produce_fixture<E: std::fmt::Debug, F>(
     produce_succeeds(send(build_produce_request(setup))).await;
 }
 
-pub(crate) async fn partition_added<E: std::fmt::Debug>(
-    response: impl std::future::Future<
-        Output = Result<
-            krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse,
-            E,
-        >,
-    >,
+pub async fn partition_added<E: fmt::Debug>(
+    response: impl Future<Output = Result<AddPartitionsToTxnResponse, E>>,
 ) {
     assert_partition_added(&response.await.expect("AddPartitionsToTxn"));
 }
 
-pub(crate) async fn initialized_identity<F>(
+pub async fn initialized_identity<F>(
     send: impl FnMut() -> F,
     retriable: impl Fn(i16) -> bool,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> (i64, i16)
 where
-    F: std::future::Future<
-            Output = krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
-        >,
+    F: Future<Output = InitProducerIdResponse>,
 {
     let response = initialize_producer(send, retriable, timeout).await;
     (response.producer_id, response.producer_epoch)
 }
 
 /// Only the three original metadata/leadership readiness errors trigger another Produce.
-pub(crate) async fn settled_produce(
+pub async fn settled_produce(
     client: &krabka_client_core::Client,
     request: ProduceRequest,
-    timeout: std::time::Duration,
-) -> krabka_protocol::owned::produce_response::ProduceResponse {
+    timeout: Duration,
+) -> ProduceResponse {
     retry_coordinator(
         || async { client.send(request.clone()).await.expect("Produce") },
         |response| response.responses[0].partition_responses[0].error_code,
@@ -372,13 +360,13 @@ pub(crate) async fn settled_produce(
 }
 
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct AssignedTransactionTopicSetup<'a> {
+pub struct AssignedTransactionTopicSetup<'a> {
     pub topic: AssignedTopicSetup,
     pub context: Option<&'a str>,
 }
 
 #[bon::builder]
-pub(crate) async fn create_assigned_topic(
+pub async fn create_assigned_topic(
     client: &krabka_client_core::Client,
     #[builder(default)] topic: AssignedTopicSetup,
     context: Option<&'_ str>,
@@ -401,7 +389,7 @@ pub(crate) async fn create_assigned_topic(
 }
 
 /// Retain the 200ms polls and check completion before each poll, including the first.
-pub(crate) async fn poll_values_until(
+pub async fn poll_values_until(
     consumer: &mut Consumer,
     timeout: Duration,
     done: impl Fn(&[String]) -> bool,
@@ -430,18 +418,18 @@ async fn poll_values(
     seen
 }
 
-pub(crate) async fn read_committed_through(
+pub async fn read_committed_through(
     bootstrap: &str,
     topic: &str,
     last: &str,
     timeout: Duration,
 ) -> Vec<String> {
     let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.to_string())
+        .bootstrap(bootstrap.to_owned())
         .group_id(format!("{topic}-reader"))
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe([topic.to_string()])
+        .subscribe([topic.to_owned()])
         .build()
         .await
         .expect("consumer");
@@ -456,7 +444,7 @@ pub(crate) async fn read_committed_through(
 use krabka_client_core::security::ClientSecurity;
 
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct TransactionConsumerSetup<'a> {
+pub struct TransactionConsumerSetup<'a> {
     #[default("transaction-reader".into())]
     pub group: String,
     #[default("orders")]
@@ -467,7 +455,7 @@ pub(crate) struct TransactionConsumerSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) async fn consumer(
+pub async fn consumer(
     bootstrap: impl Into<String>,
     #[builder(default = "transaction-reader" . into ())] group: String,
     #[builder(default = "orders")] topic: &'_ str,
@@ -491,7 +479,7 @@ pub(crate) async fn consumer(
         .group_id(group)
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .isolation_level(isolation)
-        .subscribe([topic.to_string()]);
+        .subscribe([topic.to_owned()]);
     match security {
         Some(security) => builder.security(security).build().await,
         None => builder.build().await,
@@ -499,11 +487,11 @@ pub(crate) async fn consumer(
 }
 
 /// Common committed-record probe; callers retain the exact value oracle and teardown order.
-pub(crate) async fn committed_values(
+pub async fn committed_values(
     bootstrap: impl Into<String>,
     group: impl Into<String>,
     topic: &str,
-    security: Option<krabka_client_core::security::ClientSecurity>,
+    security: Option<ClientSecurity>,
 ) -> (Consumer, Vec<String>) {
     observed_values(
         bootstrap,
@@ -518,14 +506,11 @@ pub(crate) async fn committed_values(
 }
 
 /// Poll the same consumer while leaving value expectations and close order with the scenario.
-pub(crate) async fn observed_values(
+pub async fn observed_values(
     bootstrap: impl Into<String>,
     group: impl Into<String>,
     topic: &str,
-    (isolation, security): (
-        IsolationLevel,
-        Option<krabka_client_core::security::ClientSecurity>,
-    ),
+    (isolation, security): (IsolationLevel, Option<ClientSecurity>),
     timeout: Duration,
     done: impl Fn(&[String]) -> bool,
     context: Option<&str>,
@@ -544,12 +529,12 @@ pub(crate) async fn observed_values(
 }
 
 /// Initialize a transactional identity through the ordinary client with the caller's exact retry policy.
-pub(crate) async fn initialize_transactional(
+pub async fn initialize_transactional(
     client: &krabka_client_core::Client,
     transactional_id: &str,
     retriable: impl Fn(i16) -> bool,
     timeout: Duration,
-) -> krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse {
+) -> InitProducerIdResponse {
     initialize_producer(
         || async {
             client
@@ -564,7 +549,7 @@ pub(crate) async fn initialize_transactional(
 }
 
 /// The plain read-committed probes keep their original ten-second bound and unwrap diagnostic.
-pub(crate) async fn read_committed_at_least(
+pub async fn read_committed_at_least(
     bootstrap: impl Into<String>,
     group: impl Into<String>,
     topic: &str,

@@ -25,10 +25,10 @@ use {
     },
     krabka_ids::Offset,
     krabka_protocol::records::TimestampType,
-    krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, mebibytes},
+    krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, mebibytes, millis},
     std::{
-        fs::{File, OpenOptions},
-        io::Write as _,
+        fs::{self, File, OpenOptions},
+        io::{self, ErrorKind, Write as _},
         os::unix::fs::FileExt as _,
         path::Path,
         sync::{
@@ -59,7 +59,7 @@ struct DirectWrite {
 }
 
 impl LogIo for AlignedDisk {
-    fn open_direct(&self, path: &Path) -> std::io::Result<DirectFile> {
+    fn open_direct(&self, path: &Path) -> io::Result<DirectFile> {
         Ok(DirectFile {
             file: OpenOptions::new().read(true).write(true).open(path)?,
             mem_align: BLOCK,
@@ -67,12 +67,12 @@ impl LogIo for AlignedDisk {
         })
     }
 
-    fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+    fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
         assert2::assert!(offset % BLOCK as u64 == 0);
         assert2::assert!(buf.len() % BLOCK == 0);
         assert2::assert!(buf.as_ptr().align_offset(BLOCK) == 0);
         if self.fail_next.swap(false, Ordering::SeqCst) {
-            return Err(std::io::ErrorKind::StorageFull.into());
+            return Err(ErrorKind::StorageFull.into());
         }
         self.writes.lock().unwrap().push(DirectWrite {
             offset,
@@ -81,11 +81,15 @@ impl LogIo for AlignedDisk {
         file.write_at(buf, offset)
     }
 
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
-        let mut fail = self.fail_target.lock().unwrap();
-        if *fail == Some(target) {
-            *fail = None;
-            return Err(std::io::ErrorKind::StorageFull.into());
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
+        let failed = self
+            .fail_target
+            .lock()
+            .unwrap()
+            .take_if(|failing| *failing == target)
+            .is_some();
+        if failed {
+            return Err(ErrorKind::StorageFull.into());
         }
         (&*file).write(buf)
     }
@@ -104,7 +108,7 @@ fn direct(tail_cache_size: ByteSize) -> LogConfig {
 /// and then applies the topic's `preallocate`.
 fn direct_log(disk: &Arc<AlignedDisk>, tail_cache_size: ByteSize) -> TempLog {
     let TempLog { dir, mut log } = configured_test_log(LogConfig::default());
-    log.test_set_io(disk.clone());
+    log.test_set_io(Arc::<AlignedDisk>::clone(disk));
     log.set_config(direct(tail_cache_size));
     TempLog { dir, log }
 }
@@ -119,9 +123,7 @@ fn batches(log: &Log) -> Vec<BatchSpan> {
         .collect()
 }
 
-fn log_len(dir: &Path, base: i64) -> u64 {
-    std::fs::metadata(name::log_path(dir, base)).unwrap().len()
-}
+fn log_len(dir: &Path, base: i64) -> u64 { fs::metadata(name::log_path(dir, base)).unwrap().len() }
 
 /// Batches of any size go out as whole blocks, the last one zero-padded and
 /// written again once the next append completes it, and read back as
@@ -321,8 +323,10 @@ fn direct_inline_appends_defer_storage_work_after_policy_changes() {
     log.sync().unwrap();
     let base = direct(mebibytes(1));
     let policies = [
+        // A larger segment grows the reservation a step at a time, when the
+        // appends come near the reserved end; 16 MiB puts the next step due.
         LogConfig {
-            segment_size: mebibytes(2),
+            segment_size: mebibytes(16),
             ..base.clone()
         },
         LogConfig {
@@ -351,7 +355,7 @@ fn direct_inline_appends_defer_storage_work_after_policy_changes() {
         },
         LogConfig {
             segment_allocation: SegmentAllocation::OnWrite,
-            ..base.clone()
+            ..base
         },
     ];
     for config in policies {
@@ -585,8 +589,8 @@ fn a_direct_group_matches_individual_appends() {
             grouped.epoch_checkpoint().entries() == individual.epoch_checkpoint().entries()
         );
         assert2::assert!(
-            std::fs::read(name::log_path(dir.path(), 0)).unwrap()
-                == std::fs::read(name::log_path(individual_dir.path(), 0)).unwrap()
+            fs::read(name::log_path(dir.path(), 0)).unwrap()
+                == fs::read(name::log_path(individual_dir.path(), 0)).unwrap()
         );
         grouped.roll().unwrap();
         drop(grouped);
@@ -627,7 +631,7 @@ fn failed_direct_groups_restore_bytes_indexes_and_producer_state() {
             .unwrap()
             .unwrap_err();
         assert2::assert!(
-            matches!(error, crate::LogError::Io(ref error) if error.kind() == std::io::ErrorKind::StorageFull)
+            matches!(error, crate::LogError::Io(ref error) if error.kind() == ErrorKind::StorageFull)
         );
         assert2::assert!(log.read(Offset(0), NO_LIMIT).unwrap().batches == before);
         assert2::assert!(log.producer_state_snapshot() == producers);
@@ -657,7 +661,7 @@ fn direct_groups_leave_special_policies_and_rolls_to_individual_appends() {
             ..direct(mebibytes(1))
         },
         LogConfig {
-            segment_roll_interval: krabka_units::prelude::millis(1),
+            segment_roll_interval: millis(1),
             ..direct(mebibytes(1))
         },
         LogConfig {
@@ -665,7 +669,7 @@ fn direct_groups_leave_special_policies_and_rolls_to_individual_appends() {
             ..direct(mebibytes(1))
         },
         LogConfig {
-            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+            message_timestamp_type: TimestampType::LogAppendTime,
             ..direct(mebibytes(1))
         },
         LogConfig {
@@ -677,7 +681,7 @@ fn direct_groups_leave_special_policies_and_rolls_to_individual_appends() {
             ..direct(mebibytes(1))
         },
         LogConfig {
-            flush_interval: Some(krabka_units::prelude::millis(100)),
+            flush_interval: Some(millis(100)),
             ..direct(mebibytes(1))
         },
     ];

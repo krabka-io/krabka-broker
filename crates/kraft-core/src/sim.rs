@@ -128,7 +128,7 @@ impl Sim {
                 };
                 NodeRole {
                     id: n.id.0,
-                    role: n.machine.role().name().to_string(),
+                    role: n.machine.role().name().to_owned(),
                     epoch: u64::from(n.machine.quorum_state().leader_epoch),
                     log_len: n.log.record_count(),
                     hwm,
@@ -194,16 +194,16 @@ impl Sim {
         );
     }
 
-    /// # Panics
+    /// Append `n` records on `leader` in its current epoch.
     ///
-    /// Panics if `leader` is not present in the simulated cluster. Callers must
-    /// elect or add the node before they append through it.
+    /// A `leader` the simulated cluster does not hold appends nothing, as
+    /// delivery drops a message to an absent node. Callers elect or add
+    /// the node before they append through it.
     pub fn leader_append(&mut self, leader: NodeId, n: usize) {
-        let epoch = self
-            .nodes
-            .get_mut(&leader)
-            .expect("no entry found for key")
-            .append_in_current_epoch(n);
+        let Some(node) = self.nodes.get_mut(&leader) else {
+            return;
+        };
+        let epoch = node.append_in_current_epoch(n);
         self.record(
             TraceAction::Append {
                 node: leader.0,

@@ -43,9 +43,10 @@ use {
         },
         heartbeat::controller_state::replicated_registrations,
     },
+    tokio::time::Instant,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterPartitionRequest,
     _version: ApiVersion,
@@ -53,7 +54,7 @@ pub(crate) async fn handle(
 ) -> Result<AlterPartitionResponse, BrokerError> {
     let result = guarded_operation_on_source(
         broker.controller.as_ref(),
-        tokio::time::Instant::now() + Duration::from_secs(5),
+        Instant::now() + Duration::from_secs(5),
         |image| alter_partition_once(broker, &req, ctx, image),
     )
     .await;
@@ -86,7 +87,7 @@ async fn alter_partition_once(
     ctx: &RequestContext<'_>,
     image: Arc<MetadataImage>,
 ) -> Result<AlterPartitionResponse, RaftError> {
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
 
     // ── ACL preamble ────────────────────────────────────────────
     // Inter-broker control-plane RPC: `ClusterAction` on
@@ -144,31 +145,29 @@ async fn alter_partition_once(
         let topic_name = (req_topic.topic_id != WireUuid::ZERO)
             .then(|| image.topic_name_by_id(&uuid::Uuid::from_bytes(req_topic.topic_id.0)))
             .flatten();
-        let resp_partitions: Vec<RespPartitionData> = match topic_name {
-            None => req_topic
-                .partitions
-                .iter()
-                .map(|req_part| RespPartitionData {
-                    partition_index: req_part.partition_index,
-                    error_code: codes::UNKNOWN_TOPIC_ID,
-                    ..Default::default()
-                })
-                .collect(),
-            Some(topic_name) => req_topic
-                .partitions
-                .iter()
-                .map(|req_part| {
-                    handle_partition_with_recovery(
-                        &image,
-                        &active,
-                        req.broker_id,
-                        topic_name,
-                        req_part,
-                        &mut changes,
-                    )
-                })
-                .collect(),
-        };
+        let resp_partitions: Vec<RespPartitionData> = req_topic
+            .partitions
+            .iter()
+            .map(|req_part| {
+                topic_name.map_or_else(
+                    || RespPartitionData {
+                        partition_index: req_part.partition_index,
+                        error_code: codes::UNKNOWN_TOPIC_ID,
+                        ..Default::default()
+                    },
+                    |topic_name| {
+                        handle_partition_with_recovery(
+                            &image,
+                            &active,
+                            req.broker_id,
+                            topic_name,
+                            req_part,
+                            &mut changes,
+                        )
+                    },
+                )
+            })
+            .collect();
 
         resp_topics.push(krabka_macros::tagged_wire!(RespTopicData {
             topic_id: req_topic.topic_id,

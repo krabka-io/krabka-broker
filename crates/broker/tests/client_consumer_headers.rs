@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 mod support;
 
 use {
@@ -28,10 +30,11 @@ async fn consumer_record_carries_headers() {
         .await
         .unwrap();
     producer.flush().await.unwrap();
+    drop(producer);
     let mut consumer = Consumer::builder()
         .bootstrap(&bootstrap)
         .group_id("g")
-        .subscribe(vec!["h".to_string()])
+        .subscribe(vec!["h".to_owned()])
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .build()
         .await

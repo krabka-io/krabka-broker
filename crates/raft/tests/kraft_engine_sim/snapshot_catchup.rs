@@ -21,8 +21,12 @@ use {
     krabka_units::prelude::{Time, secs},
     std::{
         collections::{BTreeSet, HashMap},
+        fs,
+        path::Path,
+        sync::Arc,
         time::Duration,
     },
+    tokio::time,
 };
 
 /// Per-node election timeouts for these tests, staggered as the harness's
@@ -105,12 +109,13 @@ fn fetch_from_zero(epoch: u32) -> bytes::Bytes {
         fetch_offset: 0,
         replica_directory_id: uuid::Uuid::nil(),
     }
-    .encode()
+    .try_encode()
+    .unwrap()
 }
 
 async fn submit_burst(net: &SimNet, leader: NodeId, count: usize, prefix: &str, first_id: u128) {
     for i in 0..count {
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(10),
             net.get(leader).unwrap().submit_change(vec![topic_record(
                 &format!("{prefix}{i}"),
@@ -126,8 +131,8 @@ async fn submit_burst(net: &SimNet, leader: NodeId, count: usize, prefix: &str, 
 /// The `.checkpoint` artifacts a node currently holds, by file name. The
 /// checkpoint directory is also the metadata log's own segment directory, so
 /// the extension filter is what separates checkpoints from `.log` / `.index`.
-fn checkpoint_names(dir: &std::path::Path) -> BTreeSet<String> {
-    std::fs::read_dir(dir)
+fn checkpoint_names(dir: &Path) -> BTreeSet<String> {
+    fs::read_dir(dir)
         .expect("read checkpoint dir")
         .flatten()
         .filter(|entry| {
@@ -215,7 +220,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // through the FetchSnapshot path (its LEO 0 < leader.log_start), reassembling
     // and installing the snapshot, then resuming normal fetch.
     let lag = net.get(NodeId(3)).unwrap();
-    let want = leader_image.clone();
+    let want = Arc::clone(&leader_image);
     await_until(Duration::from_secs(10), || {
         (*lag.current_image() == *want).then_some(())
     })
@@ -228,6 +233,8 @@ async fn lagging_follower_catches_up_via_snapshot() {
     assert2::assert!(lag_snap.log_start_offset > 0);
 
     shutdown_nodes(&net, &ids).await;
+    // The data directories outlive the engines that wrote to them.
+    drop(dirs);
 }
 
 /// Every voter snapshots and prunes on its own (#364): a follower that never
@@ -334,7 +341,8 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
         position: 0,
         max_bytes: i32::MAX,
     }
-    .encode();
+    .try_encode()
+    .unwrap();
     let resp_body = net
         .send(follower, api_key::FETCH_SNAPSHOT, req)
         .await
@@ -382,7 +390,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     let leader_dir = pair.dirs[&leader].path().to_path_buf();
 
     let submit = async |name: String, id: u128| {
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(10),
             net.get(leader)
                 .unwrap()
@@ -430,7 +438,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
             .next_back()
             .expect("the leader wrote a checkpoint"),
     );
-    let on_disk = std::fs::read(&checkpoint_file).expect("read the leader's checkpoint");
+    let on_disk = fs::read(&checkpoint_file).expect("read the leader's checkpoint");
     let chunk_bytes = {
         let mut cursor: &[u8] = &on_disk;
         RecordBatch::decode(&mut cursor).expect("decode the snapshot header batch");
@@ -446,7 +454,8 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
             position: i64::try_from(position).unwrap(),
             max_bytes,
         }
-        .encode();
+        .try_encode()
+        .unwrap();
         let body = net
             .send(leader, api_key::FETCH_SNAPSHOT, req)
             .await

@@ -110,7 +110,7 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
             == abort_intersects_fetch(entries@[j], fetch_start@, narrowed@))]
     #[variant(entries@.len() - i@)]
     while i < entries.len() {
-        let entry = entries[i];
+        let &entry = entries.get(i)?;
         if !restore_txn_index_entry_valid(previous_last, entry, segment) {
             return None;
         }
@@ -118,8 +118,7 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
             Some(entry.start_offset),
             entry.last_offset,
             entry.producer_id,
-        )
-        .expect("admitted interval");
+        )?;
         if aborted_transaction_overlaps(start, last, fetch_start, narrowed) {
             selected.push(i);
         }

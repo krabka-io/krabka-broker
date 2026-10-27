@@ -9,7 +9,7 @@ use {super::GroupEntry, krabka_units::convert::TimeExt as _};
 /// Set when the scheduler should inject next.
 ///
 /// A group with no interval injects only on demand, so it gets no due time.
-pub(crate) fn schedule_next(entry: &mut GroupEntry, now_ms: i64) {
+pub fn schedule_next(entry: &mut GroupEntry, now_ms: i64) {
     entry.next_due_ms = entry
         .definition
         .interval
@@ -17,7 +17,7 @@ pub(crate) fn schedule_next(entry: &mut GroupEntry, now_ms: i64) {
 }
 
 /// Whether the scheduler should inject this group now.
-pub(crate) fn is_due(entry: &GroupEntry, now_ms: i64) -> bool {
+pub fn is_due(entry: &GroupEntry, now_ms: i64) -> bool {
     entry.next_due_ms.is_some_and(|due| now_ms >= due)
 }
 

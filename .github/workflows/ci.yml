@@ -59,8 +59,6 @@ jobs:
           bazelisk-cache: true
           disk-cache: false
           repository-cache: true
-      - name: reject unimported crate-qualified Rust paths
-        run: aspect check-imported-paths
       - name: reject Rust duplicates with jscpd
         run: aspect check-cpd --output "${RUNNER_TEMP}/cpd-reports"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -737,7 +735,7 @@ jobs:
         name: resolve the proof image tag
         run: echo "tag=$(aspect creusot-image-tag)" >>"${GITHUB_OUTPUT}"
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1050,7 +1048,7 @@ jobs:
           bazelisk-cache: true
           disk-cache: false
           repository-cache: true
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1486,7 +1484,7 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ env.TRUSTED_RUN }}
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

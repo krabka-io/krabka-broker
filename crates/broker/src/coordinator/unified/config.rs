@@ -11,10 +11,11 @@ use {
     std::{borrow::Cow, collections::BTreeMap, str::FromStr, sync::Arc, time::Duration},
 };
 
-/// `group.consumer.migration.policy` governs classic ↔ next-gen consumer
-/// group conversion. The default is `Bidirectional`, which matches Apache
-/// Kafka 4.0, verified empirically against
-/// `mirror.gcr.io/apache/kafka:4.0.0`.
+/// `group.consumer.migration.policy` governs classic ↔ next-gen consumer group
+/// conversion.
+///
+/// The default is `Bidirectional`, which matches Apache Kafka 4.0, verified
+/// empirically against `mirror.gcr.io/apache/kafka:4.0.0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, krabka_macros::EnumStr)]
 #[enum_str(case = "lowercase", parse)]
 pub enum ConsumerGroupMigrationPolicy {
@@ -129,8 +130,9 @@ pub enum RebalanceProtocol {
 }
 
 /// Returned by [`NextGenConfig::register_assignor`] when the supplied
-/// assignor's `name()` collides with one that is already registered. The
-/// existing entry can be a built-in or a previously-registered custom
+/// assignor's `name()` collides with one that is already registered.
+///
+/// The existing entry can be a built-in or a previously-registered custom
 /// assignor.
 #[derive(Debug, thiserror::Error)]
 pub enum AssignorRegistrationError {
@@ -227,13 +229,15 @@ pub(crate) fn broker_assignment_interval(
     key: &str,
     static_value: Duration,
 ) -> Duration {
-    let dynamic = match node {
-        Some(node) => node_or_cluster_default(image, node, key),
-        None => image
-            .default_broker_config()
-            .and_then(|configs| configs.get(key))
-            .map(String::as_str),
-    };
+    let dynamic = node.map_or_else(
+        || {
+            image
+                .default_broker_config()
+                .and_then(|configs| configs.get(key))
+                .map(String::as_str)
+        },
+        |node| node_or_cluster_default(image, node, key),
+    );
     dynamic
         .and_then(|value| value.trim().parse::<i32>().ok())
         .and_then(|millis| u64::try_from(millis).ok())
@@ -460,7 +464,7 @@ mod tests {
             ],
         )])));
         let coordinator = make_coord();
-        coordinator.set_metadata_source(source.clone());
+        coordinator.set_metadata_source(Arc::<FakeMetadataSource>::clone(&source));
         let consumer = NextGenConfig::default();
         let effective = resolve_group_config(
             &consumer,
@@ -658,7 +662,7 @@ mod tests {
     fn a_dynamic_broker_assignment_interval_reaches_the_next_lookup() {
         let source = Arc::new(FakeMetadataSource::static_image(group_config_image(&[])));
         let coordinator = make_coord();
-        coordinator.set_metadata_source(source.clone());
+        coordinator.set_metadata_source(Arc::<FakeMetadataSource>::clone(&source));
         coordinator.set_node_id(NODE);
         let consumer = NextGenConfig::default();
         let interval = || {

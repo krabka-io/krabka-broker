@@ -10,7 +10,10 @@
 //! partition registry and the future-log registry, which is why they live
 //! together and away from the directory scan.
 
-use crate::{future_log::FutureLogState, partition_registry::PartitionRegistry};
+use {
+    crate::{future_log::FutureLogState, partition_registry::PartitionRegistry},
+    std::sync::{Arc, PoisonError},
+};
 
 /// `DescribeLogDirsResponse.INVALID_OFFSET_LAG`: the lag is not available
 /// because the replica is not created or is offline.
@@ -43,10 +46,7 @@ pub(super) async fn offset_lag_for(
 /// resume task has not opened the future log yet.
 pub(super) fn future_offset_lag(
     partitions: &PartitionRegistry,
-    future_logs: &dashmap::DashMap<
-        (String, krabka_ids::PartitionIndex),
-        std::sync::Arc<FutureLogState>,
-    >,
+    future_logs: &dashmap::DashMap<(String, krabka_ids::PartitionIndex), Arc<FutureLogState>>,
     topic: &str,
     partition: krabka_ids::PartitionIndex,
 ) -> i64 {
@@ -56,12 +56,12 @@ pub(super) fn future_offset_lag(
     let current_leo = part.log_end_offset();
     let future_leo =
         future_logs
-            .get(&(topic.to_string(), partition))
+            .get(&(topic.to_owned(), partition))
             .map_or(krabka_log::Offset(0), |e| {
                 e.value()
                     .future_log
                     .lock()
-                    .expect("future log mutex poisoned")
+                    .unwrap_or_else(PoisonError::into_inner)
                     .log_end_offset()
             });
     // Lag is a record-count delta between two offsets, not an offset.
@@ -78,6 +78,13 @@ mod tests {
             test_support::{RecordCount, open_partition, repeated_records_batch},
         },
         assert2::assert,
+        std::{
+            fs,
+            path::Path,
+            sync::{Arc, Mutex, PoisonError},
+        },
+        tokio::task::JoinHandle,
+        tokio_util::sync::CancellationToken,
     };
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.
@@ -96,11 +103,11 @@ mod tests {
 
     #[bon::builder]
     fn partition_with_leo(
-        log_dir: &std::path::Path,
+        log_dir: &Path,
         #[builder(default = "orders")] topic: &'_ str,
         #[builder(into, default)] partition: krabka_ids::PartitionIndex,
         #[builder(into, default = RecordCount (0))] count: RecordCount,
-    ) -> std::sync::Arc<Partition> {
+    ) -> Arc<Partition> {
         let setup = PartitionLogSetup {
             topic,
             partition,
@@ -125,13 +132,13 @@ mod tests {
     /// Appends one batch of `count` records to a `Log` behind a mutex.
     ///
     /// The LEO of the log advances by `count`.
-    fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: RecordCount) {
+    fn append_n(log: &Mutex<krabka_log::Log>, count: RecordCount) {
         let mut batch = repeated_records_batch()
             .count(count)
             .timestamp(1_700_000_000)
             .call();
         log.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .append(&mut batch)
             .expect("append records");
     }
@@ -156,23 +163,20 @@ mod tests {
     }
 
     /// Builds a `FutureLogState` whose future log has LEO `future_count`.
-    fn future_state_with_leo(
-        dir: &std::path::Path,
-        future_count: RecordCount,
-    ) -> std::sync::Arc<FutureLogState> {
+    fn future_state_with_leo(dir: &Path, future_count: RecordCount) -> Arc<FutureLogState> {
         let future_path = dir.join("future");
-        std::fs::create_dir_all(&future_path).unwrap();
+        fs::create_dir_all(&future_path).unwrap();
         let flog = krabka_log::Log::open(&future_path, krabka_log::LogConfig::default()).unwrap();
-        let future_log = std::sync::Arc::new(std::sync::Mutex::new(flog));
+        let future_log = Arc::new(Mutex::new(flog));
         if future_count.0 > 0 {
             append_n(&future_log, future_count);
         }
-        std::sync::Arc::new(FutureLogState {
+        Arc::new(FutureLogState {
             target_log_dir: dir.to_path_buf(),
             future_path,
             future_log,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            task: std::sync::Mutex::new(None::<tokio::task::JoinHandle<()>>),
+            cancel: CancellationToken::new(),
+            task: Mutex::new(None::<JoinHandle<()>>),
         })
     }
 
@@ -200,7 +204,7 @@ mod tests {
         let fut_dir = tempfile::tempdir().unwrap();
         let future_logs = dashmap::DashMap::new();
         future_logs.insert(
-            (topic.to_string(), krabka_ids::PartitionIndex(3)),
+            (topic.to_owned(), krabka_ids::PartitionIndex(3)),
             future_state_with_leo(fut_dir.path(), RecordCount(future_leo)),
         );
         let lag = future_offset_lag(&reg, &future_logs, topic, krabka_ids::PartitionIndex(3));

@@ -52,7 +52,7 @@
 //!
 //! The operations in [`mod@run`] return an [`OperationReport`] with an outcome and ordered diagnostics, including progress before an error. They do not print. [`run()`] renders those diagnostics for the CLI.
 
-use clap::Parser as _;
+use {clap::Parser as _, std::io};
 
 pub mod archive;
 pub mod capture;
@@ -130,8 +130,7 @@ pub async fn run(cli: Cli) -> i32 {
 }
 
 fn render_report<T>(report: OperationReport<T>) -> Result<(), BackupError> {
-    report::render(&report.events, &mut std::io::stdout().lock())
-        .expect("failed printing to stdout");
+    report::render(&report.events, &mut io::stdout().lock())?;
     report.result.map(|_| ())
 }
 
@@ -147,14 +146,15 @@ mod tests {
         },
         assert2::check,
         clap::Parser as _,
+        std::{fs, path::Path},
     };
 
     // A log directory holding the RLMM snapshot a capture takes off a node.
     krabka_macros::snapshot_node_fixture!(node);
 
     /// The one capture id the archive holds, which `latest` also resolves to.
-    fn only_capture(archive_root: &std::path::Path) -> String {
-        let mut ids: Vec<String> = std::fs::read_dir(archive_root.join("restore-inputs"))
+    fn only_capture(archive_root: &Path) -> String {
+        let mut ids: Vec<String> = fs::read_dir(archive_root.join("restore-inputs"))
             .expect("read the capture root")
             .flatten()
             .filter_map(|entry| entry.file_name().to_str().map(ToOwned::to_owned))
@@ -221,7 +221,7 @@ mod tests {
         );
 
         let id = only_capture(archive_root.path());
-        std::fs::write(
+        fs::write(
             archive_root.path().join(capture_key(&id, RLMM_SNAPSHOT)),
             b"truncated",
         )
@@ -234,7 +234,7 @@ mod tests {
 
         // And an archive whose manifest is gone is unreadable rather than
         // corrupt: the two codes send a runbook down different branches.
-        std::fs::remove_file(archive_root.path().join(capture_key(&id, MANIFEST)))
+        fs::remove_file(archive_root.path().join(capture_key(&id, MANIFEST)))
             .expect("remove the manifest");
         check!(
             run_from_args(["krabka-backup", "verify", "--archive-local", &archive]).await

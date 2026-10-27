@@ -12,8 +12,16 @@ use {
     },
     bytes::{Buf, BufMut, Bytes, BytesMut},
     krabka_ids::{ApiKey, ApiVersion},
-    std::time::Duration,
-    tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    krabka_protocol::tagged_fields,
+    std::{
+        io::{Error, ErrorKind},
+        str,
+        time::Duration,
+    },
+    tokio::{
+        io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+        time,
+    },
 };
 
 /// Kafka request-header `correlation_id`, echoed back in the response header.
@@ -22,7 +30,7 @@ pub(super) type CorrelationId = i32;
 pub(super) fn is_eof(e: &RaftError) -> bool {
     matches!(e,
         RaftError::Storage(krabka_log::LogError::Io(io))
-            if io.kind() == std::io::ErrorKind::UnexpectedEof
+            if io.kind() == ErrorKind::UnexpectedEof
     )
 }
 
@@ -31,11 +39,11 @@ pub(super) fn is_eof(e: &RaftError) -> bool {
 pub(super) fn is_idle(e: &RaftError) -> bool {
     matches!(e,
         RaftError::Storage(krabka_log::LogError::Io(io))
-            if io.kind() == std::io::ErrorKind::TimedOut
+            if io.kind() == ErrorKind::TimedOut
     )
 }
 
-fn io_err(e: std::io::Error) -> RaftError { RaftError::Storage(krabka_log::LogError::Io(e)) }
+fn io_err(e: Error) -> RaftError { RaftError::Storage(krabka_log::LogError::Io(e)) }
 
 /// Fills `buf`, giving up once `max_idle` passes with no byte read. Each read
 /// that makes progress arms a fresh window, as Kafka's `Selector` refreshes a
@@ -50,17 +58,17 @@ where
     S: AsyncRead + Unpin,
 {
     let mut filled = 0;
-    while filled < buf.len() {
-        let read = stream.read(&mut buf[filled..]);
+    while let Some(unread) = buf.get_mut(filled..).filter(|unread| !unread.is_empty()) {
+        let read = stream.read(unread);
         let n = match max_idle {
-            Some(window) => tokio::time::timeout(window, read)
+            Some(window) => time::timeout(window, read)
                 .await
-                .map_err(|_| io_err(std::io::ErrorKind::TimedOut.into()))?,
+                .map_err(|_| io_err(ErrorKind::TimedOut.into()))?,
             None => read.await,
         }
         .map_err(io_err)?;
         if n == 0 {
-            return Err(io_err(std::io::ErrorKind::UnexpectedEof.into()));
+            return Err(io_err(ErrorKind::UnexpectedEof.into()));
         }
         filled += n;
     }
@@ -96,13 +104,12 @@ fn request_is_flexible(
             Some(i16::MIN)
         }
         _ => table::flexible_min(api_key).or_else(|| {
-            admin_router.and_then(|router| {
-                router
-                    .api_versions()
-                    .iter()
-                    .find(|api| api.api_key == api_key)
-                    .map(|api| api.flexible_min)
-            })
+            let router = admin_router?;
+            router
+                .api_versions()
+                .iter()
+                .find(|api| api.api_key == api_key)
+                .map(|api| api.flexible_min)
         }),
     };
     flexible_min.is_some_and(|minimum| version >= minimum)
@@ -171,12 +178,12 @@ where
     let client_id = match cs_len {
         -1 => None,
         0.. => {
-            let n = usize::try_from(cs_len).expect("non-negative i16 fits usize");
+            let n = usize::from(cs_len.unsigned_abs());
             require_remaining(cur.remaining(), n)?;
             let (raw, rest) = cur.split_at(n);
             cur = rest;
             Some(
-                std::str::from_utf8(raw)
+                str::from_utf8(raw)
                     .map_err(krabka_protocol::ProtocolError::InvalidUtf8)?
                     .to_owned(),
             )
@@ -189,7 +196,7 @@ where
     };
     let response_flexible = request_is_flexible(api_key_n.get(), api_version.get(), admin_router);
     if response_flexible {
-        krabka_protocol::tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
+        tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
     }
 
     Ok(RequestFrame {
@@ -237,6 +244,16 @@ mod tests {
             ControllerApiVersion,
         },
         assert2::check,
+        krabka_protocol::owned::{
+            add_raft_voter_request,
+            api_versions_request::{API_KEY, FLEXIBLE_MIN},
+            describe_quorum_request, fetch_request, vote_request,
+        },
+        std::{
+            future,
+            io::{Error, ErrorKind},
+        },
+        tokio::io,
     };
 
     /// `socket.request.max.bytes` for the tests that do not probe it.
@@ -248,7 +265,7 @@ mod tests {
     )]
     #[test_macro(tokio::test)]
     async fn response_headers_match_their_wire_versions(tagged: bool, expected: &[u8]) {
-        let (mut client, mut server) = tokio::io::duplex(32);
+        let (mut client, mut server) = io::duplex(32);
         let writer = write_response(&mut server, 0x0102_0304, Bytes::from_static(&[0xaa, 0xbb]));
         if tagged {
             writer.call().await
@@ -280,7 +297,7 @@ mod tests {
         refused: bool,
     ) {
         let limit = 64_usize;
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         client.write_all(&size.to_be_bytes()).await.unwrap();
         drop(client);
 
@@ -303,7 +320,7 @@ mod tests {
     /// the request header is short by its whole fixed part.
     #[tokio::test]
     async fn read_one_request_reads_a_zero_size_frame_and_fails_its_header() {
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         client.write_all(&0_i32.to_be_bytes()).await.unwrap();
         drop(client);
 
@@ -332,28 +349,28 @@ mod tests {
     #[yare::parameterized(
         api_versions = {
             "ApiVersions",
-            krabka_protocol::owned::api_versions_request::API_KEY,
-            Some(krabka_protocol::owned::api_versions_request::FLEXIBLE_MIN)
+            API_KEY,
+            Some(FLEXIBLE_MIN)
         },
         fetch = {
             "Fetch",
-            krabka_protocol::owned::fetch_request::API_KEY,
-            Some(krabka_protocol::owned::fetch_request::FLEXIBLE_MIN)
+            fetch_request::API_KEY,
+            Some(fetch_request::FLEXIBLE_MIN)
         },
         vote = {
             "Vote",
-            krabka_protocol::owned::vote_request::API_KEY,
-            Some(krabka_protocol::owned::vote_request::FLEXIBLE_MIN)
+            vote_request::API_KEY,
+            Some(vote_request::FLEXIBLE_MIN)
         },
         describe_quorum = {
             "DescribeQuorum",
-            krabka_protocol::owned::describe_quorum_request::API_KEY,
-            Some(krabka_protocol::owned::describe_quorum_request::FLEXIBLE_MIN)
+            describe_quorum_request::API_KEY,
+            Some(describe_quorum_request::FLEXIBLE_MIN)
         },
         add_raft_voter = {
             "AddRaftVoter",
-            krabka_protocol::owned::add_raft_voter_request::API_KEY,
-            Some(krabka_protocol::owned::add_raft_voter_request::FLEXIBLE_MIN)
+            add_raft_voter_request::API_KEY,
+            Some(add_raft_voter_request::FLEXIBLE_MIN)
         },
         unknown_api = { "an unknown API", i16::MAX, None },
     )]
@@ -391,7 +408,7 @@ mod tests {
         fn api_versions(&self) -> &[ControllerApiVersion] { &self.0 }
 
         fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
-            Box::pin(std::future::ready(Ok(None)))
+            Box::pin(future::ready(Ok(None)))
         }
     }
 
@@ -406,7 +423,7 @@ mod tests {
         frame: Vec<u8>,
         router: Option<&dyn ControllerAdminRouter>,
     ) -> RequestFrame {
-        let (mut client, mut server) = tokio::io::duplex(256);
+        let (mut client, mut server) = io::duplex(256);
         let write_fut = async move {
             client.write_all(&frame).await.unwrap();
         };
@@ -526,20 +543,11 @@ mod tests {
 
     #[test]
     fn is_eof_only_matches_unexpected_eof_io_errors() {
-        let io_error = |kind| {
-            super::RaftError::Storage(krabka_log::LogError::Io(std::io::Error::new(kind, "io")))
-        };
+        let io_error =
+            |kind| super::RaftError::Storage(krabka_log::LogError::Io(Error::new(kind, "io")));
         let cases = [
-            (
-                "unexpected EOF",
-                io_error(std::io::ErrorKind::UnexpectedEof),
-                true,
-            ),
-            (
-                "broken pipe",
-                io_error(std::io::ErrorKind::BrokenPipe),
-                false,
-            ),
+            ("unexpected EOF", io_error(ErrorKind::UnexpectedEof), true),
+            ("broken pipe", io_error(ErrorKind::BrokenPipe), false),
             (
                 "protocol error",
                 super::RaftError::Protocol(krabka_protocol::ProtocolError::InvalidValue("not io")),
@@ -638,7 +646,7 @@ mod tests {
             ),
         ];
         for (_case, frame, needed) in cases {
-            let (mut client, mut server) = tokio::io::duplex(128);
+            let (mut client, mut server) = io::duplex(128);
             let writer = tokio::spawn(async move {
                 client.write_all(&frame).await.unwrap();
             });
@@ -659,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_one_request_keeps_nonflexible_body_prefix() {
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         let frame = raw_request_frame()
             .api_key(53)
             .api_version(0)

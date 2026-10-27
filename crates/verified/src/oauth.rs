@@ -112,20 +112,22 @@ pub fn oauth_session_lifetime(facts: OAuthSessionFacts) -> Int {
 })]
 #[must_use]
 pub fn oauth_session_admission(facts: OAuthSessionFacts) -> OAuthSessionDecision {
-    if let OAuthExpiryPresence::Missing = facts.expiry {
+    if matches!(facts.expiry, OAuthExpiryPresence::Missing) {
         return OAuthSessionDecision::Reject;
     }
     if facts.token_expires_at_ms <= facts.now_ms {
         return OAuthSessionDecision::Reject;
     }
-    if let (OAuthAuthenticationKind::Reauthentication, OAuthPrincipalMatch::Differs) =
-        (facts.authentication, facts.principal)
-    {
+    if matches!(
+        (facts.authentication, facts.principal),
+        (
+            OAuthAuthenticationKind::Reauthentication,
+            OAuthPrincipalMatch::Differs
+        )
+    ) {
         return OAuthSessionDecision::Reject;
     }
-    if let OAuthSessionCap::Enabled = facts.cap
-        && facts.cap_ms <= 0
-    {
+    if matches!(facts.cap, OAuthSessionCap::Enabled) && facts.cap_ms <= 0 {
         return OAuthSessionDecision::Reject;
     }
     let Some(token_lifetime_ms) = facts.token_expires_at_ms.checked_sub(facts.now_ms) else {

@@ -3,22 +3,26 @@
 use {
     bytes::Bytes,
     krabka_ids::PartitionIndex,
-    krabka_protocol::{Decode, Encode, owned::fetch_request::FetchRequest},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
+        primitives::uuid::Uuid,
+    },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    std::num::{NonZeroU32, NonZeroU64},
 };
 
-const KRAFT_METADATA_TOPIC_ID: krabka_protocol::primitives::uuid::Uuid =
-    krabka_protocol::primitives::uuid::Uuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
-pub(crate) const KIP_595_FETCH_VERSION: i16 = 17;
+const KRAFT_METADATA_TOPIC_ID: Uuid = Uuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+pub const KIP_595_FETCH_VERSION: i16 = 17;
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
-pub(crate) const FENCED_LEADER_EPOCH: i16 = 74;
-pub(crate) const UNKNOWN_LEADER_EPOCH: i16 = 75;
+pub const OFFSET_OUT_OF_RANGE: i16 = 1;
+pub const FENCED_LEADER_EPOCH: i16 = 74;
+pub const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const WAL_FETCH_RACK_ID: &str = "__krabka_diskless_wal";
 
 /// Group discriminator for KIP-595 traffic carried by the broker listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum QuorumGroup {
+pub enum QuorumGroup {
     Metadata,
     DisklessWal {
         topic_id: uuid::Uuid,
@@ -29,7 +33,7 @@ pub(crate) enum QuorumGroup {
 // No `Eq`: `max_size` is a `ByteSize`, which stores `f64`. The derive was
 // unused — `WalFetchRequest` is only destructured, never compared or hashed.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct WalFetchRequest {
+pub struct WalFetchRequest {
     pub(crate) group: QuorumGroup,
     pub(crate) from: krabka_raft::NodeId,
     pub(crate) current_leader_epoch: i32,
@@ -53,7 +57,7 @@ impl QuorumGroup {
 /// The topic name, topic id and partition that a Fetch names a quorum by.
 struct FetchRoute {
     topic: String,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     partition: i32,
 }
 
@@ -61,7 +65,7 @@ struct FetchRoute {
 fn fetch_partition(group: QuorumGroup) -> FetchRoute {
     match group {
         QuorumGroup::Metadata => FetchRoute {
-            topic: "__cluster_metadata".to_string(),
+            topic: "__cluster_metadata".to_owned(),
             topic_id: KRAFT_METADATA_TOPIC_ID,
             partition: 0,
         },
@@ -70,7 +74,7 @@ fn fetch_partition(group: QuorumGroup) -> FetchRoute {
             partition,
         } => FetchRoute {
             topic: String::new(),
-            topic_id: krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+            topic_id: Uuid(*topic_id.as_bytes()),
             partition: partition.0,
         },
     }
@@ -83,21 +87,21 @@ fn fetch_partition(group: QuorumGroup) -> FetchRoute {
 /// Diskless WAL shards reuse the same KIP-595 Fetch envelope, but they use the
 /// data topic id and the partition as the shard address.
 #[cfg(test)]
-pub(crate) fn classify_fetch(body: &[u8]) -> Option<QuorumGroup> {
+pub fn classify_fetch(body: &[u8]) -> Option<QuorumGroup> {
     decode_fetch(body).map(|request| request.group)
 }
 
-pub(crate) fn decode_fetch(body: &[u8]) -> Option<WalFetchRequest> {
+pub fn decode_fetch(body: &[u8]) -> Option<WalFetchRequest> {
     let mut cur = body;
     let request = FetchRequest::decode(&mut cur, KIP_595_FETCH_VERSION).ok()?;
     decode_fetch_request(&request)
 }
 
-pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchRequest> {
+pub fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchRequest> {
     let topic = request.topics.first()?;
     let partition = topic.partitions.first()?;
     let max_bytes = request.max_bytes.min(partition.partition_max_bytes);
-    let max_bytes = std::num::NonZeroU32::new(u32::try_from(max_bytes).ok()?)?;
+    let max_bytes = NonZeroU32::new(u32::try_from(max_bytes).ok()?)?;
     let group = if topic.topic_id == KRAFT_METADATA_TOPIC_ID {
         QuorumGroup::Metadata
     } else {
@@ -115,13 +119,13 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
         current_leader_epoch: partition.current_leader_epoch,
         last_fetched_epoch: partition.last_fetched_epoch,
         fetch_offset: partition.fetch_offset,
-        max_size: ByteSize::from_bytes(u64::from(max_bytes.get())),
+        max_size: ByteSize::from_bytes(NonZeroU64::from(max_bytes).get()),
         max_wait_ms: request.max_wait_ms,
         min_bytes: request.min_bytes,
     })
 }
 
-pub(crate) fn conventional_node_id(principal_name: &str) -> Option<krabka_raft::NodeId> {
+pub fn conventional_node_id(principal_name: &str) -> Option<krabka_raft::NodeId> {
     let id = principal_name
         .strip_prefix("broker-")
         .or_else(|| {
@@ -134,7 +138,7 @@ pub(crate) fn conventional_node_id(principal_name: &str) -> Option<krabka_raft::
     Some(krabka_raft::NodeId(id))
 }
 
-pub(crate) fn fetch_response(
+pub fn fetch_response(
     group: QuorumGroup,
     hwm: i64,
     log_end_offset: i64,
@@ -142,7 +146,7 @@ pub(crate) fn fetch_response(
     records: Bytes,
     error_code: i16,
     diverging_epoch: Option<(i32, i64)>,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+) -> FetchResponse {
     use krabka_protocol::{owned::fetch_response as fetch_resp, records::RecordsPayload};
 
     let FetchRoute {
@@ -188,9 +192,7 @@ pub(crate) fn fetch_response(
     }
 }
 
-pub(crate) fn unknown_shard_fetch_response(
-    group: QuorumGroup,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+pub fn unknown_shard_fetch_response(group: QuorumGroup) -> FetchResponse {
     fetch_response(
         group,
         0,
@@ -202,15 +204,13 @@ pub(crate) fn unknown_shard_fetch_response(
     )
 }
 
-pub(crate) fn encode_fetch_response_struct(
-    response: &krabka_protocol::owned::fetch_response::FetchResponse,
-) -> Bytes {
+pub fn encode_fetch_response_struct(response: &FetchResponse) -> Bytes {
     let mut out = bytes::BytesMut::new();
     let _ = response.encode(&mut out, KIP_595_FETCH_VERSION);
     out.freeze()
 }
 
-pub(crate) fn fetch_request(
+pub fn fetch_request(
     group: QuorumGroup,
     from: krabka_raft::NodeId,
     current_leader_epoch: i32,
@@ -227,7 +227,7 @@ pub(crate) fn fetch_request(
     } = fetch_partition(group);
     FetchRequest {
         rack_id: matches!(group, QuorumGroup::DisklessWal { .. })
-            .then_some(WAL_FETCH_RACK_ID.to_string())
+            .then_some(WAL_FETCH_RACK_ID.to_owned())
             .unwrap_or_default(),
         replica_state: fetch_req::ReplicaState {
             replica_id: i32::try_from(from.0).unwrap_or(i32::MAX),
@@ -253,7 +253,7 @@ pub(crate) fn fetch_request(
 }
 
 #[cfg(test)]
-pub(crate) fn encode_fetch_for_group(
+pub fn encode_fetch_for_group(
     group: QuorumGroup,
     from: krabka_raft::NodeId,
     fetch_epoch: i32,

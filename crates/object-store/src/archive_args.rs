@@ -202,7 +202,14 @@ impl ArchiveArgs {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::prefixed_key, assert2::check, clap::Parser, object_store::path::Path};
+    use {
+        super::*,
+        crate::prefixed_key,
+        assert2::check,
+        clap::Parser,
+        object_store::path::Path,
+        std::{iter, path},
+    };
 
     #[derive(Parser, Debug)]
     struct Cli {
@@ -211,8 +218,7 @@ mod tests {
     }
 
     fn parse(argv: &[&str]) -> Result<ArchiveArgs, clap::Error> {
-        Cli::try_parse_from(std::iter::once("tool").chain(argv.iter().copied()))
-            .map(|cli| cli.archive)
+        Cli::try_parse_from(iter::once("tool").chain(argv.iter().copied())).map(|cli| cli.archive)
     }
 
     fn s3_archive_args(prefix: &str) -> ArchiveArgs {
@@ -382,7 +388,7 @@ mod tests {
         .to_config()
         .expect("config");
         check!(
-            matches!(config, ObjectStoreConfig::Local { root } if root == std::path::Path::new("/archive"))
+            matches!(config, ObjectStoreConfig::Local { root } if root == path::Path::new("/archive"))
         );
     }
 

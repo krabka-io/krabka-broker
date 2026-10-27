@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 /// One row of the `GROUP TOPIC PARTITION NEW-OFFSET` table that
 /// `--reset-offsets` prints under both `--dry-run` and `--execute`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ResetRow {
+pub struct ResetRow {
     pub(crate) group: String,
     pub(crate) topic: String,
     pub(crate) partition: i32,
@@ -30,7 +30,7 @@ pub(crate) struct ResetRow {
 /// Sorted because the tool walks a map: the same broker answers the same
 /// partitions in a different order between two runs, and a case that compared
 /// the raw order would be flaky on one side and correct on neither.
-pub(crate) fn parse_reset_table(stdout: &str) -> Vec<ResetRow> {
+pub fn parse_reset_table(stdout: &str) -> Vec<ResetRow> {
     let mut rows: Vec<ResetRow> = stdout
         .lines()
         .filter_map(|line| {
@@ -53,7 +53,7 @@ pub(crate) fn parse_reset_table(stdout: &str) -> Vec<ResetRow> {
 /// One line of the CSV that `--reset-offsets --export` writes and
 /// `--from-file` reads back.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ExportRow {
+pub struct ExportRow {
     /// `None` for the three-column form. The tool drops the group column when
     /// exactly one `--group` was named, and keeps it under `--all-groups`, so
     /// both shapes are legitimate output and the parser accepts either.
@@ -73,7 +73,7 @@ pub(crate) struct ExportRow {
 /// Splitting on `,` before unquoting would mis-split a field that contained a
 /// comma. A Kafka topic name cannot (`[a-zA-Z0-9._-]` only), and the group ids
 /// this suite uses cannot either, so the simple split is enough here.
-pub(crate) fn parse_export_csv(stdout: &str) -> Vec<ExportRow> {
+pub fn parse_export_csv(stdout: &str) -> Vec<ExportRow> {
     let mut rows: Vec<ExportRow> = stdout
         .lines()
         .map(str::trim)
@@ -118,26 +118,26 @@ fn unquote(field: &str) -> String {
 /// theirs differently; the class is Kafka's, built by `Errors.forCode` from
 /// the numeric code the broker sent, so it is exactly the claim a differential
 /// about error codes wants to make.
-pub(crate) fn kafka_exceptions(text: &str) -> BTreeSet<String> {
+pub fn kafka_exceptions(text: &str) -> BTreeSet<String> {
     const PREFIX: &str = "org.apache.kafka.common.errors.";
     let mut found = BTreeSet::new();
     let mut rest = text;
-    while let Some(at) = rest.find(PREFIX) {
-        rest = &rest[at + PREFIX.len()..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_alphanumeric())
-            .unwrap_or(rest.len());
-        if end > 0 {
-            found.insert(format!("{PREFIX}{}", &rest[..end]));
+    while let Some((_, after)) = rest.split_once(PREFIX) {
+        // The class name runs to the first character that cannot be in one.
+        let (name, tail) = after
+            .split_once(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or((after, ""));
+        if !name.is_empty() {
+            found.insert(format!("{PREFIX}{name}"));
         }
-        rest = &rest[end..];
+        rest = tail;
     }
     found
 }
 
 /// What `--delete` said about one group.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct DeleteOutcome {
+pub struct DeleteOutcome {
     pub(crate) group: String,
     /// The exception class the tool named, or `None` when the delete worked.
     pub(crate) failure: Option<String>,
@@ -150,7 +150,7 @@ pub(crate) struct DeleteOutcome {
 /// followed by one `* Group 'g' could not be deleted due to: <exception>` line
 /// per group. Both are reduced to the same list here, so a case states the
 /// rule once for the group that existed and the group that did not.
-pub(crate) fn parse_delete_groups(text: &str) -> Vec<DeleteOutcome> {
+pub fn parse_delete_groups(text: &str) -> Vec<DeleteOutcome> {
     let mut outcomes: Vec<DeleteOutcome> = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -172,22 +172,22 @@ pub(crate) fn parse_delete_groups(text: &str) -> Vec<DeleteOutcome> {
 
 /// The group named by the first `'...'` after `marker`, when the line has one.
 fn quoted_group(line: &str, marker: &str) -> Option<String> {
-    let after = line.find(marker)? + marker.len();
-    let rest = &line[after..];
-    let open = rest.find('\'')? + 1;
-    let close = rest[open..].find('\'')? + open;
-    Some(rest[open..close].to_owned())
+    let (_, rest) = line.split_once(marker)?;
+    let (_, quoted) = rest.split_once('\'')?;
+    let (name, _) = quoted.split_once('\'')?;
+    Some(name.to_owned())
 }
 
 /// Every `'...'`-quoted name on a line.
 fn quoted_groups(line: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = line;
-    while let Some(open) = rest.find('\'') {
-        rest = &rest[open + 1..];
-        let Some(close) = rest.find('\'') else { break };
-        names.push(rest[..close].to_owned());
-        rest = &rest[close + 1..];
+    while let Some((_, quoted)) = rest.split_once('\'') {
+        let Some((name, tail)) = quoted.split_once('\'') else {
+            break;
+        };
+        names.push(name.to_owned());
+        rest = tail;
     }
     names
 }

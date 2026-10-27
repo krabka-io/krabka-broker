@@ -11,8 +11,9 @@ use {
     },
     assert2::assert,
     krabka_log::Offset,
+    std::time::Duration,
     tempfile::tempdir,
-    tokio::sync::oneshot,
+    tokio::{sync::oneshot, time},
 };
 
 async fn writer_after_first_append() -> DefaultWriter {
@@ -63,14 +64,14 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
         let _ack_rx = queue_batch(&tx, sample_batch().call()).await;
     }
 
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
         wal: Some(wal),
         max_produce_group: MAX_GROUP,
         sequencer: Some(test_sequencer()),
         ..Default::default()
     });
 
-    tokio::time::timeout(std::time::Duration::from_secs(10), sync_started_rx)
+    time::timeout(Duration::from_secs(10), sync_started_rx)
         .await
         .expect("first group did not reach WAL sync")
         .expect("first group reached WAL sync");
@@ -114,7 +115,7 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
     .expect("send durable sync");
     sync_started_rx.await.expect("WAL sync started");
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), &mut durable_ack_rx)
+        time::timeout(Duration::from_millis(10), &mut durable_ack_rx)
             .await
             .is_err(),
         "durable ack must wait for WAL"
@@ -219,7 +220,7 @@ async fn writer_fires_notify_after_append() {
     let _ack_rx = queue_batch(&tx, sample_batch().call()).await;
 
     // Should wake within a short timeout.
-    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+    time::timeout(Duration::from_secs(1), waiter)
         .await
         .expect("notify did not fire");
 

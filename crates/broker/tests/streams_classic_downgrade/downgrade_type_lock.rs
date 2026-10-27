@@ -11,6 +11,7 @@ use {
         downgrade_streams_join::{streams_join_and_converge, topology},
     },
     assert2::{assert, check},
+    krabka_broker::coordinator::unified::GroupType,
     krabka_protocol::owned::{
         delete_groups_request::DeleteGroupsRequest,
         join_group_request::JoinGroupRequest,
@@ -19,6 +20,7 @@ use {
         list_groups_request::ListGroupsRequest,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 /// A streams group with a LIVE member refuses every classic `JoinGroup`, static
@@ -41,12 +43,7 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     let (_mid, resp) =
         streams_join_and_converge(&streams_client, "g2", topology("in2"), 1, CONVERGE_TRIES).await;
     assert!(resp.error_code == ERR_NONE);
-    broker
-        .wait_until_group_type(
-            "g2",
-            krabka_broker::coordinator::unified::GroupType::Streams,
-        )
-        .await;
+    broker.wait_until_group_type("g2", GroupType::Streams).await;
     broker.wait_until_streams_group_member_count("g2", 1).await;
 
     // (row, the JoinGroup)
@@ -77,7 +74,7 @@ async fn streams_group_with_live_member_rejects_classic_join() {
         ..Default::default()
     };
     for (row, request) in rows {
-        let response = tokio::time::timeout(Duration::from_secs(5), classic_client.send(request))
+        let response = time::timeout(Duration::from_secs(5), classic_client.send(request))
             .await
             .expect("JoinGroup timeout")
             .expect("JoinGroup");
@@ -85,8 +82,7 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     }
 
     assert!(
-        broker.group_type_for_test("g2")
-            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
+        broker.group_type_for_test("g2") == Some(GroupType::Streams),
         "group_type must remain Streams after rejected downgrade"
     );
     broker.wait_until_streams_group_member_count("g2", 1).await;
@@ -126,17 +122,9 @@ async fn converted_group_admin_views_respect_type_lock() {
     let (_sm, hb) =
         streams_join_and_converge(&streams_client, "g3", topology("in3"), 1, CONVERGE_TRIES).await;
     assert!(hb.error_code == ERR_NONE);
-    broker
-        .wait_until_group_type(
-            "g3",
-            krabka_broker::coordinator::unified::GroupType::Streams,
-        )
-        .await;
+    broker.wait_until_group_type("g3", GroupType::Streams).await;
     broker.wait_until_streams_group_member_count("g3", 1).await;
-    assert!(
-        broker.group_type_for_test("g3")
-            == Some(krabka_broker::coordinator::unified::GroupType::Streams)
-    );
+    assert!(broker.group_type_for_test("g3") == Some(GroupType::Streams));
 
     // ListGroups: the converted group appears exactly once, as `streams`.
     let lg = classic_client
@@ -166,8 +154,7 @@ async fn converted_group_admin_views_respect_type_lock() {
         dg.results[0].error_code
     );
     assert!(
-        broker.group_type_for_test("g3")
-            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
+        broker.group_type_for_test("g3") == Some(GroupType::Streams),
         "the streams group must survive the rejected delete"
     );
 }

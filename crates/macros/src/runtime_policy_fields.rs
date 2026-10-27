@@ -1,14 +1,14 @@
 //! Common policy fields of the TOML and command-line runtime configurations.
 
 use {
-    crate::meta::{ItemBody, mode, named_body},
+    crate::meta::{ItemBody, body_group, mode, named_body},
     moxy::{
         ast::{Field, List, ParseError, Parser, Token},
         token::{LitStr, Span, ToTokenStream, TokenStream, TokenTree},
     },
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let mode = mode(meta, ["toml", "cli", "node_cli"])?;
     if mode == "node_cli" {
         return controller_fields(item, ControllerFieldInterface::CommandLine);
@@ -334,15 +334,13 @@ fn insert_fields(
         mut tokens,
         body_index: body,
     } = named_body(item, "runtime_policy_fields")?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     for FieldGroup { before, fields } in fields {
         let mut start = group
             .tokens
             .windows(2)
             .position(|pair| {
-                pair[0].is_keyword_pub() && pair[1].as_ident().is_some_and(|ident| ident == before)
+                matches!(pair, [keyword, name] if keyword.is_keyword_pub() && name.as_ident().is_some_and(|ident| ident == before))
             })
             .ok_or_else(|| {
                 ParseError::new(
@@ -351,9 +349,14 @@ fn insert_fields(
                 )
             })?;
         while start >= 2
-            && group.tokens[start - 2].is_punct_pound()
-            && group.tokens[start - 1]
-                .as_group()
+            && group
+                .tokens
+                .get(start - 2)
+                .is_some_and(TokenTree::is_punct_pound)
+            && group
+                .tokens
+                .get(start - 1)
+                .and_then(TokenTree::as_group)
                 .is_some_and(|attr| attr.delim.is_bracket())
         {
             start -= 2;

@@ -11,12 +11,18 @@ use {
     clap::Parser,
     krabka_broker::{
         Broker, BrokerConfig, BrokerError, BrokerHandle,
-        file_config::FileConfig,
-        security_clients,
-        telemetry::{OtlpProtocol, TelemetryGuard},
+        bootstrap::initialize_log_dirs,
+        config::{DEFAULT_LOG_FILTER, DEFAULT_READINESS_MAX_METADATA_LAG},
+        file_config::{FileConfig, config_schema},
+        health, security_clients,
+        telemetry::{self, OtlpConfig, OtlpProtocol, TelemetryGuard},
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::future::Future,
+    rustix::process::Rlimit,
+    std::{error::Error, future::Future, process, time::Duration},
+    tokio::{sync::watch, time},
+    tokio_util::sync::CancellationToken,
+    tracing::field,
 };
 
 /// Where the broker's own client metrics go, when OTLP is on: the endpoint and
@@ -34,11 +40,11 @@ struct AssembledConfig {
 }
 
 #[tokio::main]
-pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn broker_main() -> Result<(), Box<dyn Error>> {
     let mut args = Args::parse();
 
     if args.print_config_schema {
-        let schema = krabka_broker::file_config::config_schema();
+        let schema = config_schema();
         println!("{}", serde_json::to_string_pretty(&schema)?);
         return Ok(());
     }
@@ -51,7 +57,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     // optional OTLP export layer. OTLP stays off unless the environment
     // opts in (see `krabka_broker::telemetry`). Built here, inside the
     // tokio runtime, so the gRPC exporter captures the runtime handle.
-    let otlp = krabka_broker::telemetry::OtlpConfig::from_env(
+    let otlp = OtlpConfig::from_env(
         |k| args.telemetry_value(k),
         &args.broker_id.to_string(),
         env!("CARGO_PKG_VERSION"),
@@ -61,11 +67,11 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         endpoint: otlp.as_ref().map(|cfg| cfg.endpoint.clone()),
         protocol: otlp.as_ref().map_or(OtlpProtocol::Grpc, |cfg| cfg.protocol),
     };
-    let telemetry = krabka_broker::telemetry::init(
+    let telemetry = telemetry::init(
         otlp,
         // The stdout filter. This is the one `BROKER_LOGGER` retargets, and
         // the one whose target directives seed the logger list.
-        krabka_broker::config::DEFAULT_LOG_FILTER,
+        DEFAULT_LOG_FILTER,
         "info,krabka_broker::request=debug,krabka_log=info",
         "krabka-broker",
     )?;
@@ -85,7 +91,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!(%error, "halting: the metadata controller met a fatal fault");
         telemetry.shutdown();
         eprintln!("Error: {error}");
-        std::process::exit(1);
+        process::exit(1);
     }
     telemetry.shutdown();
     outcome
@@ -93,7 +99,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Whether `error` is the fatal fault of the metadata controller that this
 /// node hosts, the one failure that Kafka halts the process over.
-fn is_fatal_fault(error: &(dyn std::error::Error + 'static)) -> bool {
+fn is_fatal_fault(error: &(dyn Error + 'static)) -> bool {
     matches!(
         error.downcast_ref::<BrokerError>(),
         Some(BrokerError::FatalFault(_))
@@ -111,9 +117,9 @@ fn is_fatal_fault(error: &(dyn std::error::Error + 'static)) -> bool {
 /// infinite soft limit on open files, so an unlimited hard limit is left
 /// alone.
 #[cfg(unix)]
-fn raised_open_file_limit(limit: rustix::process::Rlimit) -> Option<rustix::process::Rlimit> {
+fn raised_open_file_limit(limit: Rlimit) -> Option<Rlimit> {
     match (limit.current, limit.maximum) {
-        (Some(current), Some(maximum)) if current < maximum => Some(rustix::process::Rlimit {
+        (Some(current), Some(maximum)) if current < maximum => Some(Rlimit {
             current: Some(maximum),
             maximum: Some(maximum),
         }),
@@ -158,7 +164,7 @@ fn broker_config(
         endpoint: client_metrics_otlp_endpoint,
         protocol: client_metrics_otlp_protocol,
     }: ClientMetricsOtlp,
-) -> Result<AssembledConfig, Box<dyn std::error::Error>> {
+) -> Result<AssembledConfig, Box<dyn Error>> {
     let file_shutdown_timeout = file_config
         .as_ref()
         .and_then(|file| file.runtime.as_ref())
@@ -231,7 +237,7 @@ async fn run(
     file_config: Option<FileConfig>,
     client_metrics_otlp: ClientMetricsOtlp,
     telemetry: &TelemetryGuard,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     raise_open_file_limit();
     let health_listen_addr = parse_optional_listen_addr(&args.health_listen_addr)?;
@@ -256,7 +262,7 @@ async fn run(
     // `meta.properties` has to belong to this cluster and to this node, and
     // the metadata log directory has to be formatted. KIP-853: the metadata
     // log directory's id is this replica's stable voter identity.
-    let identity = krabka_broker::bootstrap::initialize_log_dirs(
+    let identity = initialize_log_dirs(
         &metadata_log_dir,
         &config.all_log_dirs(),
         config.node_id,
@@ -281,11 +287,11 @@ async fn run(
     // condition on the state these routes read.
     let health = krabka_broker::HealthState::new(
         args.readiness_max_metadata_lag
-            .unwrap_or(krabka_broker::config::DEFAULT_READINESS_MAX_METADATA_LAG),
+            .unwrap_or(DEFAULT_READINESS_MAX_METADATA_LAG),
     );
-    let health_shutdown = tokio_util::sync::CancellationToken::new();
+    let health_shutdown = CancellationToken::new();
     if let Some(addr) = health_listen_addr {
-        krabka_broker::health::serve(addr, health.clone(), health_shutdown.child_token()).await?;
+        health::serve(addr, health.clone(), health_shutdown.child_token()).await?;
     }
 
     let health_for_shutdown = health.clone();
@@ -316,9 +322,8 @@ async fn run(
 /// line names the controller listener only.
 fn log_started(handle: &BrokerHandle, controller_role: bool) {
     tracing::info!(
-        listen_addr = handle.data_plane_addr().map(tracing::field::display),
-        controller_listen_addr =
-            controller_role.then(|| tracing::field::display(handle.controller_addr())),
+        listen_addr = handle.data_plane_addr().map(field::display),
+        controller_listen_addr = controller_role.then(|| field::display(handle.controller_addr())),
         "krabka-broker started"
     );
 }
@@ -329,8 +334,8 @@ fn log_started(handle: &BrokerHandle, controller_role: bool) {
 async fn serve(
     handle: BrokerHandle,
     health: &krabka_broker::HealthState,
-    health_shutdown: &tokio_util::sync::CancellationToken,
-    drain_timeout: std::time::Duration,
+    health_shutdown: &CancellationToken,
+    drain_timeout: Duration,
     termination_signal: impl Future<Output = &'static str>,
 ) -> Result<(), BrokerError> {
     let mut shutdown_rx = handle.should_shutdown_rx();
@@ -390,12 +395,9 @@ async fn serve(
 /// here only closes what it can within `drain_timeout`, so an async task that
 /// hangs cannot hold up the return, and the `FatalFault` it returns is what
 /// [`broker_main`] halts the process on.
-pub(crate) async fn stop_broker(
-    handle: BrokerHandle,
-    drain_timeout: std::time::Duration,
-) -> Result<(), BrokerError> {
+pub async fn stop_broker(handle: BrokerHandle, drain_timeout: Duration) -> Result<(), BrokerError> {
     if let Some(fault) = handle.fatal_fault() {
-        if tokio::time::timeout(drain_timeout, handle.shutdown())
+        if time::timeout(drain_timeout, handle.shutdown())
             .await
             .is_err()
         {
@@ -419,20 +421,28 @@ pub(crate) async fn stop_broker(
 
 /// The `FatalFault` a controller published while the broker was stopping, or
 /// `Ok` when it published none.
-fn fault_after_shutdown(
-    fault_watch: &tokio::sync::watch::Receiver<Option<String>>,
-) -> Result<(), BrokerError> {
-    match fault_watch.borrow().clone() {
-        Some(fault) => Err(BrokerError::FatalFault(fault)),
-        None => Ok(()),
-    }
+fn fault_after_shutdown(fault_watch: &watch::Receiver<Option<String>>) -> Result<(), BrokerError> {
+    let fault = fault_watch.borrow().clone();
+    fault.map_or(Ok(()), |fault| Err(BrokerError::FatalFault(fault)))
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::test_support::env_guard, assert2::assert, std::time::Duration,
+        super::*,
+        crate::test_support::env_guard,
+        assert2::assert,
+        krabka_broker::config::DEFAULT_BROKER_ID,
+        std::{
+            error::Error,
+            fs, future, io,
+            net::SocketAddr,
+            path::{Path, PathBuf},
+            time::Duration,
+        },
         tempfile::tempdir,
+        tokio::{sync::watch, time},
+        tokio_util::sync::CancellationToken,
     };
 
     // Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one
@@ -443,7 +453,7 @@ mod tests {
 
     const CLEAN_SHUTDOWN_PROOF: &str = ".kafka_cleanshutdown";
 
-    async fn start_broker(log_dir: &std::path::Path) -> BrokerHandle {
+    async fn start_broker(log_dir: &Path) -> BrokerHandle {
         Broker::start(BrokerConfig::for_tests(log_dir.to_path_buf()))
             .await
             .expect("broker start")
@@ -462,7 +472,7 @@ mod tests {
             .await
             .expect("the unsupported level commits before the controller stops");
         let mut should_shutdown = handle.should_shutdown_rx();
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(30),
             should_shutdown.wait_for(|down| *down),
         )
@@ -476,14 +486,14 @@ mod tests {
     fn probes() -> Probes {
         Probes {
             health: krabka_broker::HealthState::new(1_000),
-            shutdown: tokio_util::sync::CancellationToken::new(),
+            shutdown: CancellationToken::new(),
         }
     }
 
     /// The probe state and its shutdown token.
     struct Probes {
         health: krabka_broker::HealthState,
-        shutdown: tokio_util::sync::CancellationToken,
+        shutdown: CancellationToken,
     }
 
     // The `PENDING_CONTROLLED_SHUTDOWN` ordinal of `HealthState::broker_state`,
@@ -510,14 +520,7 @@ mod tests {
                 shutdown: health_shutdown,
             } = probes();
 
-            let outcome = serve(
-                handle,
-                &health,
-                &health_shutdown,
-                bound,
-                std::future::pending(),
-            )
-            .await;
+            let outcome = serve(handle, &health, &health_shutdown, bound, future::pending()).await;
 
             assert!(
                 matches!(&outcome, Err(BrokerError::FatalFault(fault)) if fault == FAULT),
@@ -566,21 +569,21 @@ mod tests {
     // to it boxed, as `run` boxes what `?` and `serve` return.
     #[yare::parameterized(
         fatal_controller_fault = {
-            Box::new(BrokerError::FatalFault(FAULT.to_owned())) as Box<dyn std::error::Error>,
+            Box::new(BrokerError::FatalFault(FAULT.to_owned())) as Box<dyn Error>,
             true,
         },
         startup_error = {
-            Box::new(BrokerError::Startup("no leader".to_owned())) as Box<dyn std::error::Error>,
+            Box::new(BrokerError::Startup("no leader".to_owned())) as Box<dyn Error>,
             false,
         },
-        shutdown = { Box::new(BrokerError::Shutdown) as Box<dyn std::error::Error>, false },
+        shutdown = { Box::new(BrokerError::Shutdown) as Box<dyn Error>, false },
         bare_message = {
-            Box::new(std::io::Error::other("failed to read the config")) as Box<dyn std::error::Error>,
+            Box::new(io::Error::other("failed to read the config")) as Box<dyn Error>,
             false,
         },
     )]
     fn only_the_fatal_fault_of_the_controller_halts_the_process(
-        error: Box<dyn std::error::Error>,
+        error: Box<dyn Error>,
         halts: bool,
     ) {
         assert2::assert!(is_fatal_fault(error.as_ref()) == halts, "{error}");
@@ -592,7 +595,7 @@ mod tests {
         let _guard = env_guard();
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("broker.toml");
-        std::fs::write(&path, toml).expect("write broker.toml");
+        fs::write(&path, toml).expect("write broker.toml");
         let config_file = format!("--config-file={}", path.display());
         let mut args = Args::try_parse_from(
             ["krabka-broker", config_file.as_str()]
@@ -681,10 +684,8 @@ mod tests {
         assert2::assert!(
             (config.metadata_dir().to_path_buf(), config.all_log_dirs())
                 == (
-                    std::path::PathBuf::from(metadata),
-                    data.iter()
-                        .map(std::path::PathBuf::from)
-                        .collect::<Vec<_>>()
+                    PathBuf::from(metadata),
+                    data.iter().map(PathBuf::from).collect::<Vec<_>>()
                 )
         );
     }
@@ -693,7 +694,7 @@ mod tests {
         file_alone = { &[] as &'static [&'static str], "broker_id = 2\n", 2 },
         flag_over_file = { &["--broker-id=7"], "broker_id = 2\n", 7 },
         flag_alone = { &["--broker-id=7"], "", 7 },
-        neither = { &[] as &'static [&'static str], "", krabka_broker::config::DEFAULT_BROKER_ID },
+        neither = { &[] as &'static [&'static str], "", DEFAULT_BROKER_ID },
     )]
     fn the_flag_wins_over_the_file_and_the_file_over_the_default(
         flags: &'static [&'static str],
@@ -770,7 +771,7 @@ mod tests {
 
     #[test]
     fn the_profiling_flags_reach_the_broker_config() {
-        type Profiling = (Option<std::net::SocketAddr>, Option<std::path::PathBuf>);
+        type Profiling = (Option<SocketAddr>, Option<PathBuf>);
         let cases: [(&str, &[&str], Profiling); 2] = [
             ("the default disables profiling", &[], (None, None)),
             (
@@ -831,7 +832,7 @@ mod tests {
     // after `stop_broker` last looked, and the process must still halt on it.
     #[test]
     fn a_fault_published_while_the_broker_stopped_ends_in_a_fatal_fault_error() {
-        let (fault_tx, fault_rx) = tokio::sync::watch::channel(None);
+        let (fault_tx, fault_rx) = watch::channel(None);
         assert!(fault_after_shutdown(&fault_rx).is_ok());
 
         fault_tx.send_replace(Some(FAULT.to_owned()));

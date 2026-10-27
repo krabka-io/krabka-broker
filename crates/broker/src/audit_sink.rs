@@ -77,6 +77,9 @@ impl AuditSink for KafkaTopicAuditSink {
         } else {
             partition.produce_batch_outcome(batch).await
         };
+        // The leadership guard spans the append, so the leader cannot change
+        // under it, and no longer.
+        drop(leadership);
         if let Err(error) = result {
             self.metrics.audit_write_failures.inc();
             return Err(match error {
@@ -128,7 +131,7 @@ mod tests {
         assert2::assert,
         krabka_log::Offset,
         krabka_units::mebibytes,
-        std::sync::Arc,
+        std::{path::Path, sync::Arc},
     };
 
     /// The `__audit` partition and the registry that holds it.
@@ -137,7 +140,7 @@ mod tests {
         partitions: Arc<PartitionRegistry>,
     }
 
-    fn audit_partition(path: &std::path::Path) -> AuditPartition {
+    fn audit_partition(path: &Path) -> AuditPartition {
         let partitions = Arc::new(PartitionRegistry::new());
         let partition = fixture_partition().log_dir(path).topic("__audit").call();
         partitions.insert("__audit".into(), PartitionIndex(0), Arc::clone(&partition));
@@ -150,7 +153,7 @@ mod tests {
     fn audit_sink(partitions: Arc<PartitionRegistry>) -> KafkaTopicAuditSink {
         KafkaTopicAuditSink::new(
             partitions,
-            "__audit".to_string(),
+            "__audit".to_owned(),
             PartitionIndex(0),
             krabka_raft::NodeId(0),
             BrokerMetrics::new(),
@@ -170,7 +173,7 @@ mod tests {
             AuditRecord {
                 class: krabka_audit::AuditEventClass::ApiActivity,
                 value: b"{\"ok\":true}".to_vec(),
-                headers: vec![("event_class".to_string(), b"admin".to_vec())],
+                headers: vec![("event_class".to_owned(), b"admin".to_vec())],
             },
             true,
         )

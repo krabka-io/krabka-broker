@@ -21,7 +21,7 @@ use {
 /// `krabka-units` wraps, and reachable here purely through operator syntax
 /// without naming the type -- gets the same tiny segment size the sibling
 /// `jvm_tiered_storage.rs` fixture builds with `bytes(1)`.
-pub(crate) fn tiny_segment_config() -> LogConfig {
+pub fn tiny_segment_config() -> LogConfig {
     let default = LogConfig::default();
     LogConfig {
         segment_size: default.segment_size / 1_073_741_824.0,
@@ -46,7 +46,7 @@ fn record(offset_delta: i32, value: &str) -> Record {
 /// A batch holding one record per `values` entry, in order. `base_offset` is
 /// a placeholder: `Log::append` overwrites it with the log's real end offset
 /// when the batch is appended.
-pub(crate) fn text_batch(values: &[&str]) -> RecordBatch {
+pub fn text_batch(values: &[&str]) -> RecordBatch {
     let records: Vec<Record> = values
         .iter()
         .enumerate()
@@ -73,7 +73,7 @@ pub(crate) fn text_batch(values: &[&str]) -> RecordBatch {
 }
 
 /// Append and sync the fixture groups, retaining their assigned offsets and sealed exports.
-pub(crate) fn append_groups(
+pub fn append_groups(
     log: &mut krabka_log::Log,
     groups: &[&[&str]],
 ) -> (Vec<RecordBatch>, Vec<krabka_log::SegmentExport>) {

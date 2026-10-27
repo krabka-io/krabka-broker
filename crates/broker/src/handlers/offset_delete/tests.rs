@@ -71,7 +71,7 @@ fn classic_group(group_id: &str, protocol_type: &str, metadata: Bytes) -> Coordi
     ));
     state.resolve_selected_protocol_metadata("range");
     state.complete_rebalance("range");
-    state.install_assignments(HashMap::from([("m1".to_string(), Bytes::new())]));
+    state.install_assignments(HashMap::from([("m1".to_owned(), Bytes::new())]));
     CoordinatorGroup::seeded(group_id, GroupKind::Classic(state), HashMap::new())
 }
 
@@ -82,7 +82,7 @@ fn consumer_group(group_id: &str, regex: &str, resolved: &[&str]) -> Coordinator
     m.subscribed_topic_regex = Some(regex.into());
     state.add_or_update_member(m);
     state.set_resolved_regex(regex.into(), ResolvedRegularExpression {
-        topics: resolved.iter().map(|s| (*s).to_string()).collect(),
+        topics: resolved.iter().map(|s| (*s).to_owned()).collect(),
         version: 1,
         timestamp_ms: 1,
     });
@@ -120,14 +120,14 @@ async fn offset_delete_matches_kafka_whole_responses() {
     } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
     create_topic(&allowed, "t").await;
     create_topic(&allowed, "u").await;
-    let coordinator = allowed.broker_arc_for_test().group_coordinator.clone();
+    let coordinator = Arc::clone(&allowed.broker_arc_for_test().group_coordinator);
     for group in [
         classic_group("connect-g", "connect", Bytes::from_static(b"opaque")),
         // `u-0` holds an offset, so its delete writes the tombstone below.
         CoordinatorGroup::seeded(
             "classic-g",
             classic_group("classic-g", "consumer", subscription(&["t", "ghost"])).kind,
-            HashMap::from([(("u".to_string(), 0), offset_entry(5))]),
+            HashMap::from([(("u".to_owned(), 0), offset_entry(5))]),
         ),
         classic_group("garbled-g", "consumer", Bytes::from_static(b"\x00")),
         consumer_group("kip848-g", "t.*", &["t"]),
@@ -288,7 +288,8 @@ async fn offset_delete_matches_kafka_whole_responses() {
             .offset_for_timestamp(before_ms)
             .expect("dated tombstone");
         check!(offset == log.log_end_offset() - 1);
-        check!(timestamp <= crate::time_util::now_ms());
+        check!(timestamp <= now_ms());
+        drop(log);
     }
 
     allowed.shutdown().await;
@@ -349,7 +350,7 @@ async fn delete_counting_writes(
     };
     let before = offsets_log_end(broker, group_id);
     let req = OffsetDeleteRequest {
-        group_id: group_id.to_string(),
+        group_id: group_id.to_owned(),
         ..req_with_topics(topics)
     };
     let resp = handle(
@@ -443,7 +444,7 @@ async fn offset_delete_on_a_streams_group_follows_its_topology() {
     for topic in ["t", "u", "r"] {
         create_topic(&broker, topic).await;
     }
-    let coordinator = broker.broker_arc_for_test().group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.broker_arc_for_test().group_coordinator);
     let topology = StreamsGroupTopologyValue {
         epoch: 1,
         subtopologies: vec![StoredSubtopology {
@@ -489,8 +490,8 @@ async fn offset_delete_on_a_streams_group_follows_its_topology() {
                 .tx
                 .send(GroupActorMessage::UpdateCommitted {
                     entries: vec![
-                        (("t".to_string(), 0), offset_entry(5)),
-                        (("u".to_string(), 0), offset_entry(5)),
+                        (("t".to_owned(), 0), offset_entry(5)),
+                        (("u".to_owned(), 0), offset_entry(5)),
                     ],
                     reply,
                 })
@@ -586,7 +587,7 @@ async fn offset_delete_tombstones_only_offsets_the_group_holds() {
         .partitions(3)
         .call()
         .await;
-    let coordinator = broker.broker_arc_for_test().group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.broker_arc_for_test().group_coordinator);
 
     let want: Vec<_> = rows
         .iter()
@@ -598,9 +599,9 @@ async fn offset_delete_tombstones_only_offsets_the_group_holds() {
         let mut group = CoordinatorGroup::seeded(
             group_id.as_str(),
             GroupKind::Classic(ClassicGroup::new(group_id.as_str())),
-            HashMap::from([(("t".to_string(), 0), offset_entry(5))]),
+            HashMap::from([(("t".to_owned(), 0), offset_entry(5))]),
         );
-        group.add_pending_txn_offsets(7, 0, [("t".to_string(), 1)]);
+        group.add_pending_txn_offsets(7, 0, [("t".to_owned(), 1)]);
         coordinator.seed_classic(&group_id, Box::new(group));
 
         let (resp, tombstones) = delete_counting_writes(&broker, &group_id, row.topics).await;

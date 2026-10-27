@@ -22,6 +22,7 @@ use {
     rate::CreationRates,
     std::{
         collections::HashMap,
+        hash,
         net::IpAddr,
         sync::{Arc, Mutex, MutexGuard, PoisonError},
         time::{Duration, Instant},
@@ -243,11 +244,12 @@ impl ConnectionLimiter {
     pub fn total(&self) -> usize { lock(&self.counts).total }
 }
 
-/// RAII release for one accepted connection. Moved into the spawned
-/// per-connection task, so it fires however the connection ends: clean
-/// close, error, panic, or task abort. On drop it decrements the total, the
-/// address and the listener counts, and removes a count that reaches 0 so
-/// the maps do not grow without bound.
+/// RAII release for one accepted connection.
+///
+/// Moved into the spawned per-connection task, so it fires however the
+/// connection ends: clean close, error, panic, or task abort. On drop it
+/// decrements the total, the address and the listener counts, and removes a
+/// count that reaches 0 so the maps do not grow without bound.
 pub struct ConnectionGuard {
     limiter: ConnectionLimiter,
     ip: IpAddr,
@@ -255,7 +257,7 @@ pub struct ConnectionGuard {
 }
 
 /// Decrement `key`'s count in `map`, removing it at 0.
-fn release<K: Eq + std::hash::Hash>(map: &mut HashMap<K, usize>, key: &K) {
+fn release<K: Eq + hash::Hash>(map: &mut HashMap<K, usize>, key: &K) {
     if let Some(count) = map.get_mut(key) {
         *count -= 1;
         if *count == 0 {

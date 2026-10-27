@@ -23,7 +23,8 @@ use {
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::prelude::{ByteSize, bytes, gibibytes, mebibytes},
     std::{
-        fs::File,
+        fs::{self, File, OpenOptions},
+        io::{self, ErrorKind},
         path::Path,
         sync::{
             Arc,
@@ -80,7 +81,7 @@ fn mixed_appends(segment_bytes: ByteSize) -> TempLog {
     for i in 0..80 {
         fixture.log.append(&mut mixed_batch(i)).unwrap();
     }
-    set_segment_size(&mut fixture.log, segment_bytes);
+    set_segment_size(&fixture.log, segment_bytes);
     fixture
 }
 
@@ -91,7 +92,7 @@ fn mixed_log(segment_bytes: ByteSize) -> TempLog {
     fixture
 }
 
-fn read(path: &Path) -> Vec<u8> { std::fs::read(path).unwrap() }
+fn read(path: &Path) -> Vec<u8> { fs::read(path).unwrap() }
 
 /// Every batch of the log, from its start.
 fn batches(log: &Log) -> Vec<RecordBatch> {
@@ -116,7 +117,7 @@ fn each_output_opens_as_a_recovery_scan_of_it_would(segment_bytes: ByteSize) {
     for output in outputs {
         let base = output.base_offset().0;
         let scratch = tempdir().unwrap();
-        std::fs::copy(
+        fs::copy(
             name::log_path(dir.path(), base),
             name::log_path(scratch.path(), base),
         )
@@ -153,7 +154,7 @@ fn each_output_opens_as_a_recovery_scan_of_it_would(segment_bytes: ByteSize) {
 struct CountedDirSyncs(AtomicUsize);
 
 impl LogIo for CountedDirSyncs {
-    fn sync_dir(&self, _dir: &Path) -> std::io::Result<()> {
+    fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -164,9 +165,9 @@ impl LogIo for CountedDirSyncs {
 fn directory_syncs_of_a_pass(segments: i64) -> usize {
     let TempLog { dir: _dir, mut log } = compact_test_log();
     append_keyed_samples(&mut log, segments + 1, |i| format!("k{}", i % 2));
-    set_segment_size(&mut log, gibibytes(1));
+    set_segment_size(&log, gibibytes(1));
     let io = Arc::new(CountedDirSyncs::default());
-    log.test_set_io(io.clone());
+    log.test_set_io(Arc::<CountedDirSyncs>::clone(&io));
     log.compact(&compaction_ctx()).unwrap();
     io.0.load(Ordering::SeqCst)
 }
@@ -190,10 +191,10 @@ fn an_output_that_is_not_what_the_build_wrote_is_refused() {
     let job = log.prepare_compaction(&compaction_ctx()).unwrap().unwrap();
     let built = job.build();
     let output = built.rewrites.as_ref().unwrap()[0].rewrite.log_swap.clone();
-    std::fs::OpenOptions::new()
+    OpenOptions::new()
         .append(true)
         .open(output)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, &[0; 16]))
+        .and_then(|mut file| io::Write::write_all(&mut file, &[0; 16]))
         .unwrap();
 
     let refused = log.finish_compaction(built);
@@ -208,10 +209,10 @@ fn an_output_that_is_not_what_the_build_wrote_is_refused() {
 struct FullIndexDisk;
 
 impl LogIo for FullIndexDisk {
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
         match target {
             IoTarget::OffsetIndex | IoTarget::TimeIndex => {
-                Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+                Err(io::Error::from(ErrorKind::StorageFull))
             }
             _ => FileIo.write_at(target, file, buf),
         }
@@ -229,7 +230,7 @@ fn the_build_writes_the_indexes_through_the_logs_io() {
     let failed = log.compact(&compaction_ctx());
 
     assert!(let Err(LogError::Io(error)) = failed);
-    check!(error.kind() == std::io::ErrorKind::StorageFull);
+    check!(error.kind() == ErrorKind::StorageFull);
     check!(batches(&log) == before);
     check!(cleaned_files(dir.path()).is_empty());
 }

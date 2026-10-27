@@ -10,7 +10,10 @@ use {
         broker::Broker,
         codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
         config_keys::MIN_INSYNC_REPLICAS,
-        elr::state::test_records,
+        elr::{
+            TopicElr,
+            state::{PartitionElr, test_records},
+        },
         handlers::{
             alter_partition_reassignments::test_support::{
                 ReassignmentTarget, ReplicationFactorPolicy, request, test_context,
@@ -19,7 +22,7 @@ use {
         },
         test_support::{
             broker_registration, finalize_elr_version_on,
-            start_broker_with_authorizer as start_broker,
+            start_broker_with_authorizer as start_broker, topic_freeze_record,
         },
     },
     assert2::{assert, check},
@@ -73,13 +76,13 @@ async fn seed_reassignable_partition(broker: &Broker) {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 broker_epoch: -1,
                 host: "localhost".into(),
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(1))
+                ..broker_registration(krabka_raft::NodeId(1))
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 broker_epoch: -1,
                 host: "localhost".into(),
                 port: 9093,
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
+                ..broker_registration(krabka_raft::NodeId(2))
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "orders".into(),
@@ -124,9 +127,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
     records.push(MetadataRecord::V1TopicConfig(
         krabka_metadata::TopicConfigRecord {
             topic: "orders".into(),
-            overrides: [(MIN_INSYNC_REPLICAS.to_string(), "3".to_string())]
-                .into_iter()
-                .collect(),
+            overrides: [(MIN_INSYNC_REPLICAS.to_owned(), "3".to_owned())].into(),
         },
     ));
     records.extend(test_records("orders", "7:2,3:"));
@@ -176,8 +177,8 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     assert!(partition.replicas == vec![NodeId(1), NodeId(2)]);
     assert!(partition.isr == vec![NodeId(1)]);
     assert!(
-        crate::elr::TopicElr::of_topic(&image, "orders").partition(7)
-            == crate::elr::state::PartitionElr {
+        TopicElr::of_topic(&image, "orders").partition(7)
+            == PartitionElr {
                 eligible_leader_replicas: vec![2],
                 last_known_elr: vec![],
             }
@@ -331,7 +332,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
         .controller
         .submit_change(vec![MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
             set_at_ms: 10,
-            ..crate::test_support::topic_freeze_record().call()
+            ..topic_freeze_record().call()
         })])
         .await
         .expect("seed topic freeze");

@@ -43,14 +43,13 @@ pub(super) const FILE_MAGIC: [u8; 4] = *b"KAUD";
 pub(super) const FORMAT_VERSION: i16 = 0;
 
 /// The length of [`file_header`].
-pub(crate) const HEADER_LEN: usize = FILE_MAGIC.len() + 2;
+pub const HEADER_LEN: usize = FILE_MAGIC.len() + 2;
 
 /// The header a file in the audit spool directory starts with.
 pub(super) fn file_header() -> [u8; HEADER_LEN] {
-    let mut header = [0_u8; HEADER_LEN];
-    header[..FILE_MAGIC.len()].copy_from_slice(&FILE_MAGIC);
-    header[FILE_MAGIC.len()..].copy_from_slice(&FORMAT_VERSION.to_be_bytes());
-    header
+    let [m0, m1, m2, m3] = FILE_MAGIC;
+    let [v0, v1] = FORMAT_VERSION.to_be_bytes();
+    [m0, m1, m2, m3, v0, v1]
 }
 
 /// `bytes` with its header checked and stripped.
@@ -68,48 +67,62 @@ pub(super) fn strip_file_header<'a>(file: &str, bytes: &'a [u8]) -> Result<&'a [
     let (header, body) = bytes
         .split_at_checked(HEADER_LEN)
         .ok_or_else(|| unsupported(None))?;
-    let (magic, version) = header.split_at(FILE_MAGIC.len());
-    if magic != FILE_MAGIC {
+    let Some((magic, &[v0, v1])) = header.split_first_chunk::<4>() else {
+        return Err(unsupported(None));
+    };
+    if *magic != FILE_MAGIC {
         return Err(unsupported(None));
     }
-    let version = i16::from_be_bytes([version[0], version[1]]);
+    let version = i16::from_be_bytes([v0, v1]);
     if version != FORMAT_VERSION {
         return Err(unsupported(Some(version)));
     }
     Ok(body)
 }
 
-pub(super) fn encode_frame(record: &AuditRecord) -> Vec<u8> {
-    let body = encode_record(record);
-    let len = u32::try_from(body.len()).expect("audit record fits u32");
+/// The length-prefixed frame that carries `record`.
+///
+/// # Errors
+///
+/// [`AuditError::Io`] when the record, a field, or the header count does not
+/// fit the format's `u32` length.
+pub(super) fn encode_frame(record: &AuditRecord) -> Result<Vec<u8>, AuditError> {
+    let body = encode_record(record)?;
+    let len = u32_len(body.len(), "audit record")?;
     let mut frame = Vec::with_capacity(4 + body.len());
     frame.extend_from_slice(&len.to_be_bytes());
     frame.extend_from_slice(&body);
-    frame
+    Ok(frame)
 }
 
-fn encode_record(record: &AuditRecord) -> Vec<u8> {
+fn encode_record(record: &AuditRecord) -> Result<Vec<u8>, AuditError> {
     let mut b = Vec::new();
     b.push(record.class.tag());
-    put_bytes(&mut b, &record.value);
-    let hc = u32::try_from(record.headers.len()).expect("header count fits u32");
+    put_bytes(&mut b, &record.value)?;
+    let hc = u32_len(record.headers.len(), "audit header count")?;
     b.extend_from_slice(&hc.to_be_bytes());
     for (k, v) in &record.headers {
-        put_bytes(&mut b, k.as_bytes());
-        put_bytes(&mut b, v);
+        put_bytes(&mut b, k.as_bytes())?;
+        put_bytes(&mut b, v)?;
     }
-    b
+    Ok(b)
 }
 
-fn put_bytes(b: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len()).expect("field fits u32");
+fn put_bytes(b: &mut Vec<u8>, bytes: &[u8]) -> Result<(), AuditError> {
+    let len = u32_len(bytes.len(), "audit record field")?;
     b.extend_from_slice(&len.to_be_bytes());
     b.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn u32_len(len: usize, what: &str) -> Result<u32, AuditError> {
+    u32::try_from(len).map_err(|_| AuditError::Io(format!("{what} length {len} exceeds u32")))
 }
 
 pub(super) fn decode_record(mut b: &[u8]) -> Option<AuditRecord> {
-    let class = AuditEventClass::from_tag(*b.first()?)?;
-    b = &b[1..];
+    let (&tag, rest) = b.split_first()?;
+    let class = AuditEventClass::from_tag(tag)?;
+    b = rest;
     let value = take_bytes(&mut b)?;
     let hc = usize::try_from(take_u32(&mut b)?).unwrap_or(0);
     let mut headers = Vec::with_capacity(hc);
@@ -126,22 +139,16 @@ pub(super) fn decode_record(mut b: &[u8]) -> Option<AuditRecord> {
 }
 
 fn take_u32(b: &mut &[u8]) -> Option<u32> {
-    if b.len() < 4 {
-        return None;
-    }
-    let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-    *b = &b[4..];
-    Some(n)
+    let (n, rest) = b.split_first_chunk::<4>()?;
+    *b = rest;
+    Some(u32::from_be_bytes(*n))
 }
 
 fn take_bytes(b: &mut &[u8]) -> Option<Vec<u8>> {
     let len = usize::try_from(take_u32(b)?).unwrap_or(0);
-    if b.len() < len {
-        return None;
-    }
-    let out = b[..len].to_vec();
-    *b = &b[len..];
-    Some(out)
+    let (out, rest) = b.split_at_checked(len)?;
+    *b = rest;
+    Some(out.to_vec())
 }
 
 #[cfg(test)]

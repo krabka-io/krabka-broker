@@ -13,6 +13,7 @@ use {
         DeleteDelegationTokenRecord, MetadataImage, MetadataRecord, PartitionRecord,
         TopicFreezeRecord, from_kraft_value, to_kraft_values,
     },
+    std::collections::HashSet,
 };
 
 pub(super) struct MutationAdmission<'a> {
@@ -221,7 +222,7 @@ impl MutationAdmission<'_> {
         registration_change_must_wait: impl Fn(krabka_metadata::NodeId) -> bool,
     ) -> Result<(), RaftError> {
         let mut freeze_in_batch = false;
-        let mut token_create_in_batch = std::collections::HashSet::new();
+        let mut token_create_in_batch = HashSet::new();
         for record in records {
             match record {
                 MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
@@ -377,7 +378,7 @@ pub(super) fn prepare_records<'a>(
                     pending.count,
                 ) else {
                     return Err(RaftError::ChangeRejected(
-                        "pending offset reservation chain is invalid".to_string(),
+                        "pending offset reservation chain is invalid".to_owned(),
                     ));
                 };
                 next_offset = frontier;
@@ -538,13 +539,14 @@ mod tests {
         },
         krabka_metadata::{DelegationTokenRecord, MetadataRecord, PartitionRecord},
         krabka_security::KafkaPrincipal,
+        std::slice,
         uuid::Uuid,
     };
 
     fn principal(name: &str) -> KafkaPrincipal {
         KafkaPrincipal {
-            principal_type: "User".to_string(),
-            name: name.to_string(),
+            principal_type: "User".to_owned(),
+            name: name.to_owned(),
         }
     }
 
@@ -729,7 +731,7 @@ mod tests {
             image: &image,
             uncommitted_tail: false,
         }
-        .check_compare_and_set_records(std::slice::from_ref(&tok), false, |_| false);
+        .check_compare_and_set_records(slice::from_ref(&tok), false, |_| false);
         assert2::assert!(matches!(res_exists, Err(RaftError::ChangeRejected(_))));
 
         // Token create when hwm < log_end_offset (uncommitted tail) is rejected
@@ -748,7 +750,7 @@ mod tests {
             image: &image,
             uncommitted_tail: true,
         }
-        .check_compare_and_set_records(std::slice::from_ref(&tok2), false, |_| false);
+        .check_compare_and_set_records(slice::from_ref(&tok2), false, |_| false);
         assert2::assert!(matches!(res_tail, Err(RaftError::ChangeRejected(_))));
 
         // When delegation_token_guarded is true, create is admitted

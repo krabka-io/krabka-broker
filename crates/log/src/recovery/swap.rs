@@ -33,11 +33,11 @@ use {
     },
     std::{
         collections::BTreeSet,
-        fs::File,
+        fs::{self, File},
         io::{ErrorKind, Read, Seek, SeekFrom},
         path::{Path, PathBuf},
     },
-    tracing::instrument,
+    tracing::{field, instrument},
     zerocopy::FromBytes,
 };
 
@@ -155,7 +155,7 @@ pub fn swap_orphan_recover(dir: &Path) -> Result<(), LogError> { recover_swaps(&
 #[instrument(
     level = "info",
     skip_all,
-    fields(dir = %dir.display(), swaps = tracing::field::Empty),
+    fields(dir = %dir.display(), swaps = field::Empty),
     err,
 )]
 pub fn recover_swaps(io: &dyn LogIo, dir: &Path) -> Result<(), LogError> {
@@ -176,7 +176,7 @@ pub fn recover_swaps(io: &dyn LogIo, dir: &Path) -> Result<(), LogError> {
             LocalRecoverySwapAction::CompleteSwap => {
                 let next = swap_next_offset(&swap_path(dir, base, "log"), base)?;
                 let segments = listing.log_bases.iter().copied().chain([base]);
-                for segment in segments.collect::<BTreeSet<_>>() {
+                for segment in segments {
                     if local_recovery_swap_replaces(base, next, segment) {
                         remove_replaced_segment(io, dir, segment)?;
                     }
@@ -272,7 +272,7 @@ impl Listing {
             log_bases: BTreeSet::new(),
             cleaned: BTreeSet::new(),
         };
-        for entry in std::fs::read_dir(dir)? {
+        for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let file_name = entry.file_name();
             let Some(value) = file_name.to_str() else {

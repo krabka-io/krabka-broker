@@ -90,8 +90,8 @@ fn topic_describe_places_write_freeze_beside_the_stored_overrides() {
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "orders".into(),
         overrides: maplit::btreemap! {
-        config_keys::CLEANUP_POLICY.to_string() => "compact".to_string(),
-        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
+        config_keys::CLEANUP_POLICY.to_owned() => "compact".to_owned(),
+        config_keys::RETENTION_MS.to_owned() => "60000".to_owned()},
     }));
 
     let result = describe_topic(&image, "orders", None);
@@ -136,7 +136,7 @@ fn topic_describe_applies_the_key_filter_to_the_synthesised_key() {
             Vec::new(),
         ),
     ] {
-        let configuration_keys = Some(keys.iter().map(|key| (*key).to_string()).collect());
+        let configuration_keys = Some(keys.iter().map(|key| (*key).to_owned()).collect());
         let result = describe_topic(&image, "orders", configuration_keys);
         let names: Vec<&str> = result.configs.iter().map(|c| c.name.as_str()).collect();
         check!(names == expected, "{label}");

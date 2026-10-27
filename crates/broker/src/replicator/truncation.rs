@@ -40,6 +40,7 @@ use {
         UNKNOWN_PENDING_UPLOAD_OFFSET, earliest_pending_upload_offset,
         should_fetch_from_last_tiered_offset,
     },
+    std::sync::{PoisonError, atomic},
     tracing::{info, warn},
 };
 
@@ -99,11 +100,12 @@ pub(super) fn diverging_epoch_truncation_target(
     diverging: &EpochEndOffset,
 ) -> Offset {
     let leader_epoch = LeaderEpoch(diverging.epoch);
-    let log = part.log.lock().expect("log mutex poisoned");
+    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
     let log_end = log.log_end_offset();
     let (epoch, end_offset) = log
         .epoch_checkpoint()
         .epoch_and_offset_for(leader_epoch, log_end);
+    drop(log);
     let follower = EpochEnd { epoch, end_offset };
     diverging_truncation_offset(
         follower,
@@ -368,7 +370,7 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
             .map_or(cfg.leader_epoch.0, |partition| {
                 partition
                     .current_leader_epoch
-                    .load(std::sync::atomic::Ordering::Acquire)
+                    .load(atomic::Ordering::Acquire)
             });
     recover_offset_moved_to_tiered_storage(cfg, |timestamp| {
         leader_list_offset(cfg, our_epoch, timestamp)
@@ -611,9 +613,7 @@ pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return Ok(());
     };
-    let our_epoch = part
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    let our_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
     drop(part);
 
     let client = leader_connection(cfg)
@@ -735,7 +735,9 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        krabka_protocol::records::{Record, RecordBatch},
         krabka_raft::NodeId,
+        std::{cell::RefCell, future, net::TcpListener},
     };
 
     /// One row per branch of `getOffsetTruncationState`.
@@ -1014,7 +1016,7 @@ mod tests {
     fn unreachable_local_config() -> ConfigWithDir {
         let (mut cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         cfg.leader_port = listener.local_addr().unwrap().port();
         drop(listener);
         ConfigWithDir { cfg, dir: log_dir }
@@ -1119,15 +1121,15 @@ mod tests {
             {
                 let mut log = partition.log.lock().unwrap();
                 for _ in 0..6 {
-                    let mut batch = krabka_protocol::records::RecordBatch {
+                    let mut batch = RecordBatch {
                         partition_leader_epoch: 4,
-                        records: vec![krabka_protocol::records::Record::default()],
+                        records: vec![Record::default()],
                         ..Default::default()
                     };
                     log.append(&mut batch).unwrap();
                 }
             }
-            let asked = std::cell::RefCell::new(Vec::new());
+            let asked = RefCell::new(Vec::new());
 
             let action = recover_offset_out_of_range(&cfg, |timestamp| {
                 asked.borrow_mut().push(timestamp);
@@ -1136,7 +1138,7 @@ mod tests {
                     EARLIEST_TIMESTAMP => earliest.clone(),
                     other => Err(format!("unexpected sentinel {other}")),
                 };
-                std::future::ready(answer)
+                future::ready(answer)
             })
             .await;
 
@@ -1360,9 +1362,9 @@ mod tests {
         {
             let mut log = partition.log.lock().unwrap();
             for _ in 0..replica.records {
-                let mut batch = krabka_protocol::records::RecordBatch {
+                let mut batch = RecordBatch {
                     partition_leader_epoch: 4,
-                    records: vec![krabka_protocol::records::Record {
+                    records: vec![Record {
                         key: Some(bytes::Bytes::from_static(b"k")),
                         ..Default::default()
                     }],
@@ -1371,10 +1373,10 @@ mod tests {
                 log.append(&mut batch).unwrap();
             }
         }
-        let asked = std::cell::RefCell::new(Vec::new());
+        let asked = RefCell::new(Vec::new());
         let lookup = |timestamp| {
             asked.borrow_mut().push(timestamp);
-            std::future::ready(match timestamp {
+            future::ready(match timestamp {
                 LATEST_TIMESTAMP => Ok(leader.latest),
                 EARLIEST_TIMESTAMP => Ok(leader.earliest),
                 EARLIEST_LOCAL_TIMESTAMP => Ok(leader.earliest_local),
@@ -1408,7 +1410,7 @@ mod tests {
 
         let action = recover_offset_out_of_range(&cfg, |timestamp| {
             asked.push(timestamp);
-            std::future::ready(Ok(0))
+            future::ready(Ok(0))
         })
         .await;
 

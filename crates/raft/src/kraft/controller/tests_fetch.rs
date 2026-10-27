@@ -29,7 +29,13 @@ use {
         },
     },
     assert2::assert,
-    std::time::Duration as StdDuration,
+    krabka_units::prelude,
+    std::{
+        iter,
+        sync::{self, Mutex},
+        time::{Duration as StdDuration, UNIX_EPOCH},
+    },
+    tokio::{sync::mpsc::UnboundedReceiver, time},
 };
 
 #[yare::parameterized(
@@ -113,7 +119,7 @@ fn leader_answer(leader_id: NodeId, leader_epoch: Epoch) -> wire::FetchAnswer {
 /// The endpoint every test voter announces (`test_support::voter_set`).
 fn test_endpoint() -> wire::LeaderEndpoint {
     wire::LeaderEndpoint {
-        host: "127.0.0.1".to_string(),
+        host: "127.0.0.1".to_owned(),
         port: 9_093,
     }
 }
@@ -137,7 +143,7 @@ fn fetch_request(from: NodeId, current_leader_epoch: i32) -> bytes::Bytes {
 /// engine learns from responses.
 #[derive(Default)]
 struct EndpointRecorder {
-    endpoints: std::sync::Mutex<Vec<LearnedEndpoint>>,
+    endpoints: Mutex<Vec<LearnedEndpoint>>,
 }
 
 /// The address a transport was told a leader is reached at.
@@ -364,12 +370,7 @@ fn two_voter_engine(role: TwoVoterRole) -> EngineInDir {
 }
 
 /// A node that follows node 1 at epoch 1, with its peer sends recorded.
-fn following_node_one(
-    me: NodeId,
-) -> (
-    EngineInDir,
-    tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
-) {
+fn following_node_one(me: NodeId) -> (EngineInDir, UnboundedReceiver<CapturedPeerSend>) {
     let (mut engine, dir) = build_engine_only().me(me).call();
     engine.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(1),
@@ -381,11 +382,9 @@ fn following_node_one(
 
 /// The peer that each Fetch went to over the next 50 ms, failing on any other
 /// send. `None` when nothing was sent.
-async fn fetches_sent(
-    sends: &mut tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
-) -> Option<NodeId> {
-    tokio::time::sleep(StdDuration::from_millis(50)).await;
-    let sent = std::iter::from_fn(|| sends.try_recv().ok())
+async fn fetches_sent(sends: &mut UnboundedReceiver<CapturedPeerSend>) -> Option<NodeId> {
+    time::sleep(StdDuration::from_millis(50)).await;
+    let sent = iter::from_fn(|| sends.try_recv().ok())
         .map(|send| (send.peer, send.api_key))
         .collect::<Vec<_>>();
     match sent.as_slice() {
@@ -680,7 +679,7 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
 struct BroadcastFixture {
     engine: Engine,
     dir: tempfile::TempDir,
-    sends: tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
+    sends: UnboundedReceiver<CapturedPeerSend>,
 }
 
 fn broadcast_fixture() -> BroadcastFixture {
@@ -813,18 +812,18 @@ async fn quorum_epoch_requests_teach_the_leader_endpoints(case: EndpointRequestC
 
     let learned = vec![LearnedEndpoint {
         leader: NodeId(4),
-        address: "c4.example:9093".to_string(),
+        address: "c4.example:9093".to_owned(),
     }];
     let (api, body, remembered) = match case {
-        EndpointRequestCase::Begin => (api_key::BEGIN_QUORUM_EPOCH, begin_body, learned.clone()),
+        EndpointRequestCase::Begin => (api_key::BEGIN_QUORUM_EPOCH, begin_body, learned),
         EndpointRequestCase::End => (api_key::END_QUORUM_EPOCH, end_body, learned),
         EndpointRequestCase::BeginWithoutEndpoints => {
             (api_key::BEGIN_QUORUM_EPOCH, bare_begin_body, Vec::new())
         }
     };
     let (mut replica, _dir) = build_engine_only().call();
-    let recorder = std::sync::Arc::new(EndpointRecorder::default());
-    replica.peers = recorder.clone();
+    let recorder = sync::Arc::new(EndpointRecorder::default());
+    replica.peers = sync::Arc::<EndpointRecorder>::clone(&recorder);
     let (reply, mut answer) = oneshot::channel();
     replica.on_inbound(if api == api_key::BEGIN_QUORUM_EPOCH {
         Inbound::BeginQuorumEpoch {
@@ -851,7 +850,7 @@ struct SentFetch {
 }
 
 async fn check_sent_fetch(
-    engine: &mut Engine,
+    engine: &Engine,
     sends: &mut mpsc::UnboundedReceiver<super::test_support::CapturedPeerSend>,
     expected: SentFetch,
 ) {
@@ -892,7 +891,7 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
 
-    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+    check_sent_fetch(&engine, &mut sends, SentFetch {
         fetch_epoch: 7,
         fetch_offset: 10,
     })
@@ -903,7 +902,7 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         .log
         .append_at(&mut batch, Offset(10))
         .expect("append after snapshot");
-    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+    check_sent_fetch(&engine, &mut sends, SentFetch {
         fetch_epoch: 9,
         fetch_offset: 11,
     })
@@ -989,7 +988,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
 
     engine.on_fetch_response(NodeId(2), &body);
     assert2::assert!(
-        tokio::time::timeout(StdDuration::from_millis(20), async {
+        time::timeout(StdDuration::from_millis(20), async {
             loop {
                 let send = recv_peer_send(&mut sends).await;
                 if send.api_key == api_key::FETCH_SNAPSHOT {
@@ -1022,7 +1021,7 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         .ids(&[NodeId(1), NodeId(2)])
         .call();
     let transport = Arc::new(EndpointRecorder::default());
-    observer.peers = transport.clone();
+    observer.peers = Arc::<EndpointRecorder>::clone(&transport);
     assert2::assert!(matches!(observer.core.role(), Role::Observer {
         leader_id: None,
         ..
@@ -1032,7 +1031,7 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         leader_id: Some(NodeId(2)),
         epoch,
         endpoint: Some(wire::LeaderEndpoint {
-            host: "controller-2".to_string(),
+            host: "controller-2".to_owned(),
             port: 9_093,
         }),
     };
@@ -1053,7 +1052,7 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         *transport.endpoints.lock().expect("endpoint lock")
             == vec![LearnedEndpoint {
                 leader: NodeId(2),
-                address: "controller-2:9093".to_string()
+                address: "controller-2:9093".to_owned()
             }]
     );
 
@@ -1451,7 +1450,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     assert2::check!(leader_caught_ms > 1_700_000_000_000);
 
     // 2. After Node 2 fetches at the current log end offset:
-    tokio::time::sleep(StdDuration::from_millis(10)).await;
+    time::sleep(StdDuration::from_millis(10)).await;
     let _rx = fetch_at_tip(&mut engine, NodeId(2), 1);
 
     let snap2 = engine.quorum_state_snapshot();
@@ -1615,7 +1614,7 @@ async fn kraft_controller_metadata_fetch_returns_slice() {
         .unwrap();
 
     let slice = ctrl
-        .metadata_fetch(0, krabka_units::prelude::bytes(1024), None)
+        .metadata_fetch(0, prelude::bytes(1024), None)
         .await
         .unwrap();
     assert2::check!(!slice.records.is_empty());
@@ -1632,7 +1631,7 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
 
     // When wall_clock_base is before UNIX_EPOCH, duration_since returns Err,
     // so map_or fallback -1 must be returned for all timestamps.
-    engine.wall_clock_base = std::time::UNIX_EPOCH - StdDuration::from_secs(100_000);
+    engine.wall_clock_base = UNIX_EPOCH - StdDuration::from_secs(100_000);
     // Shift clock_base back so engine.now() > 0 and progress.last_fetch / progress.last_caught_up > 0
     engine.clock_base = Instant::now() - StdDuration::from_millis(50);
     drop(fetch_at_tip(&mut engine, NodeId(2), 1));

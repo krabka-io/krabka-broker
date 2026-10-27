@@ -3,10 +3,20 @@
 //! Each test runs the binary as a subprocess. It then asserts on the exit
 //! code and on the on-disk output. These tests show that the clap surface and
 //! the bootstrap-write path work end-to-end without a broker.
+#![cfg(test)]
 
-use {krabka_metadata::MetadataRecord, std::process::Command};
+use {
+    krabka_broker::bootstrap,
+    krabka_metadata::MetadataRecord,
+    std::{
+        collections::BTreeMap,
+        fs,
+        path::PathBuf,
+        process::{Command, Output},
+    },
+};
 
-fn run_format(dir: &tempfile::TempDir, args: &[&str]) -> std::process::Output {
+fn run_format(dir: &tempfile::TempDir, args: &[&str]) -> Output {
     // The monorepo spells this `krabka format`; here the command is its own
     // binary, so the `format` subcommand argument is gone and the rest is the
     // same. `CARGO_BIN_EXE_<bin>` is set because the binary is in this package.
@@ -20,10 +30,10 @@ fn run_format(dir: &tempfile::TempDir, args: &[&str]) -> std::process::Output {
 }
 
 fn bootstrap_records(dir: &tempfile::TempDir) -> Vec<MetadataRecord> {
-    krabka_broker::bootstrap::load_bootstrap_records(dir.path()).expect("bootstrap records")
+    bootstrap::load_bootstrap_records(dir.path()).expect("bootstrap records")
 }
 
-fn offset_zero_checkpoint(dir: &tempfile::TempDir) -> std::path::PathBuf {
+fn offset_zero_checkpoint(dir: &tempfile::TempDir) -> PathBuf {
     dir.path()
         .join("__cluster_metadata-0")
         .join("00000000000000000000-0000000000.checkpoint")
@@ -38,7 +48,7 @@ fn check_static_records(records: &[MetadataRecord]) {
 
 fn check_dynamic_checkpoint(dir: &tempfile::TempDir, records: &[MetadataRecord]) {
     check_static_records(records);
-    assert2::assert!(std::fs::metadata(offset_zero_checkpoint(dir)).is_ok_and(|m| m.len() > 0));
+    assert2::assert!(fs::metadata(offset_zero_checkpoint(dir)).is_ok_and(|m| m.len() > 0));
 }
 
 fn check_refused_case(args: &[&str], expected: i32) {
@@ -51,7 +61,7 @@ fn check_refused_case(args: &[&str], expected: i32) {
 fn formatted_directory_id(dir: &tempfile::TempDir, args: &[&str]) -> uuid::Uuid {
     let out = run_format(dir, args);
     assert2::assert!(out.status.success());
-    krabka_broker::bootstrap::read_directory_id(dir.path()).expect("formatted directory id")
+    bootstrap::read_directory_id(dir.path()).expect("formatted directory id")
 }
 
 #[test]
@@ -64,14 +74,14 @@ fn format_with_add_scram_writes_credential_record() {
         "SCRAM-SHA-512=[name=admin,password=admin-secret,iterations=4096]",
     ]);
     assert2::assert!(out.status.success());
-    let bin_meta = std::fs::metadata(dir.path().join("bootstrap.records.bin"))
+    let bin_meta = fs::metadata(dir.path().join("bootstrap.records.bin"))
         .expect("bootstrap.records.bin must exist");
     assert2::assert!(bin_meta.len() > 0);
     let records = bootstrap_records(&dir);
     // Static format seeds every registered feature whose default at Kafka
     // 4.3's latest production release, 4.3-IV0, is > 0 (features at 0 are
     // omitted per KIP-1022), plus the SCRAM credential.
-    let features: std::collections::BTreeMap<&str, i16> = records
+    let features: BTreeMap<&str, i16> = records
         .iter()
         .filter_map(|record| match record {
             MetadataRecord::V1FeatureLevel(f) => Some((f.name.as_str(), f.level)),
@@ -80,7 +90,7 @@ fn format_with_add_scram_writes_credential_record() {
         .collect();
     assert2::assert!(
         features
-            == std::collections::BTreeMap::from([
+            == BTreeMap::from([
                 ("eligible.leader.replicas.version", 1),
                 ("group.version", 1),
                 ("metadata.version", 30),
@@ -258,7 +268,7 @@ fn static_kraft_version_zero_is_accepted() {
 fn node_id_is_required() {
     let parent = tempfile::tempdir().unwrap();
     let dir = parent.path().join("data");
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_krabka-format"))
+    let out = Command::new(env!("CARGO_BIN_EXE_krabka-format"))
         .args([
             "--log-dir",
             dir.to_str().unwrap(),

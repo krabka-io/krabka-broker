@@ -1,9 +1,12 @@
+#![cfg(test)]
+
 mod support;
 
 use {
     crate::support::admin::topic_spec,
     assert2::check,
     krabka_client_admin::{AdminClient, AdminError, ConfigResource, DescribeConfigsOptions},
+    std::slice,
 };
 
 krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
@@ -16,11 +19,7 @@ struct StartedBroker {
 }
 
 async fn start_broker() -> StartedBroker {
-    let StartedBoundBroker {
-        broker,
-        controller_addr: _,
-        dir,
-    } = start_bound(|_| {}).await;
+    let StartedBoundBroker { broker, dir, .. } = start_bound(|_| {}).await;
     StartedBroker { broker, dir }
 }
 
@@ -29,10 +28,7 @@ async fn describe_topic(
     topic: &ConfigResource,
 ) -> krabka_client_admin::DescribeConfigsResults {
     controller_admin
-        .describe_configs(
-            std::slice::from_ref(topic),
-            DescribeConfigsOptions::default(),
-        )
+        .describe_configs(slice::from_ref(topic), DescribeConfigsOptions::default())
         .await
         .unwrap()
 }
@@ -41,7 +37,7 @@ async fn describe_topic(
 async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc() {
     let StartedBroker { broker, dir: _dir } = start_broker().await;
     let broker_bootstrap = broker.listen_addr().to_string();
-    let mut broker_admin = AdminClient::connect(std::slice::from_ref(&broker_bootstrap))
+    let mut broker_admin = AdminClient::connect(slice::from_ref(&broker_bootstrap))
         .await
         .unwrap();
     let created = broker_admin
@@ -55,7 +51,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
 
     let controller_bootstrap = broker.controller_addr().to_string();
     let mut controller_admin =
-        AdminClient::connect_controller(std::slice::from_ref(&controller_bootstrap))
+        AdminClient::connect_controller(slice::from_ref(&controller_bootstrap))
             .await
             .unwrap();
     let topic = ConfigResource::topic("controller-admin");

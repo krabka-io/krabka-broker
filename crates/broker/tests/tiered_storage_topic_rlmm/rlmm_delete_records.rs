@@ -30,8 +30,15 @@ use {
     assert2::{assert, check},
     krabka_client_admin::{AdminClient, DeleteRecordsOp},
     krabka_client_core::Client,
-    krabka_protocol::primitives::uuid::Uuid as WireUuid,
-    std::time::{Duration, Instant},
+    krabka_protocol::{
+        owned::fetch_response::PartitionData, primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
+    },
+    std::{
+        path::{Path, PathBuf},
+        time::{Duration, Instant},
+    },
+    tokio::{task, time},
 };
 
 const TOPIC: &str = "tiered-delete-records-itest";
@@ -81,7 +88,7 @@ async fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case() 
     let outcomes = admin
         .delete_records(
             &[DeleteRecordsOp {
-                topic: TOPIC.to_string(),
+                topic: TOPIC.to_owned(),
                 partition: 0,
                 offset: DELETE_THROUGH,
             }],
@@ -145,7 +152,7 @@ async fn create_tiered_topic(client: &Client) {
 // intentional: remote-tier object presence is filesystem state on the
 // `LocalTieredStorage` backend — it is not in the metadata image and has no
 // broker metric, so poll the remote dir directly (bounded loop).
-async fn await_copied_segments(remote_dir: &std::path::Path, want: usize) {
+async fn await_copied_segments(remote_dir: &Path, want: usize) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if remote_log_files(remote_dir).len() >= want {
@@ -155,7 +162,7 @@ async fn await_copied_segments(remote_dir: &std::path::Path, want: usize) {
             Instant::now() <= deadline,
             "fewer than {want} segments tiered within 30s"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 
@@ -166,7 +173,7 @@ async fn await_copied_segments(remote_dir: &std::path::Path, want: usize) {
 /// segments while this runs, so a total that stays level says nothing.
 // intentional: same filesystem-state observation as `await_copied_segments`,
 // in the other direction.
-async fn await_remote_segments_freed(before: &[std::path::PathBuf]) {
+async fn await_remote_segments_freed(before: &[PathBuf]) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if before.iter().any(|path| !path.exists()) {
@@ -177,15 +184,11 @@ async fn await_remote_segments_freed(before: &[std::path::PathBuf]) {
             "the log-start breach freed none of the {} segment objects within 30s",
             before.len()
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-async fn fetch_once(
-    client: &Client,
-    topic_id: WireUuid,
-    fetch_offset: i64,
-) -> krabka_protocol::owned::fetch_response::PartitionData {
+async fn fetch_once(client: &Client, topic_id: WireUuid, fetch_offset: i64) -> PartitionData {
     let resp = client
         .send(
             single_partition_fetch()
@@ -221,7 +224,7 @@ async fn await_fetch_records(
         if let Some(value) = partition
             .records
             .as_ref()
-            .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+            .and_then(RecordsPayload::as_v2)
             .and_then(|batches| batches.first())
             .and_then(|batch| batch.records.first())
         {
@@ -230,6 +233,6 @@ async fn await_fetch_records(
         if Instant::now() > deadline {
             return None;
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }

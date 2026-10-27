@@ -12,8 +12,8 @@ use {
         txn_index::TxnIndex,
     },
     krabka_ids::Offset,
-    std::collections::HashSet,
-    tracing::instrument,
+    std::{collections::HashSet, sync::Arc, time::SystemTime},
+    tracing::{field, instrument},
 };
 
 impl Log {
@@ -28,7 +28,7 @@ impl Log {
         self.stamp_indexes
             .retain(|base, _| !drop_set.contains(base));
         for base in bases {
-            self.retire_segment(*base, std::time::SystemTime::now())?;
+            self.retire_segment(*base, SystemTime::now())?;
             producer_snapshot::remove_at(&self.dir, *base)?;
         }
         Ok(())
@@ -38,7 +38,7 @@ impl Log {
     pub(super) fn remove_truncated_segment_files(&mut self, base: Offset) -> Result<(), LogError> {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
-        let now = std::time::SystemTime::now();
+        let now = SystemTime::now();
         self.retire_files(
             base,
             now,
@@ -61,8 +61,6 @@ impl Log {
     #[instrument(level = "info", skip(self), err)]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
         let log_end = self.log_end_offset();
@@ -107,12 +105,9 @@ impl Log {
         );
 
         // Drop exactly the sealed suffix selected by the verified plan.
-        while self.segments.len() > plan.retained_sealed {
-            let base = self
-                .segments
-                .last()
-                .expect("length exceeds retained prefix")
-                .base_offset();
+        while self.segments.len() > plan.retained_sealed
+            && let Some(base) = self.segments.last().map(Segment::base_offset)
+        {
             self.remove_truncated_segment_files(base)?;
             self.segments.pop();
             self.sealed_txn_indexes.remove(&base);
@@ -137,10 +132,13 @@ impl Log {
                 let rel = krabka_verified::truncation_relative_offset(base.0, offset.0)
                     .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
                 seg.truncate_to_relative(rel)?;
-                let mut active_txn_index = self
-                    .sealed_txn_indexes
-                    .remove(&base)
-                    .expect("sealed segment must have a cached transaction index");
+                let mut active_txn_index =
+                    self.sealed_txn_indexes.remove(&base).ok_or_else(|| {
+                        LogError::Corrupt(format!(
+                            "sealed segment {} has no cached transaction index",
+                            base.0
+                        ))
+                    })?;
                 active_txn_index.truncate_from(offset)?;
                 self.active_txn_index = active_txn_index;
                 let stamp_index_path = seg.stamp_index_path();
@@ -153,7 +151,7 @@ impl Log {
                 }
             } else {
                 let mut new_seg = Segment::create(&self.dir, offset)?;
-                new_seg.set_io(self.io.clone());
+                new_seg.set_io(Arc::clone(&self.io));
                 self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
                 let stamp_index_path = new_seg.stamp_index_path();
                 self.active = Some(new_seg);
@@ -204,7 +202,7 @@ impl Log {
         // the cut landed inside a batch, and a start past the end would name
         // records the log no longer holds.
         self.lower_log_start_offset(offset.min(new_end))?;
-        self.reap_deleted_files(std::time::SystemTime::now())
+        self.reap_deleted_files(SystemTime::now())
     }
 
     /// Trim from the start of the log and return the resulting
@@ -223,7 +221,7 @@ impl Log {
     #[instrument(
         level = "info",
         skip(self),
-        fields(new_log_start = tracing::field::Empty),
+        fields(new_log_start = field::Empty),
         err,
     )]
     pub fn trim_to_offset(&mut self, target: Offset) -> Result<Offset, LogError> {

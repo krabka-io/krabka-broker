@@ -47,7 +47,7 @@ fn seed_metrics_subscription(image: &mut MetadataImage) {
         krabka_metadata::ClientMetricsConfigRecord {
             name: "sub-1".to_owned(),
             configs: maplit::btreemap! {
-            crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
+            KEY_METRICS.to_owned() => "org.apache.kafka".to_owned()},
         },
     ));
 }
@@ -149,7 +149,7 @@ struct ServingConfig<'a> {
 /// per-listener `overrides`.
 fn idle_window_serving<'a>(
     resource_name: &str,
-    overrides: &'a std::collections::BTreeMap<String, krabka_units::Time>,
+    overrides: &'a BTreeMap<String, krabka_units::Time>,
 ) -> ServingConfig<'a> {
     ServingConfig {
         node: serving_node_for(RESOURCE_TYPE_BROKER, resource_name),
@@ -197,8 +197,8 @@ fn resource_request(
     resource_type: i8,
     resource_name: &str,
     configuration_keys: Option<Vec<String>>,
-) -> krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-    krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+) -> DescribeConfigsResource {
+    DescribeConfigsResource {
         resource_type,
         resource_name: resource_name.to_owned(),
         configuration_keys,
@@ -208,7 +208,7 @@ fn resource_request(
 
 fn settings_for<'a>(
     (resource_type, resource_name): (i8, &str),
-    settings: &'a std::collections::BTreeMap<&'static str, String>,
+    settings: &'a BTreeMap<&'static str, String>,
 ) -> ServingConfig<'a> {
     ServingConfig {
         node: serving_node_for(resource_type, resource_name),
@@ -287,7 +287,7 @@ fn broker_logger_resource_names_this_node_or_is_refused() {
             levels: &levels,
         },
     );
-    check!(result.error_code == crate::codes::NONE);
+    check!(result.error_code == NONE);
     check!(
         result
             .configs
@@ -306,7 +306,7 @@ fn broker_logger_resource_names_this_node_or_is_refused() {
             levels: &levels,
         },
     );
-    check!(refused.error_code == crate::codes::INVALID_REQUEST);
+    check!(refused.error_code == INVALID_REQUEST);
     check!(
         refused.error_message.as_deref() == Some("Unexpected broker id, expected 7 but received 8")
     );
@@ -379,6 +379,11 @@ fn expected_named_static_chain(key: &str, value: &str, default: &str) -> Synonym
 }
 
 pub(super) use crate::handlers::describe_configs::test_support::synonym;
+use {
+    crate::{codes::NONE, coordinator::unified::streams},
+    krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    std::{collections::BTreeMap, iter},
+};
 
 /// A config key and the value it is set to.
 #[derive(Debug, Clone, Copy)]
@@ -442,7 +447,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
     assert!(
         result
             == krabka_macros::tagged_wire!(DescribeConfigsResult {
-                error_code: crate::codes::NONE,
+                error_code: NONE,
                 error_message: None,
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".to_owned(),
@@ -612,9 +617,9 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
         &MetadataImage::new(Uuid::nil()),
         SERVING_NODE,
         "orders",
-        &std::collections::BTreeMap::new(),
+        &BTreeMap::new(),
         UnstableApiVersions::Enabled,
-        &std::collections::BTreeMap::new(),
+        &BTreeMap::new(),
     );
     check!(
         !created
@@ -626,10 +631,10 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
         SERVING_NODE,
         "orders",
         &maplit::btreemap! {
-            config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
+            config_keys::INTERNAL_SEGMENT_BYTES.to_owned() => "4096".to_owned(),
         },
         UnstableApiVersions::Enabled,
-        &std::collections::BTreeMap::new(),
+        &BTreeMap::new(),
     );
     check!(
         created
@@ -644,7 +649,7 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "events".into(),
         overrides: maplit::btreemap! {
-        config_keys::DISKLESS.to_string() => "true".to_string()},
+        config_keys::DISKLESS.to_owned() => "true".to_owned()},
     }));
 
     let result = describe_topic(
@@ -695,7 +700,7 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
         RESOURCE_TYPE_BROKER,
         "2",
         Some(vec![
-            crate::throttle::LEADER_THROTTLED_RATE_KEY.to_owned(),
+            LEADER_THROTTLED_RATE_KEY.to_owned(),
             NODE_ID.to_owned(),
         ]),
         EVERYTHING,
@@ -705,17 +710,17 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
         result.configs
             == vec![
                 expected_config_entry()
-                    .name(crate::throttle::LEADER_THROTTLED_RATE_KEY)
+                    .name(LEADER_THROTTLED_RATE_KEY)
                     .maybe_value(Some(Some("1024")))
                     .source(CONFIG_SOURCE_DYNAMIC_BROKER)
                     .synonyms(vec![
                         synonym(
-                            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                            LEADER_THROTTLED_RATE_KEY,
                             "1024",
                             CONFIG_SOURCE_DYNAMIC_BROKER
                         ),
                         synonym(
-                            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                            LEADER_THROTTLED_RATE_KEY,
                             "512",
                             CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                         ),
@@ -758,11 +763,11 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
         result.configs
             == vec![
                 expected_config_entry()
-                    .name(crate::throttle::LEADER_THROTTLED_RATE_KEY)
+                    .name(LEADER_THROTTLED_RATE_KEY)
                     .maybe_value(Some(Some("1024")))
                     .source(CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER)
                     .synonyms(vec![synonym(
-                        crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                        LEADER_THROTTLED_RATE_KEY,
                         "1024",
                         CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                     )])
@@ -946,8 +951,8 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
                 config_keys::DEFAULT_REPLICATION_FACTOR,
                 config_keys::DELETE_TOPIC_ENABLE,
-                crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                FOLLOWER_THROTTLED_RATE_KEY,
+                LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
                 config_keys::NUM_PARTITIONS,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
@@ -958,8 +963,8 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
         ),
         (
             "a filter narrows the response to the keys it names",
-            Some(vec![crate::throttle::LEADER_THROTTLED_RATE_KEY]),
-            vec![crate::throttle::LEADER_THROTTLED_RATE_KEY],
+            Some(vec![LEADER_THROTTLED_RATE_KEY]),
+            vec![LEADER_THROTTLED_RATE_KEY],
         ),
         (
             "a filter that names no key this broker holds reports nothing",
@@ -999,8 +1004,8 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
         krabka_metadata::GroupConfigRecord {
             group_id: "streams-1".to_owned(),
             configs: maplit::btreemap! {
-            crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS.to_string()
-                => "2".to_string()},
+            streams::config::KEY_NUM_STANDBY_REPLICAS.to_owned()
+                => "2".to_owned()},
         },
     ));
 
@@ -1111,7 +1116,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
     assert!(
         result
             == krabka_macros::tagged_wire!(DescribeConfigsResult {
-                error_code: crate::codes::INVALID_REQUEST,
+                error_code: INVALID_REQUEST,
                 error_message: Some(
                     "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
                 ),
@@ -1143,9 +1148,9 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
         VALUES_ONLY,
     );
 
-    check!(result.error_code == crate::codes::NONE);
+    check!(result.error_code == NONE);
     let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
-    check!(names == vec![crate::throttle::LEADER_THROTTLED_RATE_KEY]);
+    check!(names == vec![LEADER_THROTTLED_RATE_KEY]);
 }
 
 #[test]
@@ -1239,7 +1244,7 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
         None,
         EVERYTHING,
     );
-    check!(found.error_code == crate::codes::NONE);
+    check!(found.error_code == NONE);
     check!(!found.configs.is_empty());
 }
 
@@ -1279,7 +1284,7 @@ fn a_group_reports_its_override_above_the_streams_default() {
         krabka_metadata::GroupConfigRecord {
             group_id: "streams-1".to_owned(),
             configs: maplit::btreemap! {
-            KEY_NUM_STANDBY_REPLICAS.to_string() => "2".to_string()},
+            KEY_NUM_STANDBY_REPLICAS.to_owned() => "2".to_owned()},
         },
     ));
 
@@ -1551,7 +1556,7 @@ fn an_unhandled_resource_type_is_refused() {
     assert!(
         result
             == krabka_macros::tagged_wire!(DescribeConfigsResult {
-                error_code: crate::codes::INVALID_REQUEST,
+                error_code: INVALID_REQUEST,
                 error_message: Some("Unsupported resource type: 99".to_owned()),
                 resource_type: 99,
                 resource_name: "whatever".to_owned(),
@@ -1799,7 +1804,7 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
 )]
 fn idle_window_is_reported_only_for_a_named_broker(resource_name: &str, named: bool) {
     let listener_key = "listener.name.external.connections.max.idle.ms";
-    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
+    let overrides = iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
     let result = describe_at(
         idle_window_serving(resource_name, &overrides),
@@ -2355,7 +2360,7 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
         &MetadataImage::new(Uuid::nil()),
         SERVING_NODE,
         "orders",
-        &std::collections::BTreeMap::new(),
+        &BTreeMap::new(),
         UnstableApiVersions::Disabled,
         &settings,
     );
@@ -2536,9 +2541,9 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
             &image,
             node,
             "orders",
-            &std::collections::BTreeMap::new(),
+            &BTreeMap::new(),
             UnstableApiVersions::Disabled,
-            &std::collections::BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let entry = created
             .iter()

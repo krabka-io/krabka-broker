@@ -4,8 +4,12 @@
 //! so the comparisons live here rather than once per test module.
 
 use {
-    crate::codes::SASL_AUTHENTICATION_FAILED, assert2::assert,
-    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
+    crate::codes::SASL_AUTHENTICATION_FAILED,
+    assert2::assert,
+    krabka_protocol::owned::{
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+    },
 };
 
 pub(super) fn assert_success_authenticate_response(
@@ -78,15 +82,12 @@ pub(super) fn authenticated(
 }
 
 /// The RFC 4616 bytes with an empty authorization identity.
-pub(crate) fn plain_request(
-    user: &str,
-    password: &str,
-) -> krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+pub fn plain_request(user: &str, password: &str) -> SaslAuthenticateRequest {
     let mut bytes = vec![0_u8];
     bytes.extend_from_slice(user.as_bytes());
     bytes.push(0);
     bytes.extend_from_slice(password.as_bytes());
-    krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+    SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(bytes),
         ..Default::default()
     }

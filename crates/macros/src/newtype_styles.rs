@@ -15,7 +15,7 @@ fn tuple_struct(meta: TokenStream, item: TokenStream) -> Result<ItemStruct, Pars
     Ok(item)
 }
 
-pub(crate) fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let item = tuple_struct(meta, item)?;
     Ok(moxy::template! {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
@@ -26,7 +26,7 @@ pub(crate) fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStr
     })
 }
 
-pub(crate) fn test_scalar(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn test_scalar(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let item = tuple_struct(meta, item)?;
     Ok(moxy::template! {
         #[derive(Debug, Clone, Copy, Default, PartialEq, Eq,
@@ -35,10 +35,7 @@ pub(crate) fn test_scalar(meta: TokenStream, item: TokenStream) -> Result<TokenS
     })
 }
 
-pub(crate) fn hex_bytes_identity(
-    meta: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, ParseError> {
+pub fn hex_bytes_identity(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let item = tuple_struct(meta, item)?;
     let debug = LitStr::new(&format!("{}({{}})", item.ident.text()), item.ident.span());
     Ok(moxy::template! {

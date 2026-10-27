@@ -6,13 +6,18 @@ use {
     crate::{
         broker::Broker,
         config::ListenerSpec,
-        network::client::tune_socket,
+        metrics::{ConnectionCloseReason, QuotaType},
+        network::{client::tune_socket, dispatch},
         quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
     },
     krabka_raft::AcceptingListener,
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
-    std::{sync::Arc, time::Instant},
-    tokio::{net::TcpListener, task::JoinSet},
+    std::{net::IpAddr, sync::Arc, time::Instant},
+    tokio::{
+        net::{TcpListener, TcpStream},
+        task::JoinSet,
+        time,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -33,7 +38,7 @@ fn connection_creation_delay(rate: f64, maximum: Time) -> Time {
 /// `connection_creation_rate` and its token bucket is empty. The bucket spends
 /// no token on a throttled connection, as Kafka's
 /// `recordIpConnectionMaybeThrottle` un-records it.
-fn connection_creation_throttle(broker: &Broker, peer_ip: std::net::IpAddr) -> Option<Time> {
+fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time> {
     let image = broker.controller.current_image();
     let (entity_key, rate) = lookup_ip_quota_with_key(
         &image,
@@ -55,8 +60,8 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: std::net::IpAddr) -> O
 /// Hold a throttled socket for `delay`, then close it without reading a
 /// request. Kafka's acceptor keeps the socket in `throttledSockets` until
 /// the throttle ends, so the client does not reconnect at once.
-async fn close_after(stream: tokio::net::TcpStream, delay: Time) {
-    tokio::time::sleep(delay.to_std()).await;
+async fn close_after(stream: TcpStream, delay: Time) {
+    time::sleep(delay.to_std()).await;
     drop(stream);
 }
 
@@ -124,7 +129,7 @@ pub(super) async fn accept_loop(
                         );
                         if !delay.is_zero() {
                             tokio::select! {
-                                () = tokio::time::sleep(delay) => {}
+                                () = time::sleep(delay) => {}
                                 () = shutdown.cancelled() => break 'accept,
                             }
                         }
@@ -144,7 +149,7 @@ pub(super) async fn accept_loop(
                             // the broker-wide and listener rates.
                             broker.connections.refund_creation(accepting, &quotas);
                             broker.metrics.observe_quota_throttle(
-                                crate::metrics::QuotaType::ConnectionCreation,
+                                QuotaType::ConnectionCreation,
                                 delay.secs_f64(),
                             );
                             tracing::debug!(
@@ -170,10 +175,10 @@ pub(super) async fn accept_loop(
                                 let reason = match limit {
                                     krabka_raft::ConnectionLimit::Global
                                     | krabka_raft::ConnectionLimit::Listener => {
-                                        crate::metrics::ConnectionCloseReason::MaxConnections
+                                        ConnectionCloseReason::MaxConnections
                                     }
                                     krabka_raft::ConnectionLimit::PerIp => {
-                                        crate::metrics::ConnectionCloseReason::MaxConnectionsPerIp
+                                        ConnectionCloseReason::MaxConnectionsPerIp
                                     }
                                 };
                                 broker.metrics.record_connection_close(reason);
@@ -188,7 +193,7 @@ pub(super) async fn accept_loop(
                             }
                         };
 
-                        let b = broker.clone();
+                        let b = Arc::clone(&broker);
                         let s = spec.clone();
                         connections.spawn(async move {
                             // Hold the connection guard for the lifetime of the
@@ -201,7 +206,7 @@ pub(super) async fn accept_loop(
                             // future that trips `clippy::large_futures` once held
                             // inline in this spawned task. Boxing moves it to the
                             // heap (one alloc per long-lived connection — free).
-                            Box::pin(crate::network::dispatch::serve_connection_on_listener(
+                            Box::pin(dispatch::serve_connection_on_listener(
                                 b, stream, s,
                             ))
                             .await;
@@ -228,11 +233,7 @@ pub(super) async fn accept_loop(
 ///
 /// All failures are non-fatal and logged at debug level. A connection that the
 /// broker cannot tune still serves correctly, but less efficiently.
-fn tune_accepted_socket(
-    stream: &tokio::net::TcpStream,
-    send_buffer: ByteSize,
-    receive_buffer: ByteSize,
-) {
+fn tune_accepted_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
     tune_socket(stream, send_buffer, receive_buffer, [
         |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on accepted socket"),
         |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on accepted socket"),
@@ -250,7 +251,10 @@ mod tests {
         },
         assert2::assert,
         krabka_units::{kibibytes, millis},
-        std::sync::atomic::{AtomicUsize, Ordering},
+        std::{
+            future,
+            sync::atomic::{AtomicUsize, Ordering},
+        },
     };
 
     #[tokio::test]
@@ -284,7 +288,7 @@ mod tests {
             connections.spawn(async move {
                 let _drop_counter = DropCounter(task_dropped);
                 task_started.fetch_add(1, Ordering::SeqCst);
-                std::future::pending::<()>().await;
+                future::pending::<()>().await;
             });
         }
         wait_tasks_started(

@@ -37,8 +37,12 @@ use {
         task_util::ask,
     },
     krabka_metadata::{MetadataImage, NodeId},
-    std::sync::Arc,
+    std::{
+        collections::VecDeque,
+        sync::{Arc, PoisonError},
+    },
     tokio_util::sync::CancellationToken,
+    uuid::Uuid,
 };
 
 #[cfg(test)]
@@ -52,15 +56,15 @@ pub struct DeletedTopic {
 }
 
 /// The offsets that one group's actor tombstoned for deleted topics.
-#[derive(Debug, PartialEq)]
-pub(crate) struct GroupDeletedOffsets {
+#[derive(Debug, PartialEq, Eq)]
+pub struct GroupDeletedOffsets {
     pub group_id: String,
     pub offsets: Vec<(String, i32)>,
 }
 
 /// Spawn the watcher. It returns when `shutdown` is cancelled or the image
 /// channel closes.
-pub(crate) fn spawn(
+pub fn spawn(
     node_id: NodeId,
     metadata: Arc<dyn MetadataSource>,
     coordinator: Arc<GroupCoordinator>,
@@ -101,7 +105,7 @@ pub(crate) fn spawn(
 /// topic that was deleted and created again with the same name between two
 /// images the watcher reads is still a deleted topic. The id travels with the
 /// name, so the actors keep the offsets committed to the new topic.
-pub(crate) fn deleted_topics(previous: &MetadataImage, next: &MetadataImage) -> Vec<DeletedTopic> {
+pub fn deleted_topics(previous: &MetadataImage, next: &MetadataImage) -> Vec<DeletedTopic> {
     let mut deleted: Vec<DeletedTopic> = previous
         .topics()
         .filter(|topic| next.topic_by_id(&topic.topic_id).is_none())
@@ -121,10 +125,18 @@ const REMEMBERED_DELETIONS: usize = 1024;
 /// Records `deleted` for [`after_partition_load`], keeping the latest
 /// [`REMEMBERED_DELETIONS`].
 fn remember_deletions(coordinator: &GroupCoordinator, deleted: &[DeletedTopic]) {
-    let mut recent = coordinator
-        .recent_topic_deletions
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    remember_in(
+        &mut coordinator
+            .recent_topic_deletions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        deleted,
+    );
+}
+
+/// Appends `deleted` to `recent` and keeps the newest
+/// [`REMEMBERED_DELETIONS`] of them.
+fn remember_in(recent: &mut VecDeque<(String, Uuid)>, deleted: &[DeletedTopic]) {
     recent.extend(
         deleted
             .iter()
@@ -145,7 +157,7 @@ fn remember_deletions(coordinator: &GroupCoordinator, deleted: &[DeletedTopic]) 
 /// current image does not hold: a replayed offset has no topic id, so for a
 /// name that exists again it cannot tell an offset of the old topic from one
 /// of the new topic, and it keeps them.
-pub(crate) async fn after_partition_load(
+pub async fn after_partition_load(
     coordinator: &GroupCoordinator,
     image: &MetadataImage,
     owned: impl Fn(&str) -> bool,
@@ -153,7 +165,7 @@ pub(crate) async fn after_partition_load(
     let deletions: Vec<DeletedTopic> = coordinator
         .recent_topic_deletions
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .filter(|(name, _)| image.topic(name).is_none())
         .map(|(name, topic_id)| DeletedTopic {
@@ -173,7 +185,7 @@ pub(crate) async fn after_partition_load(
 /// The watcher awaits each reply before it reads the next image. A later
 /// deletion of a topic with the same name therefore cannot reach an actor
 /// before this one.
-pub(crate) async fn on_topics_deleted(
+pub async fn on_topics_deleted(
     coordinator: &GroupCoordinator,
     owned: impl Fn(&str) -> bool,
     topics: &[DeletedTopic],

@@ -19,9 +19,16 @@ use {
     },
     krabka_raft::RaftHandshakeError,
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        sync::{
+            Arc,
+            atomic::{AtomicI64, AtomicU64},
+        },
+        time,
+    },
     tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncRead, AsyncReadExt, AsyncWriteExt, duplex},
         sync::OnceCell,
         time::{Duration, timeout},
     },
@@ -113,14 +120,12 @@ pub(super) fn request_frame(
 pub(super) async fn read_request_from_frame(
     frame: Vec<u8>,
 ) -> Result<KafkaRequest, RaftHandshakeError> {
-    let (mut client, mut server) = tokio::io::duplex(4096);
+    let (mut client, mut server) = duplex(4096);
     client.write_all(&frame).await.expect("write request frame");
     read_kafka_request(&mut server, 4096).await
 }
 
-pub(super) async fn read_response_frame<R: tokio::io::AsyncRead + Unpin>(
-    stream: &mut R,
-) -> Vec<u8> {
+pub(super) async fn read_response_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Vec<u8> {
     timeout(Duration::from_secs(1), async {
         let mut size_buf = [0u8; 4];
         stream
@@ -166,14 +171,14 @@ pub(super) fn handshake_config(
         enabled_sasl_mechanisms: setup.mechanisms,
         gssapi: None,
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-        oauthbearer_jwks_cache_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        oauthbearer_jwks_last_successful_fetch_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        oauthbearer_jwks_cache_generation: Arc::new(AtomicU64::new(0)),
+        oauthbearer_jwks_last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
         protocol: setup.protocol,
         controller: Arc::new(OnceCell::new()),
         delegation_token_secret_key: None,
         audit_log: Arc::new(OnceCell::new()),
         sasl_max_receive_bytes: 4096,
-        failed_authentication_delay: std::time::Duration::ZERO,
+        failed_authentication_delay: time::Duration::ZERO,
         authorizer: Arc::new(AllowAllAuthorizer),
         principal_mapper: SslPrincipalMapper::default(),
     }
@@ -182,7 +187,7 @@ pub(super) fn handshake_config(
 pub(super) fn sasl_handshake_body() -> Vec<u8> {
     let mut body = bytes::BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
+        mechanism: "PLAIN".to_owned(),
         ..Default::default()
     }
     .encode(&mut body, 1)
@@ -193,8 +198,8 @@ pub(super) fn sasl_handshake_body() -> Vec<u8> {
 pub(super) fn api_versions_body(version: HandshakeApiVersion) -> Vec<u8> {
     let mut body = bytes::BytesMut::new();
     ApiVersionsRequest {
-        client_software_name: "raft-peer".to_string(),
-        client_software_version: "1.0".to_string(),
+        client_software_name: "raft-peer".to_owned(),
+        client_software_version: "1.0".to_owned(),
         ..Default::default()
     }
     .encode(&mut body, version.0)

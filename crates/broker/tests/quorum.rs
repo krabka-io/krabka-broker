@@ -10,6 +10,7 @@
 //! cold on a hosted GitHub Actions runner can need tens of seconds for
 //! openraft to converge on a leader, and `cluster_lock` serializes the
 //! tests, so three slow startups accumulate.
+#![cfg(test)]
 
 // Test-file pragmatism: broker ids are formed with plain
 // `u64::try_from(i+1).unwrap()`-style casts when turning 1-based `i` into broker
@@ -25,6 +26,7 @@ use {
     },
     assert2::assert,
     krabka_broker::{BrokerConfig, BrokerHandle},
+    std::collections::HashSet,
 };
 
 mod support;
@@ -40,13 +42,13 @@ use {support::cluster_lock, tempfile::TempDir};
 /// specific node.
 async fn wait_for_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) {
     for (h, _, _) in cluster {
-        h.wait_until_controller_leader().await;
+        h.wait_until_controller_leader().await.unwrap();
     }
 }
 
 fn controller_leaders(
     cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
-) -> std::collections::HashSet<krabka_broker::NodeId> {
+) -> HashSet<krabka_broker::NodeId> {
     cluster
         .iter()
         .filter_map(|(handle, _, _)| handle.controller_leader_id())

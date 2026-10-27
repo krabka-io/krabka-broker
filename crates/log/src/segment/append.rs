@@ -15,8 +15,8 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
     krabka_protocol::records::{HEADER_LEN, RecordBatch, patch_base_offset_and_leader_epoch},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
-    std::io::IoSlice,
-    tracing::instrument,
+    std::{io, io::IoSlice},
+    tracing::{field, instrument},
 };
 
 /// One batch's encoded bytes, as an append path has them.
@@ -46,7 +46,7 @@ impl BatchBytes<'_> {
 
 /// A verbatim batch together with the base offset it is written at.
 #[derive(Clone, Copy)]
-pub(crate) struct PlacedBatch<'a> {
+pub struct PlacedBatch<'a> {
     pub(crate) batch: &'a VerbatimBatch,
     pub(crate) base: Offset,
 }
@@ -94,7 +94,7 @@ impl Segment {
             base_offset = self.base_offset.0,
             batch_base = batch.base_offset,
             bytes = batch.encoded_len(),
-            position = tracing::field::Empty,
+            position = field::Empty,
         ),
         err,
     )]
@@ -157,7 +157,7 @@ impl Segment {
             seg_base_offset = self.base_offset.0,
             base_offset = base_offset.0,
             bytes_len = bytes.len(),
-            position = tracing::field::Empty,
+            position = field::Empty,
         ),
         err,
     )]
@@ -173,11 +173,11 @@ impl Segment {
         index_interval: ByteSize,
     ) -> Result<u64, LogError> {
         self.ensure_writable()?;
-        if bytes.len() < HEADER_LEN {
+        let Some((&header, body)) = bytes.split_first_chunk::<HEADER_LEN>() else {
             return Err(LogError::Corrupt(
                 "verbatim batch shorter than v2 header".into(),
             ));
-        }
+        };
 
         // Patch base_offset + partition_leader_epoch in a copy of *just* the
         // fixed-size header — both fields live below byte 16, well under the
@@ -186,8 +186,7 @@ impl Segment {
         // with no copy: the previous `bytes.to_vec()` was a full-payload memcpy
         // on the produce hot path (100 KiB+ per batch for large messages), the
         // dominant remaining produce-side cost.
-        let mut header = [0u8; HEADER_LEN];
-        header.copy_from_slice(&bytes[..HEADER_LEN]);
+        let mut header = header;
         // The protocol patcher writes the raw KIP-320 wire `int32`; unwrap here.
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
@@ -196,7 +195,7 @@ impl Segment {
             last_offset_delta,
             max_timestamp,
             index_interval,
-            BatchBytes::Split(&header, &bytes[HEADER_LEN..]),
+            BatchBytes::Split(&header, body),
         )
     }
 
@@ -208,7 +207,7 @@ impl Segment {
     /// `writev` without a copy. Through `O_DIRECT`, the writer copies the
     /// batch behind the partial last block and writes whole blocks, and the
     /// batch joins the bytes kept in memory for reads.
-    fn write_bytes(&mut self, batch: BatchBytes<'_>, chunk_ends: &[usize]) -> std::io::Result<()> {
+    fn write_bytes(&mut self, batch: BatchBytes<'_>, chunk_ends: &[usize]) -> io::Result<()> {
         let Some(mode) = self.direct.as_mut() else {
             return match batch {
                 BatchBytes::Whole(bytes) => write_all(&*self.io, &self.log_file, bytes),
@@ -242,7 +241,7 @@ impl Segment {
 
     fn ensure_writable(&self) -> Result<(), LogError> {
         if self.sealed {
-            return Err(LogError::Io(std::io::Error::other("segment is sealed")));
+            return Err(LogError::Io(io::Error::other("segment is sealed")));
         }
         Ok(())
     }
@@ -282,11 +281,15 @@ impl Segment {
         let mut bytes = bytes::BytesMut::with_capacity(size);
         let mut chunk_ends = Vec::with_capacity(batches.len());
         for &PlacedBatch { batch, base } in batches {
-            let mut header = [0; HEADER_LEN];
-            header.copy_from_slice(&batch.bytes[..HEADER_LEN]);
+            let Some((&header, body)) = batch.bytes.split_first_chunk::<HEADER_LEN>() else {
+                return Err(LogError::Corrupt(
+                    "verbatim batch shorter than v2 header".into(),
+                ));
+            };
+            let mut header = header;
             patch_base_offset_and_leader_epoch(&mut header, base.0, batch.leader_epoch.0);
             bytes.extend_from_slice(&header);
-            bytes.extend_from_slice(&batch.bytes[HEADER_LEN..]);
+            bytes.extend_from_slice(body);
             chunk_ends.push(bytes.len());
         }
         let bytes = bytes.freeze();
@@ -398,12 +401,17 @@ impl Segment {
 mod tests {
     use {
         super::*,
-        crate::segment::test_support::{
-            DENSE_INDEX, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH,
-            SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, TempSegment, sample_batch,
-            seeded_fixture, segment_at, test_batch_at, test_segment,
+        crate::{
+            name::log_path,
+            segment::test_support::{
+                DENSE_INDEX, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH,
+                SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, TempSegment,
+                sample_batch, seeded_fixture, segment_at, test_batch_at, test_segment,
+            },
         },
+        krabka_protocol::records::RecordBatch,
         krabka_units::prelude::kibibytes,
+        std::fs,
     };
 
     #[test]
@@ -441,12 +449,7 @@ mod tests {
 
         assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
         assert2::assert!(seg.size().bytes_u64() == 0);
-        assert2::assert!(
-            std::fs::metadata(crate::name::log_path(dir.path(), i64::MAX))
-                .unwrap()
-                .len()
-                == 0
-        );
+        assert2::assert!(fs::metadata(log_path(dir.path(), i64::MAX)).unwrap().len() == 0);
     }
 
     #[test]
@@ -477,9 +480,9 @@ mod tests {
         assert2::assert!(
             read == vec![
                 sample_batch()
-                    .offset(crate::segment::test_support::ONE_RECORD_BATCH.offset.0)
-                    .records(crate::segment::test_support::ONE_RECORD_BATCH.records.0)
-                    .timestamp(crate::segment::test_support::ONE_RECORD_BATCH.timestamp.0)
+                    .offset(ONE_RECORD_BATCH.offset.0)
+                    .records(ONE_RECORD_BATCH.records.0)
+                    .timestamp(ONE_RECORD_BATCH.timestamp.0)
                     .call(),
                 sample_batch().offset(1).timestamp(300).call()
             ]
@@ -541,7 +544,7 @@ mod tests {
 
         // And it decodes (CRC still valid).
         let mut cur: &[u8] = &on_disk;
-        let decoded = krabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
+        let decoded = RecordBatch::decode(&mut cur).unwrap();
         assert2::assert!(decoded.base_offset == assigned_base.0);
         assert2::assert!(decoded.partition_leader_epoch == stamped_epoch);
         drop(dir);

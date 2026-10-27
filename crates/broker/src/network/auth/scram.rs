@@ -11,16 +11,18 @@ use {
         state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
     },
     crate::{metadata_source::MetadataSource, time_util::now_ms},
+    base64::engine::general_purpose::STANDARD,
     krabka_protocol::owned::{
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
     krabka_security::{
         Principal, SaslMechanism, ScramServerExchange, SecretBytes, compute_token_hmac,
-        scram::MIN_SCRAM_ITERATIONS,
+        scram::{self, MIN_SCRAM_ITERATIONS},
     },
     krabka_units::Time,
     krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source},
+    std::{mem, str},
 };
 
 /// SCRAM-SHA-256 and SCRAM-SHA-512 `SaslAuthenticate` handler. It runs the two RFC 5802 rounds
@@ -74,7 +76,7 @@ pub fn handle_authenticate_scram(
         if let ConnectionAuth::Negotiating {
             exchange: SaslExchange::ScramPending,
             mechanism,
-            pending_token_expiry_ms: _,
+            ..
         } = auth
         {
             let mech = *mechanism;
@@ -112,13 +114,13 @@ pub fn handle_authenticate_scram(
             // request closes the connection; the expiry sweep removes it.
             // The verified selector's `token_mechanism` input is whether the
             // token store may be read, which is the `tokenauth` extension.
-            let (cred, principal, token_expiry_ms) = match scram_credential_source(
-                regular.is_some(),
-                token_requested,
-                token.is_some(),
+            let (cred, principal, token_expiry_ms) = match (
+                scram_credential_source(regular.is_some(), token_requested, token.is_some()),
+                regular,
+                token,
             ) {
-                ScramCredentialSource::Regular => (
-                    regular.expect("verified regular source exists").clone(),
+                (ScramCredentialSource::Regular, Some(regular), _) => (
+                    regular.clone(),
                     Principal {
                         name: username.clone(),
                         auth_method: krabka_security::AuthMethod::from_sasl(mech),
@@ -126,8 +128,7 @@ pub fn handle_authenticate_scram(
                     },
                     None,
                 ),
-                ScramCredentialSource::DelegationToken => {
-                    let (token, secret) = token.expect("verified token source exists");
+                (ScramCredentialSource::DelegationToken, _, Some((token, secret))) => {
                     let owner = Principal {
                         name: token.owner.name.clone(),
                         auth_method: krabka_security::AuthMethod::from_sasl(mech),
@@ -139,7 +140,13 @@ pub fn handle_authenticate_scram(
                         Some(token.expiry_timestamp_ms),
                     )
                 }
-                ScramCredentialSource::Unknown => {
+                // The selector names a source only when that source exists.
+                (
+                    ScramCredentialSource::Unknown
+                    | ScramCredentialSource::Regular
+                    | ScramCredentialSource::DelegationToken,
+                    ..,
+                ) => {
                     return fail_authenticate("unknown user");
                 }
             };
@@ -206,7 +213,7 @@ pub fn handle_authenticate_scram(
                 mechanism,
                 exchange: SaslExchange::Scram(server),
                 pending_token_expiry_ms,
-            } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+            } = mem::replace(auth, ConnectionAuth::Anonymous)
             else {
                 unreachable!("matched Negotiating{{Scram}} above");
             };
@@ -288,15 +295,9 @@ fn synthesize_token_scram_credential(
     mechanism: SaslMechanism,
 ) -> krabka_security::ScramCredential {
     use base64::Engine;
-    let password = base64::engine::general_purpose::STANDARD
-        .encode(compute_token_hmac(secret_key.as_bytes(), &token.token_id));
+    let password = STANDARD.encode(compute_token_hmac(secret_key.as_bytes(), &token.token_id));
     let salt = token.token_id.as_bytes().to_vec();
-    krabka_security::scram::hash_scram_password_with_salt(
-        password.as_bytes(),
-        mechanism,
-        TOKEN_SCRAM_ITERS,
-        salt,
-    )
+    scram::hash_scram_password_with_salt(password.as_bytes(), mechanism, TOKEN_SCRAM_ITERS, salt)
 }
 
 /// One `<key>=<value>` extension of a SCRAM client-first message.
@@ -322,7 +323,7 @@ struct ClientFirst<'a> {
 impl<'a> ClientFirst<'a> {
     /// Parses `bytes`, or returns `None` where Kafka's pattern does not match.
     fn parse(bytes: &'a [u8]) -> Option<Self> {
-        let message = std::str::from_utf8(bytes).ok()?;
+        let message = str::from_utf8(bytes).ok()?;
         let rest = message.strip_prefix("n,")?;
         let (authorization_id, rest) = match rest.strip_prefix("a=") {
             Some(after) => {
@@ -378,8 +379,8 @@ impl<'a> ClientFirst<'a> {
 fn is_sasl_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
+    while let Some(&byte) = bytes.get(i) {
+        match byte {
             b'=' if matches!(bytes.get(i + 1..i + 3), Some(b"2C" | b"3D")) => i += 3,
             b'=' | b',' | 0 | 0x80.. => return false,
             _ => i += 1,

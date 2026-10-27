@@ -3,9 +3,10 @@
 use {
     assert2::assert,
     std::{fmt::Debug, future::Future, time::Duration},
+    tokio::{time, time::Instant},
 };
 
-pub(crate) trait ErrorCodeRows {
+pub trait ErrorCodeRows {
     fn all_cluster_authorization_failed(&self) -> bool;
 }
 
@@ -15,12 +16,12 @@ impl<Key> ErrorCodeRows for Vec<(Key, i16)> {
     }
 }
 
-pub(crate) fn all_cluster_authorization_failed<Rows: ErrorCodeRows>(rows: &Rows) -> bool {
+pub fn all_cluster_authorization_failed<Rows: ErrorCodeRows>(rows: &Rows) -> bool {
     rows.all_cluster_authorization_failed()
 }
 
 #[bon::builder]
-pub(crate) async fn retry_until<T, Attempt, AttemptFuture, Complete>(
+pub async fn retry_until<T, Attempt, AttemptFuture, Complete>(
     mut attempt: Attempt,
     mut is_complete: Complete,
     #[builder(default = Duration::from_secs(5))] timeout: Duration,
@@ -32,16 +33,16 @@ where
     AttemptFuture: Future<Output = T>,
     Complete: FnMut(&T) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         let response = attempt().await;
         if is_complete(&response) {
             return response;
         }
         assert!(
-            tokio::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "response did not reach its expected state before the retry deadline: {response:?}"
         );
-        tokio::time::sleep(interval).await;
+        time::sleep(interval).await;
     }
 }

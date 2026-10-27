@@ -21,7 +21,7 @@ use {
             schedule::ScheduledFault,
         },
     },
-    hdrhistogram::Histogram,
+    hdrhistogram::{CreationError, Histogram},
     krabka_units::prelude::*,
     std::sync::Mutex,
 };
@@ -149,13 +149,17 @@ pub struct Latencies {
 }
 
 impl Latencies {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            steady: hist::new(),
-            disturbed: hist::new(),
+    /// No samples yet.
+    ///
+    /// # Errors
+    ///
+    /// The [`CreationError`] building a latency histogram returned.
+    pub fn new() -> Result<Self, CreationError> {
+        Ok(Self {
+            steady: hist::new()?,
+            disturbed: hist::new()?,
             steady_count: 0,
-        }
+        })
     }
 
     pub fn record(&mut self, disturbed: bool, latency: Time) {
@@ -178,10 +182,6 @@ impl Latencies {
     fn steady(&self) -> LatencySummary { summary(&self.steady) }
 
     fn disturbed(&self) -> LatencySummary { summary(&self.disturbed) }
-}
-
-impl Default for Latencies {
-    fn default() -> Self { Self::new() }
 }
 
 fn summary(histogram: &Histogram<u64>) -> LatencySummary {
@@ -292,15 +292,15 @@ mod tests {
 
     #[test]
     fn the_steady_rate_counts_only_steady_acknowledgements() {
-        let mut produce = Latencies::new();
+        let mut produce = Latencies::new().unwrap();
         for _ in 0..20 {
             produce.record(false, millis(4));
         }
         for _ in 0..7 {
             produce.record(true, secs(3));
         }
-        let mut consume = Latencies::new();
-        let mut other = Latencies::new();
+        let mut consume = Latencies::new().unwrap();
+        let mut other = Latencies::new().unwrap();
         other.record(false, millis(9));
         consume.merge(&other);
         let measured = measurement("p", &produce, &consume, secs(10));

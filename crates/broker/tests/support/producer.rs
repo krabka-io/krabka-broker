@@ -4,6 +4,7 @@ use {
     bytes::Bytes,
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_ids::PartitionIndex,
+    std::time::Duration,
 };
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -70,7 +71,7 @@ pub async fn no_retry_acks_all_producer(
         .acks(krabka_client_producer::Acks::All)
         .enable_idempotence(false)
         .retries(0)
-        .linger(std::time::Duration::ZERO);
+        .linger(Duration::ZERO);
     match batch_size {
         Some(size) => builder.batch_size(size).build().await.expect(context),
         None => builder.build().await.expect(context),
@@ -81,7 +82,7 @@ pub async fn no_retry_acks_all_producer(
 pub fn string_record(topic: &str, value: &str) -> ProducerRecord {
     producer_record()
         .topic((topic).into())
-        .maybe_value(Some(Some(Bytes::from(value.to_string()))))
+        .maybe_value(Some(Some(Bytes::from(value.to_owned()))))
         .call()
 }
 

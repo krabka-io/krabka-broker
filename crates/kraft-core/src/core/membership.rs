@@ -136,9 +136,8 @@ impl QuorumStateMachine {
     #[must_use]
     pub fn current_or_adjacent_voter_entry(&self, id: NodeId) -> Option<&krabka_voters::Voter> {
         self.state.voters.get(id).or_else(|| {
-            self.adjacent_voters
-                .as_ref()
-                .and_then(|voters| voters.get(id))
+            let voters = self.adjacent_voters.as_ref()?;
+            voters.get(id)
         })
     }
 

@@ -16,26 +16,26 @@ use {
 
 /// Subscribes every client to `cpu.utilization`, the one metric the live-broker
 /// telemetry tests push. The broker accepts only subscribed metrics.
-pub(crate) async fn subscribe_to_cpu(handle: &BrokerHandle) {
+pub async fn subscribe_to_cpu(handle: &BrokerHandle) {
     handle
         .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
             ClientMetricsConfigRecord {
                 name: "cpu".into(),
-                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
+                configs: [("metrics".to_owned(), "cpu.utilization".to_owned())].into(),
             },
         ))
         .await
         .expect("submit client-metrics subscription");
 }
 
-pub(crate) fn number_point(value: number_data_point::Value) -> NumberDataPoint {
+pub fn number_point(value: number_data_point::Value) -> NumberDataPoint {
     NumberDataPoint {
         value: Some(value),
         ..Default::default()
     }
 }
 
-pub(crate) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
+pub fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
     MetricsData {
         resource_metrics: vec![ResourceMetrics {
             scope_metrics: vec![ScopeMetrics {
@@ -48,7 +48,7 @@ pub(crate) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
 }
 
 /// A one-point gauge for the OTLP input fixtures; expected Prometheus output stays explicit.
-pub(crate) fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
+pub fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
     Metric {
         name: name.into(),
         data: Some(metric::Data::Gauge(Gauge {

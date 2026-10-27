@@ -34,7 +34,7 @@ use {
     std::sync::atomic::Ordering,
 };
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -60,8 +60,15 @@ pub(crate) fn handle(
                     .partitions
                     .get(name, krabka_ids::PartitionIndex(partition))
             });
-        match hosted {
-            Some(part) => {
+        hosted.map_or_else(
+            || {
+                unanswered(
+                    partition,
+                    codes::REPLICA_NOT_AVAILABLE,
+                    "partition not hosted locally",
+                )
+            },
+            |part| {
                 let epoch = part.current_leader_epoch.load(Ordering::Acquire);
                 PartitionLogInfo {
                     partition,
@@ -73,13 +80,8 @@ pub(crate) fn handle(
                     error_message: None,
                     ..Default::default()
                 }
-            }
-            None => unanswered(
-                partition,
-                codes::REPLICA_NOT_AVAILABLE,
-                "partition not hosted locally",
-            ),
-        }
+            },
+        )
     })
 }
 
@@ -144,6 +146,7 @@ mod tests {
         super::*,
         crate::{
             authorizer as fixture_authorizers,
+            handlers::test_support::single_replica_partition,
             log_dir::partition_dir,
             test_support::{
                 self as broker_fixture_support, empty_acl_image, encode_request,
@@ -151,10 +154,14 @@ mod tests {
             },
         },
         assert2::assert,
-        krabka_protocol::owned::{
-            get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
-            get_replica_log_info_response::GetReplicaLogInfoResponse,
+        krabka_protocol::{
+            owned::{
+                get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
+                get_replica_log_info_response::GetReplicaLogInfoResponse,
+            },
+            primitives::uuid::Uuid,
         },
+        std::fs,
     };
 
     /// A locally hosted partition answers with its cached
@@ -189,11 +196,7 @@ mod tests {
                 MetadataRecord::V1Partition(PartitionRecord {
                     directories: vec![uuid::Uuid::nil()],
                     partition_epoch: 1,
-                    ..crate::handlers::test_support::single_replica_partition(
-                        "orders",
-                        krabka_ids::PartitionIndex(0),
-                        NodeId(1),
-                    )
+                    ..single_replica_partition("orders", krabka_ids::PartitionIndex(0), NodeId(1))
                 }),
             ])
             .await
@@ -201,7 +204,7 @@ mod tests {
 
         // Materialize a local replica and force a non-zero leader epoch.
         let part_dir = partition_dir(dir.path(), "orders", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
+        fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         let part = spawn_standalone_partition()
             .log_dir(dir.path())
@@ -215,7 +218,7 @@ mod tests {
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {
             topic_partitions: vec![TopicPartitions {
-                topic_id: krabka_protocol::primitives::uuid::Uuid(*topic_uuid.as_bytes()),
+                topic_id: Uuid(*topic_uuid.as_bytes()),
                 partitions: vec![0],
                 ..Default::default()
             }],
@@ -256,7 +259,7 @@ mod tests {
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {
             topic_partitions: vec![TopicPartitions {
-                topic_id: krabka_protocol::primitives::uuid::Uuid([7u8; 16]),
+                topic_id: Uuid([7u8; 16]),
                 partitions: vec![0, 1],
                 ..Default::default()
             }],

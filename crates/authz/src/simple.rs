@@ -21,6 +21,7 @@ use {
         authz::{AclDefault, AclFacts},
     },
     std::{collections::HashSet, net::SocketAddr},
+    tracing::field::Empty,
 };
 
 mod coverage;
@@ -88,7 +89,7 @@ impl Authorizer for SimpleAclAuthorizer {
             resource = %req.resource_name,
             operation = ?req.operation,
             host = %jdk_host_address(req.host.ip()),
-            decision = tracing::field::Empty,
+            decision = Empty,
         )
     )]
     fn authorize(
@@ -164,7 +165,7 @@ impl Authorizer for SimpleAclAuthorizer {
             resource_type = ?resource_type,
             operation = ?operation,
             host = %jdk_host_address(host.ip()),
-            decision = tracing::field::Empty,
+            decision = Empty,
         )
     )]
     fn authorize_by_resource_type(

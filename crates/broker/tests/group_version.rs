@@ -5,6 +5,7 @@
 //! KIP-584 tombstone, disables next-gen. The broker then rejects heartbeats
 //! with `UNSUPPORTED_VERSION`, so the client falls back to the classic
 //! protocol.
+#![cfg(test)]
 
 use assert2::assert;
 mod support;

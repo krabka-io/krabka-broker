@@ -17,7 +17,10 @@ use {
     },
     krabka_metadata::{
         FeatureLevelRecord, MetadataRecord,
-        metadata_version::{KRAFT_VERSION_FEATURE, METADATA_VERSION_FEATURE, METADATA_VERSION_MIN},
+        metadata_version::{
+            KRAFT_VERSION_FEATURE, METADATA_VERSION_FEATURE, METADATA_VERSION_MIN,
+            metadata_changed_between,
+        },
     },
     krabka_protocol::owned::update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     krabka_verified::features::{
@@ -140,9 +143,7 @@ fn plan_update(
     let (current, kind, dependency) = if name == METADATA_VERSION_FEATURE {
         let current = image.finalized_metadata_version().unwrap_or(0);
         let kind = FeatureKind::MetadataVersion {
-            metadata_changed: krabka_metadata::metadata_version::metadata_changed_between(
-                current, level,
-            ),
+            metadata_changed: metadata_changed_between(current, level),
         };
         (current, kind, None)
     } else if name == KRAFT_VERSION_FEATURE {
@@ -217,7 +218,7 @@ fn plan_update(
             }
             plan.records
                 .push(MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: name.to_string(),
+                    name: name.to_owned(),
                     level,
                 }));
             Ok(())

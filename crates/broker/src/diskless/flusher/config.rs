@@ -13,10 +13,10 @@ use {
 };
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
-pub(crate) struct FlushConfig {
+pub struct FlushConfig {
     /// Namespace for new WAL objects. Persisted object keys remain absolute,
     /// so older unprefixed keys continue to be read exactly as recorded.
-    pub(crate) object_prefix: Option<String>,
+    pub object_prefix: Option<String>,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std())]
     pub(crate) interval: Duration,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE)]

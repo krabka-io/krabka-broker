@@ -182,20 +182,20 @@ fn decode(input: &str) -> Result<Uuid, KafkaUuidError> {
             input: input.to_owned(),
             reason: error.to_string(),
         })?;
-    if bytes.len() != 16 {
+    let Ok(uuid) = <[u8; 16]>::try_from(bytes.as_slice()) else {
         return Err(KafkaUuidError::WrongLength {
             input: input.to_owned(),
             decoded_len: bytes.len(),
         });
-    }
-    Ok(Uuid::from_slice(&bytes).expect("22 base64 characters decode to 16 bytes"))
+    };
+    Ok(Uuid::from_bytes(uuid))
 }
 
 /// Parses the hyphenated form when the input has its shape, and the Kafka
 /// form otherwise.
 fn parse_kafka_or_hyphenated(input: &str) -> Result<Uuid, KafkaUuidError> {
     let bytes = input.as_bytes();
-    if bytes.len() == 36 && [8, 13, 18, 23].iter().all(|&i| bytes[i] == b'-') {
+    if bytes.len() == 36 && [8, 13, 18, 23].iter().all(|&i| bytes.get(i) == Some(&b'-')) {
         return Uuid::try_parse(input).map_err(|error| KafkaUuidError::Hyphenated {
             input: input.to_owned(),
             reason: error.to_string(),

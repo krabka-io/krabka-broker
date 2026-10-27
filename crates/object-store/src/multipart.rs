@@ -103,6 +103,7 @@ mod tests {
         super::*,
         crate::test_support::{HttpPage, HttpServer, s3_config, serve_http_pages},
         assert2::check,
+        quick_xml::de,
     };
 
     async fn with_listing<T>(
@@ -125,8 +126,8 @@ mod tests {
 
     #[test]
     fn parses_incomplete_uploads_and_pagination() {
-        let page: ListResponse = quick_xml::de::from_str(
-            r"<ListMultipartUploadsResult>
+        let page: ListResponse = de::from_str(
+            "<ListMultipartUploadsResult>
                 <IsTruncated>true</IsTruncated>
                 <NextKeyMarker>worm/b</NextKeyMarker>
                 <NextUploadIdMarker>next</NextUploadIdMarker>

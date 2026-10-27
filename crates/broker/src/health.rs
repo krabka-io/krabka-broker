@@ -47,15 +47,19 @@ use crate::{error::BrokerError, http_server::spawn};
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 #[cfg(not(target_family = "wasm"))]
 use std::net::SocketAddr;
-#[cfg(not(target_family = "wasm"))]
-use tokio_util::sync::CancellationToken;
 use {
     crate::metadata_source::MetadataSource,
-    std::sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
+    std::{
+        fmt,
+        fmt::Formatter,
+        sync::{
+            Arc, OnceLock,
+            atomic::{AtomicBool, Ordering},
+        },
     },
 };
+#[cfg(not(target_family = "wasm"))]
+use {tokio::net::TcpListener, tokio_util::sync::CancellationToken};
 
 #[cfg(test)]
 mod tests;
@@ -116,8 +120,8 @@ pub enum NotReady {
     },
 }
 
-impl std::fmt::Display for NotReady {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for NotReady {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "not ready: {}: ", self.condition())?;
         match *self {
             Self::ShuttingDown => f.write_str("controlled shutdown is draining leadership"),
@@ -151,8 +155,8 @@ struct Inner {
     progress: OnceLock<Arc<dyn MetadataProgress>>,
 }
 
-impl std::fmt::Debug for HealthState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for HealthState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("HealthState")
             .field("readiness", &self.readiness())
             .finish()
@@ -279,9 +283,7 @@ pub async fn serve(
     shutdown: CancellationToken,
 ) -> Result<SocketAddr, BrokerError> {
     let bind_error = || BrokerError::listener_bind("health", addr, "--health-listen-addr");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(bind_error())?;
+    let listener = TcpListener::bind(addr).await.map_err(bind_error())?;
     let bound = listener.local_addr().map_err(bind_error())?;
     tracing::info!(%bound, "health server listening");
     let app = router(state);
@@ -302,7 +304,7 @@ async fn healthz() -> impl IntoResponse { (StatusCode::OK, "ok\n") }
 #[cfg(not(target_family = "wasm"))]
 async fn readyz(State(state): State<HealthState>) -> impl IntoResponse {
     match state.readiness() {
-        Ok(()) => (StatusCode::OK, "ready\n".to_string()),
+        Ok(()) => (StatusCode::OK, "ready\n".to_owned()),
         Err(not_ready) => (StatusCode::SERVICE_UNAVAILABLE, format!("{not_ready}\n")),
     }
 }

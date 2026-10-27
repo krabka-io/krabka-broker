@@ -8,6 +8,7 @@ use {
         RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
         RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
     },
+    std::fs,
     uuid::Uuid,
 };
 
@@ -27,12 +28,8 @@ pub fn archive_segment(
         1,
         0,
         RemoteLogSegmentDetails::new(
-            i32::try_from(
-                std::fs::metadata(&export.log_path)
-                    .expect("log metadata")
-                    .len(),
-            )
-            .expect("fixture segment fits i32"),
+            i32::try_from(fs::metadata(&export.log_path).expect("log metadata").len())
+                .expect("fixture segment fits i32"),
             RemoteLogSegmentState::CopySegmentFinished,
             maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
         ),

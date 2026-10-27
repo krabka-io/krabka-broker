@@ -19,8 +19,9 @@ use {
         network::auth::subject_dn_rfc2253,
         platform::Sockets,
     },
-    std::net::SocketAddr,
-    tokio::net::TcpStream,
+    std::{io, net::SocketAddr, sync::Arc, time::Duration},
+    tokio::{net::TcpStream, time},
+    tokio_rustls::server::TlsStream,
 };
 
 /// Per-listener entrypoint.
@@ -29,7 +30,7 @@ use {
 /// TLS, and the plaintext path. Both paths converge on
 /// [`serve_connection_stream`] for the per-connection request loop.
 pub async fn serve_connection_on_listener(
-    broker: std::sync::Arc<Broker>,
+    broker: Arc<Broker>,
     stream: TcpStream,
     spec: ListenerSpec,
 ) {
@@ -176,15 +177,15 @@ pub async fn serve_connection_on_listener(
 /// counted as an idle close like any other, or the handshake itself failed.
 async fn handshake_within_idle_window<F, T>(
     handshake: F,
-    idle: Option<std::time::Duration>,
+    idle: Option<Duration>,
     peer: SocketAddr,
     metrics: &BrokerMetrics,
 ) -> Option<T>
 where
-    F: Future<Output = std::io::Result<T>>,
+    F: Future<Output = io::Result<T>>,
 {
     let outcome = match idle {
-        Some(window) => match tokio::time::timeout(window, handshake).await {
+        Some(window) => match time::timeout(window, handshake).await {
             Ok(outcome) => outcome,
             Err(_elapsed) => {
                 // An idle close, which Kafka's `Selector` logs below INFO.
@@ -211,19 +212,19 @@ where
 /// A TLS stream whose handshake finished and the principal its peer
 /// certificate maps to, if it presented one.
 struct AuthenticatedTls<S> {
-    stream: tokio_rustls::server::TlsStream<S>,
+    stream: TlsStream<S>,
     principal: Option<krabka_security::Principal>,
 }
 
 async fn authenticated_tls<F, S>(
     handshake: F,
-    idle: Option<std::time::Duration>,
+    idle: Option<Duration>,
     peer: SocketAddr,
     metrics: &BrokerMetrics,
     spec: &ListenerSpec,
 ) -> Option<AuthenticatedTls<S>>
 where
-    F: Future<Output = std::io::Result<tokio_rustls::server::TlsStream<S>>>,
+    F: Future<Output = io::Result<TlsStream<S>>>,
 {
     let stream = handshake_within_idle_window(handshake, idle, peer, metrics).await?;
     let principal = peer_cert_principal(&stream, spec, peer).ok()?;
@@ -244,7 +245,7 @@ where
 /// there and the channel never builds, so the caller closes the connection
 /// rather than admitting the peer under its DN or as `ANONYMOUS`.
 fn peer_cert_principal<S>(
-    stream: &tokio_rustls::server::TlsStream<S>,
+    stream: &TlsStream<S>,
     spec: &ListenerSpec,
     peer: SocketAddr,
 ) -> Result<Option<krabka_security::Principal>, ()> {
@@ -292,7 +293,7 @@ fn mtls_principal(
 /// call sites, and it records the peer's TCP address before it passes the
 /// stream to the generic loop.
 async fn serve_connection_plaintext(
-    broker: std::sync::Arc<Broker>,
+    broker: Arc<Broker>,
     stream: TcpStream,
     spec: ListenerSpec,
     peer: SocketAddr,

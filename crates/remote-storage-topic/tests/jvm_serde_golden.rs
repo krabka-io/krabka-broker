@@ -21,6 +21,7 @@
 //!   eventTimestampMs=123 (add cases) segmentSizeInBytes=4096
 //!   segmentLeaderEpochs = {0->0, 1->50}
 //!   customMetadata (with-custom case) = [1,2,3,4]
+#![cfg(test)]
 
 use {
     krabka_ids::LeaderEpoch,
@@ -47,9 +48,11 @@ fn golden(name: &str) -> Vec<u8> {
     let hex = map
         .get(name)
         .unwrap_or_else(|| panic!("no golden case {name}"));
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex"))
+    hex.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            u8::from_str_radix(str::from_utf8(pair).expect("ASCII hex"), 16).expect("valid hex")
+        })
         .collect()
 }
 
@@ -89,7 +92,7 @@ fn base_add() -> RemoteLogSegmentMetadata {
 /// Assert Krabka round-trips byte-identically against a JVM golden vector.
 fn assert_byte_exact(case: &str, event: &MetadataEvent) {
     let want = golden(case);
-    let got = event.encode();
+    let got = event.encode().unwrap();
     assert2::assert!(
         (got.as_ref()) == (want.as_slice()),
         "case `{case}`: Krabka encode != JVM golden\n  got : {}\n  want: {}",

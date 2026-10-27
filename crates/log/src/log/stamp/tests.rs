@@ -15,10 +15,11 @@ use {
     },
     assert2::check,
     krabka_units::prelude::mebibytes,
+    std::path::Path,
     tempfile::tempdir,
 };
 
-fn assert_stamp_entries(dir: &std::path::Path, expected: &[StampEntry]) {
+fn assert_stamp_entries(dir: &Path, expected: &[StampEntry]) {
     assert2::assert!(stamp_entries(dir, 0) == expected);
 }
 

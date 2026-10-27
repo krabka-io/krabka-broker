@@ -26,12 +26,13 @@ use {
     krabka_verified::transaction::{
         TransactionReaperCompletionDecision as CompletionDecision, TransactionSnapshot,
     },
+    std::{mem, sync::PoisonError},
     tracing::{info, warn},
 };
 
 /// The result of one attempt to complete a prepared transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompletionAttempt {
+pub enum CompletionAttempt {
     /// The `Complete*` record is durable, from this attempt or an earlier one.
     Completed,
     /// There is nothing for this broker to complete: the transactional id is
@@ -44,14 +45,14 @@ pub(crate) enum CompletionAttempt {
 
 /// The marker and the `Complete*` state that finish a prepared transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PreparedCompletion {
+pub struct PreparedCompletion {
     pub(crate) marker: MarkerType,
     pub(crate) complete: TxnState,
 }
 
 /// The marker and complete state that finish a transaction in `prepare`, or
 /// `None` when `prepare` is not a `Prepare*` state.
-pub(crate) fn completion_for(prepare: TxnState) -> Option<PreparedCompletion> {
+pub fn completion_for(prepare: TxnState) -> Option<PreparedCompletion> {
     match prepare {
         TxnState::PrepareCommit => Some(PreparedCompletion {
             marker: MarkerType::Commit,
@@ -73,7 +74,7 @@ pub(crate) fn completion_for(prepare: TxnState) -> Option<PreparedCompletion> {
 /// The prior producer ID is recorded only when the identity rotated to a new
 /// producer ID. Kafka's `prepareComplete` also clears `hasFailedEpochFence`,
 /// because the abort that fence prepared has now been written.
-pub(crate) fn apply_completion(
+pub fn apply_completion(
     entry: &mut TxnEntry,
     complete: TxnState,
     (new_pid, new_epoch): (ProducerId, i16),
@@ -98,7 +99,7 @@ pub(crate) fn apply_completion(
 ///
 /// `(prepare, complete)` must be a pairing [`completion_for`] returns; the
 /// verified kernel requires the two states to differ.
-pub(crate) fn completion_decision(
+pub fn completion_decision(
     entry: &TxnEntry,
     prepared: &TxnEntry,
     (prepare, complete): (TxnState, TxnState),
@@ -133,7 +134,7 @@ impl TxnCoordinator {
     pub(crate) fn request_completion(&self, transactional_id: &str) {
         self.pending_completions
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(transactional_id.to_owned());
         self.completion_requested.notify_one();
     }
@@ -144,11 +145,11 @@ impl TxnCoordinator {
 
     /// Take every queued transactional id, in order.
     pub(crate) fn take_completion_requests(&self) -> Vec<String> {
-        std::mem::take(
+        mem::take(
             &mut *self
                 .pending_completions
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .unwrap_or_else(PoisonError::into_inner),
         )
         .into_iter()
         .collect()
@@ -178,7 +179,7 @@ impl TxnCoordinator {
         transactional_id: &str,
         txnv: TxnVersion,
     ) -> CompletionAttempt {
-        if !self.is_coordinator_for(transactional_id).await {
+        if !self.is_transaction_coordinator_for(transactional_id).await {
             return CompletionAttempt::NothingToComplete;
         }
         let Some(handle) = self.get(transactional_id) else {
@@ -225,35 +226,37 @@ impl TxnCoordinator {
         if !self.is_current_entry(transactional_id, &handle) {
             return CompletionAttempt::Retry;
         }
-        match completion_decision(&entry, &prepared, (prepared.state, complete)) {
-            CompletionDecision::AlreadyComplete => CompletionAttempt::Completed,
+        let mut completed = match completion_decision(&entry, &prepared, (prepared.state, complete))
+        {
+            CompletionDecision::AlreadyComplete => return CompletionAttempt::Completed,
             CompletionDecision::RejectMalformed
             | CompletionDecision::RejectStaleIdentity
             | CompletionDecision::RejectChangedPreparedState => {
-                CompletionAttempt::NothingToComplete
+                return CompletionAttempt::NothingToComplete;
             }
-            CompletionDecision::Proceed => {
-                let mut completed = entry.clone();
-                let identity = completion_producer_identity(&completed);
-                apply_completion(&mut completed, complete, identity, now_millis());
-                match self.put_under_state_partition_lock(completed, txnv).await {
-                    Ok(_) => {
-                        info!(
-                            tid = transactional_id,
-                            state = ?complete,
-                            "transaction completion: completed a prepared transaction"
-                        );
-                        CompletionAttempt::Completed
-                    }
-                    Err(error) => {
-                        warn!(
-                            tid = transactional_id,
-                            %error,
-                            "transaction completion: Complete append failed; will retry"
-                        );
-                        CompletionAttempt::Retry
-                    }
-                }
+            CompletionDecision::Proceed => entry.clone(),
+        };
+        let identity = completion_producer_identity(&completed);
+        apply_completion(&mut completed, complete, identity, now_millis());
+        // The entry stays locked until the completion is written.
+        let written = self.put_under_state_partition_lock(completed, txnv).await;
+        drop(entry);
+        match written {
+            Ok(_) => {
+                info!(
+                    tid = transactional_id,
+                    state = ?complete,
+                    "transaction completion: completed a prepared transaction"
+                );
+                CompletionAttempt::Completed
+            }
+            Err(error) => {
+                warn!(
+                    tid = transactional_id,
+                    %error,
+                    "transaction completion: Complete append failed; will retry"
+                );
+                CompletionAttempt::Retry
             }
         }
     }

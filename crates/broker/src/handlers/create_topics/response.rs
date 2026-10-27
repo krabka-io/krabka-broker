@@ -11,8 +11,11 @@ use {
         metrics::QuotaType,
         quota::throttle_time_ms,
     },
-    krabka_protocol::owned::create_topics_response::{
-        CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
+    krabka_protocol::owned::{
+        create_topics_response::{
+            CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
+        },
+        describe_configs_response::DescribeConfigsResourceResult,
     },
     krabka_units::Time,
 };
@@ -54,8 +57,8 @@ pub(super) fn topic_error_result(
 /// paths.
 /// The supplied entries already resolve the create request's override map,
 /// including a validate-only topic that is absent from the metadata image.
-pub(super) fn creatable_topic_configs(
-    entries: Vec<krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult>,
+pub fn creatable_topic_configs(
+    entries: Vec<DescribeConfigsResourceResult>,
 ) -> Vec<CreatableTopicConfigs> {
     entries
         .into_iter()

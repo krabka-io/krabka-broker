@@ -20,6 +20,9 @@ use {
     },
     assert2::check,
     krabka_broker::codes,
+    krabka_protocol::owned::{
+        fetch_response, produce_response::NodeEndpoint as ProduceNodeEndpoint,
+    },
     std::collections::BTreeSet,
 };
 
@@ -78,7 +81,7 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         produced.responses[0].partition_responses[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Produce to the witness is refused"
     );
-    let expected_endpoint = krabka_protocol::owned::produce_response::NodeEndpoint {
+    let expected_endpoint = ProduceNodeEndpoint {
         node_id: leader_id,
         port: i32::from(advertised.port),
         host: advertised.host.clone(),
@@ -106,7 +109,7 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
     );
     check!(
         fetched.node_endpoints
-            == vec![krabka_protocol::owned::fetch_response::NodeEndpoint {
+            == vec![fetch_response::NodeEndpoint {
                 node_id: leader_id,
                 host: advertised.host.clone(),
                 port: i32::from(advertised.port),

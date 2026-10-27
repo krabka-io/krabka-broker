@@ -61,7 +61,7 @@ mod primitives;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     cut::{
         CutStatus, CutValue, MissingPartition, PartitionOffset, TopicOffsets, decode_cut,
         encode_cut,
@@ -78,11 +78,11 @@ pub(crate) use self::{
 /// Part of the 1.x on-disk contract. Version 0 is the only version so far,
 /// and the decoder rejects any other value. A new version keeps a decoder for
 /// every earlier 1.x version. See `docs/persisted_formats.md`.
-pub(crate) const RECORD_VERSION: i16 = 0;
+pub const RECORD_VERSION: i16 = 0;
 
 /// The epoch that a group record writes, because a group definition belongs to
 /// no single epoch.
-pub(crate) const NO_EPOCH: i64 = -1;
+pub const NO_EPOCH: i64 = -1;
 
 #[cfg(test)]
 mod tests {

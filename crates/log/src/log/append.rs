@@ -18,11 +18,33 @@ use {
         stamp_index::OffsetRange,
         txn_index::TxnIndex,
     },
+    bytes::{Bytes, BytesMut},
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_protocol::records::{RecordBatch, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _},
-    tracing::instrument,
+    std::{
+        mem,
+        sync::{Arc, PoisonError},
+        time::SystemTime,
+    },
+    tracing::{field, instrument},
 };
+
+/// The bytes an append stores: the caller's wire bytes, or the batch encoded
+/// here.
+enum StoredBytes<'a> {
+    Verbatim(&'a [u8]),
+    Encoded(Bytes),
+}
+
+impl StoredBytes<'_> {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Verbatim(bytes) => bytes,
+            Self::Encoded(bytes) => bytes,
+        }
+    }
+}
 
 /// The write settings an append retains after it rolls the active segment.
 pub(super) struct AppendRoll {
@@ -75,7 +97,7 @@ impl Log {
             segment_allocation,
             tail_cache_size,
         ) = {
-            let cfg = self.config.read().unwrap();
+            let cfg = self.config.read().unwrap_or_else(PoisonError::into_inner);
             (
                 cfg.segment_size,
                 cfg.segment_roll_interval,
@@ -133,7 +155,7 @@ impl Log {
     #[instrument(
         level = "debug",
         skip_all,
-        fields(assigned_base = tracing::field::Empty, leader_epoch = batch.partition_leader_epoch),
+        fields(assigned_base = field::Empty, leader_epoch = batch.partition_leader_epoch),
         err,
     )]
     /// # Errors
@@ -221,7 +243,7 @@ impl Log {
     /// holds a record whose delivery time is strictly after `delivery_ms`.
     pub(super) fn reject_backwards_schedule(&self, delivery_ms: i64) -> Result<(), LogError> {
         let monotonic = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             config.delivery_policy == DeliveryPolicy::Scheduled
                 && config.schedule_order == ScheduleOrder::Monotonic
         };
@@ -270,9 +292,13 @@ impl Log {
     /// The broker clock reading this append stamps, or `None` on a
     /// `CreateTime` partition, which stamps nothing.
     pub(super) fn log_append_time_stamp(&self) -> Option<i64> {
-        let log_append_time =
-            self.config.read().unwrap().message_timestamp_type == TimestampType::LogAppendTime;
-        log_append_time.then(|| retention::now_ms(std::time::SystemTime::now()))
+        let log_append_time = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .message_timestamp_type
+            == TimestampType::LogAppendTime;
+        log_append_time.then(|| retention::now_ms(SystemTime::now()))
     }
 
     /// Append a commit-marker batch with a coordinator-supplied transaction
@@ -415,7 +441,7 @@ impl Log {
     /// updates the LSO and the active `.txnindex` from the batch attributes.
     fn append_preserving_offset(
         &mut self,
-        batch: &mut RecordBatch,
+        batch: &RecordBatch,
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
         self.append_preserving_offset_inner(batch, transaction_stamp, None)
@@ -449,18 +475,19 @@ impl Log {
             Offset(batch.base_offset),
         )?;
         check_control_record_versions(batch)?;
-        let encoded = if verbatim.is_none() {
-            let config = self.config.read().unwrap();
-            let level = config.compression_level(batch.attributes.compression());
-            let mut bytes = bytes::BytesMut::with_capacity(batch.encoded_len());
-            batch.encode_with_compression_level(&mut bytes, level)?;
-            Some(bytes.freeze())
+        let stored = if let Some(bytes) = verbatim {
+            StoredBytes::Verbatim(bytes)
         } else {
-            None
+            let level = self
+                .config
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .compression_level(batch.attributes.compression());
+            let mut bytes = BytesMut::with_capacity(batch.encoded_len());
+            batch.encode_with_compression_level(&mut bytes, level)?;
+            StoredBytes::Encoded(bytes.freeze())
         };
-        let stored_bytes = verbatim
-            .or(encoded.as_deref())
-            .expect("owned batches were encoded above");
+        let stored_bytes = stored.as_slice();
         let AppendRoll {
             index_interval,
             flush_on_append,
@@ -470,25 +497,21 @@ impl Log {
         )?;
 
         let result = (|| {
-            let active = self
-                .active
-                .as_mut()
-                .expect("active segment must exist after Log::open");
-            if let Some(bytes) = verbatim {
-                active.append_verbatim(
-                    bytes,
-                    base_offset,
-                    batch.last_offset_delta,
-                    batch.max_timestamp,
-                    LeaderEpoch(batch.partition_leader_epoch),
-                    index_interval,
-                )?;
-            } else {
-                active.append_encoded(
-                    batch,
-                    index_interval,
-                    encoded.as_ref().expect("owned batches were encoded above"),
-                )?;
+            let active = self.active.as_mut().ok_or_else(super::no_active_segment)?;
+            match &stored {
+                StoredBytes::Verbatim(bytes) => {
+                    active.append_verbatim(
+                        bytes,
+                        base_offset,
+                        batch.last_offset_delta,
+                        batch.max_timestamp,
+                        LeaderEpoch(batch.partition_leader_epoch),
+                        index_interval,
+                    )?;
+                }
+                StoredBytes::Encoded(encoded) => {
+                    active.append_encoded(batch, index_interval, encoded)?;
+                }
             }
 
             let pid = ProducerId(batch.producer_id);
@@ -597,14 +620,19 @@ impl Log {
     #[instrument(
         level = "info",
         skip_all,
-        fields(new_base = tracing::field::Empty),
+        fields(new_base = field::Empty),
         err,
     )]
     pub(super) fn roll_active_segment(&mut self) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
         let new_base = self.log_end_offset();
         tracing::Span::current().record("new_base", new_base.0);
-        let buffered = !self.config.read().unwrap().flush_on_append && !cfg!(target_os = "wasi");
+        let buffered = !self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .flush_on_append
+            && !cfg!(target_os = "wasi");
         #[cfg(not(target_os = "wasi"))]
         let flush = if buffered {
             // Reserve both retained bytes and encoding scratch space before
@@ -615,10 +643,14 @@ impl Log {
                     self.producer_state.len(),
                 )?)?;
             let snapshot = producer_snapshot::prepare(&self.dir, new_base, &self.producer_state)?;
-            let files = self.active.as_ref().unwrap().flush_handles()?;
+            let files = self
+                .active
+                .as_ref()
+                .ok_or_else(super::no_active_segment)?
+                .flush_handles()?;
             Some(super::rollover_flush::Flush {
                 files,
-                io: self.io.clone(),
+                io: Arc::clone(&self.io),
                 snapshot,
                 _permit: permit,
             })
@@ -634,7 +666,7 @@ impl Log {
         // so it runs before the segment leaves `self.active`.
         self.active
             .as_mut()
-            .expect("active segment must exist before rolling")
+            .ok_or_else(super::no_active_segment)?
             .seal()?;
         #[cfg(not(target_os = "wasi"))]
         if let Some(flush) = flush {
@@ -642,16 +674,13 @@ impl Log {
             // segment, transaction-index, or stamp-index setup fails.
             self.rollover_flusher.submit(flush)?;
         }
-        let old = self
-            .active
-            .take()
-            .expect("active segment must exist before rolling");
+        let old = self.active.take().ok_or_else(super::no_active_segment)?;
         let old_base = old.base_offset();
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;
-        new_seg.set_io(self.io.clone());
+        new_seg.set_io(Arc::clone(&self.io));
         let new_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
-        let old_txn_index = std::mem::replace(&mut self.active_txn_index, new_txn_index);
+        let old_txn_index = mem::replace(&mut self.active_txn_index, new_txn_index);
         self.sealed_txn_indexes.insert(old_base, old_txn_index);
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);

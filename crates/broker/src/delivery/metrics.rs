@@ -12,7 +12,7 @@ use {
 
 /// The gauges, the histogram, and the counter that the delivery scheduler
 /// feeds.
-pub(crate) trait DeliveryMetrics: Send + Sync {
+pub trait DeliveryMetrics: Send + Sync {
     /// One scheduled partition's state after a recompute. A partition whose
     /// topic delivers immediately never reaches this method, so it never
     /// creates a series.
@@ -43,7 +43,7 @@ pub(crate) trait DeliveryMetrics: Send + Sync {
 /// cheaply, so the scheduler can own one behind an `Arc<dyn DeliveryMetrics>`
 /// without borrowing from the broker.
 #[derive(Clone)]
-pub(crate) struct BrokerDeliveryMetrics {
+pub struct BrokerDeliveryMetrics {
     metrics: BrokerMetrics,
 }
 
@@ -80,7 +80,7 @@ impl DeliveryMetrics for BrokerDeliveryMetrics {
 /// It exists so a unit test needs no live metric registry.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct NoDeliveryMetrics;
+pub struct NoDeliveryMetrics;
 
 #[cfg(test)]
 impl DeliveryMetrics for NoDeliveryMetrics {

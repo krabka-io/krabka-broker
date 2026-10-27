@@ -1,6 +1,10 @@
 //! Member fixtures the `classic_state` submodule tests share.
 
-use {super::member::Member, bytes::Bytes, std::time::Duration};
+use {
+    super::member::Member,
+    bytes::Bytes,
+    std::{collections::HashMap, time::Duration},
+};
 
 pub(super) fn sample_member(id: &str) -> Member { member_with_protocols(id, vec![("range", &[])]) }
 
@@ -13,19 +17,19 @@ pub(super) fn member_with_protocols(id: &str, protocols: Vec<(&str, &[u8])>) -> 
         Duration::from_mins(1),
         protocols
             .into_iter()
-            .map(|(n, b)| (n.to_string(), Bytes::copy_from_slice(b)))
+            .map(|(n, b)| (n.to_owned(), Bytes::copy_from_slice(b)))
             .collect(),
     )
 }
 
 pub(super) fn static_member(member_id: &str, instance_id: &str) -> Member {
-    sample_member(member_id).with_instance_id(Some(instance_id.to_string()))
+    sample_member(member_id).with_instance_id(Some(instance_id.to_owned()))
 }
 
 /// Complete a range rebalance and install the test's assignment for member m1.
 pub(super) fn stabilize_m1(group: &mut super::group::ClassicGroup) {
     group.complete_rebalance("range");
-    group.install_assignments(std::collections::HashMap::from([(
+    group.install_assignments(HashMap::from([(
         "m1".into(),
         Bytes::from_static(b"assignment-bytes"),
     )]));

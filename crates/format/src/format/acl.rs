@@ -23,8 +23,8 @@ pub(super) fn parse_acl_spec(spec: &str) -> Result<AclEntry, String> {
             .split_once('=')
             .ok_or_else(|| format!("malformed pair: {kv}"))?;
         match k {
-            "principal" => principal = Some(v.to_string()),
-            "host" => host = Some(v.to_string()),
+            "principal" => principal = Some(v.to_owned()),
+            "host" => host = Some(v.to_owned()),
             "operation" => {
                 operation = Some(match v {
                     "All" => AclOperation::All,
@@ -67,7 +67,7 @@ pub(super) fn parse_acl_spec(spec: &str) -> Result<AclEntry, String> {
                     "TransactionalId" => ResourceType::TransactionalId,
                     other => return Err(format!("unknown resource type: {other}")),
                 });
-                resource_name = Some(rn.to_string());
+                resource_name = Some(rn.to_owned());
             }
             other => return Err(format!("unknown key: {other}")),
         }
@@ -97,10 +97,10 @@ mod tests {
             entry
                 == AclEntry {
                     resource_type: krabka_metadata::ResourceType::Cluster,
-                    resource_name: "kafka-cluster".to_string(),
+                    resource_name: "kafka-cluster".to_owned(),
                     pattern_type: krabka_metadata::PatternType::Literal,
-                    principal: "User:admin".to_string(),
-                    host: "*".to_string(),
+                    principal: "User:admin".to_owned(),
+                    host: "*".to_owned(),
                     operation: krabka_metadata::AclOperation::All,
                     permission_type: krabka_metadata::PermissionType::Allow,
                 }

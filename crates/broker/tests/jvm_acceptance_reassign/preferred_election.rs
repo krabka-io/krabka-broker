@@ -15,6 +15,7 @@ use {
         oracle::OracleComparison,
     },
     assert2::assert,
+    std::{collections::BTreeMap, slice},
 };
 
 /// JVM acceptance test for `kafka-leader-election --election-type preferred`.
@@ -264,7 +265,7 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
             None,
         );
         let outcomes = parse_election(&by_file.text());
-        let expected: std::collections::BTreeMap<_, _> = selector_partitions()
+        let expected: BTreeMap<_, _> = selector_partitions()
             .into_iter()
             .map(|partition| (partition, ElectionOutcome::AlreadyElected))
             .collect();
@@ -286,7 +287,7 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
             "preferred",
             "--all-topic-partitions",
         ]);
-        let mine: std::collections::BTreeMap<_, _> = parse_election(&by_all.text())
+        let mine: BTreeMap<_, _> = parse_election(&by_all.text())
             .into_iter()
             .filter(|(partition, _)| partition.topic == SELECTOR_TOPIC)
             .collect();
@@ -344,7 +345,7 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
             "--command-config",
             "/client.properties",
         ],
-        std::slice::from_ref(&props_file),
+        slice::from_ref(&props_file),
         None,
     )
     .expect_success();
@@ -352,7 +353,7 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
 
     // Keep a registered non-controller broker offline so the injected
     // preferred replica cannot race back into the ISR before the JVM command.
-    let controller_leader = brokers.h1.wait_until_controller_leader().await.0;
+    let controller_leader = brokers.h1.wait_until_controller_leader().await.unwrap().0;
     let preferred = (2_u64..=3)
         .find(|node| *node != controller_leader)
         .expect("a non-bootstrap, non-controller broker");
@@ -406,7 +407,7 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
     let outcomes = parse_election(&run.text());
     assert!(
         outcomes
-            == std::collections::BTreeMap::from([(
+            == BTreeMap::from([(
                 TopicPartition::new(TOPIC, 0),
                 ElectionOutcome::Failed(
                     "org.apache.kafka.common.errors.PreferredLeaderNotAvailableException"

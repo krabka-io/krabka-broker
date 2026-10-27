@@ -97,9 +97,10 @@ fn declarations(input: &TokenStream) -> Result<Vec<Mutation>, ParseError> {
             "\"topic name\" => required[topics[0].name]",
             "\"metadata\" => optional[topics[0].partitions[0].committed_metadata]",
         ] {
-            mutations.extend(declarations(
-                &entry.parse().expect("fixed offset mutation"),
-            )?);
+            let entry = entry
+                .parse()
+                .map_err(|_| parser.error("invalid offset mutation"))?;
+            mutations.extend(declarations(&entry)?);
         }
     }
     if mutations.is_empty() {
@@ -108,7 +109,7 @@ fn declarations(input: &TokenStream) -> Result<Vec<Mutation>, ParseError> {
     Ok(mutations)
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let mutations = declarations(input)?;
     let request = Ident::new("request").with_span(Span::mixed_site());
     let value = Ident::new("value").with_span(Span::mixed_site());

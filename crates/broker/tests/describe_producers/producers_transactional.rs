@@ -5,18 +5,22 @@
 use {
     crate::{
         producers_harness::{
-            create_topic, init_transactional_producer, topic_id_for, transactional_batch,
+            batch, create_topic, init_transactional_producer, topic_id_for, transactional,
         },
         support::{
             self,
             admin::describe_producers_request,
             produce::{SinglePartitionProduceSetup, batch_request},
             records::{ProducerSequence, ProducerValuesSetup},
+            transactions,
         },
     },
     assert2::{assert, check},
-    krabka_protocol::owned::{
-        produce_request::ProduceRequest, write_txn_markers_request::WriteTxnMarkersRequest,
+    krabka_protocol::{
+        owned::{
+            produce_request::ProduceRequest, write_txn_markers_request::WriteTxnMarkersRequest,
+        },
+        primitives::uuid::Uuid,
     },
 };
 
@@ -53,11 +57,11 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
         .client
         .send(WriteTxnMarkersRequest {
             markers: vec![
-                crate::support::transactions::transaction_marker()
+                transactions::transaction_marker()
                     .producer(producer)
                     .coordinator_epoch(17)
                     .transaction_version(1)
-                    .topics(vec![crate::support::transactions::marker_topic(
+                    .topics(vec![transactions::marker_topic(
                         "transactions".into(),
                         vec![0],
                     )])
@@ -124,19 +128,18 @@ async fn check_transaction_state(
     check!(producer_row.coordinator_epoch == expected.coordinator_epoch);
 }
 
-fn transaction_values_request(
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-    values: ProducerValuesSetup<'_>,
-) -> ProduceRequest {
+fn transaction_values_request(topic_id: Uuid, values: ProducerValuesSetup<'_>) -> ProduceRequest {
     ProduceRequest {
         transactional_id: Some("describe-producers-tid".into()),
         ..batch_request(
-            transactional_batch()
-                .pid(values.pid.0)
-                .epoch(values.epoch.0)
-                .base_seq(values.base_seq.0)
-                .values(values.values)
-                .call(),
+            transactional(
+                batch()
+                    .pid(values.pid.0)
+                    .epoch(values.epoch.0)
+                    .base_seq(values.base_seq.0)
+                    .values(values.values)
+                    .call(),
+            ),
             SinglePartitionProduceSetup {
                 topic: ("transactions").into(),
                 topic_id,

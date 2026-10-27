@@ -1,4 +1,8 @@
-use {super::*, crate::producer_snapshot::ProducerSnapshotEntryFacts, assert2::assert};
+use {
+    super::*,
+    crate::{producer_snapshot, producer_snapshot::ProducerSnapshotEntryFacts},
+    assert2::assert,
+};
 
 #[test]
 fn trim_composition_boundaries_expose_inherited_frontier_requirement() {
@@ -39,7 +43,7 @@ fn trim_composition_boundaries_expose_inherited_frontier_requirement() {
         coordinator_epoch: -1,
         current_txn_first_offset: -1,
     };
-    assert!(crate::producer_snapshot::producer_snapshot_entry_valid(
+    assert!(producer_snapshot::producer_snapshot_entry_valid(
         10, historical
     ));
 }

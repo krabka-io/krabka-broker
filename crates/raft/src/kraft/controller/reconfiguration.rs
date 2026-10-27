@@ -352,7 +352,7 @@ impl Engine {
             ),
             VoterChange::Update(request) => (current.with_voter(request.voter), true, false),
             VoterChange::FinalizeKraftVersion(_) | VoterChange::ValidateKraftVersion(_) => {
-                (current.clone(), true, false)
+                (current, true, false)
             }
         };
         if next.len() != plan.next_voter_count {

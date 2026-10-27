@@ -17,11 +17,20 @@ use {
     crate::{kraft::transport::api_key, network::dialer::PlaintextDialer},
     bytes::BufMut,
     krabka_ids::ApiVersion,
-    tokio::io::{AsyncReadExt, AsyncWriteExt},
+    krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
+    krabka_protocol::owned::api_versions_response::SupportedFeatureKey,
+    std::{collections::BTreeMap, net::SocketAddr, str, sync::Mutex, time::Duration},
+    tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::mpsc,
+        task::JoinHandle,
+        time,
+    },
 };
 
 struct TestRecordingDialer {
-    options: Arc<std::sync::Mutex<Vec<ConnectionOptions>>>,
+    options: Arc<Mutex<Vec<ConnectionOptions>>>,
 }
 
 #[async_trait]
@@ -57,17 +66,17 @@ fn voter_set_with_controller(id: NodeId, host: &str, port: u16) -> VoterSet {
 /// A sender and the connection options its dialer recorded.
 struct RecordedSender {
     sender: RealPeerSender,
-    options: Arc<std::sync::Mutex<Vec<ConnectionOptions>>>,
+    options: Arc<Mutex<Vec<ConnectionOptions>>>,
 }
 
-fn recorded_sender(address: std::net::SocketAddr) -> RecordedSender {
-    let options = Arc::new(std::sync::Mutex::new(Vec::new()));
+fn recorded_sender(address: SocketAddr) -> RecordedSender {
+    let options = Arc::new(Mutex::new(Vec::new()));
     let sender = RealPeerSender::new(
         voter_set_with_controller(NodeId(2), &address.ip().to_string(), address.port()),
         &[],
         "raft-client".into(),
         Arc::new(TestRecordingDialer {
-            options: options.clone(),
+            options: Arc::clone(&options),
         }),
         krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
         krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
@@ -75,7 +84,7 @@ fn recorded_sender(address: std::net::SocketAddr) -> RecordedSender {
     RecordedSender { sender, options }
 }
 
-async fn answer_fetch_connection(listener: &tokio::net::TcpListener, answer: &[u8]) {
+async fn answer_fetch_connection(listener: &TcpListener, answer: &[u8]) {
     let (mut stream, _) = listener.accept().await.unwrap();
     let api_versions = read_frame(&mut stream).await;
     let RequestHeader {
@@ -131,11 +140,11 @@ fn bootstrap_servers_remain_available_and_a_leader_is_addressed_by_its_announced
     sender.remember_leader_endpoint(NodeId(7), "leader.example:9093".into());
     assert2::assert!(
         *sender.aliases.read().expect("alias lock")
-            == std::collections::BTreeMap::from([(NodeId(7), "leader.example:9093".to_string())])
+            == BTreeMap::from([(NodeId(7), "leader.example:9093".to_owned())])
     );
 }
 
-async fn read_frame(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+async fn read_frame(stream: &mut TcpStream) -> Vec<u8> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await.unwrap();
     let len = u32::from_be_bytes(len_buf) as usize;
@@ -145,7 +154,7 @@ async fn read_frame(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
 }
 
 async fn write_response_frame(
-    stream: &mut tokio::net::TcpStream,
+    stream: &mut TcpStream,
     correlation_id: i32,
     tagged_fields: bool,
     body: &[u8],
@@ -182,9 +191,9 @@ fn parse_request_header(frame: &[u8]) -> RequestHeader<'_> {
     assert2::assert!(client_len >= 0);
     let client_start = 10;
     let client_end = client_start + usize::try_from(client_len).unwrap();
-    let client_id = std::str::from_utf8(&frame[client_start..client_end])
+    let client_id = str::from_utf8(&frame[client_start..client_end])
         .unwrap()
-        .to_string();
+        .to_owned();
     let body_start = if frame.get(client_end) == Some(&0) {
         client_end + 1
     } else {
@@ -218,14 +227,12 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
                 max_version: 4,
                 ..Default::default()
             }],
-            supported_features: vec![
-                krabka_protocol::owned::api_versions_response::SupportedFeatureKey {
-                    name: name.to_owned(),
-                    min_version: min,
-                    max_version: max,
-                    ..Default::default()
-                },
-            ],
+            supported_features: vec![SupportedFeatureKey {
+                name: name.to_owned(),
+                min_version: min,
+                max_version: max,
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let mut buf = bytes::BytesMut::new();
@@ -235,7 +242,7 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
 
     use krabka_protocol::{Decode, owned::api_versions_request::ApiVersionsRequest};
 
-    const KRAFT: &str = krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
+    const KRAFT: &str = KRAFT_VERSION_FEATURE;
     /// What the candidate advertises, the finalized version asked about, and
     /// whether the candidate supports it.
     struct Case {
@@ -298,7 +305,7 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
         supported,
     } in cases
     {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let body = response_with_feature(feature, min, max);
 
@@ -338,7 +345,7 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
             .expect("probe");
         assert2::check!(got == supported, "{what}");
         {
-            let opts = recorded_options.lock().unwrap();
+            let opts = recorded_options.lock().unwrap().clone();
             assert2::assert!(
                 opts.last().unwrap().dispatch_queue_capacity
                     == krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap()
@@ -355,9 +362,9 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
 
 #[tokio::test]
 async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (observed_tx, mut observed_rx) = tokio::sync::mpsc::channel(1);
+    let (observed_tx, mut observed_rx) = mpsc::channel(1);
 
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -401,7 +408,7 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
 
     assert2::assert!(response == Bytes::from_static(b"raft-response"));
     {
-        let opts = recorded_options.lock().unwrap();
+        let opts = recorded_options.lock().unwrap().clone();
         assert2::assert!(
             opts[0].dispatch_queue_capacity
                 == krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap()
@@ -412,7 +419,7 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
                     .unwrap()
         );
     }
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(5), observed_rx.recv())
+    let observed = time::timeout(Duration::from_secs(5), observed_rx.recv())
         .await
         .expect("server observed request")
         .expect("server sent request details");
@@ -421,7 +428,7 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
             == (
                 ApiKey(api_key::VOTE),
                 ApiVersion(2),
-                "raft-client".to_string(),
+                "raft-client".to_owned(),
                 Bytes::from_static(b"vote-body"),
             )
     );
@@ -432,12 +439,12 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
 /// A fake peer that answers one fetch connection, and the address it listens
 /// on.
 struct FetchServer {
-    addr: std::net::SocketAddr,
-    task: tokio::task::JoinHandle<()>,
+    addr: SocketAddr,
+    task: JoinHandle<()>,
 }
 
 async fn fetch_server() -> FetchServer {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         answer_fetch_connection(&listener, b"fetch-response").await;
@@ -529,7 +536,7 @@ async fn a_peer_becomes_reachable_after_a_voter_set_is_populated_from_empty() {
 /// election that follows a quiet spell goes into a dead link.
 #[tokio::test]
 async fn a_send_dials_again_when_the_cached_connection_has_closed() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         for answer in [&b"first"[..], &b"second"[..]] {
@@ -550,13 +557,13 @@ async fn a_send_dials_again_when_the_cached_connection_has_closed() {
         .send(NodeId(2), api_key::VOTE, Bytes::from_static(b"vote-body"))
         .await
         .expect("first send");
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         while !sender
             .connections
             .get(&NodeId(2))
             .is_some_and(|cached| cached.is_closed())
         {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await

@@ -25,6 +25,10 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     krabka_units::{Time, convert::TimeExt as _},
+    std::{
+        path::Path,
+        time::{self, SystemTime},
+    },
 };
 
 // Commands share transport errors and the broker's ordinary refusal report.
@@ -37,7 +41,7 @@ use {
 /// Returns the [`Failure`] of a step that stopped before a broker answered: a
 /// key file that cannot be read, a proposal that cannot be looked up, or a
 /// request that did not complete.
-pub(super) async fn dispatch(
+pub async fn dispatch(
     client: &krabka_client_core::Client,
     command: Command,
 ) -> Result<i32, Failure> {
@@ -140,7 +144,7 @@ async fn list_freezes(
     client: &krabka_client_core::Client,
     scope: Option<String>,
     verify_signatures: bool,
-    operator_keys: Option<&std::path::Path>,
+    operator_keys: Option<&Path>,
 ) -> Result<i32, Failure> {
     let request = api::DescribeTopicFreezesRequest {
         scope_filter: scope,
@@ -193,7 +197,7 @@ async fn propose(
 async fn approve(
     client: &krabka_client_core::Client,
     proposal: uuid::Uuid,
-    sign_with: Option<&std::path::Path>,
+    sign_with: Option<&Path>,
     key_id: Option<&str>,
 ) -> Result<i32, Failure> {
     let proposal_id = WireUuid(*proposal.as_bytes());
@@ -308,7 +312,7 @@ async fn cluster_id(client: &krabka_client_core::Client) -> Result<String, Failu
 /// `freeze.signature_max_skew` of its own clock. A clock before the epoch
 /// saturates at zero, which the broker then refuses as far outside the window.
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(time::UNIX_EPOCH)
         .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(0))
 }

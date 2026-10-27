@@ -29,7 +29,13 @@ use {
         Time,
         convert::{ByteSizeExt, TimeExt},
     },
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+        mem,
+        sync::{Arc, PoisonError, atomic},
+        time::Duration,
+    },
+    tokio::time::Instant,
     tracing::{info, warn},
 };
 
@@ -43,11 +49,11 @@ use {
 /// -- rebuilding the partition's configuration and re-asking the leader -- for
 /// as long as the disagreement lasts. Holding it back instead leaves the
 /// membership where it belongs and stops the churn.
-type DelayedUntil = std::collections::HashMap<FollowedKey, tokio::time::Instant>;
+type DelayedUntil = HashMap<FollowedKey, Instant>;
 
 /// Catch out-of-band local log mutations without putting a full partition
 /// scan back into every incremental Fetch round.
-const PARTITION_STATE_AUDIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+const PARTITION_STATE_AUDIT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// One round's plan: what goes on the wire, and which partition each row
 /// belongs to once the answer comes back.
@@ -69,15 +75,15 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
     // that sees it is what opens it; re-checking every partition every round
     // would put the registry lookup back on the per-partition path this
     // batching exists to leave.
-    let mut materialized: std::collections::HashSet<FollowedKey> = std::collections::HashSet::new();
+    let mut materialized: HashSet<FollowedKey> = HashSet::new();
     let mut followed = BTreeMap::new();
     let mut followed_generation = 0;
     let mut followed_index = FollowedIndex::new(&followed);
-    let mut dirty = std::collections::BTreeSet::new();
-    let mut request_epochs = std::collections::HashMap::new();
+    let mut dirty = BTreeSet::new();
+    let mut request_epochs = HashMap::new();
     let mut forgotten = Vec::new();
     let mut delayed: DelayedUntil = DelayedUntil::new();
-    let mut next_partition_audit = tokio::time::Instant::now() + PARTITION_STATE_AUDIT_INTERVAL;
+    let mut next_partition_audit = Instant::now() + PARTITION_STATE_AUDIT_INTERVAL;
     // The leader connection, dialled lazily. Opening the local logs must not
     // wait behind the dial: a follower whose leader is not accepting yet still
     // has to have its replicas on disk, because the ISR report, a later
@@ -118,7 +124,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             }
         }
 
-        let now = tokio::time::Instant::now();
+        let now = Instant::now();
         if now >= next_partition_audit {
             dirty.extend(followed.keys().cloned());
             next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
@@ -129,9 +135,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                 .filter(|(_, until)| **until <= now)
                 .map(|(key, _)| key.clone()),
         );
-        delayed.retain(|key, until| {
-            followed.contains_key(key) && *until > tokio::time::Instant::now()
-        });
+        delayed.retain(|key, until| followed.contains_key(key) && *until > Instant::now());
         let round = plan_changed(&followed, &delayed, &dirty);
         if round.entries.is_empty()
             && (session.is_full() || followed.is_empty() || round.all_throttled)
@@ -157,7 +161,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
         for (key, entry) in round.keys.iter().zip(&round.entries) {
             request_epochs.insert(key.clone(), entry.request_leader_epoch);
         }
-        let removed = std::mem::take(&mut forgotten);
+        let removed = mem::take(&mut forgotten);
         let request = RawFetchRequest(build_fetch_request(
             fetcher,
             &mut session,
@@ -224,7 +228,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                          the metadata image settles");
                     delayed.insert(
                         key.clone(),
-                        tokio::time::Instant::now() + replication.epoch_fence_backoff.to_std(),
+                        Instant::now() + replication.epoch_fence_backoff.to_std(),
                     );
                     if let Some(cfg) = followed.get(&key) {
                         forgotten.push(session_key(cfg));
@@ -283,7 +287,7 @@ fn plan_round(followed: &BTreeMap<FollowedKey, Arc<Config>>, delayed: &DelayedUn
 fn plan_changed(
     followed: &BTreeMap<FollowedKey, Arc<Config>>,
     delayed: &DelayedUntil,
-    dirty: &std::collections::BTreeSet<FollowedKey>,
+    dirty: &BTreeSet<FollowedKey>,
 ) -> Round {
     let mut round = Round {
         wanted: WantedRows::new(),
@@ -351,11 +355,9 @@ struct PartitionRow {
 fn partition_row(cfg: &Config) -> Option<PartitionRow> {
     let entry = cfg.partitions.get(&cfg.topic, cfg.partition)?;
     let fetch_offset = entry.log_end_offset();
-    let leader_epoch = entry
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    let leader_epoch = entry.current_leader_epoch.load(atomic::Ordering::Acquire);
     let last_fetched_epoch = {
-        let log = entry.log.lock().expect("log mutex poisoned");
+        let log = entry.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.epoch_checkpoint()
             .latest_epoch()
             // Unwrap the log-layer `LeaderEpoch` into the raw wire field.
@@ -440,10 +442,13 @@ mod tests {
         krabka_protocol::primitives::uuid::Uuid as WireUuid,
         krabka_raft::NodeId,
         krabka_units::{bytes, millis},
+        std::{collections::BTreeSet, iter, time::Duration},
+        tokio::{time, time::Instant},
+        tokio_util::sync::CancellationToken,
     };
 
     fn followed_partition(cfg: Config) -> BTreeMap<FollowedKey, Arc<Config>> {
-        [(followed_key(&cfg), Arc::new(cfg))].into_iter().collect()
+        iter::once((followed_key(&cfg), Arc::new(cfg))).collect()
     }
 
     fn followed_key(cfg: &Config) -> FollowedKey {
@@ -472,7 +477,7 @@ mod tests {
             leader_host: cfg.leader_host.clone(),
             leader_port: cfg.leader_port,
             client_id: cfg.client_id.clone(),
-            shutdown: tokio_util::sync::CancellationToken::new(),
+            shutdown: CancellationToken::new(),
             connection: cfg.connection.clone(),
             followed,
         }
@@ -487,7 +492,7 @@ mod tests {
     ) -> (SessionKey, FetchPartition) {
         (
             SessionKey {
-                topic: TOPIC.to_string(),
+                topic: TOPIC.to_owned(),
                 topic_id: WIRE_TOPIC_ID,
                 partition,
             },
@@ -557,9 +562,7 @@ mod tests {
         let req = build_fetch_request(
             &fetcher,
             &mut FollowerFetchSession::default(),
-            [wanted_row(PARTITION, 0, replication.fetch_max.bytes_i32())]
-                .into_iter()
-                .collect(),
+            iter::once(wanted_row(PARTITION, 0, replication.fetch_max.bytes_i32())).collect(),
             &[],
         );
 
@@ -585,7 +588,7 @@ mod tests {
         build_fetch_request(&fetcher, &mut session, first, &[]);
         session.handle_response(NONE, 77);
 
-        let second: WantedRows = [wanted_row(PARTITION, 5, 99)].into_iter().collect();
+        let second: WantedRows = iter::once(wanted_row(PARTITION, 5, 99)).collect();
         let req = build_fetch_request(&fetcher, &mut session, second, &[]);
 
         check!(req.session_id == 77);
@@ -611,7 +614,7 @@ mod tests {
         let req = build_fetch_request(
             &fetcher,
             &mut session,
-            [wanted_row(PARTITION, 0, 1)].into_iter().collect(),
+            iter::once(wanted_row(PARTITION, 0, 1)).collect(),
             &[],
         );
 
@@ -658,10 +661,7 @@ mod tests {
         let mut followed = BTreeMap::new();
         followed.insert(key.clone(), Arc::new(cfg));
         let mut delayed = DelayedUntil::new();
-        delayed.insert(
-            key,
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-        );
+        delayed.insert(key, Instant::now() + Duration::from_secs(30));
 
         let round = empty_round(&followed, &delayed);
 
@@ -691,13 +691,9 @@ mod tests {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
         let key = followed_key(&cfg);
-        let followed = [(key, Arc::new(cfg))].into_iter().collect();
+        let followed = iter::once((key, Arc::new(cfg))).collect();
 
-        let round = plan_changed(
-            &followed,
-            &DelayedUntil::new(),
-            &std::collections::BTreeSet::default(),
-        );
+        let round = plan_changed(&followed, &DelayedUntil::new(), &BTreeSet::default());
 
         check!(round.entries.is_empty());
         check!(round.wanted.is_empty());
@@ -724,42 +720,42 @@ mod tests {
     #[tokio::test]
     async fn a_fetcher_opens_its_partitions_before_it_reaches_the_leader() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        let partitions = cfg.partitions.clone();
+        let partitions = Arc::clone(&cfg.partitions);
         let topic = Arc::clone(&cfg.topic);
         let partition = cfg.partition;
         let followed: FollowedPartitions = Arc::new(super::super::FollowedPartitionsState::new(
-            [(
+            iter::once((
                 FollowedKey {
                     topic: Arc::clone(&topic),
                     partition,
                 },
                 Arc::new(cfg),
-            )]
-            .into_iter()
+            ))
             .collect(),
         ));
         // `test_config` points the fetcher at port 9, the discard port, so the
         // dial never completes and the loop cannot get past it.
         let fetcher = test_fetcher(
-            &followed
-                .lock()
-                .expect("followed")
-                .values()
-                .next()
-                .expect("one partition")
-                .clone(),
+            &Arc::clone(
+                followed
+                    .lock()
+                    .expect("followed")
+                    .values()
+                    .next()
+                    .expect("one partition"),
+            ),
             Arc::clone(&followed),
         );
         let shutdown = fetcher.shutdown.clone();
 
         let task = tokio::spawn(async move { run_fetcher_loop(&fetcher).await });
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while partitions.get(TOPIC, partition).is_none() {
             assert!(
-                tokio::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the fetcher never opened its partition's log"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
 
         shutdown.cancel();

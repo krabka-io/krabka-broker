@@ -35,7 +35,11 @@ use {
     krabka_client_core::security::ClientSecurity,
     krabka_client_producer::{Acks, Compression, Producer, ProducerRecord},
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
-    std::{collections::BTreeMap, time::Duration},
+    std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    },
+    tokio::time,
     tokio_util::sync::CancellationToken,
 };
 
@@ -88,17 +92,17 @@ async fn create_topic(cluster: &DisklessCluster) -> uuid::Uuid {
         response.topics[0].error_code == 0,
         "CreateTopics rejected the diskless topic: {response:?}"
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let topic_id = loop {
         let topic_id = topic_id_for(&admin, TOPIC).await;
         if topic_id != WireUuid::default() {
             break topic_id;
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "the metadata image never reported a topic id for {TOPIC}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     };
     for partition in 0..PARTITIONS {
         await_partition_quorum(cluster, partition).await;
@@ -186,7 +190,7 @@ async fn produce_bursts(producer: &Producer, first_index: usize) -> usize {
             delivery.await.expect("the record is acknowledged");
             acknowledged += 1;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
     acknowledged
 }
@@ -214,14 +218,14 @@ async fn read_back(bootstrap: String, ends: &BTreeMap<i32, i64>) -> BTreeMap<i32
         .await
         .expect("seek to the beginning");
     let mut read: BTreeMap<i32, Vec<i64>> = BTreeMap::new();
-    let deadline = std::time::Instant::now() + Duration::from_mins(2);
+    let deadline = Instant::now() + Duration::from_mins(2);
     loop {
         let done = ends.iter().all(|(partition, end)| {
             read.get(partition)
                 .and_then(|offsets| offsets.last())
                 .is_some_and(|last| last + 1 >= *end)
         });
-        if done || consumer.at_log_end().await || std::time::Instant::now() > deadline {
+        if done || consumer.at_log_end().await || Instant::now() > deadline {
             break;
         }
         for record in consumer
@@ -257,10 +261,13 @@ async fn high_watermarks(cluster: &DisklessCluster) -> BTreeMap<i32, i64> {
 async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
     let cluster = trimming_cluster().await;
     let topic_id = create_topic(&cluster).await;
-    let producer = batching_producer(cluster.bootstrap_for_node(cluster.node_ids()[0])).await;
+    let acknowledged = {
+        let producer = batching_producer(cluster.bootstrap_for_node(cluster.node_ids()[0])).await;
 
-    let acknowledged = produce_bursts(&producer, 0).await;
-    producer.close().await.expect("close the producer");
+        let acknowledged = produce_bursts(&producer, 0).await;
+        producer.close().await.map(|()| acknowledged)
+    }
+    .expect("close the producer");
     let partitions = usize::try_from(PARTITIONS).expect("small topic");
     let total = RECORDS_PER_PARTITION.div_ceil(BURST) * BURST * partitions;
     assert!(acknowledged == total);
@@ -392,4 +399,4 @@ async fn a_follower_restarted_under_load_rejoins_the_isr() {
 }
 
 /// Let the load run for a few flush ticks.
-async fn produce_settle() { tokio::time::sleep(Duration::from_secs(3)).await; }
+async fn produce_settle() { time::sleep(Duration::from_secs(3)).await; }

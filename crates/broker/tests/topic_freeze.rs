@@ -32,6 +32,7 @@
 //! field by field. `krabka-guard` carries a third copy for the same reason, and
 //! a drift between any two of them fails here: a signature this suite makes has
 //! to verify inside the broker, which is only true while both layouts agree.
+#![cfg(test)]
 
 mod support;
 

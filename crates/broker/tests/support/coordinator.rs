@@ -15,6 +15,7 @@ use {
     krabka_client_core::Client,
     krabka_protocol::owned::find_coordinator_response::Coordinator,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// `FindCoordinator` key type of a consumer group.
@@ -58,7 +59,7 @@ pub async fn find_coordinator(client: &Client, key_type: i8, key: &str) -> Coord
                 );
                 // intentional: a client has no awaiter for the creation; it
                 // retries after a backoff, as Kafka's clients do.
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                time::sleep(Duration::from_millis(50)).await;
             }
             code => panic!("FindCoordinator({key:?}) answered {code}: {row:?}"),
         }

@@ -19,25 +19,25 @@
 ///
 /// An operator who holds only the JVM tools reads the freeze with
 /// `kafka-configs --entity-type topics --describe`.
-pub(crate) const WRITE_FREEZE: &str = "write.freeze";
+pub const WRITE_FREEZE: &str = "write.freeze";
 
 /// Registration epochs whose brokers already received an audit partition.
 /// These controller-owned values use ordinary topic metadata records.
-pub(crate) const AUDIT_PLACEMENT_EPOCH_PREFIX: &str = "krabka.audit.placement.epoch.";
+pub const AUDIT_PLACEMENT_EPOCH_PREFIX: &str = "krabka.audit.placement.epoch.";
 
 /// Removed private ELR topic-config key, retained only for migration tests.
 #[cfg(test)]
-pub(crate) const ELIGIBLE_LEADER_REPLICAS: &str = "krabka.elr";
+pub const ELIGIBLE_LEADER_REPLICAS: &str = "krabka.elr";
 
 /// Topic-scoped config keys that only the controller writes. This is the
 /// topic-side analogue of [`super::broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS`]:
 /// `AlterConfigs` and `IncrementalAlterConfigs` must reject every key in this
 /// list, and `DescribeConfigs` must report each one as read-only. The audit
 /// epoch namespace is recognized separately.
-pub(crate) const CONTROLLER_MANAGED_TOPIC_CONFIGS: [&str; 1] = [WRITE_FREEZE];
+pub const CONTROLLER_MANAGED_TOPIC_CONFIGS: [&str; 1] = [WRITE_FREEZE];
 
 /// `true` when `key` is a topic config that only the controller writes.
-pub(crate) fn is_controller_managed_topic_config(key: &str) -> bool {
+pub fn is_controller_managed_topic_config(key: &str) -> bool {
     CONTROLLER_MANAGED_TOPIC_CONFIGS.contains(&key) || key.starts_with(AUDIT_PLACEMENT_EPOCH_PREFIX)
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn is_controller_managed_topic_config(key: &str) -> bool {
 /// from `AlterConfigs` and from `IncrementalAlterConfigs`. The message names
 /// what does change the key. A refusal that names nothing leaves the operator
 /// with no next step.
-pub(crate) fn controller_managed_topic_config_message(key: &str) -> String {
+pub fn controller_managed_topic_config_message(key: &str) -> String {
     if key.starts_with(AUDIT_PLACEMENT_EPOCH_PREFIX) {
         return format!(
             "topic config {key} is controller-managed and read-only; audit placement records the broker registration epoch"

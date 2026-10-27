@@ -38,9 +38,11 @@ pub fn vote_fields_fit_int32(
     }
 }
 
-/// Reject values that would otherwise be clamped and alias another identity
-/// or epoch when encoded as Kafka `int32` fields. The one ensures pins both
-/// variants: `Accept` exactly when `vote_fields_fit_int32` holds.
+/// Reject values that would otherwise be clamped and alias another identity or
+/// epoch when encoded as Kafka `int32` fields.
+///
+/// The one ensures pins both variants: `Accept` exactly when
+/// `vote_fields_fit_int32` holds.
 #[ensures((result == VoteEncodeDecision::Accept)
     == vote_fields_fit_int32(voter_id, candidate_id, candidate_epoch, last_epoch))]
 #[must_use]

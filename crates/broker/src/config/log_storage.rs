@@ -3,7 +3,7 @@
 
 use {
     crate::{BrokerError, config::BrokerConfig, cordoned_log_dirs::resolve},
-    std::path::PathBuf,
+    std::path::{Path, PathBuf},
 };
 
 impl BrokerConfig {
@@ -49,7 +49,7 @@ impl BrokerConfig {
     /// [`metadata_log_dir`][Self::metadata_log_dir] when it is set, and
     /// otherwise [`log_dir`][Self::log_dir], the first entry of `log.dirs`.
     #[must_use]
-    pub fn metadata_dir(&self) -> &std::path::Path {
+    pub fn metadata_dir(&self) -> &Path {
         self.metadata_log_dir.as_deref().unwrap_or(&self.log_dir)
     }
 
@@ -72,12 +72,12 @@ impl BrokerConfig {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, crate::config::NodeRole, assert2::assert, std::path::PathBuf};
 
     #[test]
     fn all_log_dirs_keeps_primary_first_and_deduplicates_extras() {
-        let primary = std::path::PathBuf::from("/data/primary");
-        let extra = std::path::PathBuf::from("/data/extra");
+        let primary = PathBuf::from("/data/primary");
+        let extra = PathBuf::from("/data/extra");
         let mut c = BrokerConfig::for_tests(primary.clone());
         c.extra_log_dirs = vec![extra.clone(), primary.clone(), extra.clone()];
 
@@ -88,7 +88,7 @@ mod tests {
     /// Kafka's message. A node without the broker role does not check it.
     #[test]
     fn a_static_cordoned_value_is_checked_on_a_broker_only() {
-        let primary = std::path::PathBuf::from("/data/primary");
+        let primary = PathBuf::from("/data/primary");
         let cases = [
             (None, true, Ok(())),
             (Some("/data/primary"), true, Ok(())),
@@ -108,7 +108,7 @@ mod tests {
             let mut c = BrokerConfig::for_tests(primary.clone());
             c.cordoned_log_dirs = value.map(str::to_owned);
             if !broker {
-                c.roles = vec![crate::config::NodeRole::Controller];
+                c.roles = vec![NodeRole::Controller];
             }
             let got = c
                 .validate_cordoned_log_dirs()

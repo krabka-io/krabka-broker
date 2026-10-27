@@ -26,21 +26,23 @@ use {
         },
     },
     std::{
+        fs,
         net::SocketAddr,
-        path::Path,
+        path::{Path, PathBuf},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// One directory `DescribeLogDirs` reports, and whether it is cordoned.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct DirFlag {
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     is_cordoned: bool,
 }
 
 impl DirFlag {
-    fn new(log_dir: std::path::PathBuf, is_cordoned: bool) -> Self {
+    fn new(log_dir: PathBuf, is_cordoned: bool) -> Self {
         Self {
             log_dir,
             is_cordoned,
@@ -56,8 +58,8 @@ async fn cordoned_flags(addr: SocketAddr, version: i16) -> Vec<DirFlag> {
         .results
         .into_iter()
         .map(|result| {
-            let dir = std::fs::canonicalize(&result.log_dir)
-                .unwrap_or_else(|_| std::path::PathBuf::from(&result.log_dir));
+            let dir = fs::canonicalize(&result.log_dir)
+                .unwrap_or_else(|_| PathBuf::from(&result.log_dir));
             DirFlag::new(dir, result.is_cordoned)
         })
         .collect();
@@ -80,11 +82,11 @@ async fn wait_for_flags(addr: SocketAddr, want: &[DirFlag]) {
         assert!(Instant::now() <= deadline, "flags never converged: {got:?}");
         // intentional: the cordoned set is broker-local state behind an image
         // watcher, and `DescribeLogDirs` is its only wire observable.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-fn canonical(dir: &Path) -> std::path::PathBuf { std::fs::canonicalize(dir).unwrap() }
+fn canonical(dir: &Path) -> PathBuf { fs::canonicalize(dir).unwrap() }
 
 fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
     AlterReplicaLogDirsResponse {
@@ -109,7 +111,7 @@ fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
 async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
     let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).call().await;
     let (first, second) = (canonical(primary.path()), canonical(extra.path()));
-    let extra_str = std::fs::canonicalize(extra.path())
+    let extra_str = fs::canonicalize(extra.path())
         .unwrap()
         .display()
         .to_string();

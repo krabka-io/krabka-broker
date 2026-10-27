@@ -57,6 +57,7 @@ mod tests {
             test_support::string_pairs,
         },
         assert2::assert,
+        std::collections::BTreeSet,
     };
 
     #[test]
@@ -72,16 +73,16 @@ mod tests {
         let cl = topic("cl", None, &[]);
         let configured = ConfiguredTopology {
             topology_epoch: 1,
-            subtopologies: Some(BTreeMap::from([("0".to_string(), ConfiguredSubtopology {
+            subtopologies: Some(BTreeMap::from([("0".to_owned(), ConfiguredSubtopology {
                 number_of_tasks: 5,
-                source_topics: std::collections::BTreeSet::new(),
-                repartition_source_topics: BTreeMap::from([("rp".to_string(), rp.clone())]),
-                repartition_sink_topics: std::collections::BTreeSet::new(),
-                state_changelog_topics: BTreeMap::from([("cl".to_string(), cl.clone())]),
+                source_topics: BTreeSet::new(),
+                repartition_source_topics: BTreeMap::from([("rp".to_owned(), rp.clone())]),
+                repartition_sink_topics: BTreeSet::new(),
+                state_changelog_topics: BTreeMap::from([("cl".to_owned(), cl.clone())]),
             })])),
             internal_topics_to_create: BTreeMap::from([
-                ("cl".to_string(), cl),
-                ("rp".to_string(), rp),
+                ("cl".to_owned(), cl),
+                ("rp".to_owned(), rp),
             ]),
             status: None,
         };
@@ -90,17 +91,17 @@ mod tests {
             internal_topic_specs(&configured)
                 == vec![
                     InternalTopicSpec {
-                        name: "cl".to_string(),
+                        name: "cl".to_owned(),
                         partitions: 5,
                         replication_factor: 0,
                         configs: BTreeMap::new(),
                     },
                     InternalTopicSpec {
-                        name: "rp".to_string(),
+                        name: "rp".to_owned(),
                         partitions: 5,
                         replication_factor: 2,
                         configs: maplit::btreemap! {
-                            "cleanup.policy".to_string() => "delete".to_string()
+                            "cleanup.policy".to_owned() => "delete".to_owned()
                         },
                     },
                 ]

@@ -1,4 +1,5 @@
 //! KIP-516: `OffsetCommit` v10 and `OffsetFetch` v8+ keyed by `topic_id`.
+#![cfg(test)]
 use {
     crate::support::{
         offsets::{

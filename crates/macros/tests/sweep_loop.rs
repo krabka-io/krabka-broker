@@ -1,10 +1,11 @@
 //! Flat loops preserve binding scopes, timer failure exits and per-tick work.
+#![cfg(test)]
 
 use {
     assert2::assert,
     std::{
         collections::VecDeque,
-        future::{Future, pending, ready},
+        future::{self, Future, pending, ready},
         pin::Pin,
         sync::{
             Arc, Mutex,
@@ -33,26 +34,26 @@ struct Timer {
 mod time_util {
     use super::{Deadline, Duration, Tick, Timer, pending, ready};
 
-    pub(crate) fn arm(timer: &Timer, delay: Duration, task: &'static str) -> Option<Tick> {
+    pub fn arm(timer: &Timer, delay: Duration, task: &'static str) -> Option<Tick> {
         timer
             .events
             .lock()
             .unwrap()
             .push(format!("arm:{task}:{}", delay.as_millis()));
-        match timer
+        let deadline = timer
             .deadlines
             .lock()
             .unwrap()
             .pop_front()
-            .expect("expected deadline")
-        {
+            .expect("expected deadline");
+        match deadline {
             Deadline::Complete(outcome) => Some(Box::pin(ready(outcome))),
             Deadline::Pending => Some(Box::pin(pending())),
             Deadline::Refuse => None,
         }
     }
 
-    pub(crate) fn fired(outcome: bool, task: &'static str) -> bool {
+    pub fn fired(outcome: bool, task: &'static str) -> bool {
         assert2::assert!(task == "test sweeper");
         outcome
     }
@@ -72,13 +73,14 @@ struct Shutdown {
 impl Shutdown {
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        if let Some(waker) = self.waker.lock().unwrap().take() {
+        let waker = self.waker.lock().unwrap().take();
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
 
     async fn cancelled(&self) {
-        std::future::poll_fn(|context| {
+        future::poll_fn(|context| {
             *self.waker.lock().unwrap() = Some(context.waker().clone());
             if self.cancelled.load(Ordering::SeqCst) {
                 Poll::Ready(())
@@ -125,7 +127,7 @@ async fn drive(
             if image == 2 {
                 shutdown.cancel();
             } else {
-                std::future::ready(()).await;
+                ready(()).await;
             }
         };
         on_shutdown {

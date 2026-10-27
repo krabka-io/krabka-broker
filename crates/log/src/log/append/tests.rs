@@ -9,11 +9,11 @@ use {
         io::{FileIo, LogIo},
         leader_epoch_checkpoint::EpochEntry,
         log::test_support::{
-            EncodedVerbatim, TempLog, abort_marker, append_transaction, assert_empty_append_state,
-            assert_only_active, check_append_time_lookup, configured_test_log, gzip_value,
-            install_stamps, log_append_time_log, rolling_test_log, sample_batch,
-            sample_batch_with_epoch, sample_log, stamped_test_log, test_batch_at, test_log,
-            tiny_segments, transactional_batch, verbatim_from, write_with_budget,
+            EncodedVerbatim, NO_LIMIT, TempLog, abort_marker, append_transaction,
+            assert_empty_append_state, assert_only_active, check_append_time_lookup,
+            configured_test_log, gzip_value, install_stamps, log_append_time_log, rolling_test_log,
+            sample_batch, sample_batch_with_epoch, sample_log, stamped_test_log, test_batch_at,
+            test_log, tiny_segments, transactional_batch, verbatim_from, write_with_budget,
         },
         name::log_path,
         retention::now_ms,
@@ -21,27 +21,38 @@ use {
         test_support::{log_file_count, open_log},
     },
     assert2::{assert, check},
-    krabka_units::prelude::bytes,
+    krabka_protocol::records::TimestampType,
+    krabka_units::prelude::{bytes, mebibytes},
+    std::{
+        fs,
+        fs::File,
+        io::{self, ErrorKind},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::SystemTime,
+    },
     tempfile::tempdir,
 };
 
 #[derive(Debug)]
-struct FailAfterBytes(std::sync::Mutex<usize>);
+struct FailAfterBytes(Mutex<usize>);
 
 impl LogIo for FailAfterBytes {
-    fn write(&self, file: &std::fs::File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&self, file: &File, buf: &[u8]) -> io::Result<usize> {
         let mut remaining = self.0.lock().unwrap();
         write_with_budget(file, buf, &mut remaining)
     }
 }
 
 #[derive(Debug)]
-struct FailFirstSync(std::sync::atomic::AtomicUsize);
+struct FailFirstSync(AtomicUsize);
 
 impl LogIo for FailFirstSync {
-    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
-        if self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-            Err(std::io::Error::other("injected sync_data failure"))
+    fn sync_data(&self, file: &File) -> io::Result<()> {
+        if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+            Err(io::Error::other("injected sync_data failure"))
         } else {
             file.sync_data()
         }
@@ -49,29 +60,26 @@ impl LogIo for FailFirstSync {
 }
 
 #[derive(Debug)]
-struct CountSync(std::sync::atomic::AtomicUsize);
+struct CountSync(AtomicUsize);
 
 impl LogIo for CountSync {
-    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fn sync_data(&self, file: &File) -> io::Result<()> {
+        self.0.fetch_add(1, Ordering::Relaxed);
         file.sync_data()
     }
 }
 
 #[derive(Debug)]
 struct FailSyncAt {
-    calls: std::sync::atomic::AtomicUsize,
+    calls: AtomicUsize,
     fail_at: usize,
 }
 
 impl LogIo for FailSyncAt {
-    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
-        let call = self
-            .calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            + 1;
+    fn sync_data(&self, file: &File) -> io::Result<()> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         if call == self.fail_at {
-            Err(std::io::Error::other("injected ordered sync failure"))
+            Err(io::Error::other("injected ordered sync failure"))
         } else {
             file.sync_data()
         }
@@ -79,15 +87,11 @@ impl LogIo for FailSyncAt {
 }
 
 fn fail_after_bytes(log: &mut Log, budget: usize) {
-    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
-        budget,
-    ))));
+    log.test_set_io(Arc::new(FailAfterBytes(Mutex::new(budget))));
 }
 
 fn assert_storage_full(error: &LogError) {
-    assert!(
-        matches!(error, LogError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull)
-    );
+    assert!(matches!(error, LogError::Io(error) if error.kind() == ErrorKind::StorageFull));
 }
 
 #[test]
@@ -111,7 +115,7 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
     let mut first = sample_batch(1);
     log.append(&mut first).unwrap();
     let log_path = log_path(dir.path(), 0);
-    let position = std::fs::metadata(&log_path).unwrap().len();
+    let position = fs::metadata(&log_path).unwrap().len();
 
     let mut next = sample_batch(1);
     let mut failed = sample_batch(10);
@@ -122,19 +126,14 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
     let error = log.append(&mut failed).unwrap_err();
 
     assert_storage_full(&error);
-    assert!(std::fs::metadata(&log_path).unwrap().len() == position);
+    assert!(fs::metadata(&log_path).unwrap().len() == position);
 
-    log.test_set_io(std::sync::Arc::new(FileIo));
+    log.test_set_io(Arc::new(FileIo));
     let next_len = next.encoded_len() as u64;
     log.append(&mut next).unwrap();
 
-    assert!(std::fs::metadata(log_path).unwrap().len() == position + next_len);
-    assert!(
-        log.read(Offset(0), crate::log::test_support::NO_LIMIT)
-            .unwrap()
-            .batches
-            == vec![first, next]
-    );
+    assert!(fs::metadata(log_path).unwrap().len() == position + next_len);
+    assert!(log.read(Offset(0), NO_LIMIT).unwrap().batches == vec![first, next]);
 }
 
 #[test]
@@ -145,8 +144,8 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
         ..LogConfig::default()
     };
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
-    let io = std::sync::Arc::new(FailFirstSync(std::sync::atomic::AtomicUsize::new(0)));
-    log.test_set_io(io.clone());
+    let io = Arc::new(FailFirstSync(AtomicUsize::new(0)));
+    log.test_set_io(Arc::<FailFirstSync>::clone(&io));
     let producer = ProducerId(41);
 
     let error = log
@@ -154,7 +153,7 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
         .unwrap_err();
 
     assert!(matches!(error, LogError::Io(_)));
-    assert!(io.0.load(std::sync::atomic::Ordering::Relaxed) == 2);
+    assert!(io.0.load(Ordering::Relaxed) == 2);
     assert_empty_append_state(&log);
     assert!(log.pending_transaction_start(producer) == None);
     drop(log);
@@ -477,23 +476,23 @@ fn segment_bytes_are_synced_before_durable_sidecars() {
         dir: _dir,
         log: mut stamped_log,
     } = stamped_test_log(100, 1);
-    let stamp_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
-    stamped_log.test_set_io(stamp_syncs.clone());
+    let stamp_syncs = Arc::new(CountSync(AtomicUsize::new(0)));
+    stamped_log.test_set_io(Arc::<CountSync>::clone(&stamp_syncs));
 
     stamped_log.append(&mut sample_batch(1)).unwrap();
-    assert!(stamp_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
+    assert!(stamp_syncs.0.load(Ordering::Relaxed) == 1);
 
     let TempLog {
         dir: _dir,
         log: mut transaction_log,
     } = test_log();
-    let txn_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
-    transaction_log.test_set_io(txn_syncs.clone());
+    let txn_syncs = Arc::new(CountSync(AtomicUsize::new(0)));
+    transaction_log.test_set_io(Arc::<CountSync>::clone(&txn_syncs));
     append_transaction(&mut transaction_log, 7, 0, &["value"]);
-    assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 0);
+    assert!(txn_syncs.0.load(Ordering::Relaxed) == 0);
 
     transaction_log.append(&mut abort_marker(7, 0)).unwrap();
-    assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
+    assert!(txn_syncs.0.load(Ordering::Relaxed) == 1);
 }
 
 #[test]
@@ -504,16 +503,16 @@ fn post_roll_failure_restores_the_previous_active_segment() {
     });
     log.append(&mut sample_batch(1)).unwrap();
     install_stamps(&mut log, 100, 1);
-    let io = std::sync::Arc::new(FailSyncAt {
-        calls: std::sync::atomic::AtomicUsize::new(0),
+    let io = Arc::new(FailSyncAt {
+        calls: AtomicUsize::new(0),
         fail_at: 2,
     });
-    log.test_set_io(io.clone());
+    log.test_set_io(Arc::<FailSyncAt>::clone(&io));
 
     let error = log.append(&mut sample_batch(1)).unwrap_err();
 
     assert!(matches!(error, LogError::Io(_)));
-    assert!(io.calls.load(std::sync::atomic::Ordering::Relaxed) == 4);
+    assert!(io.calls.load(Ordering::Relaxed) == 4);
     assert_only_active(&log, Offset(1), Offset(0));
     assert!(log.lso() == Offset(1));
     assert!(log.stamp_for_offset(Offset(1)).is_none());
@@ -534,7 +533,7 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
     assert!(matches!(error, LogError::Io(_)));
     assert_only_active(&log, Offset(1), Offset(0));
 
-    log.test_set_io(std::sync::Arc::new(FileIo));
+    log.test_set_io(Arc::new(FileIo));
     let (appended_offset, _) = log.append(&mut sample_batch(1)).unwrap();
     assert!(appended_offset == Offset(1));
     assert!(log.log_end_offset() == Offset(2));
@@ -861,9 +860,7 @@ fn append_records_epoch_transition() {
 /// The first record of the only batch the log holds, read back off disk.
 fn only_batch(log: &Log) -> RecordBatch {
     let end = log.log_end_offset();
-    let raw = log
-        .read_raw(Offset(0), end, krabka_units::prelude::mebibytes(10))
-        .unwrap();
+    let raw = log.read_raw(Offset(0), end, mebibytes(10)).unwrap();
     let mut cursor: &[u8] = &raw.bytes;
     RecordBatch::decode(&mut cursor).expect("the stored batch decodes, so its CRC is valid")
 }
@@ -879,11 +876,11 @@ fn log_append_time_stamps_the_batch_and_leaves_the_producer_timestamps_alone() {
     let mut produced = test_batch_at(0);
     produced.base_timestamp = 1_000;
     produced.max_timestamp = 1_000;
-    let before = now_ms(std::time::SystemTime::now());
+    let before = now_ms(SystemTime::now());
 
     let (base_offset, stamp) = log.append(&mut produced).unwrap();
 
-    let after = now_ms(std::time::SystemTime::now());
+    let after = now_ms(SystemTime::now());
     let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
     check!(base_offset == Offset(0));
     check!((before..=after).contains(&stamp));
@@ -894,7 +891,7 @@ fn log_append_time_stamps_the_batch_and_leaves_the_producer_timestamps_alone() {
         partition_leader_epoch: produced.partition_leader_epoch,
         attributes: produced
             .attributes
-            .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime),
+            .with_timestamp_type(TimestampType::LogAppendTime),
         last_offset_delta: produced.last_offset_delta,
         base_timestamp: 1_000,
         max_timestamp: stamp,

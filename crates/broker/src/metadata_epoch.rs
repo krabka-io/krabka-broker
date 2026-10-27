@@ -3,18 +3,18 @@
 use {krabka_metadata::LeaderEpoch, krabka_verified::exact_epoch_successor};
 
 /// Advance a Kafka `int32` epoch exactly, rejecting exhaustion.
-pub(crate) fn next_i32(current: i32) -> Option<i32> {
-    exact_epoch_successor(i64::from(current), i64::from(i32::MAX))
-        .and_then(|next| i32::try_from(next).ok())
+pub fn next_i32(current: i32) -> Option<i32> {
+    let next = exact_epoch_successor(i64::from(current), i64::from(i32::MAX))?;
+    i32::try_from(next).ok()
 }
 
 /// Advance a partition leader epoch exactly, rejecting exhaustion.
-pub(crate) fn next_leader(current: LeaderEpoch) -> Option<LeaderEpoch> {
+pub fn next_leader(current: LeaderEpoch) -> Option<LeaderEpoch> {
     next_i32(current.0).map(LeaderEpoch)
 }
 
 /// Advance the partition epoch and, for a leader change, the leader epoch.
-pub(crate) fn next_partition_change(
+pub fn next_partition_change(
     partition_epoch: i32,
     leader_epoch: LeaderEpoch,
     leader_changes: bool,
@@ -29,7 +29,7 @@ pub(crate) fn next_partition_change(
 }
 
 /// Advance a barrier epoch exactly, rejecting exhaustion.
-pub(crate) fn next_i64(current: i64) -> Option<i64> { exact_epoch_successor(current, i64::MAX) }
+pub fn next_i64(current: i64) -> Option<i64> { exact_epoch_successor(current, i64::MAX) }
 
 #[cfg(test)]
 mod tests {

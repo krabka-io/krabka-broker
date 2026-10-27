@@ -20,6 +20,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig},
     std::{
+        fs, io,
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
     },
@@ -33,15 +34,15 @@ use {
 /// Idempotency: if a move with the same target is already in flight,
 /// returns `Ok(())` without spawning a second task. If its target differs,
 /// the old task and future log are removed before the replacement starts.
-#[allow(clippy::too_many_arguments)] // KIP-113 move inputs are independent runtime resources.
-pub(crate) async fn start_move(
+#[bon::builder]
+pub async fn start_move(
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     all_log_dirs: &[PathBuf],
     log_dir_status: &LogDirRegistry,
     log_config: &LogConfig,
     topic_partition: (&str, PartitionIndex),
-    topic_id: Option<uuid::Uuid>,
+    #[builder(required)] topic_id: Option<uuid::Uuid>,
     target_log_dir: &Path,
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
@@ -57,7 +58,7 @@ pub(crate) async fn start_move(
         return Err(MoveError::LogDirNotFound);
     };
     if log_dir_status.is_offline(&target_log_dir) {
-        return Err(MoveError::Storage(BrokerError::Io(std::io::Error::other(
+        return Err(MoveError::Storage(BrokerError::Io(io::Error::other(
             "target log directory is offline",
         ))));
     }
@@ -67,7 +68,7 @@ pub(crate) async fn start_move(
     }
 
     // (2) Partition must be hosted on this broker.
-    let key = (topic.to_string(), partition);
+    let key = (topic.to_owned(), partition);
     let part = if let Some(part) = partitions.get(topic, partition) {
         part
     } else {
@@ -89,7 +90,7 @@ pub(crate) async fn start_move(
     // (3) Already moving? Keep a same-target request idempotent. Kafka stops
     //     and removes a future replica when a later request changes its
     //     destination, including when the new destination is the current dir.
-    if let Some(existing) = future_logs.get(&key).map(|e| e.value().clone()) {
+    if let Some(existing) = future_logs.get(&key).map(|e| Arc::clone(e.value())) {
         if canonicalize_or_self(&existing.target_log_dir) == canonicalize_or_self(&target_log_dir) {
             return Ok(());
         }
@@ -105,16 +106,16 @@ pub(crate) async fn start_move(
 
     // (5) Open the future log at <target>/<topic>-<partition>-future.
     let future_path = log_dir::future_partition_dir(&target_log_dir, topic, partition.get());
-    std::fs::create_dir_all(&future_path)?;
+    fs::create_dir_all(&future_path)?;
     let future_log = open_future_log(partitions, &future_path, log_config)?;
 
     spawn_move(MoveTask {
-        partitions: partitions.clone(),
-        future_logs: future_logs.clone(),
+        partitions: Arc::clone(partitions),
+        future_logs: Arc::clone(future_logs),
         target_log_dir,
         future_path,
         future_log,
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
         part,
         policy,
@@ -127,7 +128,7 @@ pub(crate) async fn start_move(
 /// whose corresponding partition exists). Re-opens the future log
 /// and re-spawns the replicator, picking up at whatever offset the
 /// future log already holds.
-pub(crate) fn resume_move(
+pub fn resume_move(
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     target_log_dir: &Path,
@@ -142,12 +143,12 @@ pub(crate) fn resume_move(
     let future_path = log_dir::future_partition_dir(target_log_dir, topic, partition.get());
     let future_log = open_future_log(partitions, &future_path, log_config)?;
     spawn_move(MoveTask {
-        partitions: partitions.clone(),
-        future_logs: future_logs.clone(),
+        partitions: Arc::clone(partitions),
+        future_logs: Arc::clone(future_logs),
         target_log_dir: target_log_dir.to_path_buf(),
         future_path,
         future_log,
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
         part,
         policy,
@@ -188,13 +189,13 @@ fn spawn_move(task: MoveTask) {
         log_dir::partition_dir(&task.target_log_dir, &task.topic, task.partition.get());
     let replicator = tokio::spawn(replicator_loop(ReplicatorTask {
         part: task.part,
-        future_log: task.future_log.clone(),
+        future_log: Arc::clone(&task.future_log),
         future_path: task.future_path.clone(),
         target_partition_path,
         target_log_dir: task.target_log_dir.clone(),
         cancel: cancel.clone(),
         _partitions: task.partitions,
-        future_logs: task.future_logs.clone(),
+        future_logs: Arc::clone(&task.future_logs),
         topic: task.topic.clone(),
         partition: task.partition,
         policy: task.policy,
@@ -204,7 +205,7 @@ fn spawn_move(task: MoveTask) {
         future_path: task.future_path,
         future_log: task.future_log,
         cancel,
-        task: std::sync::Mutex::new(Some(replicator)),
+        task: Mutex::new(Some(replicator)),
     });
     task.future_logs.insert((task.topic, task.partition), state);
 }
@@ -220,6 +221,7 @@ mod tests {
         assert2::assert,
         std::time::Duration,
         tempfile::tempdir,
+        tokio::{task, time},
     };
 
     // Move t-0 using the common log config and policy, with caller-owned registries/status.
@@ -233,18 +235,18 @@ mod tests {
         target: &Path,
     ) -> Result<(), MoveError> {
         // The existing start_move API takes one topic/partition pair.
-        start_move(
-            partitions,
-            future_logs,
-            dirs,
-            status,
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
-            topic_id,
-            target,
-            test_policy(),
-        )
-        .await
+        start_move()
+            .partitions(partitions)
+            .future_logs(future_logs)
+            .all_log_dirs(dirs)
+            .log_dir_status(status)
+            .log_config(&LogConfig::default())
+            .topic_partition(("t", PartitionIndex(0)))
+            .topic_id(topic_id)
+            .target_log_dir(target)
+            .policy(test_policy())
+            .call()
+            .await
     }
 
     fn assert_precreation_preference(partitions: &PartitionRegistry, expected: &Path) {
@@ -528,14 +530,14 @@ mod tests {
         .await
         .expect("conflicting-target alter must redirect");
 
-        tokio::time::timeout(Duration::from_millis(500), async {
+        time::timeout(Duration::from_millis(500), async {
             loop {
                 let moved = canonicalize_or_self(&source.partition.log_dir.load_full())
                     == canonicalize_or_self(third.path());
                 if moved && source.future_logs.is_empty() {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

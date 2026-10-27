@@ -32,8 +32,10 @@ use {
     krabka_units::{ByteSize, bytes, millis},
     std::{
         collections::BTreeMap,
+        fs,
         ops::RangeInclusive,
-        sync::{Arc, Mutex, atomic::Ordering},
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, atomic::Ordering},
     },
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
@@ -44,8 +46,8 @@ use {
 /// One registry serves them all because these tests assert on the archive,
 /// not on the counters; a test that reads a counter builds its own metrics
 /// and its own [`RemoteTier`] so nothing else can move it.
-pub(crate) fn shared_test_metrics() -> &'static BrokerMetrics {
-    static METRICS: std::sync::OnceLock<BrokerMetrics> = std::sync::OnceLock::new();
+pub fn shared_test_metrics() -> &'static BrokerMetrics {
+    static METRICS: OnceLock<BrokerMetrics> = OnceLock::new();
     METRICS.get_or_init(BrokerMetrics::new)
 }
 
@@ -53,24 +55,23 @@ pub(crate) fn shared_test_metrics() -> &'static BrokerMetrics {
 /// sweep the archive, and a cache that stores nothing cannot make one of them
 /// pass by holding bytes a later assertion expects to be gone.
 fn shared_test_index_cache() -> &'static Arc<krabka_remote_storage::RemoteIndexCache> {
-    static CACHE: std::sync::OnceLock<Arc<krabka_remote_storage::RemoteIndexCache>> =
-        std::sync::OnceLock::new();
+    static CACHE: OnceLock<Arc<krabka_remote_storage::RemoteIndexCache>> = OnceLock::new();
     CACHE.get_or_init(|| Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()))
 }
 
 /// The copy quota every unit-test tier shares: unlimited, so no sweep waits
 /// on it unless the test is about the quota and builds its own.
 fn shared_test_copy_quota() -> &'static RlmQuotaManager {
-    static QUOTA: std::sync::OnceLock<RlmQuotaManager> = std::sync::OnceLock::new();
+    static QUOTA: OnceLock<RlmQuotaManager> = OnceLock::new();
     QUOTA.get_or_init(RlmQuotaManager::unlimited)
 }
 
 /// The copy deadline a unit test sweeps under when it is not the thing being
 /// tested. It is long enough that no in-process fake reaches it.
-pub(crate) const TEST_COPY_TIMEOUT: krabka_units::Time = krabka_units::secs(60);
+pub const TEST_COPY_TIMEOUT: krabka_units::Time = krabka_units::secs(60);
 
 /// The tier a unit test sweeps, wired to the shared metrics.
-pub(crate) fn tier<'a>(
+pub fn tier<'a>(
     archive: ArchiveMode,
     rsm: &'a Arc<dyn RemoteStorageManager>,
     rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
@@ -170,7 +171,7 @@ pub struct Backends {
 }
 
 /// Fresh mutable storage and metadata backends for one test's temporary directory.
-pub fn local_backends(remote_dir: &std::path::Path) -> Backends {
+pub fn local_backends(remote_dir: &Path) -> Backends {
     Backends {
         rsm: Arc::new(LocalTieredStorage::new(remote_dir)),
         rlmm: Arc::new(InmemoryRemoteLogMetadataManager::new()),
@@ -185,7 +186,7 @@ pub async fn copy_all_exports(tier: &RemoteTier<'_>, exports: &[SegmentExport]) 
 }
 
 /// The fixture broker (node and broker ID 1), stopped by `shutdown`.
-pub(crate) fn serving_broker(shutdown: &CancellationToken) -> SweepingBroker<'_> {
+pub fn serving_broker(shutdown: &CancellationToken) -> SweepingBroker<'_> {
     SweepingBroker {
         node_id: NodeId(1),
         broker_id: 1,
@@ -217,7 +218,7 @@ pub struct PartitionSnapshot {
 
 /// The sealed exports and their config from one hold of the partition's log lock.
 pub fn partition_snapshot(partition: &Partition) -> PartitionSnapshot {
-    let log = partition.log.lock().expect("partition log mutex poisoned");
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     PartitionSnapshot {
         exports: log.tierable_segments(),
         config: log.config_snapshot(),
@@ -242,7 +243,7 @@ pub fn sweep_counts(
         .iter()
         .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         .count();
-    let mut log = partition.log.lock().expect("partition log mutex poisoned");
+    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     log.sync().expect("flush rolled segments");
     SweepCounts {
         remote_finished,
@@ -251,10 +252,7 @@ pub fn sweep_counts(
 }
 
 /// Fresh mutable backends with every supplied fixture export successfully archived.
-pub async fn archived_backends(
-    remote_dir: &std::path::Path,
-    exports: &[SegmentExport],
-) -> Backends {
+pub async fn archived_backends(remote_dir: &Path, exports: &[SegmentExport]) -> Backends {
     let Backends { rsm, rlmm } = local_backends(remote_dir);
     copy_all_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports).await;
     Backends { rsm, rlmm }
@@ -283,7 +281,7 @@ impl FakeWormArchive {
     pub fn archived_segments(&self) -> usize {
         self.manifests
             .lock()
-            .expect("archived-manifest mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .len()
     }
 }
@@ -297,7 +295,7 @@ impl RemoteStorageManager for FakeWormArchive {
     ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
         let body = data.leader_epoch_index.clone();
         let entry = ObjectEntry {
-            suffix: IndexType::LeaderEpoch.suffix().to_string(),
+            suffix: IndexType::LeaderEpoch.suffix().to_owned(),
             key: format!("{}.leader-epoch", metadata.remote_log_segment_id().id),
             size_bytes: u64::try_from(body.len()).expect("test object fits in u64"),
             sha256: Sha256Digest::of(&body),
@@ -308,9 +306,9 @@ impl RemoteStorageManager for FakeWormArchive {
         let sealed = self.archiver.seal(metadata, vec![entry])?;
         self.manifests
             .lock()
-            .expect("archived-manifest mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(metadata.remote_log_segment_id().id, sealed.bytes.to_vec());
-        Ok(Some(sealed.receipt.to_custom_metadata()))
+        Ok(Some(sealed.receipt.to_custom_metadata()?))
     }
 
     fn delete_log_segment_data(
@@ -343,7 +341,7 @@ pub fn batch(n: i32) -> RecordBatch {
 }
 
 /// Build a log rolled into several sealed segments under `dir`.
-pub fn rolled_log(dir: &std::path::Path) -> Log {
+pub fn rolled_log(dir: &Path) -> Log {
     let mut log = Log::open(dir, LogConfig {
         segment_size: bytes(256), // tiny so we roll fast
         ..LogConfig::default()
@@ -354,10 +352,7 @@ pub fn rolled_log(dir: &std::path::Path) -> Log {
     log
 }
 
-pub fn rolled_tiered_partition_with_config(
-    log_dir: &std::path::Path,
-    config: LogConfig,
-) -> Arc<Partition> {
+pub fn rolled_tiered_partition_with_config(log_dir: &Path, config: LogConfig) -> Arc<Partition> {
     rolled_tiered_partition_at(PartitionIndex(0), log_dir, config)
 }
 
@@ -368,7 +363,7 @@ pub fn rolled_tiered_partition_with_config(
 /// afterwards.
 pub fn rolled_tiered_partition_at(
     index: PartitionIndex,
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     config: LogConfig,
 ) -> Arc<Partition> {
     let mut log = partition_log(log_dir, index, config);
@@ -380,21 +375,18 @@ pub fn rolled_tiered_partition_at(
 /// A partition of `orders` at `index` that this broker (node 1, epoch 0)
 /// leads, over a log the caller has already written. The log must live in the
 /// partition directory under `log_dir`.
-pub fn leading_partition_over(
-    index: PartitionIndex,
-    log_dir: &std::path::Path,
-    log: Log,
-) -> Arc<Partition> {
+pub fn leading_partition_over(index: PartitionIndex, log_dir: &Path, log: Log) -> Arc<Partition> {
     let log_end = log.log_end_offset();
     let partition = spawn_partition(
-        "orders".to_string(),
+        "orders".to_owned(),
         index,
         log_dir.to_path_buf(),
         log,
         LogDirRegistry::default(),
         Arc::new(ProducerState::new()),
         false,
-    );
+    )
+    .unwrap();
     partition.current_leader.store(1, Ordering::Relaxed);
     partition.current_leader_epoch.store(0, Ordering::Release);
     // A sole replica has replicated everything it wrote: the high watermark
@@ -443,11 +435,11 @@ pub fn synth_export(
         max_timestamp: timestamp.0,
         last_modified_ms: timestamp.0,
         size,
-        log_path: std::path::PathBuf::new(),
-        offset_index_path: std::path::PathBuf::new(),
-        time_index_path: std::path::PathBuf::new(),
+        log_path: PathBuf::new(),
+        offset_index_path: PathBuf::new(),
+        time_index_path: PathBuf::new(),
         transaction_index_path: None,
-        producer_snapshot_path: std::path::PathBuf::new(),
+        producer_snapshot_path: PathBuf::new(),
         leader_epochs: Vec::new(),
     }
 }
@@ -534,9 +526,9 @@ pub fn three_exports(#[builder(default = 300)] last_timestamp: i64) -> Vec<Segme
 }
 
 /// Open the real orders-partition directory under the supplied log root.
-pub fn partition_log(log_dir: &std::path::Path, index: PartitionIndex, config: LogConfig) -> Log {
+pub fn partition_log(log_dir: &Path, index: PartitionIndex, config: LogConfig) -> Log {
     let part_dir = partition_dir(log_dir, "orders", index.get());
-    std::fs::create_dir_all(&part_dir).unwrap();
+    fs::create_dir_all(&part_dir).unwrap();
     Log::open(&part_dir, config).unwrap()
 }
 
@@ -575,8 +567,8 @@ pub fn multiple_segment_snapshot(partition: &Partition) -> PartitionSnapshot {
     snapshot
 }
 
-pub fn partition_log_guard(partition: &Partition) -> std::sync::MutexGuard<'_, Log> {
-    partition.log.lock().expect("partition log mutex poisoned")
+pub fn partition_log_guard(partition: &Partition) -> MutexGuard<'_, Log> {
+    partition.log.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub fn sealed_segment_count(partition: &Partition) -> usize {
@@ -716,7 +708,7 @@ pub struct ArchivedRetention {
 /// Backend guards and the original exports remain owned by the caller through its assertions.
 pub async fn archived_local_retention(
     partition: &Partition,
-    remote_dir: &std::path::Path,
+    remote_dir: &Path,
     unstable: UnstableApiVersions,
 ) -> ArchivedRetention {
     let PartitionSnapshot { exports, config } = multiple_segment_snapshot(partition);
@@ -814,7 +806,7 @@ pub struct RegisteredFixture {
 pub fn register_fixture(
     registry: &PartitionRegistry,
     partition: Arc<Partition>,
-    remote: &std::path::Path,
+    remote: &Path,
 ) -> RegisteredFixture {
     registry.insert("orders".into(), PartitionIndex(0), partition);
     let controller = fixed_source(orders_image(1));
@@ -829,7 +821,7 @@ pub fn register_fixture(
 pub async fn registered_sweep_fixture(
     registry: &PartitionRegistry,
     partition: Arc<Partition>,
-    remote: &std::path::Path,
+    remote: &Path,
 ) -> RegisteredFixture {
     let fixture = register_fixture(registry, partition, remote);
     sweep_mutable(registry, &fixture.controller, &fixture.rsm, &fixture.rlmm).await;

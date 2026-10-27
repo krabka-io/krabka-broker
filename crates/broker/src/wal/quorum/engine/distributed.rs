@@ -10,7 +10,11 @@ use {
     super::{DistributedQuorum, ShardObservability, WalShardEngine, strict_majority},
     krabka_ids::Offset,
     krabka_kraft_core::NodeId,
-    std::{collections::HashMap, sync::atomic::Ordering},
+    krabka_verified::{consensus, wal},
+    std::{
+        collections::HashMap,
+        sync::{PoisonError, atomic::Ordering},
+    },
 };
 
 impl WalShardEngine {
@@ -21,12 +25,12 @@ impl WalShardEngine {
         let mut distributed = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let previous_voters = distributed
             .as_ref()
             .map_or_else(Vec::new, |quorum| quorum.voters.clone());
         let voter_ids: Vec<_> = voters.iter().map(|voter| voter.0).collect();
-        if !krabka_verified::wal::wal_voter_set_valid(&voter_ids, me.0, self.expected_voters) {
+        if !wal::wal_voter_set_valid(&voter_ids, me.0, self.expected_voters) {
             *distributed = None;
             drop(distributed);
             self.durable_advanced.notify_waiters();
@@ -79,7 +83,7 @@ impl WalShardEngine {
     pub(crate) fn voter_durable_offset(&self, voter: NodeId) -> Option<Offset> {
         self.distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .and_then(|quorum| quorum.durable_offsets.get(&voter).copied())
     }
@@ -90,7 +94,7 @@ impl WalShardEngine {
         let is_remote_voter = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .and_then(|quorum| quorum.voters.get(1..))
             .is_some_and(|followers| followers.contains(&from));
@@ -127,7 +131,7 @@ impl WalShardEngine {
         let me = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|quorum| quorum.me);
         if let Some(me) = me {
@@ -145,7 +149,7 @@ impl WalShardEngine {
         let mut distributed = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let Some(quorum) = distributed.as_mut() else {
             return false;
         };
@@ -194,7 +198,7 @@ impl WalShardEngine {
         // `false` because the leader already votes in `voter_durable_ends`
         // with its durable offset; the leader end is only the bound.
         let floor = current.0.max(log_start.0).min(leader_end.0);
-        let durable = Offset(krabka_verified::consensus::recompute_high_watermark(
+        let durable = Offset(consensus::recompute_high_watermark(
             leader_end.0,
             &voter_durable_ends,
             strict_majority(quorum.voters.len()),

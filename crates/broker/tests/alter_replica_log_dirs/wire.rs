@@ -25,11 +25,11 @@ use {
             describe_log_dirs_response::DescribeLogDirsResponse,
         },
     },
-    std::net::SocketAddr,
+    std::{net::SocketAddr, path::Path},
     tokio::net::TcpStream,
 };
 
-pub(crate) const CLIENT_ID: &str = "krabka-arld-test";
+pub const CLIENT_ID: &str = "krabka-arld-test";
 const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 = 4;
 
@@ -47,9 +47,9 @@ async fn flexible_exchange<Q: Encode, R: for<'de> Decode<'de>>(
     R::decode(&mut &response[..], setup.version.0).unwrap()
 }
 
-pub(crate) async fn alter_replica_log_dirs(
+pub async fn alter_replica_log_dirs(
     addr: SocketAddr,
-    target_dir: &std::path::Path,
+    target_dir: &Path,
     topic: &str,
     partitions: Vec<i32>,
 ) -> AlterReplicaLogDirsResponse {
@@ -57,7 +57,7 @@ pub(crate) async fn alter_replica_log_dirs(
         dirs: vec![AlterReplicaLogDir {
             path: target_dir.to_string_lossy().to_string(),
             topics: vec![AlterReplicaLogDirTopic {
-                name: topic.to_string(),
+                name: topic.to_owned(),
                 partitions,
                 ..Default::default()
             }],
@@ -73,15 +73,12 @@ pub(crate) async fn alter_replica_log_dirs(
     .await
 }
 
-pub(crate) async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
+pub async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
     describe_log_dirs_at(addr, DESCRIBE_VERSION).await
 }
 
 /// `DescribeLogDirs` for every partition, at `version`.
-pub(crate) async fn describe_log_dirs_at(
-    addr: SocketAddr,
-    version: i16,
-) -> DescribeLogDirsResponse {
+pub async fn describe_log_dirs_at(addr: SocketAddr, version: i16) -> DescribeLogDirsResponse {
     let req = DescribeLogDirsRequest {
         topics: None,
         ..Default::default()
@@ -95,8 +92,8 @@ pub(crate) async fn describe_log_dirs_at(
 }
 
 /// The per-resource result of an `IncrementalAlterConfigs` call.
-#[derive(Debug, PartialEq)]
-pub(crate) struct ConfigAlterOutcome {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConfigAlterOutcome {
     pub(crate) error_code: i16,
     pub(crate) error_message: Option<String>,
 }
@@ -113,7 +110,7 @@ impl ConfigAlterOutcome {
 
 /// `IncrementalAlterConfigs` v1 that SETs one key on broker `broker`, and the
 /// per-resource outcome it answers.
-pub(crate) async fn set_broker_config(
+pub async fn set_broker_config(
     addr: SocketAddr,
     broker: i32,
     name: &str,
@@ -124,8 +121,8 @@ pub(crate) async fn set_broker_config(
     let req = incremental_request()
         .resources(vec![incremental_resource(4, broker.to_string(), vec![
             incremental_config(
-                name.to_string(),
-                Some(value.to_string()),
+                name.to_owned(),
+                Some(value.to_owned()),
                 ConfigOperation::Set,
             ),
         ])])

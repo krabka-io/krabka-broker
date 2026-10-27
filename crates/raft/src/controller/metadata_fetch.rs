@@ -116,8 +116,9 @@ mod tests {
         krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value},
         krabka_protocol::records::RecordBatch,
         krabka_units::prelude::{TimeExt as _, mebibytes},
-        std::sync::Arc,
+        std::sync::{Arc, Mutex},
         tempfile::TempDir,
+        tokio::time,
     };
 
     fn contains_topic(records: &[u8], name: &str) -> bool {
@@ -164,7 +165,7 @@ mod tests {
         let SeededController { dir: _dir, ctrl } =
             committed_topic("t", "metadata_records seed").await;
 
-        let slice = tokio::time::timeout(
+        let slice = time::timeout(
             TEST_OP_TIMEOUT.to_std(),
             ctrl.metadata_records(0, UNBOUNDED_FETCH),
         )
@@ -181,7 +182,7 @@ mod tests {
             committed_topic("fetched", "fetch_metadata seed").await;
 
         let addr = ctrl.controller_bound_addr();
-        let resp = tokio::time::timeout(
+        let resp = time::timeout(
             TEST_OP_TIMEOUT.to_std(),
             ctrl.fetch_metadata_from(addr, 0, mebibytes(1)),
         )
@@ -198,8 +199,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_metadata_from_passes_configured_client_id_to_dialer() {
         let dir = TempDir::new().unwrap();
-        let client_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client_ids = Arc::new(Mutex::new(Vec::new()));
+        let recorded_options = Arc::new(Mutex::new(Vec::new()));
         let dialer = RecordingDialer {
             client_ids: Arc::clone(&client_ids),
             options: Arc::clone(&recorded_options),
@@ -222,7 +223,7 @@ mod tests {
         .await
         .expect("submit");
 
-        let resp = tokio::time::timeout(
+        let resp = time::timeout(
             TEST_OP_TIMEOUT.to_std(),
             ctrl.fetch_metadata_from(ctrl.controller_bound_addr(), 0, mebibytes(1)),
         )
@@ -233,7 +234,7 @@ mod tests {
         assert2::assert!(resp.error_code == 0);
         assert2::assert!(client_ids.lock().unwrap().as_slice() == ["metadata-fetch-client"]);
         {
-            let opts = recorded_options.lock().unwrap();
+            let opts = recorded_options.lock().unwrap().clone();
             let first_opt = &opts[0];
             assert2::assert!(opts.len() == 1);
             let expected_cap = krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap();

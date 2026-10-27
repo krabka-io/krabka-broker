@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     assert2::check,
     krabka_bench_driver::{
@@ -9,7 +11,7 @@ use {
         },
     },
     krabka_units::prelude::*,
-    std::{path::Path, process::Command},
+    std::{fs, path::Path, process::Command},
 };
 
 #[test]
@@ -69,7 +71,7 @@ fn report_reads_the_run_output_encoding_and_renders_operator_units() {
 
     check!(output.status.success());
 
-    let markdown = std::fs::read_to_string(&summary).expect("summary written");
+    let markdown = fs::read_to_string(&summary).expect("summary written");
     // Latencies, sizes and rates all render with their unit attached.
     for needle in [
         "Duration=1m, warmup=10s",
@@ -81,7 +83,7 @@ fn report_reads_the_run_output_encoding_and_renders_operator_units() {
         check!(markdown.contains(needle), "missing {needle:?}");
     }
 
-    let summary_csv = std::fs::read_to_string(&csv).expect("csv written");
+    let summary_csv = fs::read_to_string(&csv).expect("csv written");
     let header = summary_csv.lines().next().expect("header row");
     check!(header.contains("msg_size_bytes"));
     check!(header.contains("producer_p99_ms"));
@@ -131,7 +133,7 @@ fn failover_gate_preserves_summary_on_pass_and_failure() {
             }
             let output = command.output().expect("run report");
             check!(output.status.success() == (!gate || passes));
-            check!(std::fs::read_to_string(&summary).expect("summary written") == expected);
+            check!(fs::read_to_string(&summary).expect("summary written") == expected);
             let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
             check!(stdout.contains("failover gate: PASS") == (gate && passes));
             if gate && !passes {
@@ -196,5 +198,5 @@ fn write_run(dir: &Path, name: &str, stack: Stack) {
 
 fn write_run_output(dir: &Path, name: &str, run: &RunOutput) {
     let json = serde_json::to_string_pretty(run).expect("encode run output");
-    std::fs::write(dir.join(name), json).expect("write run output");
+    fs::write(dir.join(name), json).expect("write run output");
 }

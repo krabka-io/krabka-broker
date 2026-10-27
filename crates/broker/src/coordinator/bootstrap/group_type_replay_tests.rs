@@ -72,7 +72,8 @@ fn offset_commit() -> LogRecord {
             expire_timestamp_ms: None,
             topic_id: None,
         }
-        .encode_value(),
+        .encode_value()
+        .unwrap(),
     )
 }
 

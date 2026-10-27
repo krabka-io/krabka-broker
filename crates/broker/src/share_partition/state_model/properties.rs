@@ -298,15 +298,12 @@ impl Model for ShareModel {
                 "delivery_complete_count_is_terminal_in_window",
                 |_, s: &ShareState| delivery_complete_count_is_terminal_in_window(&s.sm),
             ),
-            Property::always(
-                "delivery_count_bounded",
-                |m: &ShareModel, s: &ShareState| {
-                    s.sm.batches
-                        .iter()
-                        .all(|b| b.delivery_count <= m.max_attempts)
-                },
-            ),
-            Property::always("spso_in_range", |m: &ShareModel, s: &ShareState| {
+            Property::always("delivery_count_bounded", |m: &Self, s: &ShareState| {
+                s.sm.batches
+                    .iter()
+                    .all(|b| b.delivery_count <= m.max_attempts)
+            }),
+            Property::always("spso_in_range", |m: &Self, s: &ShareState| {
                 0 <= s.sm.start_offset
                     && s.sm.start_offset <= s.sm.end_offset
                     && s.sm.end_offset <= m.max_offset
@@ -341,7 +338,7 @@ impl Model for ShareModel {
             // without deferral.
             properties.push(Property::always(
                 "window_within_record_lock_limit",
-                |m: &ShareModel, s: &ShareState| {
+                |m: &Self, s: &ShareState| {
                     s.sm.end_offset.0 - s.sm.start_offset.0 <= i64::from(m.max_inflight)
                 },
             ));

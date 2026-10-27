@@ -15,6 +15,7 @@ use {
     assert2::{assert, check},
     krabka_broker::codes,
     std::time::Duration,
+    tokio::time,
 };
 
 /// Sleep until the wall clock is past `expires_at_ms`.
@@ -25,7 +26,7 @@ use {
 async fn sleep_past(expires_at_ms: i64) {
     let remaining = expires_at_ms.saturating_sub(now_ms()).max(0);
     let wait = u64::try_from(remaining).expect("a non-negative remainder") + 400;
-    tokio::time::sleep(Duration::from_millis(wait)).await;
+    time::sleep(Duration::from_millis(wait)).await;
 }
 
 /// A proposal past its lifetime authorizes nothing, on either end.

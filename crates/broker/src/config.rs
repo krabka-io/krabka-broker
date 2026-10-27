@@ -4,7 +4,13 @@
 //! binary entry point is `bin/broker.rs`.
 
 pub use krabka_raft::BootstrapMode;
-use krabka_units::{ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs};
+use {
+    krabka_units::{ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs},
+    std::{
+        num::NonZeroU64,
+        sync::{Arc, atomic::AtomicI64},
+    },
+};
 
 mod break_glass;
 mod broker_config;
@@ -137,6 +143,7 @@ pub const DEFAULT_CONNECTIONS_MAX_IDLE: Time = minutes(10);
 
 /// KIP-13: default width of the sliding window a client byte-rate quota is
 /// measured over, and therefore the burst a bucket allows before it throttles.
+///
 /// Kafka's `quota.window.num` (11) times `quota.window.size.seconds` (1).
 pub const DEFAULT_QUOTA_WINDOW: Time = secs(11);
 
@@ -236,7 +243,7 @@ pub const DEFAULT_AUDIT_SPOOL_DIR: &str = "audit-spool";
 pub const DEFAULT_AUDIT_SPOOL_MAX: ByteSize = gibibytes(1);
 
 /// Default audit-spool sync cadence: every appended record.
-pub const DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N: std::num::NonZeroU64 = std::num::NonZeroU64::MIN;
+pub const DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N: NonZeroU64 = NonZeroU64::MIN;
 
 /// KIP-48: default hard upper bound on delegation-token lifetime.
 /// 7 days, matches Kafka's `delegation.token.max.lifetime.ms` default.
@@ -249,6 +256,7 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// KIP-48: default renew period used as the initial
 /// `expiry_timestamp_ms` offset at create time, and as the implicit
 /// renew period when `RenewDelegationToken.renew_period_ms == -1`.
+///
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
 
@@ -304,6 +312,4 @@ pub const DEFAULT_RLMM_SNAPSHOT_INTERVAL: Time = minutes(1);
 ///
 /// The OAUTHBEARER JWKS refresher stamps two of these, and the validator reads
 /// them through the same `Arc`.
-fn shared_epoch_ms() -> std::sync::Arc<std::sync::atomic::AtomicI64> {
-    std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0))
-}
+fn shared_epoch_ms() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(0)) }

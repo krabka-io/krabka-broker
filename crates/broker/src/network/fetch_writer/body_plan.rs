@@ -9,13 +9,14 @@ use {
     crate::coordinator::unified::persistence::MAX_STRING_BYTES,
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
-        Encode, ProtocolError,
+        Encode, ProtocolError, codegen_helpers,
         owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
         primitives::{
-            array::{put_array_len, put_nullable_array_len},
+            array::{self, put_array_len, put_nullable_array_len},
             fixed::{put_i16, put_i32, put_i64},
             string_bytes::{put_compact_string, put_string},
             uuid::put_uuid,
+            varint,
         },
         records::RecordsPayload,
         tagged_fields::{WriteTaggedFields, encode_to_bytes},
@@ -67,16 +68,14 @@ pub(super) fn fetch_response_write_plan(
 
     if flex {
         let mut tagged = WriteTaggedFields::new();
-        if !krabka_protocol::codegen_helpers::is_default(&response.node_endpoints) {
+        if !codegen_helpers::is_default(&response.node_endpoints) {
             let node_endpoints = &response.node_endpoints;
             let payload = encode_to_bytes(
-                krabka_protocol::primitives::array::array_len_prefix_len(
-                    node_endpoints.len(),
-                    flex,
-                ) + node_endpoints
-                    .iter()
-                    .map(|endpoint| endpoint.encoded_len(version))
-                    .sum::<usize>(),
+                array::array_len_prefix_len(node_endpoints.len(), flex)
+                    + node_endpoints
+                        .iter()
+                        .map(|endpoint| endpoint.encoded_len(version))
+                        .sum::<usize>(),
                 |bytes| {
                     put_array_len(bytes, node_endpoints.len(), flex);
                     for endpoint in node_endpoints {
@@ -166,7 +165,7 @@ fn encode_fetch_partition(
 
     if flex {
         let mut tagged = WriteTaggedFields::new();
-        if !krabka_protocol::codegen_helpers::is_default(&partition.diverging_epoch) {
+        if !codegen_helpers::is_default(&partition.diverging_epoch) {
             tagged.add(
                 0,
                 encode_to_bytes(partition.diverging_epoch.encoded_len(version), |bytes| {
@@ -175,7 +174,7 @@ fn encode_fetch_partition(
                 }),
             );
         }
-        if !krabka_protocol::codegen_helpers::is_default(&partition.current_leader) {
+        if !codegen_helpers::is_default(&partition.current_leader) {
             tagged.add(
                 1,
                 encode_to_bytes(partition.current_leader.encoded_len(version), |bytes| {
@@ -184,7 +183,7 @@ fn encode_fetch_partition(
                 }),
             );
         }
-        if !krabka_protocol::codegen_helpers::is_default(&partition.snapshot_id) {
+        if !codegen_helpers::is_default(&partition.snapshot_id) {
             tagged.add(
                 2,
                 encode_to_bytes(partition.snapshot_id.encoded_len(version), |bytes| {
@@ -233,7 +232,7 @@ fn encode_fetch_partition(
 /// A third path that encodes a `FetchResponse` owes the wire the same
 /// guarantee, and `network::fetch_writer::tests` holds the cross-path
 /// equivalence test that says so.
-pub(crate) fn records_to_serve(records: Option<&RecordsPayload>) -> Option<&RecordsPayload> {
+pub fn records_to_serve(records: Option<&RecordsPayload>) -> Option<&RecordsPayload> {
     records.filter(|payload| payload.payload_len() > 0)
 }
 
@@ -245,7 +244,7 @@ fn encode_records_prefix(
 ) -> Result<(), ProtocolError> {
     let Some(payload) = records_to_serve(records) else {
         if flex {
-            krabka_protocol::primitives::varint::put_uvarint(buf, 1);
+            varint::put_uvarint(buf, 1);
         } else {
             put_i32(buf, 0);
         }
@@ -257,7 +256,7 @@ fn encode_records_prefix(
     if flex {
         let prefixed_len = u32::try_from(payload_len + 1)
             .map_err(|_| ProtocolError::InvalidValue("records too large for compact len"))?;
-        krabka_protocol::primitives::varint::put_uvarint(buf, prefixed_len);
+        varint::put_uvarint(buf, prefixed_len);
     } else {
         let records_len = i32::try_from(payload_len)
             .map_err(|_| ProtocolError::InvalidValue("records too large for i32 len"))?;

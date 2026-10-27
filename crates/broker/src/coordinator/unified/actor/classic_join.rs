@@ -52,22 +52,35 @@ use {
 
 /// Kafka's `appendGroupMetadataErrorToResponseError`: the `JoinGroup` error
 /// for a group metadata write that failed.
-pub(crate) fn append_error_code(error: &BrokerError) -> i16 {
+pub fn append_error_code(error: &BrokerError) -> i16 {
     codes::coordinator_append_error(codes::from_broker_error(error))
 }
 
-#[allow(clippy::too_many_arguments)] // Keeps the actor message boundary explicit.
+/// The request side of a classic `JoinGroup` actor message: the request, the
+/// client that sent it, and the channel its answer goes back on.
+pub(super) struct ClassicJoinMessage<'a> {
+    pub(super) request: JoinGroupRequest,
+    pub(super) version: i16,
+    pub(super) client: ClientIdentity<'a>,
+    /// Resolves the group's regular expressions with the principal of the
+    /// request.
+    pub(super) regex_resolver: &'a dyn TopicRegexResolver,
+    pub(super) reply: oneshot::Sender<JoinResult>,
+}
+
 pub(super) async fn handle_classic_join_message(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
     services: ActorServices<'_>,
-    mut request: JoinGroupRequest,
-    version: i16,
-    client_id: &str,
-    client_host: &str,
-    regex_resolver: &dyn TopicRegexResolver,
-    reply: oneshot::Sender<JoinResult>,
+    message: ClassicJoinMessage<'_>,
 ) -> bool {
+    let ClassicJoinMessage {
+        mut request,
+        version,
+        client,
+        regex_resolver,
+        reply,
+    } = message;
     // Kafka's `JoinGroupRequest.maybeOverrideRebalanceTimeout`: v0 has no
     // rebalance timeout field, so the session timeout stands in for it. The
     // native and the hosted paths below then read the same value.
@@ -115,8 +128,8 @@ pub(super) async fn handle_classic_join_message(
     if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
         let outcome = classic_ops::handle_join(state, &mut request, &classic_ops::JoinContext {
-            client_id,
-            client_host,
+            client_id: client.id,
+            client_host: client.host,
             version,
             initial_rebalance_delay: services.config.classic_initial_rebalance_delay,
             max_size: services.config.classic_max_size,
@@ -170,26 +183,15 @@ pub(super) async fn handle_classic_join_message(
         }
         return true;
     }
-    if group.as_consumer().is_some() {
-        return classic_join_hosted(group, services, HostedJoin {
-            request: &request,
-            version,
-            client: ClientIdentity {
-                id: client_id,
-                host: client_host,
-            },
-            regex_resolver,
-            reply,
-        })
-        .await
-        .is_ok();
-    }
-    let _ = reply.send(JoinResult {
-        error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
-        member_id: request.member_id,
-        ..JoinResult::default()
-    });
-    true
+    classic_join_hosted(group, services, HostedJoin {
+        request: &request,
+        version,
+        client,
+        regex_resolver,
+        reply,
+    })
+    .await
+    .is_ok()
 }
 
 /// A classic `JoinGroup` for a consumer group, with the request context that
@@ -377,9 +379,10 @@ fn admit_hosted_join(
 /// and prepares a rebalance when its target is stale.
 ///
 /// It replies on `reply` with the follower `JoinResult` of
-/// [`migration::build_hosted_classic_join_result`]. It returns `Err` only on a
-/// log-write failure, so the actor exits, and it first replies with the same
-/// failure code the heartbeat path uses.
+/// [`migration::build_hosted_classic_join_result`], or with
+/// `INCONSISTENT_GROUP_PROTOCOL` when the group is not a consumer group. It
+/// returns `Err` only on a log-write failure, so the actor exits, and it first
+/// replies with the same failure code the heartbeat path uses.
 async fn classic_join_hosted(
     group: &mut CoordinatorGroup,
     services: ActorServices<'_>,
@@ -393,7 +396,14 @@ async fn classic_join_hosted(
         reply,
     } = hosted;
     let config = services.config;
-    let state = group.as_consumer().expect("caller verified consumer kind");
+    let Some(state) = group.as_consumer_mut() else {
+        let _ = reply.send(JoinResult {
+            error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
+            member_id: req.member_id.clone(),
+            ..JoinResult::default()
+        });
+        return Ok(());
+    };
     let HostedAdmission {
         member_id,
         replaces,
@@ -414,9 +424,6 @@ async fn classic_join_hosted(
         }
     };
 
-    let state = group
-        .as_consumer_mut()
-        .expect("caller verified consumer kind");
     let image = services.metadata.snapshot();
     let owned = owned_partitions(&subscription, &image);
     let replacement = replaces.map(|previous| replace_static_member(state, &previous, &member_id));
@@ -443,8 +450,8 @@ async fn classic_join_hosted(
             .iter()
             .map(|p| (p.name.clone(), p.metadata.clone()))
             .collect(),
-        client_id: client.id.to_string(),
-        client_host: client.host.to_string(),
+        client_id: client.id.to_owned(),
+        client_host: client.host.to_owned(),
         session_timeout: Duration::from_millis(
             u64::try_from(req.session_timeout_ms.max(0)).unwrap_or(FALLBACK_SESSION_TIMEOUT_MS),
         ),
@@ -467,8 +474,8 @@ async fn classic_join_hosted(
         owned: Some(&owned),
     };
     if downgrade {
-        return downgrade_joining(
-            group,
+        let classic = downgrade_joining(
+            state,
             services,
             DowngradeJoin {
                 change,
@@ -479,7 +486,11 @@ async fn classic_join_hosted(
             },
             reply,
         )
-        .await;
+        .await?;
+        if let Some(classic) = classic {
+            *group.kind_mut() = GroupKind::Classic(classic);
+        }
+        return Ok(());
     }
     let update = after_member_update(state, config, services.metadata, change, &regexes);
     let MemberUpdateRecords {
@@ -522,12 +533,21 @@ async fn classic_join_hosted(
         });
         return Err(e);
     }
-    let member = state
-        .members
-        .get(&member_id)
-        .expect("upsert_classic_member inserted the member");
-    let _ = reply.send(migration::build_hosted_classic_join_result(member));
+    let _ = reply.send(state.members.get(&member_id).map_or_else(
+        || unknown_member_result(&member_id),
+        migration::build_hosted_classic_join_result,
+    ));
     Ok(())
+}
+
+/// The `UNKNOWN_MEMBER_ID` answer for a join whose member is not in the group
+/// after its upsert.
+fn unknown_member_result(member_id: &str) -> JoinResult {
+    JoinResult {
+        error_code: codes::UNKNOWN_MEMBER_ID,
+        member_id: member_id.to_owned(),
+        ..JoinResult::default()
+    }
 }
 
 /// What [`classic_join_hosted`] hands the downgrade it triggers.
@@ -548,12 +568,16 @@ struct DowngradeJoin<'a> {
 /// then tombstones the consumer group and writes the classic group in the
 /// same batch, and the classic group prepares a rebalance when the target is
 /// stale.
+///
+/// It returns the classic group that replaces the consumer group, or `None`
+/// when the group cannot downgrade after all and the join was answered with
+/// an error instead.
 async fn downgrade_joining(
-    group: &mut CoordinatorGroup,
+    state: &mut ConsumerState,
     services: ActorServices<'_>,
     join: DowngradeJoin<'_>,
     reply: oneshot::Sender<JoinResult>,
-) -> Result<(), BrokerError> {
+) -> Result<Option<ClassicGroup>, BrokerError> {
     let DowngradeJoin {
         change,
         regexes,
@@ -562,10 +586,7 @@ async fn downgrade_joining(
         replacement,
     } = join;
     let member_id = change.member_id.to_owned();
-    let group_id = group.group_id.clone();
-    let state = group
-        .as_consumer_mut()
-        .expect("caller verified consumer kind");
+    let group_id = state.group_id.clone();
     let image = services.metadata.snapshot();
     let mut regex_records = Vec::new();
     // What the resolution finds is dropped: once the group is classic,
@@ -591,19 +612,22 @@ async fn downgrade_joining(
     if let Some(replacement) = replacement {
         pending = replacement.followed_by(pending);
     }
-    let mut classic = migration::convert_consumer_to_classic(state, &[], &image);
-    classic.generation_id = consumer_downgrade_epoch(true, epoch_before)
-        .expect("every member of a downgrading group is classic");
+    // `admit_hosted_join` admits a downgrade only when every other member is
+    // classic, and the joining member is classic.
+    let (Some(generation_id), Some(member), Some(mut classic)) = (
+        consumer_downgrade_epoch(true, epoch_before),
+        state.members.get(&member_id),
+        migration::convert_consumer_to_classic(state, &[], &image),
+    ) else {
+        let _ = reply.send(unknown_member_result(&member_id));
+        return Ok(None);
+    };
+    let result = migration::build_hosted_classic_join_result(member);
+    classic.generation_id = generation_id;
     let now_ms = chrono_now_ms();
     let pending = pending.followed_by(migration::downgrade_pending_records(
         state, &classic, now_ms,
     ));
-    let result = migration::build_hosted_classic_join_result(
-        state
-            .members
-            .get(&member_id)
-            .expect("upsert_classic_member inserted the member"),
-    );
     let appended = match pending.to_batch(&group_id, now_ms) {
         Ok(batch) => services.offsets_log.append(&group_id, batch).await,
         Err(error) => Err(error),
@@ -624,9 +648,8 @@ async fn downgrade_joining(
             Instant::now(),
         );
     }
-    *group.kind_mut() = GroupKind::Classic(classic);
     let _ = reply.send(result);
-    Ok(())
+    Ok(Some(classic))
 }
 
 #[cfg(test)]
@@ -640,7 +663,7 @@ mod tests {
                     completing_classic_group, decode_assignment, last_classic_metadata,
                     make_coordinator, make_coordinator_with_config,
                     make_coordinator_with_topic_config, make_coordinator_with_topic_policy,
-                    marked_classic_handle, rpc, seed_and_upgrade,
+                    marked_classic_handle, rpc, seed_and_upgrade, subscription_blob,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
@@ -651,7 +674,15 @@ mod tests {
         },
         assert2::{assert, check},
         bytes::Bytes,
-        krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        krabka_protocol::{
+            owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            records::RecordBatch,
+        },
+        std::{
+            collections::HashSet,
+            sync::{Arc, atomic::Ordering},
+        },
+        tokio::{sync::oneshot, time},
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -664,7 +695,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn zero_initial_rebalance_delay_completes_a_new_groups_first_join_at_once() {
         let (coord, _log) = make_coordinator_with_config(NextGenConfig {
-            classic_initial_rebalance_delay: std::time::Duration::ZERO,
+            classic_initial_rebalance_delay: Duration::ZERO,
             ..NextGenConfig::assigning_at_once()
         });
         let handle = marked_classic_handle(&coord, "g");
@@ -673,8 +704,8 @@ mod tests {
         check!(assigned.error_code == codes::MEMBER_ID_REQUIRED);
         let member_id = assigned.member_id;
 
-        let join = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        let join = time::timeout(
+            Duration::from_secs(1),
             rpc::classic_join(&handle, &member_id, "t"),
         )
         .await
@@ -842,8 +873,7 @@ mod tests {
         let (coord, log) = make_coordinator();
         let rejoin = stable_static_group_and_rejoin();
         let seeded = super::super::test_support::seed_classic_group(&coord, rejoin.group);
-        log.fail_next
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        log.fail_next.store(true, Ordering::SeqCst);
 
         let response = send_join(&seeded.handle, rejoin.request).await;
 
@@ -907,8 +937,8 @@ mod tests {
         assert!(!p_2.is_empty(), "the new member must receive an assignment");
 
         // Disjoint, and together cover {0, 1}.
-        let set_c: std::collections::HashSet<i32> = p_c.iter().copied().collect();
-        let set_2: std::collections::HashSet<i32> = p_2.iter().copied().collect();
+        let set_c: HashSet<i32> = p_c.iter().copied().collect();
+        let set_2: HashSet<i32> = p_2.iter().copied().collect();
         assert!(
             set_c.is_disjoint(&set_2),
             "the two members must hold disjoint partitions"
@@ -1010,9 +1040,7 @@ mod tests {
             protocol_type: protocol_type.into(),
             protocols: vec![JoinGroupRequestProtocol {
                 name: protocol_name.into(),
-                metadata: crate::coordinator::unified::actor::test_support::subscription_blob(&[
-                    "t",
-                ]),
+                metadata: subscription_blob(&["t"]),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1144,7 +1172,7 @@ mod tests {
     }
 
     /// The shape of each record of `batch`.
-    fn batch_shape(batch: &krabka_protocol::records::RecordBatch) -> Vec<RecordShape> {
+    fn batch_shape(batch: &RecordBatch) -> Vec<RecordShape> {
         use crate::coordinator::unified::persistence::{Key, parse_key};
         batch
             .records
@@ -1186,7 +1214,7 @@ mod tests {
     /// the old member's tombstones, then the new member's subscription,
     /// target and current assignment.
     fn replace_member_shape(old: &str, new: &str) -> Vec<RecordShape> {
-        let group_id = || "g".to_string();
+        let group_id = || "g".to_owned();
         vec![
             RecordShape {
                 key: Some(NextGenKey::CurrentMemberAssignment {
@@ -1284,7 +1312,7 @@ mod tests {
         check!(replaced.is_classic);
         check!(replaced.instance_id.as_deref() == Some("instance-1"));
         check!(replaced.target_partitions == held.target_partitions);
-        let mut want_members = vec!["native".to_string(), second.member_id.clone()];
+        let mut want_members = vec!["native".to_owned(), second.member_id.clone()];
         want_members.sort_unstable();
         check!(member_ids(&handle).await == want_members);
         let shape = new_join_batch_shape(&log, PersistedBatchCount(batches_before)).await;
@@ -1331,7 +1359,7 @@ mod tests {
                 "{label}"
             );
             check!(log.batches().await.len() == batches_before, "{label}");
-            let mut want_members = vec![joined.member_id.clone(), "native".to_string()];
+            let mut want_members = vec![joined.member_id.clone(), "native".to_owned()];
             want_members.sort_unstable();
             check!(member_ids(&handle).await == want_members, "{label}");
         }
@@ -1440,12 +1468,12 @@ mod tests {
         members.sort_unstable();
         let mut want = vec![
             MemberInstance {
-                member_id: "m-classic".to_string(),
+                member_id: "m-classic".to_owned(),
                 group_instance_id: None,
             },
             MemberInstance {
                 member_id: joined.member_id.clone(),
-                group_instance_id: Some("instance-1".to_string()),
+                group_instance_id: Some("instance-1".to_owned()),
             },
         ];
         want.sort_unstable();
@@ -1477,8 +1505,8 @@ mod tests {
         );
     }
 
-    fn fixed_topic_resolver() -> std::sync::Arc<FixedRegexResolver> {
-        std::sync::Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]))
+    fn fixed_topic_resolver() -> Arc<FixedRegexResolver> {
+        Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]))
     }
 
     /// Kafka's `classicGroupJoinToConsumerGroup` runs
@@ -1496,7 +1524,7 @@ mod tests {
         });
         let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
         let native_resolver = fixed_topic_resolver();
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::Heartbeat {
@@ -1510,7 +1538,7 @@ mod tests {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
-                regex_resolver: native_resolver.clone(),
+                regex_resolver: Arc::<FixedRegexResolver>::clone(&native_resolver),
                 reply: tx,
             })
             .await
@@ -1519,7 +1547,7 @@ mod tests {
         assert!(native_resolver.calls() == 1);
         let classic_resolver = fixed_topic_resolver();
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::ClassicJoin {
@@ -1527,7 +1555,7 @@ mod tests {
                 version: 9,
                 client_id: "client-b".into(),
                 client_host: "127.0.0.1".into(),
-                regex_resolver: classic_resolver.clone(),
+                regex_resolver: Arc::<FixedRegexResolver>::clone(&classic_resolver),
                 reply: tx,
             })
             .await

@@ -12,14 +12,14 @@ pub mod binding_filter;
 
 /// One seeded topic ACL: its resource name and pattern type.
 #[cfg(test)]
-pub(crate) struct SeededPattern {
-    pub(crate) name: &'static str,
-    pub(crate) pattern_type: PatternType,
+pub struct SeededPattern {
+    pub name: &'static str,
+    pub pattern_type: PatternType,
 }
 
 /// Topic patterns shared by the filter and handler matching fixtures.
 #[cfg(test)]
-pub(crate) const PATTERN_MATCHING_FIXTURE: [SeededPattern; 6] = [
+pub const PATTERN_MATCHING_FIXTURE: [SeededPattern; 6] = [
     SeededPattern {
         name: "foo",
         pattern_type: PatternType::Literal,

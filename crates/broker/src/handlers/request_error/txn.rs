@@ -158,7 +158,10 @@ fn marker_result(marker: &WritableTxnMarker, code: i16) -> WritableTxnMarkerResu
                 });
                 topics.len() - 1
             });
-        let partitions = &mut topics[index].partitions;
+        let Some(known) = topics.get_mut(index) else {
+            continue;
+        };
+        let partitions = &mut known.partitions;
         for &partition_index in &topic.partition_indexes {
             if partitions
                 .iter()

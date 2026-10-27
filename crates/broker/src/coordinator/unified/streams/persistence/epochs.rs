@@ -40,6 +40,7 @@ use {
         error::BrokerError,
     },
     bytes::{BufMut, Bytes, BytesMut},
+    krabka_protocol::primitives::fixed,
 };
 
 /// The tag of `ValidatedTopologyEpoch`.
@@ -62,8 +63,10 @@ pub struct LastAssignmentConfig {
     pub value: String,
 }
 
-/// Key v17 value: the streams group epoch, the metadata hash that the group
-/// last configured its topology against, the topology epoch that the group
+/// Key v17 value of a streams group.
+///
+/// It holds the streams group epoch, the metadata hash that the group last
+/// configured its topology against, the topology epoch that the group
 /// validated, and the assignment configuration of that epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamsGroupMetadataValue {
@@ -137,7 +140,7 @@ impl StreamsGroupMetadataValue {
         let mut description = DescriptionEpochs::default();
         read_tagged(&mut buf, |tag, payload| match tag {
             TAG_VALIDATED_TOPOLOGY_EPOCH => {
-                validated_topology_epoch = krabka_protocol::primitives::fixed::get_i32(payload)?;
+                validated_topology_epoch = fixed::get_i32(payload)?;
                 Ok(true)
             }
             TAG_LAST_ASSIGNMENT_CONFIGS => {
@@ -145,11 +148,11 @@ impl StreamsGroupMetadataValue {
                 Ok(true)
             }
             TAG_STORED_DESCRIPTION_TOPOLOGY_EPOCH => {
-                description.stored = krabka_protocol::primitives::fixed::get_i32(payload)?;
+                description.stored = fixed::get_i32(payload)?;
                 Ok(true)
             }
             TAG_FAILED_DESCRIPTION_TOPOLOGY_EPOCH => {
-                description.failed = krabka_protocol::primitives::fixed::get_i32(payload)?;
+                description.failed = fixed::get_i32(payload)?;
                 Ok(true)
             }
             _ => Ok(false),

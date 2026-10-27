@@ -13,6 +13,7 @@ use {
         },
     },
     krabka_protocol::owned::create_topics_request::CreatableTopic,
+    std::collections::{BTreeMap, HashSet},
 };
 
 #[cfg(test)]
@@ -26,7 +27,7 @@ mod tests;
 /// message names the least unregistered or repeated broker.
 /// `replication_factor` is the replica count of the partitions before this
 /// one, which this one must match.
-pub(crate) fn validate_manual_partition_assignment(
+pub fn validate_manual_partition_assignment(
     broker_ids: &[i32],
     registered: &[krabka_raft::NodeId],
     replication_factor: Option<usize>,
@@ -92,7 +93,7 @@ fn manual_replicas(
                 .to_owned(),
         ));
     }
-    let mut by_partition = std::collections::BTreeMap::new();
+    let mut by_partition = BTreeMap::new();
     let mut replication_factor = None;
     for assignment in &topic.assignments {
         if by_partition.contains_key(&assignment.partition_index) {
@@ -134,10 +135,7 @@ fn manual_replicas(
 /// `CreatePartitions` does not wrap it: Kafka's `createPartitions` lets the
 /// placer's exception through, so its row carries [`placement_failure_reason`]
 /// alone.
-pub(crate) fn placement_failure_message(
-    replication_factor: i16,
-    brokers: &[SiteBrokerView],
-) -> String {
+pub fn placement_failure_message(replication_factor: i16, brokers: &[SiteBrokerView]) -> String {
     format!(
         "Unable to replicate the partition {replication_factor} time(s): {}",
         placement_failure_reason(replication_factor, brokers)
@@ -146,9 +144,9 @@ pub(crate) fn placement_failure_message(
 
 /// The leader and the ISR a new partition starts with.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InitialLeadership {
-    pub(crate) leader: krabka_raft::NodeId,
-    pub(crate) isr: Vec<krabka_raft::NodeId>,
+pub struct InitialLeadership {
+    pub leader: krabka_raft::NodeId,
+    pub isr: Vec<krabka_raft::NodeId>,
 }
 
 /// The starting leadership of each partition an automatic placement made.
@@ -158,19 +156,23 @@ pub(crate) struct InitialLeadership {
 /// stays in the replica list and out of the ISR. The placement never puts a
 /// fenced broker or a witness first, so the first replica leads. `inactive` is
 /// [`inactive_brokers`].
-pub(crate) fn automatic_leaderships(
+pub fn automatic_leaderships(
     assignments: &[Vec<krabka_raft::NodeId>],
-    inactive: &std::collections::HashSet<u64>,
+    inactive: &HashSet<u64>,
 ) -> Vec<InitialLeadership> {
+    // Every placement names at least one replica, so no partition is
+    // skipped.
     assignments
         .iter()
-        .map(|replicas| InitialLeadership {
-            leader: replicas[0],
-            isr: replicas
-                .iter()
-                .copied()
-                .filter(|replica| !inactive.contains(&replica.0))
-                .collect(),
+        .filter_map(|replicas| {
+            Some(InitialLeadership {
+                leader: *replicas.first()?,
+                isr: replicas
+                    .iter()
+                    .copied()
+                    .filter(|replica| !inactive.contains(&replica.0))
+                    .collect(),
+            })
         })
         .collect()
 }
@@ -179,10 +181,10 @@ pub(crate) fn automatic_leaderships(
 /// `unavailable` ones (fenced or past their heartbeat deadline) and the ones in
 /// controlled shutdown. `unavailable` is
 /// [`crate::handlers::offline_replicas::unavailable_brokers`].
-pub(crate) fn inactive_brokers(
+pub fn inactive_brokers(
     image: &krabka_metadata::MetadataImage,
-    unavailable: &std::collections::HashSet<u64>,
-) -> std::collections::HashSet<u64> {
+    unavailable: &HashSet<u64>,
+) -> HashSet<u64> {
     let mut inactive = unavailable.clone();
     inactive.extend(controlled_shutdown_brokers(image));
     inactive
@@ -216,10 +218,10 @@ fn controlled_shutdown_brokers(
 /// The error is the `INVALID_REPLICA_ASSIGNMENT` message for the first
 /// partition that has no active broker (Kafka's message), or no active broker
 /// that may lead.
-pub(crate) fn manual_leaderships(
+pub fn manual_leaderships(
     assignments: &[Vec<krabka_raft::NodeId>],
-    inactive: &std::collections::HashSet<u64>,
-    witnesses: &std::collections::HashSet<krabka_raft::NodeId>,
+    inactive: &HashSet<u64>,
+    witnesses: &HashSet<krabka_raft::NodeId>,
     first_partition: i32,
 ) -> Result<Vec<InitialLeadership>, String> {
     let mut partition = first_partition;
@@ -269,10 +271,10 @@ pub(crate) fn manual_leaderships(
 /// clean stop would need one broker more than Kafka needs. `unavailable` is
 /// [`crate::handlers::offline_replicas::unavailable_brokers`]: the brokers
 /// that this node knows to be fenced or past their heartbeat deadline.
-pub(crate) fn automatic_placement_exclusions(
+pub fn automatic_placement_exclusions(
     image: &krabka_metadata::MetadataImage,
-    unavailable: &std::collections::HashSet<u64>,
-) -> std::collections::HashSet<u64> {
+    unavailable: &HashSet<u64>,
+) -> HashSet<u64> {
     let mut excluded = fully_cordoned_brokers(image);
     excluded.extend(
         controlled_shutdown_brokers(image).filter(|node_id| !unavailable.contains(node_id)),
@@ -304,11 +306,11 @@ pub(crate) fn automatic_placement_exclusions(
 /// can ever serve. With no fallback the list stays empty, the placement
 /// cannot be satisfied, and the caller reports `INVALID_REPLICATION_FACTOR`,
 /// which is what a Kafka controller with no registered brokers returns.
-pub(crate) fn site_broker_views(
+pub fn site_broker_views(
     image: &krabka_metadata::MetadataImage,
     local_broker: Option<krabka_raft::NodeId>,
-    excluded: &std::collections::HashSet<u64>,
-    fenced: &std::collections::HashSet<u64>,
+    excluded: &HashSet<u64>,
+    fenced: &HashSet<u64>,
 ) -> Vec<SiteBrokerView> {
     let has_registrations = image.brokers().next().is_some();
     let mut views = image

@@ -1,4 +1,4 @@
-pub(crate) use moxy::{
+pub use moxy::{
     ast::ParseError,
     token::{Span, TokenStream, TokenTree},
 };

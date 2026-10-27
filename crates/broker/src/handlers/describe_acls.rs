@@ -27,6 +27,7 @@ use {
             describe_acls_response::{AclDescription, DescribeAclsResource, DescribeAclsResponse},
         },
     },
+    std::collections::HashMap,
 };
 
 /// The message of a cluster-describe refusal. Kafka's `AuthHelper` writes
@@ -73,7 +74,7 @@ fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsR
     }
 }
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &DescribeAclsRequest,
     _version: i16,
@@ -125,8 +126,7 @@ fn matching_resources<'a>(
     acls: impl Iterator<Item = &'a AclEntry>,
     filter: &AclBindingFilter,
 ) -> Vec<DescribeAclsResource> {
-    let mut by_resource: std::collections::HashMap<ResourcePatternKey, Vec<AclDescription>> =
-        std::collections::HashMap::new();
+    let mut by_resource: HashMap<ResourcePatternKey, Vec<AclDescription>> = HashMap::new();
     for entry in acls.filter(|entry| filter.matches(entry)) {
         let key = ResourcePatternKey {
             resource_type: resource_type_to_wire(entry.resource_type),
@@ -232,7 +232,9 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::{
+        error::BrokerError, test_support::start_broker_with_authorizer_no_audit as start_broker,
+    };
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
@@ -385,7 +387,7 @@ mod tests {
         let result = handle(&broker, &req, VERSION, &ctx);
 
         assert!(
-            let Err(crate::error::BrokerError::Protocol(ProtocolError::InvalidValue(
+            let Err(BrokerError::Protocol(ProtocolError::InvalidValue(
                 "DescribeAclsRequest contains UNKNOWN elements"
             ))) = result
         );

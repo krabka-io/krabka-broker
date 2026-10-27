@@ -10,12 +10,18 @@
 use {
     super::cluster::start_n_node_with,
     crate::support::{NodeIndex, controller_voters},
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId, config::NodeRole,
+    },
     std::{
-        net::SocketAddr,
+        io::ErrorKind,
+        net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+        path::Path,
         time::{Duration, Instant},
+        vec::IntoIter,
     },
     tempfile::TempDir,
+    tokio::{net::TcpListener, time},
 };
 
 /// Shut brokers down in vector order, retaining the original tuple destructuring.
@@ -35,10 +41,8 @@ pub async fn shutdown_cluster(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)
 /// such as `elect_leaders` that drive `add_learner` and `change_membership`
 /// manually and need extra config overrides per broker. `start_n_node`'s
 /// auto-join path cannot support that flow.
-const DEFAULT_ENDPOINTS: [SocketAddr; 1] = [SocketAddr::V4(std::net::SocketAddrV4::new(
-    std::net::Ipv4Addr::LOCALHOST,
-    0,
-))];
+const DEFAULT_ENDPOINTS: [SocketAddr; 1] =
+    [SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))];
 
 #[derive(krabka_macros::FieldDefaults)]
 pub struct ClusterNodeSetup<'a> {
@@ -54,7 +58,7 @@ pub struct ClusterNodeSetup<'a> {
 
 #[bon::builder]
 pub fn broker_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(into, default)] index: NodeIndex,
     #[builder(default = & DEFAULT_ENDPOINTS)] client_addrs: &'_ [SocketAddr],
     #[builder(default = & DEFAULT_ENDPOINTS)] controller_addrs: &'_ [SocketAddr],
@@ -92,7 +96,7 @@ pub struct AddressedNodeSetup {
 
 #[bon::builder]
 pub fn addressed_node_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(into, default = NodeId (1))] node: NodeId,
     #[builder(default = DEFAULT_ENDPOINTS [0])] client: SocketAddr,
     #[builder(default = DEFAULT_ENDPOINTS [0])] controller: SocketAddr,
@@ -126,11 +130,7 @@ impl RoleEndpoints {
 
 pub async fn single_controller_endpoints(
     nodes: usize,
-) -> (
-    RoleEndpoints,
-    std::vec::IntoIter<tokio::net::TcpListener>,
-    std::vec::IntoIter<tokio::net::TcpListener>,
-) {
+) -> (RoleEndpoints, IntoIter<TcpListener>, IntoIter<TcpListener>) {
     let (clients, controllers, client_listeners, controller_listeners) =
         super::bind_and_hold_ports(nodes).await;
     let voters = vec![(1, controllers[0])];
@@ -157,8 +157,8 @@ pub struct RoleNodeSetup {
     pub index: NodeIndex,
     #[default(BootstrapMode::Bootstrap)]
     pub mode: BootstrapMode,
-    #[default(krabka_broker::config::NodeRole::Broker)]
-    pub role: krabka_broker::config::NodeRole,
+    #[default(NodeRole::Broker)]
+    pub role: NodeRole,
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -196,7 +196,7 @@ impl<'a> RoleTopology<'a> {
     ///
     /// # Panics
     /// Panics if the node index or checked broker id is out of range.
-    pub fn config(&self, log_dir: &std::path::Path, setup: RoleNodeSetup) -> BrokerConfig {
+    pub fn config(&self, log_dir: &Path, setup: RoleNodeSetup) -> BrokerConfig {
         let node = self.node_setup(ClusterBootstrapSetup {
             index: setup.index,
             mode: setup.mode,
@@ -220,8 +220,8 @@ impl<'a> RoleTopology<'a> {
 /// Panics if either listener iterator is exhausted or startup fails.
 pub async fn start_held_node(
     config: BrokerConfig,
-    controllers: &mut std::vec::IntoIter<tokio::net::TcpListener>,
-    clients: &mut std::vec::IntoIter<tokio::net::TcpListener>,
+    controllers: &mut IntoIter<TcpListener>,
+    clients: &mut IntoIter<TcpListener>,
     context: &str,
 ) -> BrokerHandle {
     // Keep node startup off the cluster fixture's stack as LogConfig grows.
@@ -273,7 +273,7 @@ pub async fn start_n_node_customized_with_retry(
             Err(error) => {
                 tracing::warn!(attempt, %error, "{label} start failed; retrying");
                 last_err = Some(error);
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
@@ -305,14 +305,14 @@ pub async fn start_reusing_addrs(cfg: &BrokerConfig, what: &str) -> BrokerHandle
             // Hold reused ports before startup can initialize the metadata log.
             // A bind failure then leaves a fresh Join log empty for the retry.
             let controller = if cfg.is_controller() && cfg.controller_listen_addr.port() != 0 {
-                Some(tokio::net::TcpListener::bind(cfg.controller_listen_addr).await?)
+                Some(TcpListener::bind(cfg.controller_listen_addr).await?)
             } else {
                 None
             };
             let mut data = Vec::new();
             for spec in cfg.effective_listeners() {
                 if spec.bind_addr.port() != 0 {
-                    data.push(tokio::net::TcpListener::bind(spec.bind_addr).await?);
+                    data.push(TcpListener::bind(spec.bind_addr).await?);
                 }
             }
             Broker::start_with_listeners(cfg.clone(), controller, data).await
@@ -321,10 +321,10 @@ pub async fn start_reusing_addrs(cfg: &BrokerConfig, what: &str) -> BrokerHandle
         match attempt {
             Ok(handle) => return handle,
             Err(BrokerError::Io(e))
-                if e.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline =>
+                if e.kind() == ErrorKind::AddrInUse && Instant::now() < deadline =>
             {
                 tracing::warn!(%what, error = %e, "vacated port not yet bindable; retrying");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                time::sleep(Duration::from_millis(100)).await;
             }
             Err(e) => panic!("{what}: {e:?}"),
         }
@@ -356,7 +356,7 @@ pub async fn wait_for_all_brokers_registered(
 pub async fn two_controller_followers(
     cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
 ) -> (NodeId, usize, usize) {
-    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let followers: Vec<usize> = (0..cluster.len())
         .filter(|&i| cluster[i].0.node_id() != leader.0)
         .collect();
@@ -373,8 +373,8 @@ pub async fn two_controller_followers(
 /// Panics if either vector is empty or broker startup fails.
 pub async fn start_first_held(
     config: BrokerConfig,
-    clients: Vec<tokio::net::TcpListener>,
-    controllers: Vec<tokio::net::TcpListener>,
+    clients: Vec<TcpListener>,
+    controllers: Vec<TcpListener>,
     context: &str,
 ) -> BrokerHandle {
     let data_listener = clients.into_iter().next().unwrap();
@@ -387,7 +387,7 @@ pub async fn start_first_held(
 /// Wait for this survivor's leader watch to replace the departed node.
 pub async fn await_controller_replacement(handle: &BrokerHandle, departed: NodeId, context: &str) {
     let mut leaders = handle.watch_leader_for_test();
-    tokio::time::timeout(
+    time::timeout(
         Duration::from_secs(30),
         leaders
             .wait_for(|leader| matches!(leader, Some(id) if *id != NodeId(0) && *id != departed)),

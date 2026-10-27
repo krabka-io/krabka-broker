@@ -35,7 +35,7 @@ use {
         create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
     },
     krabka_raft::RaftError,
-    std::collections::BTreeMap,
+    std::collections::{BTreeMap, HashSet},
     uuid::Uuid,
 };
 
@@ -211,7 +211,7 @@ impl<'a> TopicCreation<'a> {
         let unavailable = unavailable_brokers(broker, image).await;
         let inactive = inactive_brokers(image, &unavailable);
         let manual = !topic_req.assignments.is_empty();
-        let no_exclusion = std::collections::HashSet::new();
+        let no_exclusion = HashSet::new();
         let unusable = automatic_placement_exclusions(image, &unavailable);
         let brokers = site_broker_views(
             image,

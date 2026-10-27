@@ -9,6 +9,7 @@
 use {
     crate::{
         broker::Broker,
+        handlers::test_support::replicated_partition,
         test_support::{BrokerEpoch, PartitionEpoch, WireBrokerId, broker_registration},
     },
     krabka_metadata::{
@@ -160,7 +161,7 @@ pub(super) async fn seed_partition(broker: &Broker) {
             }),
             MetadataRecord::V1Partition(PartitionRecord {
                 leader_epoch: krabka_metadata::LeaderEpoch(5),
-                ..crate::handlers::test_support::replicated_partition()
+                ..replicated_partition()
                     .topic("t")
                     .replicas(&[krabka_metadata::NodeId(1)])
                     .call()

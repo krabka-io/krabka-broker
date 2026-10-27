@@ -9,12 +9,13 @@ use {
     assert2::assert,
     krabka_protocol::records::RecordsPayload,
     krabka_units::bytes,
+    std::sync::Arc,
 };
 
 #[tokio::test]
 async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_with(|config| {
-        config.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
+        config.authorizer = Arc::new(AllowAllAuthorizer);
         config.fetch_max_bytes = bytes(1);
     })
     .await;

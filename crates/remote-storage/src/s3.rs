@@ -52,7 +52,7 @@ mod manager;
 #[cfg(test)]
 mod test_support;
 
-use crate::worm::WormArchiver;
+use {crate::worm::WormArchiver, std::fmt};
 
 /// A [`RemoteStorageManager`](crate::RemoteStorageManager) backed by any
 /// S3-compatible object store.
@@ -77,7 +77,7 @@ pub struct S3RemoteStorage {
     pub(crate) worm_bucket: WormBucket,
 }
 
-pub(crate) enum WormBucket {
+pub enum WormBucket {
     S3(S3Config),
     Gcs(GcsConfig),
     Unverified,
@@ -96,12 +96,12 @@ struct WormMode {
 ///
 /// The conversion saturates and does not wrap. A `usize` above `u64::MAX`
 /// cannot occur on any target Krabka builds for.
-pub(crate) fn size_from_usize(bytes: usize) -> ByteSize {
+pub fn size_from_usize(bytes: usize) -> ByteSize {
     ByteSize::from_bytes(u64::try_from(bytes).unwrap_or(u64::MAX))
 }
 
-impl std::fmt::Debug for S3RemoteStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for S3RemoteStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("S3RemoteStorage")
             .field("prefix", &self.prefix)
             // Mode only. The archiver holds live private-key material, so it
@@ -126,7 +126,7 @@ mod tests {
         assert2::{assert, check},
         krabka_units::prelude::ByteSizeExt as _,
         object_store::memory::InMemory,
-        std::sync::Arc,
+        std::{fs, sync::Arc},
         tempfile::TempDir,
     };
 
@@ -160,7 +160,7 @@ mod tests {
         check!(rendered.contains("write_only: true"));
         // Neither the key nor the path to it reaches a log line.
         check!(!rendered.contains(&key_path.display().to_string()));
-        check!(!rendered.contains(&hex::encode(std::fs::read(&key_path).unwrap())));
+        check!(!rendered.contains(&hex::encode(fs::read(&key_path).unwrap())));
 
         let plain = format!("{:?}", rsm(None));
         check!(plain.contains("worm: false"));

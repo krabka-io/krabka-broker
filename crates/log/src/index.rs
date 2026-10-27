@@ -15,8 +15,10 @@ use {
     },
     krabka_verified::log_index::IndexEntry,
     std::{
+        fs,
         fs::{File, OpenOptions},
-        io::{Read, Seek, SeekFrom},
+        io::{ErrorKind, Seek, SeekFrom},
+        mem,
         path::Path,
     },
     zerocopy::{
@@ -35,7 +37,7 @@ struct IndexEntryRaw<Key> {
 /// An explicit sparse-index entry a test writes: a key and its coordinate.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct IndexSeed<Key> {
+pub struct IndexSeed<Key> {
     pub(crate) key: Key,
     pub(crate) coordinate: u32,
 }
@@ -60,12 +62,13 @@ mod offset;
 mod time;
 
 #[cfg(test)]
-pub(crate) use self::time::TimeIndexEntry;
-pub(crate) use self::{offset::OFFSET_ENTRY_SIZE, time::TIME_ENTRY_SIZE};
+pub use self::time::TimeIndexEntry;
 pub use self::{
-    offset::{OffsetIndex, OffsetIndexEntry},
-    time::TimeIndex,
+    offset::{OFFSET_ENTRY_SIZE, OffsetIndex, OffsetIndexEntry},
+    time::{TIME_ENTRY_SIZE, TimeIndex},
 };
+#[cfg(test)]
+use std::path::PathBuf;
 
 /// An index file opened for read and write, with the bytes it holds.
 struct OpenedFile {
@@ -74,14 +77,13 @@ struct OpenedFile {
 }
 
 fn open_index_file(path: &Path) -> Result<OpenedFile, LogError> {
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    let bytes = fs::read(path)?;
     Ok(OpenedFile { file, bytes })
 }
 
@@ -102,9 +104,12 @@ where
     Raw: FromBytes + KnownLayout + Immutable + Unaligned,
 {
     let OpenedFile { file, bytes: buf } = open_index_file(path)?;
-    let entry_size = std::mem::size_of::<Raw>();
+    let entry_size = mem::size_of::<Raw>();
     let truncated_len = (buf.len() / entry_size) * entry_size;
-    let raws = <[Raw]>::ref_from_bytes(&buf[..truncated_len]).expect(invariant);
+    let raws = buf
+        .get(..truncated_len)
+        .and_then(|whole| <[Raw]>::ref_from_bytes(whole).ok())
+        .ok_or_else(|| LogError::Corrupt(format!("{}: {invariant}", path.display())))?;
     let entries = increasing_index_entries(raws, decode);
     tracing::Span::current().record("entries", entries.len());
     Ok(OpenedIndex { file, entries })
@@ -163,7 +168,7 @@ fn truncate_index<Key>(
 
 /// Rewrite retained sidecar entries only when truncation changed the set.
 /// The caller publishes the new entries only after the rewrite succeeds.
-pub(crate) fn rewrite_retained_entries<T: Copy>(
+pub fn rewrite_retained_entries<T: Copy>(
     entries: &[T],
     keep: impl Fn(&T) -> bool,
     rewrite: impl FnOnce(&[T]) -> Result<(), LogError>,
@@ -177,7 +182,7 @@ pub(crate) fn rewrite_retained_entries<T: Copy>(
 }
 
 /// Read a fixed-width sidecar, or `None` when the file is missing.
-pub(crate) fn read_sidecar<Raw, Entries>(
+pub fn read_sidecar<Raw, Entries>(
     path: &Path,
     name: &str,
     invariant: &str,
@@ -186,10 +191,10 @@ pub(crate) fn read_sidecar<Raw, Entries>(
 where
     Raw: FromBytes + KnownLayout + Immutable + Unaligned,
 {
-    let entry_size = std::mem::size_of::<Raw>();
-    let bytes = match std::fs::read(path) {
+    let entry_size = mem::size_of::<Raw>();
+    let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if !bytes.len().is_multiple_of(entry_size) {
@@ -199,21 +204,23 @@ where
             bytes.len(),
         )));
     }
-    decode(<[Raw]>::ref_from_bytes(&bytes).expect(invariant)).map(Some)
+    let raws = <[Raw]>::ref_from_bytes(&bytes)
+        .map_err(|_| LogError::Corrupt(format!("{name} {}: {invariant}", path.display())))?;
+    decode(raws).map(Some)
 }
 
 /// A sparse index, the path of its file, and the temporary directory that
 /// holds it.
 #[cfg(test)]
-pub(crate) struct IndexFixture<Index> {
+pub struct IndexFixture<Index> {
     pub(crate) dir: tempfile::TempDir,
-    pub(crate) path: std::path::PathBuf,
+    pub(crate) path: PathBuf,
     pub(crate) index: Index,
 }
 
 /// Open a sparse-index fixture while keeping its directory alive beside its handle.
 #[cfg(test)]
-pub(crate) fn index_fixture<Index>(
+pub fn index_fixture<Index>(
     name: &str,
     open: impl FnOnce(&Path) -> Result<Index, LogError>,
 ) -> IndexFixture<Index> {
@@ -224,7 +231,7 @@ pub(crate) fn index_fixture<Index>(
 }
 
 /// Open a sidecar for a complete rewrite, retaining the established create/truncate flags.
-pub(crate) fn rewrite_sidecar_file(path: &Path) -> Result<File, LogError> {
+pub fn rewrite_sidecar_file(path: &Path) -> Result<File, LogError> {
     OpenOptions::new()
         .create(true)
         .write(true)
@@ -244,6 +251,7 @@ mod derived_operations_tests {
         assert2::assert,
         std::{
             fs::File,
+            io::{self, ErrorKind},
             sync::{
                 Arc, Mutex,
                 atomic::{AtomicBool, Ordering},
@@ -258,11 +266,11 @@ mod derived_operations_tests {
     }
 
     impl LogIo for SyncProbe {
-        fn sync_file(&self, target: IoTarget, _: &File) -> std::io::Result<()> {
+        fn sync_file(&self, target: IoTarget, _: &File) -> io::Result<()> {
             self.calls.lock().unwrap().push(target);
             if self.fail.load(Ordering::Relaxed) {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
+                Err(io::Error::new(
+                    ErrorKind::PermissionDenied,
                     "index sync refused",
                 ))
             } else {
@@ -277,14 +285,14 @@ mod derived_operations_tests {
         let mut offset = OffsetIndex::open(&directory.path().join("probe.index")).unwrap();
         let mut time = TimeIndex::open(&directory.path().join("probe.timeindex")).unwrap();
         let probe = Arc::new(SyncProbe::default());
-        offset.set_io(probe.clone());
-        time.set_io(probe.clone());
+        offset.set_io(Arc::<SyncProbe>::clone(&probe));
+        time.set_io(Arc::<SyncProbe>::clone(&probe));
         for fail in [false, true] {
             probe.fail.store(fail, Ordering::Relaxed);
             for result in [offset.flush(), time.flush()] {
                 if fail {
                     assert!(matches!(result, Err(LogError::Io(error))
-                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                        if error.kind() == ErrorKind::PermissionDenied
                             && error.to_string() == "index sync refused"));
                 } else {
                     assert!(result.is_ok());

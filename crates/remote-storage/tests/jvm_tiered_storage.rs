@@ -5,6 +5,7 @@
 //! ```text
 //! cargo test -p krabka-remote-storage --test jvm_tiered_storage -- --ignored --nocapture
 //! ```
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
@@ -21,6 +22,7 @@ use {
     sha2::{Digest as _, Sha256},
     std::{
         fmt::Write as _,
+        fs, iter,
         path::Path,
         process::{Command, Output},
     },
@@ -213,7 +215,7 @@ fn download_test_jar(destination: &Path) {
         ]),
         "download Kafka storage test jar",
     );
-    let bytes = std::fs::read(destination).expect("read downloaded Kafka test jar");
+    let bytes = fs::read(destination).expect("read downloaded Kafka test jar");
     let mut digest = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
         write!(digest, "{byte:02x}").expect("writing to String cannot fail");
@@ -288,9 +290,7 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let details = RemoteLogSegmentDetails::new(
         seg_size,
         RemoteLogSegmentState::CopySegmentStarted,
-        [(LeaderEpoch(0), export.base_offset.0)]
-            .into_iter()
-            .collect(),
+        iter::once((LeaderEpoch(0), export.base_offset.0)).collect(),
     );
     let metadata = RemoteLogSegmentMetadata::new(
         RemoteLogSegmentId::new(TopicIdPartition::new(topic_id, "orders", 0), segment_id),
@@ -307,7 +307,7 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let storage_root = shared.path().join("kafka-tiered-storage");
     let storage = LocalTieredStorage::new(&storage_root);
     let leader_epoch_path = local.path().join("remote-leader-epoch-checkpoint");
-    std::fs::write(&leader_epoch_path, b"0\n1\n0 0\n").unwrap();
+    fs::write(&leader_epoch_path, b"0\n1\n0 0\n").unwrap();
     storage
         .copy_log_segment_data(
             &metadata,
@@ -319,17 +319,14 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
 
     let work = tempfile::tempdir().expect("JVM work tempdir");
     let libs = work.path().join("libs");
-    std::fs::create_dir(&libs).unwrap();
+    fs::create_dir(&libs).unwrap();
     kafka_libs(&libs);
     let test_jar = work.path().join("kafka-storage-4.0.0-test.jar");
     download_test_jar(&test_jar);
     let source = work.path().join("JvmTieredStorageProbe.java");
-    std::fs::write(&source, JAVA_PROBE).unwrap();
+    fs::write(&source, JAVA_PROBE).unwrap();
     let classpath = format!("{}/*:{}", libs.display(), test_jar.display());
-    let segment_size = std::fs::metadata(&export.log_path)
-        .unwrap()
-        .len()
-        .to_string();
+    let segment_size = fs::metadata(&export.log_path).unwrap().len().to_string();
     let output = run(
         Command::new("java")
             .current_dir(work.path())

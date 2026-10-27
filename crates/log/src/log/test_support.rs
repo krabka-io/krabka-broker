@@ -18,9 +18,15 @@ use {
     },
     bytes::Bytes,
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
-    krabka_protocol::records::{Attributes, Record, RecordBatch},
+    krabka_protocol::records::{Attributes, Record, RecordBatch, TimestampType},
     krabka_units::prelude::{ByteSize, bytes, gibibytes},
-    std::{fs::File, io::Write as _, time::SystemTime},
+    std::{
+        fs::{self, File},
+        io::{self, ErrorKind, Write as _},
+        path::Path,
+        sync::Arc,
+        time::SystemTime,
+    },
     tempfile::tempdir,
 };
 
@@ -113,12 +119,7 @@ pub fn gzip_value(batch: &mut RecordBatch, length: usize) {
     batch.records[0].value = Some(Bytes::from(vec![7_u8; length]));
 }
 
-pub fn synced_sample_log(
-    dir: &std::path::Path,
-    config: LogConfig,
-    batches: usize,
-    records: i32,
-) -> Log {
+pub fn synced_sample_log(dir: &Path, config: LogConfig, batches: usize, records: i32) -> Log {
     let mut log = Log::open(dir, config).unwrap();
     append_samples(&mut log, batches, records);
     log.sync().unwrap();
@@ -134,7 +135,7 @@ pub fn stamped_rolling_log(first: u64, step: u64, batches: usize) -> TempLog {
 
 /// Install an explicit monotonic stamp sequence on an existing log.
 pub fn install_stamps(log: &mut Log, first: u64, step: u64) {
-    log.set_stamp_source(std::sync::Arc::new(MonotonicStampSource::new(first, step)))
+    log.set_stamp_source(Arc::new(MonotonicStampSource::new(first, step)))
         .unwrap();
 }
 
@@ -180,7 +181,7 @@ pub fn check_front_evicted_stamps(log: &Log) {
 
 /// Read every aborted interval from the caller's explicit sidecar filename.
 #[cfg(test)]
-pub fn transaction_entries(dir: &std::path::Path, filename: &str) -> Vec<AbortedTxn> {
+pub fn transaction_entries(dir: &Path, filename: &str) -> Vec<AbortedTxn> {
     use crate::txn_index::TxnIndex;
 
     TxnIndex::open(dir.join(filename))
@@ -190,7 +191,7 @@ pub fn transaction_entries(dir: &std::path::Path, filename: &str) -> Vec<Aborted
 }
 
 /// Read the entire durable stamp sidecar of one segment.
-pub fn stamp_entries(dir: &std::path::Path, base: i64) -> Vec<StampEntry> {
+pub fn stamp_entries(dir: &Path, base: i64) -> Vec<StampEntry> {
     StampIndex::open(dir.join(format!("{base:020}.stampindex")))
         .unwrap()
         .entries()
@@ -217,8 +218,8 @@ pub fn compacting_segments() -> LogConfig {
 pub fn compact_test_log() -> TempLog { configured_test_log(compacting_segments()) }
 
 /// The `.cleaned` files in `dir`: a pass's output that was never promoted.
-pub fn cleaned_files(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
+pub fn cleaned_files(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|name| name.ends_with(".cleaned"))
@@ -228,7 +229,7 @@ pub fn cleaned_files(dir: &std::path::Path) -> Vec<String> {
 }
 
 /// Change the roll and compaction grouping cap without changing other options.
-pub fn set_segment_size(log: &mut Log, size: ByteSize) {
+pub fn set_segment_size(log: &Log, size: ByteSize) {
     let mut config = log.config_snapshot();
     config.segment_size = size;
     log.set_config(config);
@@ -248,9 +249,9 @@ pub fn append_keyed_samples(log: &mut Log, batches: i64, key: impl Fn(i64) -> St
 }
 
 /// Write the allowed prefix, then report a full disk when no budget remains.
-pub fn write_with_budget(file: &File, buf: &[u8], remaining: &mut usize) -> std::io::Result<usize> {
+pub fn write_with_budget(file: &File, buf: &[u8], remaining: &mut usize) -> io::Result<usize> {
     if *remaining == 0 {
-        return Err(std::io::ErrorKind::StorageFull.into());
+        return Err(ErrorKind::StorageFull.into());
     }
     let written = (&*file).write(&buf[..buf.len().min(*remaining)])?;
     *remaining -= written;
@@ -258,14 +259,14 @@ pub fn write_with_budget(file: &File, buf: &[u8], remaining: &mut usize) -> std:
 }
 
 /// A log under `dir` opened with [`tiny_segments`].
-pub fn rolling_test_log(dir: &std::path::Path) -> Log { Log::open(dir, tiny_segments()).unwrap() }
+pub fn rolling_test_log(dir: &Path) -> Log { Log::open(dir, tiny_segments()).unwrap() }
 
 /// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
 /// configures one, with everything else at its default.
 pub fn log_append_time_log() -> TempLog {
     let dir = tempdir().unwrap();
     let log = Log::open(dir.path(), LogConfig {
-        message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+        message_timestamp_type: TimestampType::LogAppendTime,
         ..LogConfig::default()
     })
     .unwrap();
@@ -566,7 +567,7 @@ pub fn compaction_ctx() -> CompactionContext {
 /// Build a log rolled into several sealed segments under `dir`. This
 /// mirrors the `remote_log_manager` test helper and stays local to this
 /// module.
-pub fn rolled_log(dir: &std::path::Path, extra: &LogConfig) -> Log {
+pub fn rolled_log(dir: &Path, extra: &LogConfig) -> Log {
     let mut log = Log::open(dir, LogConfig {
         segment_size: bytes(200),
         ..extra.clone()
@@ -599,13 +600,13 @@ pub fn ts_batch(ts: i64) -> RecordBatch {
 
 /// Append through the same leader/follower paths as the broker.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum AppendPath {
+pub enum AppendPath {
     Leader,
     Follower,
     Verbatim,
 }
 
-pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatch) {
+pub fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatch) {
     let log_end = log.log_end_offset();
     match path {
         AppendPath::Leader => {
@@ -622,7 +623,7 @@ pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatc
     }
 }
 
-pub fn snapshot_offsets(dir: &std::path::Path) -> Vec<Offset> {
+pub fn snapshot_offsets(dir: &Path) -> Vec<Offset> {
     list(dir)
         .unwrap()
         .into_iter()
@@ -638,7 +639,7 @@ pub fn check_contiguous_exports(exports: &[super::SegmentExport]) {
 }
 
 /// Several sealed segments and an active segment, with identical batch timestamps.
-pub(crate) fn rolled_sample_log(dir: &std::path::Path) -> Log {
+pub fn rolled_sample_log(dir: &Path) -> Log {
     let mut log = segmented_log(dir, krabka_units::kibibytes(1));
     append_samples(&mut log, 40, 4);
     assert2::check!(

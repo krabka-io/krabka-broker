@@ -27,9 +27,9 @@
 //! thaw needs an approved proposal and a signature, because a freeze that one
 //! credential can lift is only as strong as that credential.
 
-pub(crate) mod handlers;
-pub(crate) mod resolve;
-pub(crate) mod signing;
+pub mod handlers;
+pub mod resolve;
+pub mod signing;
 
 use {crate::internal_topics::INTERNAL_TOPIC_PREFIX, krabka_metadata::PatternType};
 
@@ -38,7 +38,7 @@ use {crate::internal_topics::INTERNAL_TOPIC_PREFIX, krabka_metadata::PatternType
 /// It is the lowercase spelling of Kafka's ACL pattern type, so an operator
 /// who knows `kafka-acls` reads the same vocabulary in an error message, in an
 /// audit event, and in a break-glass proposal target.
-pub(crate) fn pattern_type_name(pattern_type: PatternType) -> &'static str {
+pub fn pattern_type_name(pattern_type: PatternType) -> &'static str {
     match pattern_type {
         PatternType::Literal => "literal",
         PatternType::Prefixed => "prefixed",
@@ -51,7 +51,7 @@ pub(crate) fn pattern_type_name(pattern_type: PatternType) -> &'static str {
 /// target as `"<pattern>:<scope>"`. Both sides of the check build the string
 /// here, so a proposal for `prefixed:tenant-a.` can never authorize a thaw of
 /// the literal topic `tenant-a.`.
-pub(crate) fn freeze_target(pattern_type: PatternType, scope: &str) -> String {
+pub fn freeze_target(pattern_type: PatternType, scope: &str) -> String {
     format!("{}:{scope}", pattern_type_name(pattern_type))
 }
 
@@ -67,7 +67,7 @@ pub(crate) fn freeze_target(pattern_type: PatternType, scope: &str) -> String {
 /// `a_freeze_scope_covers_every_internal_topic` holds the two together, and
 /// [`crate::internal_topics::validate_audit_topic_name`] does the same for the
 /// audit log, whose name is configured rather than fixed.
-pub(crate) fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bool {
+pub fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bool {
     if scope.starts_with(INTERNAL_TOPIC_PREFIX) {
         return true;
     }

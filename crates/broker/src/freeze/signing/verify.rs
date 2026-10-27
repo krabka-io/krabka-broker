@@ -18,7 +18,7 @@ use {
 };
 
 /// Everything outside the record that a signature check reads.
-pub(crate) struct FreezeSignatureCheck<'a> {
+pub struct FreezeSignatureCheck<'a> {
     /// The operator key trust set from `[[operator_keys]]`.
     pub keys: &'a OperatorKeys,
     /// The cluster this broker belongs to, in string form.
@@ -49,7 +49,7 @@ pub(crate) struct FreezeSignatureCheck<'a> {
 ///
 /// Returns the [`SignatureRefusal`] of the first rule that fails. Every one of
 /// them carries `OPERATOR_SIGNATURE_INVALID` (1009).
-pub(crate) fn verify_freeze_signature(
+pub fn verify_freeze_signature(
     check: &FreezeSignatureCheck<'_>,
     record: &TopicFreezeRecord,
 ) -> Result<(), SignatureRefusal> {

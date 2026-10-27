@@ -31,7 +31,7 @@ use {
         name,
     },
     krabka_ids::Offset,
-    std::{fs, path::Path},
+    std::{fs, io::ErrorKind, path::Path},
 };
 
 /// Read the checkpointed log start offset. A missing file gives `None`, which
@@ -43,11 +43,11 @@ use {
 /// and [`LogError::Io`] when the read itself fails. A trim that a reopen
 /// silently dropped serves records an operator deleted, so a checkpoint that
 /// cannot be read is an error rather than a fall back to the derived start.
-pub(crate) fn read(dir: &Path) -> Result<Option<Offset>, LogError> {
+pub fn read(dir: &Path) -> Result<Option<Offset>, LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(LogError::Io(e)),
     };
     parse(&contents).map(Some)
@@ -80,7 +80,7 @@ fn parse(contents: &str) -> Result<Offset, LogError> {
 /// may be no later `sync` to pay the debt: a crash would drop the rename and
 /// serve the deleted records again. A trim is an administrative operation, so
 /// the extra fsync costs nothing that matters.
-pub(crate) fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
+pub fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let tmp = path.with_extension("tmp");
     write_atomic(
@@ -96,10 +96,10 @@ pub(crate) fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Res
 
 /// Drop the checkpoint. A log that was reset holds no records at all, so the
 /// base offset of its fresh active segment is the whole truth about its start.
-pub(crate) fn remove(dir: &Path) -> Result<(), LogError> {
+pub fn remove(dir: &Path) -> Result<(), LogError> {
     match fs::remove_file(name::log_start_offset_checkpoint_path(dir)) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(LogError::Io(e)),
     }
 }

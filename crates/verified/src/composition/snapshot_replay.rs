@@ -43,7 +43,7 @@ pub(super) fn truncated_snapshot_selection_bounds_replay(
         ..range
     };
     let selected = producer_snapshot_latest_index(offsets, shortened);
-    let snapshot = selected.map(|index| offsets[index]);
+    let snapshot = selected.and_then(|index| offsets.get(index).copied());
     let cursor = producer_snapshot_replay_start(shortened, snapshot)?;
     Some((selected, cursor))
 }
@@ -94,7 +94,7 @@ pub(super) fn corrupt_snapshot_fallback_preserves_replay(
         ==> candidates@[j] == offsets@[j] && origins@[j]@ == j)]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        candidates.push(offsets[i]);
+        candidates.push(*offsets.get(i).ok_or(offsets.len())?);
         origins.push(i);
         i += 1;
     }
@@ -109,11 +109,13 @@ pub(super) fn corrupt_snapshot_fallback_preserves_replay(
             let cursor = producer_snapshot_replay_start(shortened, None).ok_or(offsets.len())?;
             return Ok((None, cursor));
         };
-        let origin = origins[selected];
-        match outcomes[origin] {
+        let &origin = origins.get(selected).ok_or(offsets.len())?;
+        let &outcome = outcomes.get(origin).ok_or(offsets.len())?;
+        match outcome {
             0 => {
-                let cursor = producer_snapshot_replay_start(shortened, Some(offsets[origin]))
-                    .ok_or(offsets.len())?;
+                let &offset = offsets.get(origin).ok_or(offsets.len())?;
+                let cursor =
+                    producer_snapshot_replay_start(shortened, Some(offset)).ok_or(offsets.len())?;
                 return Ok((Some(origin), cursor));
             }
             2 => return Err(origin),

@@ -20,8 +20,10 @@ use {
         log_dir_id::LogDirIds,
         metadata_source::MetadataSource,
     },
+    krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
     krabka_units::convert::TimeExt as _,
     std::sync::Arc,
+    tokio::time,
 };
 
 fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerRegistrationRecord {
@@ -77,8 +79,8 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
 fn self_witness_record(config: &BrokerConfig) -> krabka_metadata::MetadataRecord {
     krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
         node_id: config.node_id,
-        config_name: BROKER_WITNESS.to_string(),
-        config_value: config.is_witness().then(|| WITNESS_TRUE.to_string()),
+        config_name: BROKER_WITNESS.to_owned(),
+        config_value: config.is_witness().then(|| WITNESS_TRUE.to_owned()),
     })
 }
 
@@ -104,7 +106,7 @@ fn stretch_default_records(config: &BrokerConfig) -> Vec<krabka_metadata::Metada
         .map(|profile| {
             krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
                 node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                config_name: STRETCH_PREFERRED_LEADER_SITE.to_string(),
+                config_name: STRETCH_PREFERRED_LEADER_SITE.to_owned(),
                 config_value: Some(profile.preferred_leader_site.clone()),
             })
         })
@@ -160,7 +162,7 @@ async fn submit_startup_records(
             Err(error) => match delay {
                 Some(delay) => {
                     tracing::warn!(attempt = attempt_index + 1, %error, operation, "startup metadata submit retry");
-                    tokio::time::sleep(delay).await;
+                    time::sleep(delay).await;
                 }
                 None => {
                     return Err(BrokerError::Startup(format!(
@@ -199,9 +201,9 @@ fn controller_registration_update(
     image: &krabka_metadata::MetadataImage,
     registration: &krabka_metadata::ControllerRegistrationRecord,
 ) -> Option<krabka_metadata::MetadataRecord> {
-    let registration_supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL
-    });
+    let registration_supported = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= ONLINE_DOWNGRADE_MIN_LEVEL);
     (registration_supported && image.controller(registration.node_id) != Some(registration))
         .then(|| krabka_metadata::MetadataRecord::V1ControllerRegistration(registration.clone()))
 }
@@ -248,7 +250,7 @@ pub(super) fn spawn_deferred_controller_registration(
                 }
                 Err(error) => {
                     tracing::warn!(%error, "deferred controller registration retry");
-                    tokio::time::sleep(retry_backoff).await;
+                    time::sleep(retry_backoff).await;
                 }
             }
         }
@@ -380,7 +382,7 @@ async fn wait_for_self_registration_published(
             }
         }
     };
-    tokio::time::timeout(
+    time::timeout(
         config.startup_leader_wait_timeout.to_std(),
         wait_for_publish,
     )

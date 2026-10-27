@@ -3,7 +3,7 @@
 
 use {
     krabka_units::prelude::*,
-    tokio::time::{Instant, interval_at},
+    tokio::time::{Instant, Interval, MissedTickBehavior, interval_at},
 };
 
 /// The slowest rate the pacer runs at. A scenario that asks for less, or for
@@ -14,11 +14,13 @@ use {
 /// documentation has to be able to follow it to the number.
 pub const MIN_RATE: Frequency = per_sec(1);
 
-/// A simple steady-rate pacer. Every `await_token().await` returns after
-/// the bucket has accumulated one whole token. The schedule is pinned to
-/// the pacer's creation time, so per-call drift cannot accumulate.
+/// A simple steady-rate pacer.
+///
+/// Every `await_token().await` returns after the bucket has accumulated one
+/// whole token. The schedule is pinned to the pacer's creation time, so
+/// per-call drift cannot accumulate.
 pub struct Pacer {
-    inner: tokio::time::Interval,
+    inner: Interval,
 }
 
 impl Pacer {
@@ -32,7 +34,7 @@ impl Pacer {
         // If a slow consumer falls behind, deliver one tick per call
         // rather than burst-catching-up to "now" — keeps the per-message
         // latency comparable across runs.
-        inner.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        inner.set_missed_tick_behavior(MissedTickBehavior::Delay);
         Self { inner }
     }
 

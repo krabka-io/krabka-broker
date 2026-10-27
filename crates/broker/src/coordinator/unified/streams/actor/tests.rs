@@ -26,9 +26,25 @@ use {
             },
             test_support::{assert_single_member_limit_with_log, heartbeat_write_failures},
         },
-        test_support::{FakeMetadataSource, streams_join_request},
+        test_support::{
+            FakeMetadataSource, broker_registration, source_to_repartition, streams_join_request,
+        },
     },
     assert2::{assert, check},
+    krabka_protocol::{
+        owned::{
+            common::{
+                streams_group_heartbeat_request::task_ids::TaskIds as RequestTaskIds,
+                streams_group_heartbeat_response::{
+                    status::Status, task_ids::TaskIds as ResponseTaskIds,
+                },
+            },
+            streams_group_heartbeat_request::{MAX_VERSION, Topology},
+        },
+        records::RecordBatch,
+    },
+    std::{collections::BTreeMap, sync::Arc, time::Duration},
+    tokio::time::sleep,
 };
 
 fn partition_indices(partitions: Option<Vec<i32>>) -> Option<Vec<krabka_ids::PartitionIndex>> {
@@ -108,12 +124,7 @@ async fn heartbeat_result(
     handle: &StreamsGroupActorHandle,
     req: StreamsGroupHeartbeatRequest,
 ) -> StreamsHeartbeatResult {
-    heartbeat_result_at(
-        handle,
-        req,
-        krabka_protocol::owned::streams_group_heartbeat_request::MAX_VERSION,
-    )
-    .await
+    heartbeat_result_at(handle, req, MAX_VERSION).await
 }
 
 async fn heartbeat(
@@ -419,7 +430,7 @@ async fn leave_removes_member() {
     }
     .into_batch("g", 0)
     .unwrap();
-    let key_values = |batch: &krabka_protocol::records::RecordBatch| -> Vec<_> {
+    let key_values = |batch: &RecordBatch| -> Vec<_> {
         batch
             .records
             .iter()
@@ -534,7 +545,7 @@ fn image_of(broker_rack: Option<&str>, topics: &[ImageTopic]) -> krabka_metadata
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
             rack: broker_rack.map(str::to_owned),
-            ..crate::test_support::broker_registration(broker)
+            ..broker_registration(broker)
         },
     )];
     for topic in topics {
@@ -575,9 +586,7 @@ struct SingleSubtopologySetup {
 /// A topology with one subtopology `0` that reads `in` and, with a state store,
 /// keeps the changelog topic `store-changelog`.
 #[bon::builder]
-fn one_subtopology(
-    #[builder(default)] storage: TopologyStorage,
-) -> krabka_protocol::owned::streams_group_heartbeat_request::Topology {
+fn one_subtopology(#[builder(default)] storage: TopologyStorage) -> Topology {
     use krabka_protocol::owned::{
         common::streams_group_heartbeat_request::topic_info::TopicInfo,
         streams_group_heartbeat_request::{Subtopology, Topology},
@@ -619,9 +628,7 @@ struct HeartbeatRow {
     epoch: i32,
     /// The active tasks, when the response sends the task lists.
     active: Option<Vec<i32>>,
-    status: Option<
-        Vec<krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status>,
-    >,
+    status: Option<Vec<Status>>,
 }
 
 /// An image that holds only the topic `in`.
@@ -732,7 +739,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
     for row in rows {
         let source = Arc::new(FakeMetadataSource::builder().image(row.initial).build());
         let (coord, _log) = make_coordinator();
-        coord.set_metadata_source(source.clone());
+        coord.set_metadata_source(Arc::<FakeMetadataSource>::clone(&source));
         let handle = coord.get_or_create_streams("g");
         let request = |member_epoch, rack: &str, process: &str| StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -759,13 +766,11 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             HeartbeatChange::Process(process) => ("rack-a", process),
         };
         let owned = row.owned_active.map(|partitions| {
-            vec![
-                krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds {
-                    subtopology_id: "0".into(),
-                    partitions,
-                    ..Default::default()
-                },
-            ]
+            vec![RequestTaskIds {
+                subtopology_id: "0".into(),
+                partitions,
+                ..Default::default()
+            }]
         });
         let resp = heartbeat(&handle, StreamsGroupHeartbeatRequest {
             standby_tasks: owned.as_ref().map(|_| vec![]),
@@ -795,7 +800,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
 
     let source = input_topic_source(2);
     let (coord, log) = make_coordinator();
-    coord.set_metadata_source(source.clone());
+    coord.set_metadata_source(Arc::<FakeMetadataSource>::clone(&source));
     let handle = coord.get_or_create_streams("g");
     let request = |member_id: &str, member_epoch| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -829,7 +834,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
         })
         .collect();
     targets.sort();
-    check!(targets == vec!["m1".to_string(), "m2".to_string()]);
+    check!(targets == vec!["m1".to_owned(), "m2".to_owned()]);
 }
 
 /// A seeded group whose internal topics are missing asks for them again on
@@ -882,7 +887,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
                 name: "store-changelog".into(),
                 partitions: 1,
                 replication_factor: 0,
-                configs: std::collections::BTreeMap::new(),
+                configs: BTreeMap::new(),
             }]
     );
     let expected = StreamsGroupHeartbeatResponse {
@@ -1089,7 +1094,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         let handle = coord.get_or_create_streams("g");
         let topology = Topology {
             epoch: 1,
-            subtopologies: vec![crate::test_support::source_to_repartition(), Subtopology {
+            subtopologies: vec![source_to_repartition(), Subtopology {
                 subtopology_id: "1".into(),
                 source_topics: vec!["customers".into()],
                 repartition_source_topics: vec![TopicInfo {
@@ -1128,7 +1133,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             name: name.into(),
             partitions,
             replication_factor: 0,
-            configs: std::collections::BTreeMap::new(),
+            configs: BTreeMap::new(),
         };
         check!(
             result.creatable_topics
@@ -1309,7 +1314,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     epoch,
                     subtopologies: vec![Subtopology {
                         subtopology_id: "0".into(),
-                        source_topics: row.sources.iter().map(|s| (*s).to_string()).collect(),
+                        source_topics: row.sources.iter().map(|s| (*s).to_owned()).collect(),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -1594,11 +1599,11 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             for _ in 0..100 {
                 if !describe_member_ids(&handle)
                     .await
-                    .contains(&"m1".to_string())
+                    .contains(&"m1".to_owned())
                 {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(50)).await;
             }
         }
 
@@ -1701,7 +1706,7 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
             .into_iter()
             .map(|m| m.member_id)
             .collect();
-        check!(members == vec!["m1".to_string()], "{name}");
+        check!(members == vec!["m1".to_owned()], "{name}");
     }
 }
 
@@ -1741,13 +1746,11 @@ async fn a_static_member_follows_kafka_static_membership() {
     let assigned = |member_id: &str, member_epoch| StreamsGroupHeartbeatResponse {
         member_id: member_id.into(),
         status: Some(vec![]),
-        active_tasks: Some(vec![
-            krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds {
-                subtopology_id: "0".into(),
-                partitions: vec![0],
-                ..Default::default()
-            },
-        ]),
+        active_tasks: Some(vec![ResponseTaskIds {
+            subtopology_id: "0".into(),
+            partitions: vec![0],
+            ..Default::default()
+        }]),
         standby_tasks: Some(vec![]),
         warmup_tasks: Some(vec![]),
         ..super::response::base_resp(codes::NONE, member_epoch, &config)
@@ -1763,7 +1766,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                 ..Default::default()
             },
             vec![DescribedMember {
-                member_id: "m1".to_string(),
+                member_id: "m1".to_owned(),
                 member_epoch: -2,
                 active: vec![0],
             }],
@@ -1773,7 +1776,7 @@ async fn a_static_member_follows_kafka_static_membership() {
             vec![beat("m1", -2, "i1"), join("m2", "i1")],
             assigned("m2", 2),
             vec![DescribedMember {
-                member_id: "m2".to_string(),
+                member_id: "m2".to_owned(),
                 member_epoch: 2,
                 active: vec![0],
             }],
@@ -1790,7 +1793,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                 ),
             ),
             vec![DescribedMember {
-                member_id: "m1".to_string(),
+                member_id: "m1".to_owned(),
                 member_epoch: 2,
                 active: vec![0],
             }],
@@ -1803,7 +1806,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                 Some("Static member m2 with instance id i1 was fenced by member m1.".into()),
             ),
             vec![DescribedMember {
-                member_id: "m1".to_string(),
+                member_id: "m1".to_owned(),
                 member_epoch: 2,
                 active: vec![0],
             }],
@@ -1816,7 +1819,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                 Some("Instance id i9 is unknown.".into()),
             ),
             vec![DescribedMember {
-                member_id: "m1".to_string(),
+                member_id: "m1".to_owned(),
                 member_epoch: 2,
                 active: vec![0],
             }],
@@ -1827,12 +1830,12 @@ async fn a_static_member_follows_kafka_static_membership() {
             assigned("m2", 3),
             vec![
                 DescribedMember {
-                    member_id: "m2".to_string(),
+                    member_id: "m2".to_owned(),
                     member_epoch: 3,
                     active: vec![0],
                 },
                 DescribedMember {
-                    member_id: "m3".to_string(),
+                    member_id: "m3".to_owned(),
                     member_epoch: 3,
                     active: vec![],
                 },
@@ -1843,7 +1846,7 @@ async fn a_static_member_follows_kafka_static_membership() {
             vec![join("m2", "i2"), beat("m1", -2, "i1"), join("m2", "i1")],
             assigned("m2", 4),
             vec![DescribedMember {
-                member_id: "m2".to_string(),
+                member_id: "m2".to_owned(),
                 member_epoch: 4,
                 active: vec![0],
             }],
@@ -2009,7 +2012,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             Err(codes::STALE_MEMBER_EPOCH),
         ),
     ];
-    let partitions = [("in".to_string(), 0)];
+    let partitions = [("in".to_owned(), 0)];
     for (row, state, member_id, group_instance_id, member_epoch, fence, expected) in rows {
         let identity = CommitIdentity {
             member_id,
@@ -2067,7 +2070,7 @@ fn subscribed_topics_follow_kafka_streams_group() {
     live.phase = StreamsGroupStatePhase::Stable;
     let empty = StreamsGroupState::new("g");
     let named = |topics: &[&str]| {
-        SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
+        SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_owned()).collect())
     };
 
     // (row, group, topology, expected)
@@ -2161,12 +2164,12 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
     };
     let mut group = StreamsGroupState::new("g");
     let mut member = epoch_five_member();
-    member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
-    member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};
+    member.active = maplit::btreemap! {"0".to_owned() => vec![0, 1, 3]};
+    member.active_pending_revocation = maplit::btreemap! {"0".to_owned() => vec![2]};
     member.active_epochs = maplit::btreemap! {
-        ("0".to_string(), 0) => 3,
-        ("0".to_string(), 1) => 5,
-        ("0".to_string(), 2) => 4,
+        ("0".to_owned(), 0) => 3,
+        ("0".to_owned(), 1) => 5,
+        ("0".to_owned(), 2) => 4,
     };
     group.members.insert("m1".into(), member);
 
@@ -2264,7 +2267,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
     {
         let partitions: Vec<_> = committed
             .iter()
-            .map(|committed| (committed.topic.to_string(), committed.partition))
+            .map(|committed| (committed.topic.to_owned(), committed.partition))
             .collect();
         for fence in [
             CommitFence::Offset { api_version: 9 },
@@ -2530,9 +2533,9 @@ fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release
 
     // The topic `in` has two partitions.
     let image = in_image(2);
-    let subtopologies = BTreeMap::from([("0".to_string(), ConfiguredSubtopology {
+    let subtopologies = BTreeMap::from([("0".to_owned(), ConfiguredSubtopology {
         number_of_tasks: 4,
-        source_topics: BTreeSet::from(["in".to_string()]),
+        source_topics: BTreeSet::from(["in".to_owned()]),
         repartition_source_topics: BTreeMap::new(),
         repartition_sink_topics: BTreeSet::new(),
         state_changelog_topics: BTreeMap::new(),
@@ -2595,7 +2598,7 @@ fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release
             if partitions.is_empty() {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([("0".to_string(), partitions)])
+                BTreeMap::from([("0".to_owned(), partitions)])
             }
         };
         member.active = tasks(active);
@@ -2769,7 +2772,7 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
             want_delay,
         } in steps
         {
-            tokio::time::sleep(Duration::from_millis(advance_ms)).await;
+            sleep(Duration::from_millis(advance_ms)).await;
             let resp = heartbeat(&handle, StreamsGroupHeartbeatRequest {
                 group_id: "g".into(),
                 member_id: member_id.into(),
@@ -2926,7 +2929,7 @@ async fn a_changed_validation_or_assignment_config_bumps_the_epoch() {
     };
 
     let configs = |standby: &str| {
-        maplit::btreemap! {"num.standby.replicas".to_string() => standby.to_string()}
+        maplit::btreemap! {"num.standby.replicas".to_owned() => standby.to_owned()}
     };
     // The record that the bump writes: the epoch after the loaded 2, the
     // validated topology epoch, and the configuration.
@@ -3056,7 +3059,7 @@ async fn a_bump_records_the_validated_topology_epoch() {
             (seed.validated_topology_epoch, seed.last_assignment_configs)
                 == (
                     validated,
-                    maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}
+                    maplit::btreemap! {"num.standby.replicas".to_owned() => "0".to_owned()}
                 ),
             "{case}"
         );

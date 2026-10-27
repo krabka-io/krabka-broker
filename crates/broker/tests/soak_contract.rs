@@ -67,6 +67,7 @@
 //! ```text
 //! cargo test -p krabka-broker --test soak_contract
 //! ```
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto a sibling
@@ -134,11 +135,12 @@ use {
     krabka_protocol::owned::create_topics_request::CreatableTopic,
     krabka_units::prelude::*,
     std::{
+        env, fs,
         path::{Path, PathBuf},
         sync::Arc,
         time::Duration,
     },
-    tokio::{sync::oneshot, task::JoinHandle},
+    tokio::{sync::oneshot, task::JoinHandle, time},
 };
 
 /// How often every node's resources and controller progress are sampled.
@@ -151,7 +153,7 @@ const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
 
 /// The contract this run executes.
 fn contract_source() -> PathBuf {
-    std::env::var("KRABKA_SOAK_CONTRACT")
+    env::var("KRABKA_SOAK_CONTRACT")
         .ok()
         .filter(|path| !path.is_empty())
         .map_or_else(
@@ -163,7 +165,7 @@ fn contract_source() -> PathBuf {
 /// The lifecycle contract whose source release the refused rollback runs.
 fn lifecycle_contract() -> Contract {
     let source = manifest_dir().join("../../bench/soak/lifecycle.yaml");
-    let text = std::fs::read_to_string(&source)
+    let text = fs::read_to_string(&source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
     Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
@@ -199,7 +201,7 @@ async fn checkpoint_alerts(
     start_ms: i64,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let mut ticks = tokio::time::interval(CHECKPOINT_INTERVAL);
+    let mut ticks = time::interval(CHECKPOINT_INTERVAL);
     ticks.tick().await;
     loop {
         tokio::select! {
@@ -278,7 +280,7 @@ impl Recorders {
 async fn sleep_until(at: i64) {
     let left = at - now_ms();
     if left > 0 {
-        tokio::time::sleep(Time::from_millis(left).to_std()).await;
+        time::sleep(Time::from_millis(left).to_std()).await;
     }
 }
 
@@ -538,7 +540,7 @@ fn grade(contract: &Contract, evidence: &Evidence, dir: &Path) -> bool {
 #[ignore = "requires Docker and //packaging:image; runs in the container matrix and, with KRABKA_SOAK_CONTRACT, the scheduled soak"]
 async fn the_sustained_load_contract_holds() {
     let source = contract_source();
-    let text = std::fs::read_to_string(&source)
+    let text = fs::read_to_string(&source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
     let contract =
         Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{}: {error}", source.display()));
@@ -569,7 +571,7 @@ async fn the_sustained_load_contract_holds() {
         source.display(),
         dir.display()
     );
-    std::fs::write(dir.join("contract.yaml"), &text).expect("write contract.yaml");
+    fs::write(dir.join("contract.yaml"), &text).expect("write contract.yaml");
     let log = Arc::new(FaultLog::create(&dir));
 
     let image = image();
@@ -613,7 +615,7 @@ async fn the_sustained_load_contract_holds() {
             .windows(Arc::clone(&windows))
             .build(),
     );
-    let load = start(&ctx, prepared);
+    let load = start(&ctx, prepared).expect("start the load");
     let trackers = load.trackers.clone();
 
     let executor = Executor {
@@ -656,7 +658,7 @@ async fn the_sustained_load_contract_holds() {
         load_end - load_start
     );
 
-    let outcome = load.finish().await;
+    let outcome = load.finish().await.expect("the load tasks finish");
     for tracker in &trackers {
         evidence.commits.extend(
             commit_checks(&endpoint, tracker, FINAL_COMMIT_CHECK, &tracker.snapshot()).await,
@@ -669,7 +671,9 @@ async fn the_sustained_load_contract_holds() {
         },
         &windows.spans(),
     ));
-    evidence.paths = outcome.measurements(&contract, steady);
+    evidence.paths = outcome
+        .measurements(&contract, steady)
+        .expect("build the path measurements");
     evidence.producers = outcome
         .producers
         .into_iter()

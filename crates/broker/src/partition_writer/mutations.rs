@@ -18,18 +18,22 @@ use {
     },
     arc_swap::ArcSwap,
     krabka_log::{Log, Offset},
+    krabka_protocol::records::RecordBatch,
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
     },
-    tokio::sync::Notify,
+    tokio::{
+        sync,
+        sync::{Notify, oneshot},
+    },
 };
 
 /// The producer tracker and replica watermark a replicated batch updates.
 #[derive(Clone, Copy)]
 pub(super) struct ReplicationState<'a> {
     pub(super) producer_state: &'a ProducerState,
-    pub(super) replica_state: &'a tokio::sync::Mutex<ReplicaState>,
+    pub(super) replica_state: &'a sync::Mutex<ReplicaState>,
 }
 
 pub(super) async fn handle_replicate(
@@ -37,8 +41,8 @@ pub(super) async fn handle_replicate(
     log: &Arc<Mutex<Log>>,
     storage_status: StorageStatus<'_>,
     state: ReplicationState<'_>,
-    mut batch: krabka_protocol::records::RecordBatch,
-    ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+    mut batch: RecordBatch,
+    ack: oneshot::Sender<Result<(), BrokerError>>,
     append_notify: &Notify,
 ) {
     let ReplicationState {
@@ -89,7 +93,10 @@ pub(super) async fn handle_replicate(
             guard
                 .append_at(&mut batch, Offset(offset))
                 .map_err(BrokerError::from)?;
-            Ok(control_producer.and_then(|producer_id| guard.producer_state_entry(producer_id)))
+            let entry =
+                control_producer.and_then(|producer_id| guard.producer_state_entry(producer_id));
+            drop(guard);
+            Ok(entry)
         },
         "replicate task panicked",
         storage_status,
@@ -122,7 +129,7 @@ pub(super) async fn handle_replicate_verbatim(
     log_dir: &Arc<ArcSwap<PathBuf>>,
     log_dir_status: &LogDirRegistry,
     batches: Vec<ReplicatedBatch>,
-    ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+    ack: oneshot::Sender<Result<(), BrokerError>>,
     append_notify: &Notify,
 ) {
     let storage = StorageStatus {
@@ -175,10 +182,10 @@ pub(super) enum ResetMutation {
 pub(super) async fn handle_log_reset(
     log: &Arc<Mutex<Log>>,
     storage_status: StorageStatus<'_>,
-    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    replica_state: &sync::Mutex<ReplicaState>,
     wal: Option<&SharedWal>,
     mutation: ResetMutation,
-    ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+    ack: oneshot::Sender<Result<(), BrokerError>>,
 ) -> bool {
     let panic_context = match mutation {
         ResetMutation::Truncate(_) => "truncate task panicked",
@@ -206,7 +213,7 @@ pub(super) async fn handle_trim(
     storage_status: StorageStatus<'_>,
     wal: Option<&SharedWal>,
     new_start: Offset,
-    ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+    ack: oneshot::Sender<Result<Offset, BrokerError>>,
 ) {
     let result = if let Some(wal) = wal {
         // The WAL is the first durable trim step. Include an already-advanced
@@ -245,7 +252,7 @@ pub(super) async fn handle_follow_leader_log_start(
     log: &Arc<Mutex<Log>>,
     storage_status: StorageStatus<'_>,
     leader_start: Offset,
-    ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+    ack: oneshot::Sender<Result<Offset, BrokerError>>,
 ) {
     let log_for_blocking = Arc::clone(log);
     let result = run_log_mutation(
@@ -311,7 +318,7 @@ async fn reconcile_trim_frontiers(
 async fn finish_log_reset(
     result: Result<(), BrokerError>,
     log: &Mutex<Log>,
-    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    replica_state: &sync::Mutex<ReplicaState>,
     wal: Option<&SharedWal>,
     ack: super::storage::MaintenanceAck,
 ) -> bool {

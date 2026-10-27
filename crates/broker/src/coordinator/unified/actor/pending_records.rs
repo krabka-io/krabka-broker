@@ -31,7 +31,7 @@ fn partition_metadata_key(group_id: &str) -> Result<bytes::Bytes, BrokerError> {
 /// What a transition writes for the deprecated k4
 /// `ConsumerGroupPartitionMetadata` record.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PartitionMetadataWrite {
+pub enum PartitionMetadataWrite {
     /// Nothing.
     #[default]
     Keep,
@@ -43,7 +43,7 @@ pub(crate) enum PartitionMetadataWrite {
 /// members, each with its current assignment, target assignment and
 /// subscription, and the resolved regular expressions.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct GroupTombstone {
+pub struct GroupTombstone {
     pub members: Vec<String>,
     pub regexes: Vec<String>,
 }
@@ -66,7 +66,7 @@ pub(crate) struct GroupTombstone {
 ///
 /// Returns [`BrokerError::Protocol`] when a string of a key is longer than
 /// 32767 bytes.
-pub(crate) fn group_tombstone_keys(
+pub fn group_tombstone_keys(
     group_id: &str,
     tombstone: &GroupTombstone,
 ) -> Result<Vec<bytes::Bytes>, BrokerError> {
@@ -107,7 +107,7 @@ pub(crate) fn group_tombstone_keys(
 }
 
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct PendingRecords {
+pub struct PendingRecords {
     pub group_metadata: Option<GroupMetadataValue>,
     /// The regular expressions whose resolution the transition writes
     /// (`Some(value)`) or tombstones (`None`), by regular expression.
@@ -133,7 +133,7 @@ pub(crate) struct PendingRecords {
     pub classic_group_metadata: Option<ClassicGroupMetadataValue>,
     /// The records that follow these in the same batch, such as a
     /// heartbeat's own records after the records of Kafka's `replaceMember`.
-    pub then: Option<Box<PendingRecords>>,
+    pub then: Option<Box<Self>>,
 }
 
 impl MemberRecordFamilies for PendingRecords {
@@ -185,12 +185,12 @@ impl PendingRecords {
     /// Appends `next` after these records and the records already chained
     /// after them.
     #[must_use]
-    pub fn followed_by(mut self, next: PendingRecords) -> PendingRecords {
-        let mut tail = &mut self;
-        while tail.then.is_some() {
-            tail = tail.then.as_mut().expect("checked above");
-        }
-        tail.then = Some(Box::new(next));
+    pub fn followed_by(mut self, next: Self) -> Self {
+        let after = match self.then.take() {
+            Some(then) => then.followed_by(next),
+            None => next,
+        };
+        self.then = Some(Box::new(after));
         self
     }
 
@@ -431,6 +431,7 @@ mod tests {
             error::BrokerError,
         },
         assert2::assert,
+        krabka_protocol::primitives::uuid::Uuid,
         std::time::{Duration, Instant},
     };
 
@@ -642,7 +643,7 @@ mod tests {
         let topic = {
             let mut b = [0u8; 16];
             b[15] = 0xEF;
-            krabka_protocol::primitives::uuid::Uuid(b)
+            Uuid(b)
         };
         let mut state = GroupState::new("g");
         state.group_epoch = 7;
@@ -660,22 +661,22 @@ mod tests {
         m.assigned_partitions.insert(topic, vec![0, 1]);
         m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
         m.classic = Some(ClassicMemberFacade {
-            supported_protocols: vec![("range".to_string(), bytes::Bytes::from_static(b"meta"))],
+            supported_protocols: vec![("range".to_owned(), bytes::Bytes::from_static(b"meta"))],
             session_timeout: Duration::from_secs(45),
         });
         state
             .target
             .per_member
-            .insert("m1".to_string(), maplit::hashmap! {topic => vec![0, 1, 2]});
+            .insert("m1".to_owned(), maplit::hashmap! {topic => vec![0, 1, 2]});
         state.add_or_update_member(m);
 
         let mut pending = full_pending_records(&state);
         let resolution = p::RegularExpressionValue {
-            topics: vec!["t".to_string()],
+            topics: vec!["t".to_owned()],
             version: 9,
             timestamp_ms: 1_000,
         };
-        pending.resolved_regexes = vec![("t.*".to_string(), Some(resolution.clone()))];
+        pending.resolved_regexes = vec![("t.*".to_owned(), Some(resolution.clone()))];
         let (coordinator, _) = make_coordinator();
         pending.apply_to_cache(&coordinator, "g");
         let seed = coordinator.cached_seed("g").expect("cached seed");
@@ -686,30 +687,30 @@ mod tests {
             metadata_hash: 0,
             target_epoch: 6,
             assignment_timestamp_ms: 0,
-            members: maplit::hashmap! {"m1".to_string() => p::MemberMetadataValue {
+            members: maplit::hashmap! {"m1".to_owned() => p::MemberMetadataValue {
                 instance_id: None,
                 rack_id: None,
-                client_id: "client-a".to_string(),
-                client_host: "h".to_string(),
-                subscribed_topic_names: vec!["t".to_string()],
+                client_id: "client-a".to_owned(),
+                client_host: "h".to_owned(),
+                subscribed_topic_names: vec!["t".to_owned()],
                 subscribed_topic_regex: Some(String::new()),
                 server_assignor: None,
                 rebalance_timeout_ms: 60_000,
                 classic: Some(p::ClassicMemberMetadata {
                     session_timeout_ms: 45_000,
                     supported_protocols: vec![(
-                        "range".to_string(),
+                        "range".to_owned(),
                         bytes::Bytes::from_static(b"meta"),
                     )],
                 }),
             }},
-            target_per_member: maplit::hashmap! {"m1".to_string() => p::TargetAssignmentMemberValue {
+            target_per_member: maplit::hashmap! {"m1".to_owned() => p::TargetAssignmentMemberValue {
                 topic_partitions: vec![p::AssignedTopicPartitions {
                     topic_id: topic,
                     partitions: vec![0, 1, 2],
                 }],
             }},
-            current_per_member: maplit::hashmap! {"m1".to_string() => p::CurrentMemberAssignmentValue {
+            current_per_member: maplit::hashmap! {"m1".to_owned() => p::CurrentMemberAssignmentValue {
                 member_epoch: 7,
                 previous_member_epoch: 6,
                 state: MemberAssignmentState::Stable,
@@ -720,7 +721,7 @@ mod tests {
                 }],
                 partitions_pending_revocation: vec![],
             }},
-            resolved_regexes: maplit::hashmap! {"t.*".to_string() => resolution},
+            resolved_regexes: maplit::hashmap! {"t.*".to_owned() => resolution},
         };
         assert!(seed == expected);
     }
@@ -733,12 +734,12 @@ mod tests {
         use crate::coordinator::unified::persistence_next_gen as p;
 
         let value = p::RegularExpressionValue {
-            topics: vec!["t".to_string()],
+            topics: vec!["t".to_owned()],
             version: 9,
             timestamp_ms: 1_000,
         };
         let write = PendingRecords {
-            resolved_regexes: vec![("t.*".to_string(), Some(value.clone()))],
+            resolved_regexes: vec![("t.*".to_owned(), Some(value.clone()))],
             ..Default::default()
         };
         let batch = write.to_batch("g", 0).unwrap();
@@ -760,7 +761,7 @@ mod tests {
         assert!(coordinator.cached_seed("g").unwrap().resolved_regexes.len() == 1);
 
         let tombstone = PendingRecords {
-            resolved_regexes: vec![("t.*".to_string(), None)],
+            resolved_regexes: vec![("t.*".to_owned(), None)],
             ..Default::default()
         };
         assert!(
@@ -789,8 +790,8 @@ mod tests {
         use crate::coordinator::unified::persistence::{Key, encode_key as encode_classic_key};
 
         let ng = |key: NextGenKey| encode_next_gen_key(&key).unwrap();
-        let group = || "g".to_string();
-        let member = |id: &str| id.to_string();
+        let group = || "g".to_owned();
+        let member = |id: &str| id.to_owned();
         let k3 = ng(NextGenKey::GroupMetadata { group_id: group() });
         let k5 = |id: &str| {
             ng(NextGenKey::MemberMetadata {
@@ -885,11 +886,11 @@ mod tests {
                     ..Default::default()
                 },
                 vec![
-                    (k2.clone(), true),
+                    (k2, true),
                     (k5("m"), false),
-                    (k3.clone(), false),
+                    (k3, false),
                     (k7("m"), false),
-                    (k6.clone(), false),
+                    (k6, false),
                     (k8("m"), false),
                 ],
             ),
@@ -904,7 +905,7 @@ mod tests {
                     ],
                     target_per_member: vec![
                         ("leaves".into(), None),
-                        ("stays".into(), Some(target.clone())),
+                        ("stays".into(), Some(target)),
                     ],
                     current_per_member: vec![
                         ("leaves".into(), None),
@@ -913,8 +914,8 @@ mod tests {
                     ..Default::default()
                 }
                 .followed_by(PendingRecords {
-                    member_metadata: vec![("stays".into(), Some(metadata.clone()))],
-                    current_per_member: vec![("stays".into(), Some(current.clone()))],
+                    member_metadata: vec![("stays".into(), Some(metadata))],
+                    current_per_member: vec![("stays".into(), Some(current))],
                     ..Default::default()
                 }),
                 vec![
@@ -936,7 +937,7 @@ mod tests {
                     partition_metadata: PartitionMetadataWrite::Tombstone,
                     ..Default::default()
                 },
-                vec![(k4.clone(), true)],
+                vec![(k4, true)],
             ),
         ];
         for (case, pending, expected) in rows {

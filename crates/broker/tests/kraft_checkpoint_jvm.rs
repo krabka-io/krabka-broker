@@ -4,6 +4,7 @@
 //! ```text
 //! cargo test -p krabka-broker --test kraft_checkpoint_jvm -- --ignored --nocapture
 //! ```
+#![cfg(test)]
 
 use {assert2::assert, krabka_protocol::records::metadata::checkpoint::build_bootstrap_checkpoint};
 

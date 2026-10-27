@@ -22,13 +22,13 @@ use {
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
         primitives::uuid::Uuid,
     },
-    std::net::SocketAddr,
+    std::{collections::BTreeSet, net::SocketAddr},
     tokio::net::TcpStream,
 };
 
 /// A flattened record: key and value as plain byte vecs.
 #[derive(Debug)]
-pub(crate) struct FlatRecord {
+pub struct FlatRecord {
     key: Vec<u8>,
     value: Vec<u8>,
 }
@@ -42,7 +42,7 @@ pub(crate) struct FlatRecord {
 /// stream. To collect every batch, the function fetches again and again. Each
 /// time it moves `fetch_offset` past the last batch it saw. It stops when the
 /// broker returns no batch.
-pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Vec<FlatRecord> {
+pub async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Vec<FlatRecord> {
     let version: i16 = 12; // flexible
     let mut out: Vec<FlatRecord> = Vec::new();
     let mut next_offset: i64 = 0;
@@ -50,7 +50,7 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
         let req = FetchRequest {
             replica_id: -1,
             ..single_partition_fetch()
-                .topic(topic.to_string())
+                .topic(topic.to_owned())
                 .topic_id(topic_id)
                 .partition(
                     fetch_partition()
@@ -93,10 +93,7 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
                                 Some(k) => k.to_vec(),
                                 None => continue,
                             };
-                            let value = match &record.value {
-                                Some(v) => v.to_vec(),
-                                None => Vec::new(),
-                            };
+                            let value = record.value.as_ref().map_or_else(Vec::new, |v| v.to_vec());
                             out.push(FlatRecord { key, value });
                         }
                         next_offset = batch_last_abs + 1;
@@ -111,17 +108,17 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
     out
 }
 
-pub(crate) fn assert_latest_records_survive(records: &[FlatRecord]) {
-    let distinct_keys: std::collections::BTreeSet<String> = records
+pub fn assert_latest_records_survive(records: &[FlatRecord]) {
+    let distinct_keys: BTreeSet<String> = records
         .iter()
         .map(|record| String::from_utf8(record.key.clone()).unwrap())
         .filter(|key| key != "__pad__")
         .collect();
     assert!(
         distinct_keys
-            == ["k1".to_string(), "k2".to_string(), "k3".to_string()]
+            == ["k1".to_owned(), "k2".to_owned(), "k3".to_owned()]
                 .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
+                .collect::<BTreeSet<_>>(),
         "k1, k2, k3 must all survive compaction; got: {distinct_keys:?}"
     );
 

@@ -9,22 +9,24 @@ use {
     },
     krabka_ids::Offset,
     std::{
-        path::Path,
-        time::{Duration, SystemTime},
+        io::ErrorKind,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tracing::instrument,
 };
 
 /// Suffix a segment file wears between the moment retention claims it and the
 /// moment it is unlinked, mirroring Kafka's `.deleted` rename.
-pub(crate) const DELETED_SUFFIX: &str = "deleted";
+pub const DELETED_SUFFIX: &str = "deleted";
 
 /// The tombstone name for `path`: the same name with `.deleted` appended.
-pub(crate) fn deleted_path(path: &Path) -> std::path::PathBuf {
+pub fn deleted_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".");
     name.push(DELETED_SUFFIX);
-    std::path::PathBuf::from(name)
+    PathBuf::from(name)
 }
 
 /// `now` in epoch milliseconds. An instant before the epoch reads as `0`, and
@@ -32,7 +34,7 @@ pub(crate) fn deleted_path(path: &Path) -> std::path::PathBuf {
 #[must_use]
 pub fn now_ms(now: SystemTime) -> i64 {
     let millis = now
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis();
     i64::try_from(millis).unwrap_or(i64::MAX)
@@ -73,11 +75,11 @@ pub fn delete_segment_files(
 }
 
 /// Rename a removed segment out of the live namespace, retaining its files for open readers.
-pub(crate) fn retire_segment_files(
+pub fn retire_segment_files(
     io: &dyn LogIo,
     dir: &Path,
     base_offset: Offset,
-) -> Result<Vec<std::path::PathBuf>, LogError> {
+) -> Result<Vec<PathBuf>, LogError> {
     let mut tombstones = Vec::with_capacity(6);
     for path in [
         name::log_path(dir, base_offset.0),
@@ -92,7 +94,7 @@ pub(crate) fn retire_segment_files(
             Ok(()) => tombstones.push(tombstone),
             // Absent under its live name: either this segment never had the
             // sidecar, or an earlier attempt already renamed it.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error) if error.kind() == ErrorKind::NotFound => {
                 if tombstone.exists() {
                     tombstones.push(tombstone);
                 }
@@ -105,7 +107,7 @@ pub(crate) fn retire_segment_files(
 
 /// When [`retire_files`] makes its renames durable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DirSync {
+pub enum DirSync {
     /// Sync the directory before returning.
     Now,
     /// Leave the sync to the caller, which syncs the directory once after a
@@ -116,16 +118,16 @@ pub(crate) enum DirSync {
 /// Retire a file set under unique names, so repeated compactions of the same
 /// base cannot replace a file still retained for readers. Failed retirement restores
 /// successful renames, and syncs the directory, before returning the error.
-pub(crate) fn retire_files(
+pub fn retire_files(
     io: &dyn LogIo,
     dir: &Path,
     base: Offset,
     extensions: &[&str],
-    retired: &mut Vec<std::path::PathBuf>,
+    retired: &mut Vec<PathBuf>,
     sync: DirSync,
 ) -> Result<(), LogError> {
-    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
     let mut renamed = Vec::new();
     let result = (|| {
         for extension in extensions {
@@ -136,7 +138,7 @@ pub(crate) fn retire_files(
             ));
             match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
                 Ok(()) => renamed.push((path, tombstone)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(LogError::Io(error)),
             }
         }
@@ -158,27 +160,37 @@ pub(crate) fn retire_files(
     Ok(())
 }
 
-pub(crate) fn remove_optional(io: &dyn LogIo, path: &Path) -> Result<(), LogError> {
+pub fn remove_optional(io: &dyn LogIo, path: &Path) -> Result<(), LogError> {
     remove_optional_counted(io, path).map(|_| ())
 }
 
 /// Remove an optional file and report whether it existed.
-pub(crate) fn remove_optional_counted(io: &dyn LogIo, path: &Path) -> Result<bool, LogError> {
+pub fn remove_optional_counted(io: &dyn LogIo, path: &Path) -> Result<bool, LogError> {
     match io.remove_file(IoTarget::SegmentDeletion, path) {
         Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => Err(LogError::Io(error)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::io::FileIo, assert2::check, tempfile::tempdir};
+    use {
+        super::*,
+        crate::io::FileIo,
+        assert2::check,
+        std::{
+            fs,
+            io::{self, ErrorKind},
+            path::PathBuf,
+        },
+        tempfile::tempdir,
+    };
 
     /// A temporary directory and the segment files written into it.
     struct SegmentFiles {
         dir: tempfile::TempDir,
-        paths: Vec<std::path::PathBuf>,
+        paths: Vec<PathBuf>,
     }
 
     fn segment_files(base: Offset, extensions: &[&str], contents: &[u8]) -> SegmentFiles {
@@ -191,7 +203,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for path in &paths {
-            std::fs::write(path, contents).unwrap();
+            fs::write(path, contents).unwrap();
         }
         SegmentFiles { dir, paths }
     }
@@ -235,8 +247,8 @@ mod tests {
         struct NoUnlink;
 
         impl LogIo for NoUnlink {
-            fn remove_file(&self, _target: IoTarget, _path: &Path) -> std::io::Result<()> {
-                Err(std::io::ErrorKind::PermissionDenied.into())
+            fn remove_file(&self, _target: IoTarget, _path: &Path) -> io::Result<()> {
+                Err(ErrorKind::PermissionDenied.into())
             }
         }
 
@@ -269,7 +281,7 @@ mod tests {
     fn remove_optional_propagates_non_missing_errors() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("not-a-file");
-        std::fs::create_dir(&path).unwrap();
+        fs::create_dir(&path).unwrap();
 
         assert2::assert!(let Err(LogError::Io(_)) = remove_optional(&FileIo, &path));
     }

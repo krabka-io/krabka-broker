@@ -13,6 +13,7 @@ use {
     },
     crate::error::BrokerError,
     std::sync::Arc,
+    tokio::sync::oneshot,
 };
 
 impl GroupCoordinator {
@@ -58,7 +59,7 @@ impl GroupCoordinator {
         // `ClassicInspect` answers only for a classic group, and an empty
         // classic group is free for a streams group.
         if let Some(handle) = self.find(group_id) {
-            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx, rx) = oneshot::channel();
             // An actor that has stopped holds no group.
             let classic_members = if handle
                 .tx
@@ -108,7 +109,7 @@ impl GroupCoordinator {
 
         // Inspect the live classic actor (if any) for remaining members.
         if let Some(handle) = self.find(group_id) {
-            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx, rx) = oneshot::channel();
             if handle
                 .tx
                 .send(GroupActorMessage::ClassicInspect { reply: tx })
@@ -179,7 +180,7 @@ impl GroupCoordinator {
         // Kafka's `StreamsGroup.isEmpty`: a group with a member is not sent
         // down the classic path.
         if let Some(handle) = self.find_streams(group_id) {
-            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx, rx) = oneshot::channel();
             if handle
                 .tx
                 .send(StreamsGroupActorMessage::Describe { reply: tx })

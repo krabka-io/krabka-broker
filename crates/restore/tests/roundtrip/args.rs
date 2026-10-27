@@ -19,7 +19,7 @@ use {
 /// whatever `extra` flags a test needs. A test that never boots the restored
 /// node can name any `controller_listener`; one that does takes it from
 /// [`ControllerListener::restore_args`].
-pub(crate) fn restore_args(
+pub fn restore_args(
     archive_root: &Path,
     log_dir: &Path,
     options: RestoreOptions<'_>,
@@ -31,7 +31,7 @@ pub(crate) fn restore_args(
 #[path = "../support/args.rs"]
 mod cli_args;
 
-pub(crate) use cli_args::{RestoreOptions, restore_argv};
+pub use cli_args::{RestoreOptions, restore_argv};
 
 /// The controller listener of a restored node, bound before the restore
 /// formats its log directory.
@@ -43,7 +43,7 @@ pub(crate) use cli_args::{RestoreOptions, restore_argv};
 /// formatted with an address it does not listen on boots a broker that never
 /// unfences. Kafka's `KafkaClusterTestKit` binds each node's controller port
 /// first and formats the node with it; this does the same.
-pub(crate) struct ControllerListener {
+pub struct ControllerListener {
     addr: SocketAddr,
     listener: Option<TcpListener>,
 }

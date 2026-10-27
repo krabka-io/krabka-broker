@@ -26,7 +26,7 @@ use {
         task::{Context, Poll},
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::{MutexGuard, Notify, OwnedMutexGuard, mpsc},
+    tokio::sync::{Mutex, MutexGuard, Notify, OwnedMutexGuard, mpsc},
 };
 
 /// The writer's deadline value when it has none armed.
@@ -34,14 +34,14 @@ const NO_DEADLINE: u64 = u64::MAX;
 
 /// See the module documentation.
 #[derive(Debug)]
-pub(crate) struct WriterGate {
+pub struct WriterGate {
     /// Whether appends may bypass the writer at all. A diskless partition
     /// assigns offsets through a sequencer and acknowledges through its WAL,
     /// so it always takes the channel.
     inline: bool,
     /// Held by whoever is mutating the log: the writer handling a message,
     /// or a produce appending on its own task.
-    busy: Arc<tokio::sync::Mutex<()>>,
+    busy: Arc<Mutex<()>>,
     /// Raised by the writer before it polls its channel, and lowered only
     /// when the poll finds the channel empty.
     holding: AtomicBool,
@@ -58,7 +58,7 @@ impl WriterGate {
     pub(crate) fn shared(inline: bool) -> Arc<Self> {
         Arc::new(Self {
             inline,
-            busy: Arc::new(tokio::sync::Mutex::new(())),
+            busy: Arc::new(Mutex::new(())),
             holding: AtomicBool::new(false),
             armed_deadline_ms: AtomicU64::new(NO_DEADLINE),
             nudge: Notify::new(),
@@ -156,7 +156,7 @@ mod tests {
             test_support::partition_records_batch,
         },
         assert2::{assert, check},
-        futures_util::FutureExt as _,
+        futures_util::{FutureExt as _, task},
         krabka_log::LogError,
         tempfile::TempDir,
         tokio::sync::oneshot,
@@ -180,7 +180,7 @@ mod tests {
         gate: &WriterGate,
         rx: &mut mpsc::Receiver<WriterMessage>,
     ) -> Poll<Option<WriterMessage>> {
-        let waker = futures_util::task::noop_waker();
+        let waker = task::noop_waker();
         gate.poll_recv(rx, &mut Context::from_waker(&waker))
     }
 

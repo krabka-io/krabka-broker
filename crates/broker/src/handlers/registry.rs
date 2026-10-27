@@ -21,14 +21,14 @@ use {
     krabka_protocol::api_key::ApiKey,
 };
 
-pub(crate) type ContextHandler = for<'a> fn(
+pub type ContextHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
     &'a [u8],
     &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
 
-pub(crate) type ProduceHandler = for<'a> fn(
+pub type ProduceHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
     &'a [u8],
@@ -36,7 +36,7 @@ pub(crate) type ProduceHandler = for<'a> fn(
     &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
 
-pub(crate) type TelemetryHandler = for<'a> fn(
+pub type TelemetryHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
     CorrelationId,
@@ -44,13 +44,13 @@ pub(crate) type TelemetryHandler = for<'a> fn(
     &'a TelemetryContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
 
-pub(crate) type AuthHandler = for<'a> fn(
+pub type AuthHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
     CorrelationId,
     &'a [u8],
     &'a ConnectionAuth,
-    &'a std::net::SocketAddr,
+    &'a SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
 
 mod auth;
@@ -59,14 +59,31 @@ mod krabka_private;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::entry::{DispatchEntry, DispatchKind, DispatchRegistry, RequestQuotaPolicy};
-use self::{
-    auth::{
-        alter_replica_log_dirs_adapter, create_delegation_token_adapter,
-        describe_delegation_token_adapter, expire_delegation_token_adapter,
-        renew_delegation_token_adapter,
+pub use self::entry::{DispatchEntry, DispatchKind, DispatchRegistry, RequestQuotaPolicy};
+use {
+    self::{
+        auth::{
+            alter_replica_log_dirs_adapter, create_delegation_token_adapter,
+            describe_delegation_token_adapter, expire_delegation_token_adapter,
+            renew_delegation_token_adapter,
+        },
+        krabka_private::register_krabka_private_context_dispatches,
     },
-    krabka_private::register_krabka_private_context_dispatches,
+    super::{
+        alter_configs, create_partitions, delete_topics, elect_leaders, incremental_alter_configs,
+        share_fetch,
+    },
+    crate::{
+        share_coordinator::handlers::{delete, initialize, read, read_summary, write},
+        txn::handlers::{
+            add_offset_commits_to_txn, add_partitions_to_txn, end_txn, txn_offset_commit,
+            write_txn_markers,
+        },
+    },
+    krabka_protocol::owned::{
+        api_versions_request, fetch_request, produce_request, sasl_authenticate_request,
+    },
+    std::net::SocketAddr,
 };
 
 // One adapter and one `register_dispatch_table` registration per Kafka api.
@@ -83,11 +100,11 @@ krabka_macros::dispatch_table! {
     // unregister apis forward them untouched to the active controller, and
     // `ListOffsets` reads v0, which the owned codec does not model, by hand.
     context:
-        AlterConfigs => crate::handlers::alter_configs::dispatch,
-        CreatePartitions => crate::handlers::create_partitions::dispatch,
-        ElectLeaders => crate::handlers::elect_leaders::dispatch,
-        DeleteTopics => crate::handlers::delete_topics::dispatch,
-        IncrementalAlterConfigs => crate::handlers::incremental_alter_configs::dispatch,
+        AlterConfigs => alter_configs::dispatch,
+        CreatePartitions => create_partitions::dispatch,
+        ElectLeaders => elect_leaders::dispatch,
+        DeleteTopics => delete_topics::dispatch,
+        IncrementalAlterConfigs => incremental_alter_configs::dispatch,
         UnregisterBroker,
         UnregisterController,
         AddRaftVoter,
@@ -111,8 +128,8 @@ krabka_macros::dispatch_table! {
         BrokerRegistration,
         ControllerRegistration,
         AllocateProducerIds,
-        AddOffsetsToTxn => crate::txn::handlers::add_offset_commits_to_txn::handle,
-        WriteTxnMarkers => crate::txn::handlers::write_txn_markers::handle,
+        AddOffsetsToTxn => add_offset_commits_to_txn::handle,
+        WriteTxnMarkers => write_txn_markers::handle,
         DescribeCluster,
         DescribeGroups,
         ListGroups,
@@ -129,15 +146,15 @@ krabka_macros::dispatch_table! {
         BrokerHeartbeat,
         StreamsGroupTopologyDescriptionUpdate,
         FindCoordinator,
-        ShareFetch => crate::handlers::share_fetch::dispatch,
+        ShareFetch => share_fetch::dispatch,
         ShareAcknowledge,
         OffsetFetch,
-        EndTxn => crate::txn::handlers::end_txn::handle,
+        EndTxn => end_txn::handle,
         CreateAcls,
         DeleteAcls,
         AlterPartitionReassignments,
         AlterClientQuotas,
-        AddPartitionsToTxn => crate::txn::handlers::add_partitions_to_txn::handle;
+        AddPartitionsToTxn => add_partitions_to_txn::handle;
     // The same, with the request decoded by `decode_group_request`, which
     // refuses a string no coordinator record can carry.
     typed_group:
@@ -153,12 +170,12 @@ krabka_macros::dispatch_table! {
         ConsumerGroupHeartbeat,
         ShareGroupHeartbeat,
         InitProducerId,
-        TxnOffsetCommit => crate::txn::handlers::txn_offset_commit::handle,
-        InitializeShareGroupState => crate::share_coordinator::handlers::initialize::handle,
-        ReadShareGroupState => crate::share_coordinator::handlers::read::handle,
-        WriteShareGroupState => crate::share_coordinator::handlers::write::handle,
-        DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
-        ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
+        TxnOffsetCommit => txn_offset_commit::handle,
+        InitializeShareGroupState => initialize::handle,
+        ReadShareGroupState => read::handle,
+        WriteShareGroupState => write::handle,
+        DeleteShareGroupState => delete::handle,
+        ReadShareGroupStateSummary => read_summary::handle;
     // `typed`, for a handler that keeps a `#[tracing::instrument]` of its own
     // instead of the adapter's span: `AlterUserScramCredentials` and
     // `UpdateFeatures` record no `Err` as an `ERROR` event.
@@ -206,7 +223,7 @@ fn produce_adapter<'a>(
     Box::pin(produce_handle(broker, version, body, body_bytes, ctx))
 }
 
-pub(crate) fn build_registry() -> DispatchRegistry {
+pub fn build_registry() -> DispatchRegistry {
     let mut registry = DispatchRegistry::new();
 
     // KIP-219: `ApiVersionsResponse` carries `ThrottleTimeMs` behind the
@@ -216,23 +233,21 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     // through `sendResponseMaybeThrottle`.
     registry.register(DispatchEntry::self_accounted_context(
         ApiKey::ApiVersions as i16,
-        krabka_protocol::owned::api_versions_request::FLEXIBLE_MIN,
+        api_versions_request::FLEXIBLE_MIN,
         handle,
     ));
     registry.register(DispatchEntry::produce(
-        krabka_protocol::owned::produce_request::FLEXIBLE_MIN,
+        produce_request::FLEXIBLE_MIN,
         produce_adapter,
     ));
-    registry.register(DispatchEntry::fetch(
-        krabka_protocol::owned::fetch_request::FLEXIBLE_MIN,
-    ));
+    registry.register(DispatchEntry::fetch(fetch_request::FLEXIBLE_MIN));
     registry.register(DispatchEntry::sasl_metadata(
         ApiKey::SaslHandshake as i16,
         i16::MAX,
     ));
     registry.register(DispatchEntry::sasl_metadata(
         ApiKey::SaslAuthenticate as i16,
-        krabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
+        sasl_authenticate_request::FLEXIBLE_MIN,
     ));
     register_dispatch_table(&mut registry);
     register_krabka_private_context_dispatches(&mut registry);

@@ -9,6 +9,7 @@
 //!    without a response, and a connection from another ip is served at once.
 //! 3. `unthrottled_ip_unaffected`. Over PLAINTEXT with no quota, it opens 5
 //!    connections and asserts a wall time <500ms.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
@@ -39,7 +40,15 @@ use {
     assert2::assert,
     bytes::BytesMut,
     krabka_protocol::{Encode, owned::api_versions_request::ApiVersionsRequest},
-    tokio::net::TcpStream,
+    std::{
+        io::ErrorKind,
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
+    tokio::{
+        net::{TcpSocket, TcpStream},
+        time,
+    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,16 +173,16 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
         body
     };
     let connect_from = |source: [u8; 4]| async move {
-        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        let socket = TcpSocket::new_v4().expect("socket");
         socket
-            .bind(std::net::SocketAddr::from((source, 0)))
+            .bind(SocketAddr::from((source, 0)))
             .expect("bind source address");
         socket.connect(addr).await.expect("connect")
     };
 
     // Kafka's rate sensor starts empty. The broker's own connections may have
     // spent this bucket's token, so wait out one refill first.
-    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    time::sleep(Duration::from_millis(1_100)).await;
 
     let mut first = connect_from([127, 0, 0, 1]).await;
     let served = kafka_wire::round_trip()
@@ -196,9 +205,9 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
             .await
     });
     // Let the accept loop take the throttled connection before the next one.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    time::sleep(Duration::from_millis(100)).await;
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut other = connect_from([127, 0, 0, 2]).await;
     let other_served = kafka_wire::round_trip()
         .stream(&mut other)
@@ -213,11 +222,11 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
         "another ip is served: {other_served:?}"
     );
     assert!(
-        other_elapsed < std::time::Duration::from_millis(500),
+        other_elapsed < Duration::from_millis(500),
         "another ip waits for no throttle, took {other_elapsed:?}"
     );
 
-    let refused = tokio::time::timeout(std::time::Duration::from_secs(5), throttled_task)
+    let refused = time::timeout(Duration::from_secs(5), throttled_task)
         .await
         .expect("the throttled connection closes after the throttle")
         .expect("round-trip task");
@@ -227,7 +236,7 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
     assert!(
         refused.as_ref().is_err_and(|error| matches!(
             error.kind(),
-            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
         )),
         "the throttled connection closes without a response under ip={entity_name}: {refused:?}"
     );
@@ -241,17 +250,17 @@ async fn unthrottled_ip_unaffected() {
     let (_handle, _dir, addr) = start_single_broker_plaintext().await;
     // No connection_creation_rate quota configured.
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut streams = Vec::with_capacity(5);
     for _ in 0..5 {
-        let s = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let s = TcpStream::connect(addr).await.expect("connect");
         streams.push(s);
     }
     let elapsed = started.elapsed();
     drop(streams);
 
     assert!(
-        elapsed < std::time::Duration::from_millis(500),
+        elapsed < Duration::from_millis(500),
         "expected fast unthrottled connect, got {elapsed:?}"
     );
 }
@@ -300,7 +309,7 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
     // Closing c1 frees the slot. The decrement happens when the c1 handler task
     // observes the close, so retry briefly until a fresh connection succeeds.
     drop(c1);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let mut c3 = TcpStream::connect(addr).await.expect("connect c3");
         if kafka_wire::round_trip()
@@ -314,12 +323,12 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
             break;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "per-IP slot was not freed after c1 closed"
         );
         // intentional: the per-IP ConnectionGuard decrement is coordinator-local
         // (not in the metadata image and has no metric); each iteration re-drives
         // the real connect+round-trip under test, so keep the bounded retry poll.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }

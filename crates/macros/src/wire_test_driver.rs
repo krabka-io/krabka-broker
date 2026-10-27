@@ -33,7 +33,7 @@ fn wire_schema(parser: &Parser) -> Result<WireSchema, ParseError> {
     })
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let mode = Ident::parse(&parser)?;
     let attributes = Attributes::parse(&parser)?;

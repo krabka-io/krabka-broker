@@ -3,7 +3,7 @@
 //!
 //! The published docs thus contain exactly the tested example code.
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 /// Extract the lines between `// docs:begin <anchor>` and `// docs:end <anchor>`
 /// in `source`.
@@ -35,7 +35,7 @@ pub fn extract(source: &str, anchor: &str) -> Result<String, String> {
             continue;
         }
         if inside {
-            lines.push(line.to_string());
+            lines.push(line.to_owned());
         }
     }
     if !completed || inside {
@@ -67,18 +67,18 @@ pub fn sync_markdown(markdown: &str, crates_dir: &Path) -> Result<String, String
     while let Some(start) = rest.find("<!-- snippet:") {
         let (head, after) = rest.split_at(start);
         out.push_str(head);
-        let close = after.find("-->").ok_or("unterminated snippet directive")?;
-        let directive = &after[..close];
+        let (directive, body_start) = after
+            .split_once("-->")
+            .ok_or("unterminated snippet directive")?;
         let spec = directive.trim_start_matches("<!-- snippet:").trim();
         let (relpath, anchor) = spec
             .split_once('#')
             .ok_or_else(|| format!("snippet directive missing '#': {spec}"))?;
         let end_marker = "<!-- /snippet -->";
-        let body_start = &after[close + 3..];
-        let body_end = body_start
-            .find(end_marker)
+        let (_, after_body) = body_start
+            .split_once(end_marker)
             .ok_or("missing <!-- /snippet -->")?;
-        let source = std::fs::read_to_string(crates_dir.join(relpath.trim()))
+        let source = fs::read_to_string(crates_dir.join(relpath.trim()))
             .map_err(|e| format!("read {relpath}: {e}"))?;
         let code = extract(&source, anchor.trim())?;
         out.push_str(directive);
@@ -87,7 +87,7 @@ pub fn sync_markdown(markdown: &str, crates_dir: &Path) -> Result<String, String
         out.push_str(&code);
         out.push_str("\n```\n");
         out.push_str(end_marker);
-        rest = &body_start[body_end + end_marker.len()..];
+        rest = after_body;
     }
     out.push_str(rest);
     Ok(out)
@@ -128,8 +128,8 @@ mod tests {
     #[test]
     fn sync_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("c/examples")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(dir.path().join("c/examples")).unwrap();
+        fs::write(
             dir.path().join("c/examples/e.rs"),
             "// docs:begin a\nlet y = 2;\n// docs:end a\n",
         )

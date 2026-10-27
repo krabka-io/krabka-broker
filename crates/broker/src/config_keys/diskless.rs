@@ -17,7 +17,7 @@ use {
 /// local log. The value is a `BOOLEAN` read the way Kafka reads one, so `TRUE`
 /// turns the path on too. Any other value, and an absent key, leave the topic
 /// on the local-log path.
-pub(crate) const DISKLESS: &str = "krabka.diskless";
+pub const DISKLESS: &str = "krabka.diskless";
 
 /// Resolve a topic's diskless flag from its stored override map.
 ///
@@ -27,7 +27,7 @@ pub(crate) const DISKLESS: &str = "krabka.diskless";
 /// afterwards, which is why [`validate_diskless_unchanged`] pins the value for
 /// the life of the topic.
 #[must_use]
-pub(crate) fn resolve_diskless(config: Option<&BTreeMap<String, String>>) -> bool {
+pub fn resolve_diskless(config: Option<&BTreeMap<String, String>>) -> bool {
     config
         .and_then(|config| config.get(DISKLESS))
         .and_then(|value| super::parse::bool_value(value))
@@ -47,7 +47,7 @@ pub(crate) fn resolve_diskless(config: Option<&BTreeMap<String, String>>) -> boo
 /// explicit `krabka.diskless=false` is as legal as leaving it in place, and an
 /// `AlterConfigs` replacement that drops `krabka.diskless=true` is refused the
 /// same way an explicit flip is.
-pub(crate) fn validate_diskless_unchanged(
+pub fn validate_diskless_unchanged(
     current: Option<&BTreeMap<String, String>>,
     next: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -133,7 +133,7 @@ mod tests {
     fn map(pairs: &[ConfigPair<'_>]) -> BTreeMap<String, String> {
         pairs
             .iter()
-            .map(|ConfigPair { key, value }| ((*key).to_string(), (*value).to_string()))
+            .map(|ConfigPair { key, value }| ((*key).to_owned(), (*value).to_owned()))
             .collect()
     }
 

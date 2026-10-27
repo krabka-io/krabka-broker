@@ -29,6 +29,7 @@ use {
         PartitionElrRecord, PartitionRecord,
     },
     krabka_units::secs,
+    std::sync,
     tokio::sync::oneshot,
     uuid::Uuid,
 };
@@ -192,7 +193,7 @@ fn manager_with(
             balanced_deadline: secs(30),
             queue_capacity: 256,
             listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "localhost".to_string(),
+            inter_broker_server_name: "localhost".to_owned(),
             background: BackgroundRecovery::new(break_glass, audit_log),
         },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
@@ -720,7 +721,7 @@ async fn recover_one_dedups_in_flight_job() {
     ));
     // Pre-mark this partition as already recovering.
     mgr.in_flight.lock().await.insert(InFlightKey {
-        topic: "t".to_string(),
+        topic: "t".to_owned(),
         partition: 0,
     });
     let (tx, rx) = oneshot::channel();
@@ -728,7 +729,7 @@ async fn recover_one_dedups_in_flight_job() {
         reply: Some(tx),
         ..job()
     };
-    mgr.clone().recover_one(j).await;
+    sync::Arc::clone(&mgr).recover_one(j).await;
     assert!(rx.await.unwrap() == RecoveryOutcome::InProgress);
 }
 

@@ -101,10 +101,10 @@ pub fn isr_candidate_selected(facts: IsrCandidateFacts) -> bool {
         }
         IsrMemberRole::OutOfSyncFollower => {
             let in_sync = facts.follower_log_end >= facts.leader_high_watermark
-                && match facts.leader_epoch_start {
-                    Some(start) => facts.follower_log_end >= start,
-                    None => false,
-                };
+                && matches!(
+                    facts.leader_epoch_start,
+                    Some(start) if facts.follower_log_end >= start
+                );
             in_sync && replica_isr_eligible(facts.eligibility)
         }
     }
@@ -210,7 +210,9 @@ pub fn leader_high_watermark(facts: HighWatermarkFacts, replicas: &[HwmReplica])
         == kafka_watermark_candidate(facts.leader_log_end@, replicas@, i@)))]
     #[cfg_attr(creusot, variant(replicas@.len() - i@))]
     while i < replicas.len() {
-        let replica = replicas[i];
+        let Some(&replica) = replicas.get(i) else {
+            break;
+        };
         let caught_up = replica.log_end == facts.leader_log_end || replica.caught_up_within_lag;
         let holds = replica.in_isr || (caught_up && replica_isr_eligible(replica.eligibility));
         if holds && replica.log_end < candidate {

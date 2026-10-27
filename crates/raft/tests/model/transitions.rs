@@ -10,7 +10,7 @@ use {
     },
     krabka_raft::kraft::{
         action::Action,
-        event::Event,
+        event::{Event, SuccessorRank},
         types::{LogView, NodeId, SimInstant},
     },
 };
@@ -85,7 +85,7 @@ impl ConsensusModel {
                             event: Event::ReceiveEndQuorumEpoch {
                                 leader_id: id,
                                 leader_epoch: epoch,
-                                successor_rank: krabka_raft::kraft::event::SuccessorRank::default(),
+                                successor_rank: SuccessorRank::default(),
                             },
                         });
                     }

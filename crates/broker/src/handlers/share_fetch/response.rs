@@ -16,7 +16,9 @@ use {
             LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
             ShareFetchableTopicResponse,
         },
+        primitives::uuid::Uuid,
     },
+    std::collections::HashMap,
 };
 
 pub(super) fn partition_response(partition_index: i32) -> PartitionData {
@@ -56,8 +58,7 @@ fn group_rows(
     rows: impl IntoIterator<Item = (uuid::Uuid, PartitionData)>,
 ) -> Vec<ShareFetchableTopicResponse> {
     let mut order: Vec<uuid::Uuid> = Vec::new();
-    let mut by_topic: std::collections::HashMap<uuid::Uuid, Vec<PartitionData>> =
-        std::collections::HashMap::new();
+    let mut by_topic: HashMap<uuid::Uuid, Vec<PartitionData>> = HashMap::new();
     for (topic_id, row) in rows {
         if !by_topic.contains_key(&topic_id) {
             order.push(topic_id);
@@ -67,7 +68,7 @@ fn group_rows(
     order
         .into_iter()
         .map(|tid| ShareFetchableTopicResponse {
-            topic_id: krabka_protocol::primitives::uuid::Uuid(*tid.as_bytes()),
+            topic_id: Uuid(*tid.as_bytes()),
             partitions: by_topic.remove(&tid).unwrap_or_default(),
             ..Default::default()
         })

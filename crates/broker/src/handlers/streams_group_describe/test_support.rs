@@ -127,6 +127,11 @@ pub(super) async fn unfinalize_streams_version(broker: &Broker) {
 /// the broker's image shows it. Level 0 removes the feature, as it does in
 /// Kafka.
 use crate::handlers::test_support::set_streams_version;
+use krabka_protocol::owned::{
+    streams_group_describe_request::API_KEY,
+    streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+    streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+};
 
 pub(super) async fn describe(broker: &Broker, group_ids: &[&str]) -> StreamsGroupDescribeResponse {
     let principal = principal("admin");
@@ -171,14 +176,7 @@ pub(super) async fn describe_at(
         ..request(group_ids)
     };
     // Over the wire: the fields `version` lacks must not reach the answer.
-    dispatch_wire(
-        broker,
-        krabka_protocol::owned::streams_group_describe_request::API_KEY,
-        version,
-        &req,
-        &ctx,
-    )
-    .await
+    dispatch_wire(broker, API_KEY, version, &req, &ctx).await
 }
 
 /// The partitions of one subtopology that a task map holds.
@@ -231,8 +229,8 @@ pub(super) fn describe_member() -> StreamsDescribeMember {
         topology_epoch: 9,
         user_endpoint: Some(("host-a".into(), 8080)),
         client_tags: vec![("zone".into(), "z1".into())],
-        task_offsets: [(("sub-a".to_string(), 0), 5)].into(),
-        task_end_offsets: [(("sub-a".to_string(), 0), 10)].into(),
+        task_offsets: [(("sub-a".to_owned(), 0), 5)].into(),
+        task_end_offsets: [(("sub-a".to_owned(), 0), 10)].into(),
         active: task_map(&[SubtopologyTasks {
             subtopology_id: "sub-a",
             partitions: vec![0, 2],
@@ -321,8 +319,8 @@ pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
 /// decoded response.
 pub(super) async fn heartbeat(
     broker: &Broker,
-    req: &krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
-) -> krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse {
+    req: &StreamsGroupHeartbeatRequest,
+) -> StreamsGroupHeartbeatResponse {
     use krabka_protocol::owned::streams_group_heartbeat_response::MAX_VERSION;
 
     krabka_macros::request_test_identity! {

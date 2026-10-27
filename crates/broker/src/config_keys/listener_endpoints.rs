@@ -24,34 +24,33 @@ use {
 };
 
 /// `listeners`.
-pub(crate) const LISTENERS: &str = "listeners";
+pub const LISTENERS: &str = "listeners";
 /// `listener.security.protocol.map`.
-pub(crate) const LISTENER_SECURITY_PROTOCOL_MAP: &str = "listener.security.protocol.map";
+pub const LISTENER_SECURITY_PROTOCOL_MAP: &str = "listener.security.protocol.map";
 /// `advertised.listeners`.
-pub(crate) const ADVERTISED_LISTENERS: &str = "advertised.listeners";
+pub const ADVERTISED_LISTENERS: &str = "advertised.listeners";
 /// `controller.listener.names`.
-pub(crate) const CONTROLLER_LISTENER_NAMES: &str = "controller.listener.names";
+pub const CONTROLLER_LISTENER_NAMES: &str = "controller.listener.names";
 /// `inter.broker.listener.name`.
-pub(crate) const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name";
+pub const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name";
 /// `sasl.enabled.mechanisms`.
-pub(crate) const SASL_ENABLED_MECHANISMS: &str = "sasl.enabled.mechanisms";
+pub const SASL_ENABLED_MECHANISMS: &str = "sasl.enabled.mechanisms";
 /// `sasl.mechanism.inter.broker.protocol`.
-pub(crate) const SASL_MECHANISM_INTER_BROKER_PROTOCOL: &str =
-    "sasl.mechanism.inter.broker.protocol";
+pub const SASL_MECHANISM_INTER_BROKER_PROTOCOL: &str = "sasl.mechanism.inter.broker.protocol";
 /// `process.roles`.
-pub(crate) const PROCESS_ROLES: &str = "process.roles";
+pub const PROCESS_ROLES: &str = "process.roles";
 
 /// Kafka's `ListenerName.normalised`: a listener name is upper case.
-pub(crate) fn normalised(name: &str) -> String { name.to_uppercase() }
+pub fn normalised(name: &str) -> String { name.to_uppercase() }
 
 /// Kafka's `ListenerName.configPrefix`: `listener.name.` and the name in
 /// lower case.
-pub(crate) fn config_prefix(listener: &str) -> String {
+pub fn config_prefix(listener: &str) -> String {
     format!("listener.name.{}.", listener.to_lowercase())
 }
 
 /// Kafka's `SecurityProtocol` name of a listener protocol.
-pub(crate) const fn security_protocol_name(protocol: ListenerProtocol) -> &'static str {
+pub const fn security_protocol_name(protocol: ListenerProtocol) -> &'static str {
     match protocol {
         ListenerProtocol::Plaintext => "PLAINTEXT",
         ListenerProtocol::Ssl => "SSL",
@@ -73,7 +72,7 @@ fn security_protocol(name: &str) -> Option<ListenerProtocol> {
 
 /// One endpoint of a listener list: Kafka's `Endpoint`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Endpoint {
+pub struct Endpoint {
     /// The normalised listener name.
     pub(crate) name: String,
     pub(crate) protocol: ListenerProtocol,
@@ -85,7 +84,7 @@ pub(crate) struct Endpoint {
 /// Kafka's `ConfigDef` parse of a `LIST` value: empty when blank, otherwise
 /// the trimmed value split at each comma and the blanks around it, keeping
 /// empty entries.
-pub(crate) fn config_list(value: &str) -> Vec<String> {
+pub fn config_list(value: &str) -> Vec<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -120,7 +119,7 @@ fn parse_port(digits: &str) -> Result<i32, String> {
 /// Kafka's message for an entry that does not parse, a listener without a
 /// protocol, a repeated name, or, with `require_distinct_ports`, a repeated
 /// port.
-pub(crate) fn listener_endpoints(
+pub fn listener_endpoints(
     listeners: &[String],
     protocols: &BTreeMap<String, ListenerProtocol>,
     require_distinct_ports: bool,
@@ -249,7 +248,7 @@ fn check_endpoints(
 /// # Errors
 /// Kafka's message for an entry without a colon, a protocol that is not one,
 /// or two entries that name the same listener.
-pub(crate) fn protocol_map(value: &str) -> Result<BTreeMap<String, ListenerProtocol>, String> {
+pub fn protocol_map(value: &str) -> Result<BTreeMap<String, ListenerProtocol>, String> {
     let mut map = BTreeMap::new();
     if value.is_empty() {
         return Ok(map);
@@ -261,15 +260,15 @@ pub(crate) fn protocol_map(value: &str) -> Result<BTreeMap<String, ListenerProto
     }
     let mut raw: Vec<(String, String)> = Vec::new();
     for entry in entries {
-        let colon = entry.rfind(':').ok_or_else(|| {
+        let (name, protocol) = entry.rsplit_once(':').ok_or_else(|| {
             format!(
                 "Error parsing configuration property '{LISTENER_SECURITY_PROTOCOL_MAP}': begin \
                  0, end -1, length {}",
                 entry.encode_utf16().count()
             )
         })?;
-        let name = entry[..colon].trim().to_owned();
-        let protocol = entry[colon + 1..].trim().to_owned();
+        let name = name.trim().to_owned();
+        let protocol = protocol.trim().to_owned();
         // `parseCsvMap` fills a map, so a later entry for a name replaces an
         // earlier one before the names are normalised.
         if let Some(existing) = raw.iter_mut().find(|(seen, _)| *seen == name) {
@@ -302,7 +301,7 @@ pub(crate) fn protocol_map(value: &str) -> Result<BTreeMap<String, ListenerProto
 /// replacing the one before, as `DynamicBrokerConfig.validatedKafkaProps`
 /// builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ListenerView {
+pub struct ListenerView {
     originals: BTreeMap<String, String>,
 }
 
@@ -429,7 +428,7 @@ impl ListenerView {
 /// `server.properties`: what `DescribeConfigs` reports at
 /// `STATIC_BROKER_CONFIG`, and the SASL settings krabka's own config sets,
 /// spelt as the Kafka keys they stand for.
-pub(crate) fn static_originals(config: &BrokerConfig) -> BTreeMap<String, String> {
+pub fn static_originals(config: &BrokerConfig) -> BTreeMap<String, String> {
     let mut originals: BTreeMap<String, String> = static_settings(config)
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

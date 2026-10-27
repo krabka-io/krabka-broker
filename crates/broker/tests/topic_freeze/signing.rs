@@ -14,6 +14,8 @@ use {
         krabka::freeze::{DescribedTopicFreeze, SetTopicFreezeRequest},
         primitives::uuid::Uuid as WireUuid,
     },
+    ring::{signature, signature::UnparsedPublicKey},
+    std::fs,
 };
 
 /// Domain separator for a freeze-record signature.
@@ -51,7 +53,7 @@ fn signing_bytes(input: &FreezeSigningInput<'_>) -> Vec<u8> {
 }
 
 /// Everything a signed `SetTopicFreeze` needs beyond the record itself.
-pub(super) struct SignedFreeze<'a> {
+pub struct SignedFreeze<'a> {
     pub(super) key: &'a OperatorKey,
     pub(super) cluster_id: &'a str,
     pub(super) pattern_type: i8,
@@ -65,7 +67,7 @@ pub(super) struct SignedFreeze<'a> {
 /// Sign a freeze or a thaw on the caller's own machine, exactly as
 /// `krabka-guard --sign-with` does: the private key never reaches the broker,
 /// and only the `key_id` and the detached signature go on the wire.
-pub(super) fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest {
+pub fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest {
     let proposal_id = *signed.proposal_id.as_bytes();
     let bytes = signing_bytes(&FreezeSigningInput {
         cluster_id: signed.cluster_id,
@@ -93,12 +95,8 @@ pub(super) fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest
 /// Re-verify a registry entry's signature the way `freeze list
 /// --verify-signatures` does: on the reader's own machine, against the operator
 /// public key, with no trust in the broker that served it.
-pub(super) fn verifies_locally(
-    key: &OperatorKey,
-    cluster_id: &str,
-    entry: &DescribedTopicFreeze,
-) -> bool {
-    let public = std::fs::read(&key.public_path).expect("read the operator public key");
+pub fn verifies_locally(key: &OperatorKey, cluster_id: &str, entry: &DescribedTopicFreeze) -> bool {
+    let public = fs::read(&key.public_path).expect("read the operator public key");
     let bytes = signing_bytes(
         &freeze_signing_input()
             .cluster_id(cluster_id)
@@ -106,7 +104,7 @@ pub(super) fn verifies_locally(
             .frozen(true)
             .call(),
     );
-    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+    UnparsedPublicKey::new(&signature::ED25519, public)
         .verify(&bytes, &entry.signature)
         .is_ok()
 }

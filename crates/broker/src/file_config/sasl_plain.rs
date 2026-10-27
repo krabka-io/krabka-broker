@@ -9,11 +9,16 @@
 use {
     super::FileConfigError,
     crate::config::{BrokerConfig, PlainCredentials},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 /// TOML shape of `[sasl_plain]`. Maps to
 /// [`crate::BrokerConfig::plain_credentials`].
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileSaslPlainConfig {
     /// Filesystem path to the SASL/PLAIN credential file: one
     /// `username=password` per line, split at the first `=`, so a password may
@@ -25,14 +30,11 @@ pub struct FileSaslPlainConfig {
     /// secret is never silently rewritten. File-based (not literal) so no
     /// password sits in the TOML; the operator mounts a `Secret` and writes
     /// the mount path here.
-    pub credentials_path: Option<std::path::PathBuf>,
+    pub credentials_path: Option<PathBuf>,
 }
 
 /// Parse the credential file body into username → password pairs.
-fn parse_credentials(
-    path: &std::path::Path,
-    body: &str,
-) -> Result<PlainCredentials, FileConfigError> {
+fn parse_credentials(path: &Path, body: &str) -> Result<PlainCredentials, FileConfigError> {
     body.lines()
         .enumerate()
         .filter(|(_, line)| {
@@ -74,7 +76,7 @@ pub(super) fn apply_sasl_plain(
     let Some(path) = sasl_plain.and_then(|section| section.credentials_path.as_deref()) else {
         return Ok(());
     };
-    let body = std::fs::read_to_string(path).map_err(|error| {
+    let body = fs::read_to_string(path).map_err(|error| {
         FileConfigError::InvalidConfig(format!(
             "[sasl_plain]: failed to read credentials_path {}: {error}",
             path.display()
@@ -92,12 +94,13 @@ mod tests {
             file_config::{FileConfig, test_support::configured_unwrap_parse},
         },
         assert2::assert,
+        std::{collections::HashMap, fs},
     };
 
     fn apply_credential_file(body: &str) -> Result<BrokerConfig, String> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plain-credentials");
-        std::fs::write(&path, body).unwrap();
+        fs::write(&path, body).unwrap();
         let toml = format!(
             "[sasl_plain]\ncredentials_path = '{}'\n",
             path.display().to_string().replace('\\', "/")
@@ -119,8 +122,8 @@ mod tests {
         assert!(
             *cfg.plain_credentials.as_map()
                 == maplit::hashmap! {
-                    "admin".to_string() => "admin-secret".to_string(),
-                    "alice".to_string() => "pa=ss".to_string(),
+                    "admin".to_owned() => "admin-secret".to_owned(),
+                    "alice".to_owned() => "pa=ss".to_owned(),
                 }
         );
     }
@@ -128,36 +131,36 @@ mod tests {
     #[yare::parameterized(
         padded_password = {
             "pad=  secret  ",
-            maplit::hashmap! { "pad".to_string() => "  secret  ".to_string() }
+            maplit::hashmap! { "pad".to_owned() => "  secret  ".to_owned() }
         },
         tabbed_password = {
             "tabbed=\tsecret\t",
-            maplit::hashmap! { "tabbed".to_string() => "\tsecret\t".to_string() }
+            maplit::hashmap! { "tabbed".to_owned() => "\tsecret\t".to_owned() }
         },
         password_with_equals = {
             "spacey=  pa=ss  ",
-            maplit::hashmap! { "spacey".to_string() => "  pa=ss  ".to_string() }
+            maplit::hashmap! { "spacey".to_owned() => "  pa=ss  ".to_owned() }
         },
         padded_username = {
             "  admin  =  secret  ",
-            maplit::hashmap! { "admin".to_string() => "  secret  ".to_string() }
+            maplit::hashmap! { "admin".to_owned() => "  secret  ".to_owned() }
         },
         empty_password = {
             "empty=",
-            maplit::hashmap! { "empty".to_string() => String::new() }
+            maplit::hashmap! { "empty".to_owned() => String::new() }
         },
         whitespace_password = {
             "blank=   ",
-            maplit::hashmap! { "blank".to_string() => "   ".to_string() }
+            maplit::hashmap! { "blank".to_owned() => "   ".to_owned() }
         },
         comment_and_whitespace = {
             "   \t  \n\t# indented comment\n  admin=secret\n",
-            maplit::hashmap! { "admin".to_string() => "secret".to_string() }
+            maplit::hashmap! { "admin".to_owned() => "secret".to_owned() }
         },
     )]
     fn preserves_password_whitespace_and_trims_the_username(
         body: &str,
-        expected: std::collections::HashMap<String, String>,
+        expected: HashMap<String, String>,
     ) {
         let cfg = apply_credential_file(body).unwrap();
         assert2::assert!(*cfg.plain_credentials.as_map() == expected, "{body:?}");
@@ -209,8 +212,8 @@ mod tests {
     fn debug_prints_usernames_but_no_passwords() {
         let mut cfg = apply_credential_file("admin=admin-secret\n").unwrap();
         cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-            username: "broker".to_string(),
-            password: "broker-secret".to_string(),
+            username: "broker".to_owned(),
+            password: "broker-secret".to_owned(),
         });
 
         let rendered = format!("{cfg:?}");

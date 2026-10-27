@@ -15,21 +15,21 @@ use {
     std::collections::BTreeMap,
 };
 
-pub(crate) const KEY_METRICS: &str = "metrics";
-pub(crate) const KEY_INTERVAL_MS: &str = "interval.ms";
-pub(crate) const KEY_MATCH: &str = "match";
+pub const KEY_METRICS: &str = "metrics";
+pub const KEY_INTERVAL_MS: &str = "interval.ms";
+pub const KEY_MATCH: &str = "match";
 
 /// Kafka's `ClientMetricsConfigs.INTERVAL_MS_DEFAULT`: the push interval of a
 /// subscription with no `interval.ms`, and the cap every client starts from.
-pub(crate) const INTERVAL_MS_DEFAULT: i32 = 300_000;
+pub const INTERVAL_MS_DEFAULT: i32 = 300_000;
 const MIN_INTERVAL_MS: i32 = 100;
 const MAX_INTERVAL_MS: i32 = 3_600_000;
-pub(crate) const ALL_METRICS: &str = "*";
+pub const ALL_METRICS: &str = "*";
 
 /// Why `ClientMetricsConfigs.validate` refused a subscription's configs. The
 /// variant is the Kafka exception, so it decides the wire error code.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ConfigError {
+pub enum ConfigError {
     /// `InvalidRequestException`: `INVALID_REQUEST` (42).
     InvalidRequest(String),
     /// `ConfigException` or `InvalidConfigurationException`: `INVALID_CONFIG`
@@ -55,7 +55,7 @@ impl ConfigError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MatchSelector {
+pub enum MatchSelector {
     InstanceId,
     Id,
     SoftwareName,
@@ -79,7 +79,7 @@ impl MatchSelector {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MatchRule {
+pub struct MatchRule {
     pub selector: MatchSelector,
     pub pattern: JavaPattern,
 }
@@ -93,10 +93,7 @@ pub(crate) struct MatchRule {
 /// each a `ConfigException`), then the `interval.ms` range
 /// (`InvalidRequestException`), then the `match` patterns
 /// (`InvalidConfigurationException`).
-pub(crate) fn validate(
-    subscription: &str,
-    configs: &BTreeMap<String, String>,
-) -> Result<(), ConfigError> {
+pub fn validate(subscription: &str, configs: &BTreeMap<String, String>) -> Result<(), ConfigError> {
     if subscription.is_empty() {
         return Err(ConfigError::InvalidRequest(
             "Subscription name can't be empty".into(),
@@ -138,10 +135,7 @@ pub(crate) fn validate(
 
 /// Effective push interval for a subscription's override map. The function
 /// returns `default_interval_ms` when the key is unset.
-pub(crate) fn effective_interval_ms(
-    configs: &BTreeMap<String, String>,
-    default_interval_ms: i32,
-) -> i32 {
+pub fn effective_interval_ms(configs: &BTreeMap<String, String>, default_interval_ms: i32) -> i32 {
     configs
         .get(KEY_INTERVAL_MS)
         .and_then(|v| int_value(v.as_str()))
@@ -151,13 +145,13 @@ pub(crate) fn effective_interval_ms(
 /// Parse the `metrics` value into prefixes, as `ConfigDef` parses a `LIST`.
 /// `"*"` collapses to `["*"]`. An empty string gives an empty list, which
 /// means no metrics.
-pub(crate) fn parse_metrics(value: &str) -> Vec<String> {
-    list_value(value).into_iter().map(str::to_string).collect()
+pub fn parse_metrics(value: &str) -> Vec<String> {
+    list_value(value).into_iter().map(str::to_owned).collect()
 }
 
 /// Parse the `match` value into compiled selector rules. An empty value
 /// matches all.
-pub(crate) fn parse_match_rules(value: &str) -> Result<Vec<MatchRule>, ConfigError> {
+pub fn parse_match_rules(value: &str) -> Result<Vec<MatchRule>, ConfigError> {
     parse_match_patterns(&list_value(value))
 }
 
@@ -194,13 +188,14 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 mod tests {
     use {
         super::*,
+        crate::codes::{INVALID_CONFIG, INVALID_REQUEST},
         assert2::{assert, check},
     };
 
     fn validate_one(key: &str, value: &str) -> Result<(), ConfigError> {
         validate(
             "sub",
-            &maplit::btreemap! {key.to_string() => value.to_string()},
+            &maplit::btreemap! {key.to_owned() => value.to_owned()},
         )
     }
 
@@ -229,8 +224,8 @@ mod tests {
 
     #[test]
     fn validate_matches_client_metrics_configs() {
-        let request = |m: &str| Err(ConfigError::InvalidRequest(m.to_string()));
-        let config = |m: &str| Err(ConfigError::InvalidConfig(m.to_string()));
+        let request = |m: &str| Err(ConfigError::InvalidRequest(m.to_owned()));
+        let config = |m: &str| Err(ConfigError::InvalidConfig(m.to_owned()));
         let range = |n: &str| {
             request(&format!(
                 "Invalid value {n} for interval.ms, interval must be between 100 and 3600000 (1 \
@@ -354,8 +349,8 @@ mod tests {
     #[test]
     fn unknown_key_is_reported_before_a_bad_value() {
         let configs = maplit::btreemap! {
-            "interval.ms".to_string() => "abc".to_string(),
-            "zzz".to_string() => "x".to_string(),
+            "interval.ms".to_owned() => "abc".to_owned(),
+            "zzz".to_owned() => "x".to_owned(),
         };
         check!(
             validate("sub", &configs)
@@ -367,8 +362,8 @@ mod tests {
 
     #[test]
     fn error_codes_follow_the_exception() {
-        check!(ConfigError::InvalidRequest(String::new()).code() == crate::codes::INVALID_REQUEST);
-        check!(ConfigError::InvalidConfig(String::new()).code() == crate::codes::INVALID_CONFIG);
+        check!(ConfigError::InvalidRequest(String::new()).code() == INVALID_REQUEST);
+        check!(ConfigError::InvalidConfig(String::new()).code() == INVALID_CONFIG);
     }
 
     #[test]
@@ -376,7 +371,7 @@ mod tests {
         let mut m = BTreeMap::new();
         check!(effective_interval_ms(&m, INTERVAL_MS_DEFAULT) == 300_000);
         check!(effective_interval_ms(&m, 600_000) == 600_000);
-        m.insert("interval.ms".to_string(), " 60000 ".to_string());
+        m.insert("interval.ms".to_owned(), " 60000 ".to_owned());
         check!(effective_interval_ms(&m, INTERVAL_MS_DEFAULT) == 60_000);
     }
 
@@ -996,8 +991,8 @@ mod tests {
 
     #[test]
     fn parse_metrics_splits_like_config_def() {
-        check!(parse_metrics("*") == vec!["*".to_string()]);
+        check!(parse_metrics("*") == vec!["*".to_owned()]);
         check!(parse_metrics("  ") == Vec::<String>::new());
-        check!(parse_metrics(" a. , b. ") == vec!["a.".to_string(), "b.".to_string()]);
+        check!(parse_metrics(" a. , b. ") == vec!["a.".to_owned(), "b.".to_owned()]);
     }
 }

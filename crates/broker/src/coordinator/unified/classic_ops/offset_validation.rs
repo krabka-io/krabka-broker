@@ -26,7 +26,7 @@ use {
 ///
 /// # Errors
 /// Returns the Kafka error code of the failed check.
-pub(crate) fn validate_offset_commit(
+pub fn validate_offset_commit(
     state: &ClassicState,
     member_id: &str,
     group_instance_id: Option<&str>,
@@ -54,7 +54,7 @@ pub(crate) fn validate_offset_commit(
 /// `OffsetMetadataManager.validateOffsetCommit` does through
 /// `rescheduleClassicGroupMemberHeartbeat` when the group is `Stable` or
 /// `PreparingRebalance`. A member id the group does not hold changes nothing.
-pub(crate) fn refresh_committer_session(state: &mut ClassicState, member_id: &str) {
+pub fn refresh_committer_session(state: &mut ClassicState, member_id: &str) {
     if !matches!(
         state.state,
         GroupState::Stable | GroupState::PreparingRebalance
@@ -68,7 +68,7 @@ pub(crate) fn refresh_committer_session(state: &mut ClassicState, member_id: &st
 
 /// The classic fence of a `TxnOffsetCommit`. It returns `Some(code)` to
 /// reject.
-pub(crate) fn validate_commit(
+pub fn validate_commit(
     state: &ClassicState,
     member_id: &str,
     group_instance_id: Option<&str>,

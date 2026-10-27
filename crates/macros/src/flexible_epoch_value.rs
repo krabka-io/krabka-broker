@@ -13,7 +13,7 @@ struct EpochArgs {
     record: String,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let args = item
         .parse_meta::<EpochArgs>("epoch_value")?
         .ok_or_else(|| {
@@ -38,8 +38,14 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             return Err(ParseError::new(field.ty.span(), format!("expected `{ty}`")));
         }
     }
-    let epoch = field_ident(fields.first().expect("two fields"), "FlexibleEpochValue")?.clone();
-    let tagged = field_ident(fields.last().expect("two fields"), "FlexibleEpochValue")?.clone();
+    let (Some(epoch), Some(tagged)) = (fields.first(), fields.last()) else {
+        return Err(ParseError::new(
+            item.ident.span(),
+            "`FlexibleEpochValue` needs two named fields",
+        ));
+    };
+    let epoch = field_ident(epoch, "FlexibleEpochValue")?.clone();
+    let tagged = field_ident(tagged, "FlexibleEpochValue")?.clone();
     let record = LitStr::new(&args.record, item.ident.span());
     Ok(impl_block(item, &TokenStream::new(), &moxy::template! {
         #[must_use]

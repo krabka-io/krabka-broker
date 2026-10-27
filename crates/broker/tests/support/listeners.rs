@@ -16,7 +16,7 @@ pub fn configure_sasl_plaintext(
         addr,
         ListenerProtocol::SaslPlaintext,
     )];
-    config.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    config.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
     config.controller_listener_protocol = controller_protocol;
 }
 

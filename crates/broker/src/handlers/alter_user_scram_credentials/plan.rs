@@ -109,7 +109,7 @@ fn remember_user(user_order: &mut Vec<String>, user: &str) {
     if user_order.iter().any(|seen| seen == user) {
         return;
     }
-    user_order.push(user.to_string());
+    user_order.push(user.to_owned());
 }
 
 pub(super) fn distinct_requested_users(req: &AlterUserScramCredentialsRequest) -> Vec<String> {
@@ -137,25 +137,18 @@ fn stage_deletion(
         errors,
     );
     let decision = decide_deletion(broker, &deletion, authorized, prior);
-    match decision {
-        ScramAlterationDecision::KeepPriorError => {}
-        ScramAlterationDecision::Duplicate => {
+    // An accepted decision carries a mechanism, a rejected one an error, and
+    // `KeepPriorError` neither.
+    if let Some(mechanism) = decision_mechanism(decision) {
+        deletions.insert(deletion.name.clone(), StagedDeletion {
+            deletion,
+            mechanism,
+        });
+    } else if let Some(error) = decision_error(decision) {
+        if matches!(decision, ScramAlterationDecision::Duplicate) {
             deletions.remove(&deletion.name);
-            let error = decision_error(decision).expect("duplicate has an error");
-            errors.insert(deletion.name, error);
         }
-        ScramAlterationDecision::AcceptSha256 | ScramAlterationDecision::AcceptSha512 => {
-            let mechanism =
-                decision_mechanism(decision).expect("accepted decision has a mechanism");
-            deletions.insert(deletion.name.clone(), StagedDeletion {
-                deletion,
-                mechanism,
-            });
-        }
-        _ => {
-            let error = decision_error(decision).expect("rejected decision has an error");
-            errors.insert(deletion.name, error);
-        }
+        errors.insert(deletion.name, error);
     }
 }
 
@@ -188,26 +181,19 @@ fn stage_upsertion(
         errors,
     );
     let decision = decide_upsertion(&upsertion, authorized, prior);
-    match decision {
-        ScramAlterationDecision::KeepPriorError => {}
-        ScramAlterationDecision::Duplicate => {
+    // An accepted decision carries a mechanism, a rejected one an error, and
+    // `KeepPriorError` neither.
+    if let Some(mechanism) = decision_mechanism(decision) {
+        upsertions.insert(upsertion.name.clone(), StagedUpsertion {
+            upsertion,
+            mechanism,
+        });
+    } else if let Some(error) = decision_error(decision) {
+        if matches!(decision, ScramAlterationDecision::Duplicate) {
             deletions.remove(&upsertion.name);
             upsertions.remove(&upsertion.name);
-            let error = decision_error(decision).expect("duplicate has an error");
-            errors.insert(upsertion.name, error);
         }
-        ScramAlterationDecision::AcceptSha256 | ScramAlterationDecision::AcceptSha512 => {
-            let mechanism =
-                decision_mechanism(decision).expect("accepted decision has a mechanism");
-            upsertions.insert(upsertion.name.clone(), StagedUpsertion {
-                upsertion,
-                mechanism,
-            });
-        }
-        _ => {
-            let error = decision_error(decision).expect("rejected decision has an error");
-            errors.insert(upsertion.name, error);
-        }
+        errors.insert(upsertion.name, error);
     }
 }
 

@@ -67,7 +67,7 @@ mod tests;
     api = "SetTopicFreeze",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: SetTopicFreezeRequest,
     version: ApiVersion,

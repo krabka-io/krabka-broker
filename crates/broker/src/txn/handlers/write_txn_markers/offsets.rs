@@ -26,10 +26,12 @@ use {
         partition::Partition,
         txn::marker::MarkerType,
     },
+    krabka_protocol::records::RecordBatch,
     std::{collections::HashMap, sync::Arc},
+    tokio::sync::oneshot,
 };
 
-pub(crate) type CommittedOffsets = HashMap<String, Vec<((String, i32), OffsetEntry)>>;
+pub type CommittedOffsets = HashMap<String, Vec<((String, i32), OffsetEntry)>>;
 
 pub(super) fn pending_offset_entries(
     partition: &Partition,
@@ -107,7 +109,7 @@ fn scan_pending_offset_entries(
 /// tombstones.
 fn drop_tombstoned_entries(
     offsets: &mut CommittedOffsets,
-    batch: &krabka_protocol::records::RecordBatch,
+    batch: &RecordBatch,
 ) -> Result<(), BrokerError> {
     for record in &batch.records {
         let (Some(key), None) = (&record.key, &record.value) else {
@@ -196,7 +198,7 @@ pub(super) async fn resolve_pending_offsets(
         let Some(handle) = handle else {
             continue;
         };
-        let (reply, response) = tokio::sync::oneshot::channel();
+        let (reply, response) = oneshot::channel();
         let resolved = handle
             .tx
             .send(GroupActorMessage::ResolveTxnOffsets {
@@ -283,30 +285,27 @@ mod tests {
                 "no tombstone",
                 vec![],
                 HashMap::from([
-                    ("g".to_string(), vec![
-                        (("orders".to_string(), 0), entry(10)),
-                        (("orders".to_string(), 1), entry(11)),
+                    ("g".to_owned(), vec![
+                        (("orders".to_owned(), 0), entry(10)),
+                        (("orders".to_owned(), 1), entry(11)),
                     ]),
-                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                    ("h".to_owned(), vec![(("t".to_owned(), 0), entry(20))]),
                 ]),
             ),
             row(
                 "one key of one group",
                 vec![tombstone("g", "orders", 0)],
                 HashMap::from([
-                    ("g".to_string(), vec![(
-                        ("orders".to_string(), 1),
-                        entry(11),
-                    )]),
-                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                    ("g".to_owned(), vec![(("orders".to_owned(), 1), entry(11))]),
+                    ("h".to_owned(), vec![(("t".to_owned(), 0), entry(20))]),
                 ]),
             ),
             row(
                 "every key of a deleted group",
                 vec![tombstone("g", "orders", 0), tombstone("g", "orders", 1)],
                 HashMap::from([
-                    ("g".to_string(), vec![]),
-                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                    ("g".to_owned(), vec![]),
+                    ("h".to_owned(), vec![(("t".to_owned(), 0), entry(20))]),
                 ]),
             ),
         ];

@@ -8,7 +8,11 @@
 //! last leader in the ELR as well (`0:1,2,3:1`), and an unclean restart keeps
 //! it out (`0::1`).
 
-use {super::*, crate::leader_election::test_support::TopicConfigOverride, assert2::assert};
+use {
+    super::*,
+    crate::{elr::state, leader_election::test_support::TopicConfigOverride},
+    assert2::assert,
+};
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1
 /// alone in its record, and with `published` as its ELR state.
@@ -237,7 +241,7 @@ async fn an_unfence_election_leaves_a_partition_with_a_leader() {
     }
 
     let partition = img.partition("t", 0).expect("partition");
-    assert!(!crate::elr::state::is_leaderless(&img, partition));
+    assert!(!state::is_leaderless(&img, partition));
     assert!(partition.leader == NodeId(1));
     assert!(partition.leader_epoch == LeaderEpoch(6));
     assert!(img.leader_recovery_state("t", 0) == LeaderRecoveryState::Recovering);

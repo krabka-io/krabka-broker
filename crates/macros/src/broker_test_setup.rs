@@ -2,19 +2,23 @@
 
 use {
     crate::{
-        meta::{expect_name, grouped_value, native_groups},
+        meta::{expect_name, grouped_value, native_groups, next_group},
         request_test_identity::user_bindings,
         sweep_loop::{SpliceValue, splice},
     },
     moxy::{
         ast::{List, Parse, ParseError, Parser, Path, Token},
-        token::{Ident, Spanner, TokenStream},
+        token::{Ident, Spanner, TokenStream, TokenTree},
     },
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream},
 };
 
 struct Setup {
-    names: Vec<Ident>,
+    handle: Ident,
+    directory: Ident,
+    broker: Ident,
+    /// The optional context bindings after the three broker bindings.
+    context: Vec<Ident>,
     policy: Option<String>,
     ready: bool,
     leader: bool,
@@ -27,7 +31,7 @@ enum UserPolicy {
     Client,
 }
 
-fn nonempty_bracketed(token: &moxy::token::TokenTree, message: &str) -> Result<(), ParseError> {
+fn nonempty_bracketed(token: &TokenTree, message: &str) -> Result<(), ParseError> {
     if token
         .as_group()
         .is_some_and(|group| group.delim.is_bracket() && !group.tokens.is_empty())
@@ -78,7 +82,7 @@ fn declaration(input: &TokenStream) -> Result<Setup, ParseError> {
                 "starter policy must be allow_all, deny_all or controller_peer",
             ));
         }
-        let _: Path = moxy::parse!({ boot.tokens.clone() })?;
+        let _: Path = moxy::parse!({ boot.tokens })?;
         Some(policy.text().to_owned())
     };
     let _: Token![;] = Parse::parse(&parser)?;
@@ -127,8 +131,19 @@ fn declaration(input: &TokenStream) -> Result<Setup, ParseError> {
             "a context binding requires its user policy",
         ));
     }
+    let mut names = names.into_iter();
+    let (Some(handle), Some(directory), Some(broker)) = (names.next(), names.next(), names.next())
+    else {
+        return Err(ParseError::new(
+            input.span(),
+            "bind handle/directory/broker and optional context or principal/peer/context",
+        ));
+    };
     Ok(Setup {
-        names: names.into_iter().collect(),
+        handle,
+        directory,
+        broker,
+        context: names.collect(),
         policy,
         ready,
         leader,
@@ -137,9 +152,12 @@ fn declaration(input: &TokenStream) -> Result<Setup, ParseError> {
 }
 
 fn template(setup: &Setup) -> TokenStream {
-    let handle = &setup.names[0];
-    let directory = &setup.names[1];
-    let broker = &setup.names[2];
+    let Setup {
+        handle,
+        directory,
+        broker,
+        ..
+    } = setup;
     let deny = setup.policy.as_deref() == Some("deny_all");
     let controller_peer = setup.policy.as_deref() == Some("controller_peer");
     let policy = setup.policy.is_some();
@@ -154,12 +172,12 @@ fn template(setup: &Setup) -> TokenStream {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let setup = declaration(&input.clone().into())?;
     let mut groups = native_groups(input).skip(1);
-    let boot = groups.next().expect("validated starter");
+    let boot = next_group(&mut groups, "a starter")?;
     let ready = if setup.ready {
-        groups.next().expect("validated readiness").stream()
+        next_group(&mut groups, "a readiness block")?.stream()
     } else {
         NativeTokenStream::new()
     };
@@ -183,10 +201,13 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
         &[],
     );
     if !matches!(setup.user, UserPolicy::Absent) {
-        let user = groups.next().expect("validated user").stream();
-        let client = matches!(setup.user, UserPolicy::Client)
-            .then(|| groups.next().expect("validated client").stream());
-        output.extend(user_bindings(&setup.names[3..], user, client));
+        let user = next_group(&mut groups, "a user expression")?.stream();
+        let client = if matches!(setup.user, UserPolicy::Client) {
+            Some(next_group(&mut groups, "a client expression")?.stream())
+        } else {
+            None
+        };
+        output.extend(user_bindings(&setup.context, user, client)?);
     }
     Ok(output)
 }

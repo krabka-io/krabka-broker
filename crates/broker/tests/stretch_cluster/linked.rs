@@ -17,6 +17,7 @@ use {
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::Duration,
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// A three-site cluster whose peers reach each site only through a relay.
@@ -50,7 +51,7 @@ impl LinkedCluster {
                 Err(error) => {
                     tracing::warn!(attempt, %error, "relayed stretch cluster start failed");
                     last_err = Some(error);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    time::sleep(Duration::from_secs(2)).await;
                 }
             }
         }

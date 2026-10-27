@@ -14,6 +14,7 @@ use {
         },
     },
     assert2::check,
+    std::fs,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -46,7 +47,7 @@ async fn epoch_checkpoint_byte_compat() {
 
     // Read the checkpoint file from disk.
     let path = dir.path().join("ckpt-0").join("leader-epoch-checkpoint");
-    let s = std::fs::read_to_string(&path).expect("checkpoint file");
+    let s = fs::read_to_string(&path).expect("checkpoint file");
     // Format: header "0\n", count "2\n", rows "0 0\n1 1\n".
     check!(s.starts_with("0\n"), "header should be '0\\n', got: {s:?}");
     check!(s.contains("\n2\n"), "count should be 2, got: {s:?}");

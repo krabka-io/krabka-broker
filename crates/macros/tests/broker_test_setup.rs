@@ -1,4 +1,5 @@
 //! Resource retention, visible identities and refusal matrices use flat declarations.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -7,6 +8,7 @@ use {
         ptr,
         sync::{Arc, Mutex},
     },
+    tokio::task,
 };
 
 type Events = Arc<Mutex<Vec<String>>>;
@@ -14,7 +16,7 @@ thread_local! { static CURRENT_EVENTS: RefCell<Option<Events>> = const { RefCell
 
 fn record(events: &Events, event: impl Into<String>) { events.lock().unwrap().push(event.into()); }
 fn active_events() -> Events {
-    CURRENT_EVENTS.with_borrow(|events| events.as_ref().unwrap().clone())
+    CURRENT_EVENTS.with_borrow(|events| Arc::clone(events.as_ref().unwrap()))
 }
 fn install_events(events: &Events) {
     CURRENT_EVENTS.with_borrow_mut(|current| *current = Some(Arc::clone(events)));
@@ -53,7 +55,7 @@ impl Handle {
     }
 
     async fn shutdown(&self) {
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         record(&self.broker.events, "shutdown");
     }
 }
@@ -66,7 +68,7 @@ async fn start<const MAJOR: u8, const MINOR: u8>(
     events: Events,
 ) -> handlers::test_support::StartedBroker {
     assert!(MAJOR == 1 && MINOR == 2);
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     record(&events, "start");
     handlers::test_support::StartedBroker {
         broker: Handle {
@@ -98,7 +100,7 @@ impl Drop for Address {
 mod handlers {
     use super::{Address, Identity, record};
 
-    pub(crate) struct RequestContext<'a> {
+    pub struct RequestContext<'a> {
         pub identity: &'a Identity,
         pub address: &'a Address,
         pub client: &'a str,
@@ -128,24 +130,24 @@ mod handlers {
         }
     }
 
-    pub(crate) mod test_support {
-        pub(crate) struct StartedBroker {
+    pub mod test_support {
+        pub struct StartedBroker {
             pub(crate) broker: super::super::Handle,
             pub(crate) dir: super::super::Directory,
         }
         use super::super::{active_events, record};
 
-        pub(crate) fn allow_all_authorizer() -> bool {
+        pub fn allow_all_authorizer() -> bool {
             record(&active_events(), "allow policy");
             true
         }
 
-        pub(crate) fn deny_all_authorizer() -> bool {
+        pub fn deny_all_authorizer() -> bool {
             record(&active_events(), "deny policy");
             false
         }
 
-        pub(crate) fn controller_peer_authorizer() -> bool {
+        pub fn controller_peer_authorizer() -> bool {
             record(&active_events(), "controller peer policy");
             true
         }
@@ -153,13 +155,16 @@ mod handlers {
 }
 
 mod test_support {
-    use super::{
-        Address, Arc, Broker, Directory, Events, Handle, Identity, active_events,
-        handlers::{self, RequestContext},
-        install_events, record,
+    use {
+        super::{
+            Address, Arc, Broker, Directory, Events, Handle, Identity, active_events,
+            handlers::{self, RequestContext},
+            install_events, record,
+        },
+        tokio::task,
     };
 
-    pub(crate) fn principal(name: &str) -> Identity {
+    pub fn principal(name: &str) -> Identity {
         let events = active_events();
         record(&events, format!("identity:{name}"));
         Identity {
@@ -168,18 +173,18 @@ mod test_support {
         }
     }
 
-    pub(crate) fn peer() -> Address {
+    pub fn peer() -> Address {
         let events = active_events();
         record(&events, "address");
         Address { events }
     }
 
-    pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
+    pub async fn wait_for_controller_leader(broker: &Broker) {
         record(&broker.events, "leader ready");
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
-    pub(crate) fn request_context<'a>(
+    pub fn request_context<'a>(
         identity: &'a Identity,
         address: &'a Address,
         client: &'a str,
@@ -194,15 +199,15 @@ mod test_support {
         )
     }
 
-    pub(crate) struct Authorization {
+    pub struct Authorization {
         pub(crate) events: Events,
     }
-    pub(crate) struct ShareStarter {
+    pub struct ShareStarter {
         authorizer: Option<Authorization>,
         enabled: bool,
     }
 
-    pub(crate) fn start_share_broker() -> ShareStarter {
+    pub fn start_share_broker() -> ShareStarter {
         ShareStarter {
             authorizer: None,
             enabled: true,
@@ -221,7 +226,7 @@ mod test_support {
         }
 
         pub(crate) async fn call(self) -> handlers::test_support::StartedBroker {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             let events = self.authorizer.unwrap().events;
             install_events(&events);
             record(&events, format!("start:{}", self.enabled));
@@ -243,7 +248,7 @@ fn test_context<'a>(identity: &'a Identity, address: &'a Address) -> handlers::R
 }
 
 async fn configured_start(enabled: bool) -> handlers::test_support::StartedBroker {
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     let events = active_events();
     record(&events, format!("start:{enabled}"));
     handlers::test_support::StartedBroker {
@@ -355,7 +360,7 @@ async fn boot_runs_once_before_readiness_and_keeps_ready_bindings_and_directory_
                 } else {
                     panic!("enabled broker expected");
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             };
         }
         assert!(ptr::eq(
@@ -426,7 +431,7 @@ fn contexts_borrow_visible_or_hygienic_bindings_and_keep_expression_order() {
         assert!(user.name == "identity-only");
         assert!(ptr::eq(Arc::as_ptr(&address.events), Arc::as_ptr(&events)));
     }
-    let events = events.lock().unwrap();
+    let events = events.lock().unwrap().clone();
     assert!(
         events[..7]
             == [
@@ -465,7 +470,7 @@ async fn dispatch(
 ) -> Result<u8, &'static str> {
     assert!(context.identity.name == "alice");
     record(&broker.events, format!("dispatch:{value}"));
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     Ok(if broker.enabled { value } else { 0 })
 }
 

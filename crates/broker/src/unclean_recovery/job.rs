@@ -16,7 +16,7 @@ use {
 /// A request to run unclean recovery for one partition, if it is needed. The
 /// failover path and the `ElectLeaders` handler enqueue it, and the URM
 /// services it.
-pub(crate) struct RecoveryJob {
+pub struct RecoveryJob {
     pub topic: String,
     pub partition: i32,
     pub strategy: RecoveryStrategy,
@@ -37,7 +37,7 @@ pub(crate) struct RecoveryJob {
 
 /// Result of attempting unclean recovery for a single partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecoveryOutcome {
+pub enum RecoveryOutcome {
     /// The URM elected a new leader and submitted the change. This variant
     /// carries the id.
     Elected(NodeId),
@@ -61,7 +61,7 @@ pub(crate) enum RecoveryOutcome {
 
 /// Cloneable handle that enqueues [`RecoveryJob`] values onto the URM task.
 #[derive(Clone)]
-pub(crate) struct UncleanRecoveryHandle {
+pub struct UncleanRecoveryHandle {
     pub(super) tx: mpsc::Sender<RecoveryJob>,
 }
 

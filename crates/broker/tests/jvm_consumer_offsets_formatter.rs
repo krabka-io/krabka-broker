@@ -62,6 +62,7 @@
 //!
 //! Gated `#[ignore]` (requires Docker); the Bazel target that owns this suite
 //! runs it with `--ignored`.
+#![cfg(test)]
 
 mod support;
 
@@ -69,7 +70,7 @@ use {
     crate::support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
     assert2::assert,
     krabka_broker::BrokerHandle,
-    std::process::Command,
+    std::process::{Command, Output},
 };
 
 /// The pinned release whose tools decode the topic.
@@ -216,7 +217,7 @@ fn decode_stream(stdout: &str) -> Vec<serde_json::Value> {
     // and says so on stdout before the first record. The flag stays, because
     // the KIP-848 run drives `apache/kafka:4.0.0`, which has no replacement
     // for it; the stream simply starts at the first object.
-    let stdout = stdout.find('{').map_or("", |start| &stdout[start..]);
+    let stdout = stdout.trim_start_matches(|c: char| c != '{');
     serde_json::Deserializer::from_str(stdout)
         .into_iter::<serde_json::Value>()
         .map(|value| value.expect("the formatter writes one JSON object per record"))
@@ -335,7 +336,7 @@ fn processed_records(stderr: &str) -> usize {
 
 /// Run one tool from `image` against a broker outside the container, and hand
 /// back what it did without asserting that it succeeded.
-fn docker_run(image: &str, args: &[&str]) -> std::process::Output {
+fn docker_run(image: &str, args: &[&str]) -> Output {
     let mut full: Vec<&str> = vec![
         "run",
         "--rm",
@@ -357,7 +358,7 @@ fn docker_run(image: &str, args: &[&str]) -> std::process::Output {
 }
 
 /// [`docker_run`], and the tool must have succeeded.
-fn docker_run_ok(image: &str, args: &[&str]) -> std::process::Output {
+fn docker_run_ok(image: &str, args: &[&str]) -> Output {
     let out = docker_run(image, args);
     assert!(out.status.success(), "docker run {image} {args:?} failed");
     out
@@ -567,7 +568,7 @@ impl Cluster {
 
 /// Every produced record reached the consumer, so the group really did read to
 /// the end of the topic and the position it commits is [`RECORDS`].
-fn assert_records_read(out: &std::process::Output) {
+fn assert_records_read(out: &Output) {
     let stdout = String::from_utf8_lossy(&out.stdout);
     for index in 0..RECORDS {
         let record = format!("record-{index}");

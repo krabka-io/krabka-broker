@@ -18,7 +18,7 @@ use {
 /// Sentinel label value that folds unbounded inputs (unrecognised
 /// `api_key`s, `SaslAuthenticate` without a prior handshake) into one
 /// series, keeping label cardinality bounded.
-pub(crate) const UNKNOWN_LABEL: &str = "Unknown";
+pub const UNKNOWN_LABEL: &str = "Unknown";
 
 /// Per-topic label set. `EncodeLabelSet` is the prometheus-client
 /// derive that produces the `topic="<name>"` label on emitted samples.
@@ -57,9 +57,11 @@ pub struct PartitionLabel {
 }
 
 /// Per-follower replica-lag label set, paired with the `replica_lag_records`
-/// gauge family. `replica` is the follower's node id, so a partition this
-/// broker leads carries one series per follower in its replica set and none
-/// for the leader itself.
+/// gauge family.
+///
+/// `replica` is the follower's node id, so a partition this broker leads
+/// carries one series per follower in its replica set and none for the leader
+/// itself.
 ///
 /// Cardinality is bounded by the partitions this broker leads times their
 /// replication factor. Two rules hold that bound. The lag sampler republishes
@@ -77,9 +79,11 @@ pub struct ReplicaLagLabel {
 }
 
 /// Per-(group, topic, partition) consumer-group-lag label set, paired with the
-/// `consumer_group_lag_records` gauge family. It covers classic and KIP-848
-/// groups alike, because a group's committed offsets live on the
-/// protocol-agnostic `CoordinatorGroup` whichever protocol its members speak.
+/// `consumer_group_lag_records` gauge family.
+///
+/// It covers classic and KIP-848 groups alike, because a group's committed
+/// offsets live on the protocol-agnostic `CoordinatorGroup` whichever protocol
+/// its members speak.
 ///
 /// This is the widest label set the broker emits, so its bound is worth
 /// stating exactly. A series exists only for a `(topic, partition)` a group
@@ -160,20 +164,22 @@ pub struct ClientSoftwareLabel {
 }
 
 /// Per-API request fingerprint, paired with the
-/// `api_requests` counter family. `api_key` is the
-/// `ApiKey::IntoStaticStr`-derived variant name (e.g. `"Produce"`,
-/// `"DescribeQuorum"`) so operators see human-readable api-name
-/// labels. A krabka-private api key carries its own RPC name instead
-/// (e.g. `"TriggerBarrier"`), because the generated enum does not
-/// know that range. Cardinality is bounded by `ApiKey::ALL.len()`
-/// (~80 entries) plus one label per krabka-private RPC; requests for
-/// unknown api keys land under the `"Unknown"` sentinel label.
+/// `api_requests` counter family.
+///
+/// `api_key` is the `ApiKey::IntoStaticStr`-derived variant name (e.g.
+/// `"Produce"`, `"DescribeQuorum"`) so operators see human-readable api-name
+/// labels. A krabka-private api key carries its own RPC name instead (e.g.
+/// `"TriggerBarrier"`), because the generated enum does not know that range.
+/// Cardinality is bounded by `ApiKey::ALL.len()` (~80 entries) plus one label
+/// per krabka-private RPC; requests for unknown api keys land under the
+/// `"Unknown"` sentinel label.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ApiKeyLabel {
     pub api_key: &'static str,
 }
 
 /// Per-barrier-group label set, paired with the `barrier_*` families.
+///
 /// `group` is the barrier group name. Cardinality is bounded by
 /// `BrokerConfig::barrier_max_groups`, because the coordinator rejects a new
 /// group past that cap.
@@ -190,25 +196,26 @@ pub struct DirectoryLabel {
 
 /// SASL mechanism fingerprint, paired with the
 /// `{successful,failed}_authentication_total` counter families.
+///
 /// `mechanism` is the canonical Kafka wire name from
-/// [`krabka_security::SaslMechanism::wire_name`] (`"PLAIN"`,
-/// `"SCRAM-SHA-256"`, `"SCRAM-SHA-512"`, `"OAUTHBEARER"`, `"GSSAPI"`) when the
-/// `SaslAuthenticate` frame arrived in a valid sequence; the
-/// `"Unknown"` sentinel covers `ILLEGAL_SASL_STATE` rejects where
-/// no prior `SaslHandshake` ran and the mechanism is unset.
-/// Cardinality is bounded by `SaslMechanism::*` + 1 — a tight set
-/// regardless of client population.
+/// [`krabka_security::SaslMechanism::wire_name`] (`"PLAIN"`, `"SCRAM-SHA-256"`,
+/// `"SCRAM-SHA-512"`, `"OAUTHBEARER"`, `"GSSAPI"`) when the `SaslAuthenticate`
+/// frame arrived in a valid sequence; the `"Unknown"` sentinel covers
+/// `ILLEGAL_SASL_STATE` rejects where no prior `SaslHandshake` ran and the
+/// mechanism is unset. Cardinality is bounded by `SaslMechanism::*` + 1 — a
+/// tight set regardless of client population.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct SaslMechanismLabel {
     pub mechanism: String,
 }
 
 /// Authorization-denial fingerprint, paired with the
-/// `authorization_denied_total` counter family. Both values are the `Debug`
-/// spelling of a closed enum -- `krabka_metadata::AclOperation` and
-/// `krabka_metadata::ResourceType` -- so the series count is bounded by the
-/// product of the two variant sets and no principal, host or resource name
-/// reaches this label set.
+/// `authorization_denied_total` counter family.
+///
+/// Both values are the `Debug` spelling of a closed enum --
+/// `krabka_metadata::AclOperation` and `krabka_metadata::ResourceType` -- so
+/// the series count is bounded by the product of the two variant sets and no
+/// principal, host or resource name reaches this label set.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct AuthorizationDeniedLabel {
     pub operation: String,
@@ -216,11 +223,12 @@ pub struct AuthorizationDeniedLabel {
 }
 
 /// KFC-7 rejection fingerprint, paired with the
-/// `schema_validation_rejections` counter family. `reason` is one of the five
-/// fixed values `unframed`, `unknown_id`, `wrong_subject`, `body_mismatch`,
-/// and `registry_unavailable`, so a topic with schema validation on adds at
-/// most five series. No schema id, subject, or client string reaches this
-/// label set.
+/// `schema_validation_rejections` counter family.
+///
+/// `reason` is one of the five fixed values `unframed`, `unknown_id`,
+/// `wrong_subject`, `body_mismatch`, and `registry_unavailable`, so a topic
+/// with schema validation on adds at most five series. No schema id, subject,
+/// or client string reaches this label set.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct SchemaRejectionLabel {
     pub topic: String,
@@ -285,8 +293,10 @@ impl EncodeLabelValue for BreakGlassAction {
 }
 
 /// KFC-9 proposal-state label set, paired with the `break_glass_proposals`
-/// gauge family. Cardinality is bounded at four, because the field is the
-/// closed [`BreakGlassState`] enum and no caller can name a fifth state.
+/// gauge family.
+///
+/// Cardinality is bounded at four, because the field is the closed
+/// [`BreakGlassState`] enum and no caller can name a fifth state.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct BreakGlassStateLabel {
     pub state: BreakGlassState,
@@ -294,6 +304,7 @@ pub struct BreakGlassStateLabel {
 
 /// KFC-9 privileged-transition label set, paired with the
 /// `break_glass_refusals` and `break_glass_bypassed` counter families.
+///
 /// Cardinality is bounded at seven, because the field wraps the closed
 /// [`krabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
 /// action.
@@ -348,7 +359,9 @@ pub enum ConnectionCloseReason {
 }
 
 /// Connection-close label set, paired with the `connection_closes` counter
-/// family. Cardinality is bounded at six, because the field is the closed
+/// family.
+///
+/// Cardinality is bounded at six, because the field is the closed
 /// [`ConnectionCloseReason`] enum and no caller can name a seventh reason.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ConnectionCloseReasonLabel {
@@ -450,9 +463,11 @@ impl QuotaType {
 }
 
 /// Applied-quota label set, paired with the `quota_throttle_duration_seconds`
-/// histogram family. Cardinality is bounded at five, because the field is the
-/// closed [`QuotaType`] enum: no principal, client id or topic reaches this
-/// label set, so no client can invent a series.
+/// histogram family.
+///
+/// Cardinality is bounded at five, because the field is the closed
+/// [`QuotaType`] enum: no principal, client id or topic reaches this label set,
+/// so no client can invent a series.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct QuotaTypeLabel {
     pub quota_type: QuotaType,
@@ -592,6 +607,7 @@ mod tests {
             metrics::{counter::Counter, family::Family},
             registry::Registry,
         },
+        std::{fmt, hash},
     };
 
     /// [`TopicLabel`] exactly as it read before its `topic` became an
@@ -702,8 +718,8 @@ mod tests {
         sample: Sample,
     ) -> String
     where
-        T: EncodeLabelSet + Clone + Eq + std::fmt::Debug + std::hash::Hash + Send + Sync + 'static,
-        P: EncodeLabelSet + Clone + Eq + std::fmt::Debug + std::hash::Hash + Send + Sync + 'static,
+        T: EncodeLabelSet + Clone + Eq + fmt::Debug + hash::Hash + Send + Sync + 'static,
+        P: EncodeLabelSet + Clone + Eq + fmt::Debug + hash::Hash + Send + Sync + 'static,
     {
         let Sample {
             topic,

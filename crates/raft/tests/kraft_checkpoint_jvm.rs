@@ -12,6 +12,7 @@
 //! ```text
 //! cargo test -p krabka-raft --test kraft_checkpoint_jvm -- --ignored --nocapture
 //! ```
+#![cfg(test)]
 
 use {
     assert2::check,
@@ -23,7 +24,7 @@ use {
     },
     krabka_protocol::records::{Record, RecordBatch},
     krabka_raft::{kraft::KraftLog, serialize_metadata_snapshot},
-    std::process::Command,
+    std::{collections::BTreeMap, path::Path, process::Command},
     uuid::Uuid,
 };
 
@@ -39,7 +40,7 @@ const APPEND_TIMESTAMP_MS: i64 = 1_700_000_000_123;
 /// A metadata log holding one committed batch stamped with
 /// [`APPEND_TIMESTAMP_MS`], and the timestamp the engine reads back out of it
 /// for a snapshot header taken at the high watermark.
-fn committed_log_timestamp(dir: &std::path::Path) -> i64 {
+fn committed_log_timestamp(dir: &Path) -> i64 {
     let mut log = KraftLog::open(dir, &krabka_raft::MetadataLogConfig::default())
         .expect("open the metadata log");
     let mut batch = RecordBatch {
@@ -76,7 +77,7 @@ fn jvm_dump_log_parses_engine_snapshot() {
             rack: Some("rack-a".into()),
             log_dirs: vec![],
             endpoints: vec![],
-            features: std::collections::BTreeMap::new(),
+            features: BTreeMap::new(),
         },
     ));
     // Config (apiKey 4), broker scope.
@@ -90,7 +91,7 @@ fn jvm_dump_log_parses_engine_snapshot() {
     // Config (apiKey 4), topic scope.
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "orders".into(),
-        overrides: [("retention.ms".to_string(), "604800000".to_string())].into(),
+        overrides: [("retention.ms".to_owned(), "604800000".to_owned())].into(),
     }));
 
     // The krabka-only records. A finalized feature makes `to_records` emit

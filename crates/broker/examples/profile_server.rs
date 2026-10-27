@@ -24,11 +24,12 @@
 
 use {
     krabka_broker::{Broker, BrokerConfig},
-    std::path::PathBuf,
+    std::{env, error::Error, fs, path::PathBuf, process},
+    tokio::signal,
 };
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -36,32 +37,35 @@ async fn main() {
         )
         .init();
 
-    let listen = std::env::var("PROFILE_LISTEN").unwrap_or_else(|_| "127.0.0.1:9092".into());
+    let listen = env::var("PROFILE_LISTEN").unwrap_or_else(|_| "127.0.0.1:9092".into());
     let data_dir =
-        std::env::var("PROFILE_DATA_DIR").unwrap_or_else(|_| "/tmp/krabka-profile-data".into());
+        env::var("PROFILE_DATA_DIR").unwrap_or_else(|_| "/tmp/krabka-profile-data".into());
     let data_dir = PathBuf::from(data_dir);
     // A profile of a warm log and a profile of a cold one are different
     // measurements. Start cold every time, so two runs compare.
-    let _ = std::fs::remove_dir_all(&data_dir);
-    std::fs::create_dir_all(&data_dir).expect("create the log directory");
+    let _ = fs::remove_dir_all(&data_dir);
+    fs::create_dir_all(&data_dir)?;
 
     let mut config = BrokerConfig::for_tests(data_dir);
-    config.listen_addr = listen.parse().expect("PROFILE_LISTEN must be host:port");
+    config.listen_addr = listen
+        .parse()
+        .map_err(|error| format!("PROFILE_LISTEN must be host:port: {error}"))?;
     config.advertised_listener = listen.clone();
     // `PROFILE_FLUSH=1` puts an fsync on every append, which is Kafka's
     // durability mode. It is off by default, which matches Kafka's
     // `flush.messages` default. On this setting the write path waits on the
     // real disk, and that is where the profile differs most.
-    let flush = std::env::var("PROFILE_FLUSH").ok().as_deref() == Some("1");
+    let flush = env::var("PROFILE_FLUSH").ok().as_deref() == Some("1");
     config.log_config.flush_on_append = flush;
 
-    let broker = Broker::start(config).await.expect("broker start");
+    let broker = Broker::start(config).await?;
     let addr = broker.listen_addr().to_string();
     println!(
         "PROFILE_SERVER pid={} listen={addr} flush_on_append={flush}",
-        std::process::id()
+        process::id()
     );
 
-    tokio::signal::ctrl_c().await.expect("wait for ctrl-c");
+    signal::ctrl_c().await?;
     broker.shutdown().await;
+    Ok(())
 }

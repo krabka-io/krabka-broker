@@ -19,38 +19,38 @@ use super::wire_types::ApiKeyCode;
 /// as `UNKNOWN(1010)` in `kafka-broker-api-versions.sh` output, which a real
 /// Kafka broker never prints. A client that finds no row negotiates version
 /// `(0, 0)`, and every krabka-private api is version 0 only.
-pub(crate) const KRABKA_PRIVATE_API_KEY_FLOOR: ApiKeyCode = 1000;
+pub const KRABKA_PRIVATE_API_KEY_FLOOR: ApiKeyCode = 1000;
 
 /// `AlterBarrierGroups` (1010): creates, updates, and deletes barrier groups.
-pub(crate) const ALTER_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1010;
+pub const ALTER_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1010;
 
 /// `DescribeBarrierGroups` (1011): reads back the barrier group definitions.
-pub(crate) const DESCRIBE_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1011;
+pub const DESCRIBE_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1011;
 
 /// `TriggerBarrier` (1012): starts one injection for a barrier group.
-pub(crate) const TRIGGER_BARRIER_API_KEY: ApiKeyCode = 1012;
+pub const TRIGGER_BARRIER_API_KEY: ApiKeyCode = 1012;
 
 /// `ListBarrierCuts` (1013): lists the cuts that a barrier group retains.
-pub(crate) const LIST_BARRIER_CUTS_API_KEY: ApiKeyCode = 1013;
+pub const LIST_BARRIER_CUTS_API_KEY: ApiKeyCode = 1013;
 
 /// `WriteBarrierMarkers` (1014): inter-broker append of markers into the
 /// partitions that the receiving broker leads.
-pub(crate) const WRITE_BARRIER_MARKERS_API_KEY: ApiKeyCode = 1014;
+pub const WRITE_BARRIER_MARKERS_API_KEY: ApiKeyCode = 1014;
 
 /// `SetTopicFreeze` (1015): sets or clears one topic write-freeze entry.
-pub(crate) const SET_TOPIC_FREEZE_API_KEY: ApiKeyCode = 1015;
+pub const SET_TOPIC_FREEZE_API_KEY: ApiKeyCode = 1015;
 
 /// `DescribeTopicFreezes` (1016): reads back the topic write-freeze registry.
-pub(crate) const DESCRIBE_TOPIC_FREEZES_API_KEY: ApiKeyCode = 1016;
+pub const DESCRIBE_TOPIC_FREEZES_API_KEY: ApiKeyCode = 1016;
 
 /// `ProposeBreakGlass` (1017): opens one break-glass proposal.
-pub(crate) const PROPOSE_BREAK_GLASS_API_KEY: ApiKeyCode = 1017;
+pub const PROPOSE_BREAK_GLASS_API_KEY: ApiKeyCode = 1017;
 
 /// `ApproveBreakGlass` (1018): adds one approval to a break-glass proposal.
-pub(crate) const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
+pub const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
 
 /// `DescribeBreakGlass` (1019): lists break-glass proposals and their approvals.
-pub(crate) const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
+pub const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 
 #[cfg(test)]
 mod tests {

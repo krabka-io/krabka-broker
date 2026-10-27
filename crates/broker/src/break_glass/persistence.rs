@@ -52,7 +52,7 @@ fn action_decision(
 ///
 /// Returns a rejection for a missing or mismatched consume on a gated action,
 /// or the controller error when the consume did not commit.
-pub(crate) async fn spend_before_local_action(
+pub async fn spend_before_local_action(
     broker: &Broker,
     committed: &mut HashSet<Uuid>,
     consumed: Option<MetadataRecord>,
@@ -73,17 +73,14 @@ pub(crate) async fn spend_before_local_action(
     {
         return Ok(id);
     }
-    if !consumed
-        .as_ref()
-        .is_some_and(|record| consumed_record_matches(record, action, target))
-    {
+    let (Some(id), Some(record)) = (
+        id,
+        consumed.filter(|record| consumed_record_matches(record, action, target)),
+    ) else {
         return Err(RaftError::ChangeRejected(format!(
             "break-glass consume does not authorize {action:?} on {target}"
         )));
-    }
-
-    let id = id.expect("a matching consumed proposal record has an id");
-    let record = consumed.expect("a matching consumed proposal record is present");
+    };
     match broker.controller.submit_change(vec![record.clone()]).await {
         Ok(_) => {
             let decision = action_decision(gated, Some(&record), action, target, false, true);

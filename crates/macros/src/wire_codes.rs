@@ -67,7 +67,7 @@ impl ToTokens for Section {
     }
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let mut tables = HashSet::new();
     let mut names = HashSet::new();

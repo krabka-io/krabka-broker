@@ -6,7 +6,7 @@
 
 use {
     assert2::check,
-    criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main},
+    criterion::{BenchmarkId, Criterion, black_box},
     krabka_broker::coordinator::unified::offset_fetch_bench::{Fixture, Request},
     stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc},
     std::{alloc::System, time::Instant},
@@ -74,5 +74,4 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench);
-criterion_main!(benches);
+krabka_macros::bench_main!(bench);

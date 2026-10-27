@@ -2,7 +2,8 @@
 
 use {
     crate::meta::{
-        ItemBody, compact, first_missing_named_field, impl_block, item_body, named_fields,
+        ItemBody, body_group, compact, first_missing_named_field, impl_block, item_body,
+        named_fields,
     },
     moxy::{
         ast::{Attributed, FnParam, FromMeta, ItemFn, ItemStruct, Meta, ParseError},
@@ -52,7 +53,7 @@ struct IndexPolicy {
     documentation: Option<&'static str>,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let options = item
         .parse_meta::<IndexArgs>("sparse_index")?
         .ok_or_else(|| {
@@ -143,9 +144,7 @@ fn validate_open(meta: &TokenStream, input: &TokenStream) -> Result<(), ParseErr
             "expected one index open method",
         ));
     }
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     group.tokens = TokenStream::new();
     let function: ItemFn = moxy::parse!({ TokenStream::from(tokens) })?;
     let parameters = &function.sig.params.inner.inputs;
@@ -163,7 +162,7 @@ fn validate_open(meta: &TokenStream, input: &TokenStream) -> Result<(), ParseErr
     Ok(())
 }
 
-pub(crate) fn index_open(
+pub fn index_open(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

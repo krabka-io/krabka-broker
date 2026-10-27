@@ -11,7 +11,7 @@ use {
     },
 };
 
-pub(crate) fn topology(source_topic: &str) -> Topology { build_topology(source_topic, vec![]) }
+pub fn topology(source_topic: &str) -> Topology { build_topology(source_topic, vec![]) }
 
 /// Drives one streams member to convergence, which means at least
 /// `want_active` active-task partitions. It returns
@@ -20,7 +20,7 @@ pub use crate::support::streams::join_until_assigned as streams_join_and_converg
 
 /// Sends a streams `LeaveGroup`, with `member_epoch` -1, so that the group
 /// drains.
-pub(crate) async fn streams_leave(client: &Client, group: &str, member_id: &str) {
+pub async fn streams_leave(client: &Client, group: &str, member_id: &str) {
     let _ = client
         .send(StreamsGroupHeartbeatRequest {
             group_id: group.into(),

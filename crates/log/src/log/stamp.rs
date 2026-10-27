@@ -17,7 +17,7 @@ use {
     },
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
-    std::{collections::BTreeMap, path::PathBuf},
+    std::{collections::BTreeMap, path::PathBuf, sync::Arc},
 };
 
 impl Log {
@@ -41,17 +41,14 @@ impl Log {
     /// # Panics
     /// Panics only if there is no active segment, which cannot happen after
     /// [`Log::open`].
-    pub fn set_stamp_source(
-        &mut self,
-        source: std::sync::Arc<dyn StampSource>,
-    ) -> Result<(), LogError> {
+    pub fn set_stamp_source(&mut self, source: Arc<dyn StampSource>) -> Result<(), LogError> {
         let mut indexes = self
             .segments
             .iter()
             .chain(self.active.iter())
             .map(|segment| {
                 let mut index = StampIndex::open(segment.stamp_index_path())?;
-                index.set_io(self.io.clone());
+                index.set_io(Arc::clone(&self.io));
                 Ok((segment.base_offset(), index))
             })
             .collect::<Result<BTreeMap<_, _>, LogError>>()?;
@@ -82,8 +79,8 @@ impl Log {
     /// Log-directory moves use this to preserve stamping when they close and
     /// reopen a partition around the final filesystem swap.
     #[must_use]
-    pub fn stamp_source(&self) -> Option<std::sync::Arc<dyn StampSource>> {
-        self.stamp_source.as_ref().map(std::sync::Arc::clone)
+    pub fn stamp_source(&self) -> Option<Arc<dyn StampSource>> {
+        self.stamp_source.as_ref().map(Arc::clone)
     }
 
     /// The internal stamp that covers `offset`, or `None` when there is no
@@ -160,7 +157,7 @@ impl Log {
     ) -> Result<(), LogError> {
         if self.stamp_source.is_some() {
             let mut index = StampIndex::open(path)?;
-            index.set_io(self.io.clone());
+            index.set_io(Arc::clone(&self.io));
             self.stamp_indexes.insert(base_offset, index);
         }
         Ok(())

@@ -26,10 +26,10 @@ pub fn barrier_target_count_decision(
         return BarrierTargetCountDecision::Malformed;
     }
     let count = i64::from(partition_count);
-    match total.checked_add(count) {
-        Some(next) => BarrierTargetCountDecision::Expand { next },
-        None => BarrierTargetCountDecision::Overflow,
-    }
+    let Some(next) = total.checked_add(count) else {
+        return BarrierTargetCountDecision::Overflow;
+    };
+    BarrierTargetCountDecision::Expand { next }
 }
 
 /// The marker fence, in the order its refusals rank: facts that name no
@@ -65,8 +65,10 @@ fn barrier_marker_fence_model(facts: BarrierMarkerFenceFacts) -> BarrierMarkerFe
 
 /// Require the metadata image and installed partition to name exactly the
 /// expected leader generation; see `barrier_marker_fence_model` for which
-/// refusal each mismatch gets. The host maps the refusals to different wire
-/// codes, so every variant is pinned.
+/// refusal each mismatch gets.
+///
+/// The host maps the refusals to different wire codes, so every variant is
+/// pinned.
 #[ensures(result == barrier_marker_fence_model(facts))]
 #[must_use]
 pub fn barrier_marker_fence_decision(facts: BarrierMarkerFenceFacts) -> BarrierMarkerFenceDecision {

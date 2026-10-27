@@ -380,16 +380,12 @@ async fn acknowledge_checks_run_in_kafka_order() {
             .user(case.user)
             .group(&group)
             .topic_id(topic_id)
-            .rows(
-                [WirePartitionAcknowledgements {
+            .rows(vec![AcknowledgementPartitionSetup::from_wire(
+                WirePartitionAcknowledgements {
                     index: case.partition,
                     batches: case.batches,
-                }]
-                .iter()
-                .copied()
-                .map(AcknowledgementPartitionSetup::from_wire)
-                .collect(),
-            )
+                },
+            )])
             .call()
             .await;
         let row = &response.responses[0].partitions[0];

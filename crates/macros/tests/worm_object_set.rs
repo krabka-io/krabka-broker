@@ -1,4 +1,5 @@
 //! WORM diagnostic precedence and native observation evaluation.
+#![cfg(test)]
 
 use {assert2::assert, std::cell::RefCell};
 

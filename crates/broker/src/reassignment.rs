@@ -30,8 +30,8 @@ mod tests;
 /// in a normal build. The re-export exists for `reassignment_model`, the
 /// `stateright` model checker, which drives the decision directly.
 #[cfg(test)]
-pub(crate) use self::policy::reassign_one;
-pub(crate) use self::policy::{
+pub use self::policy::reassign_one;
+pub use self::policy::{
     CompletedReassignment, compute_reassignment_progress, maybe_complete_reassignment,
     remap_directories,
 };
@@ -39,7 +39,7 @@ pub(crate) use self::policy::{
 /// Minimal trait for the controller surface that this task needs. It lets a
 /// unit test inject a mock without a real raft cluster.
 #[async_trait]
-pub(crate) trait ReassignmentController: Send + Sync {
+pub trait ReassignmentController: Send + Sync {
     fn is_leader(&self) -> bool;
     fn current_image(&self) -> Arc<MetadataImage>;
     fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
@@ -47,7 +47,7 @@ pub(crate) trait ReassignmentController: Send + Sync {
 }
 
 /// Background task entry point. Image-apply events drive it.
-pub(crate) async fn run(
+pub async fn run(
     controller: Arc<dyn ReassignmentController>,
     liveness: Arc<ControllerLivenessState>,
     shutdown: CancellationToken,

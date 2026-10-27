@@ -1,7 +1,9 @@
-//! Producer and consumer workload runners. This module builds N producers and
-//! M consumers as members of one group, runs the warmup phase and then the
-//! measurement phase, triggers an optional failover mid-measurement, and merges
-//! the per-task histograms into the public `LatencyPercentiles` shape.
+//! Producer and consumer workload runners.
+//!
+//! This module builds N producers and M consumers as members of one group, runs
+//! the warmup phase and then the measurement phase, triggers an optional
+//! failover mid-measurement, and merges the per-task histograms into the public
+//! `LatencyPercentiles` shape.
 
 use {
     crate::{
@@ -16,8 +18,8 @@ use {
         prom::PromClient,
         rate::Pacer,
         scenario::{
-            Acks, BrokerSample, Disturbance, LatencyPercentiles, LoadMode, ModeTag, Resource,
-            RunOutput, Sample, Scenario, Stack, Throughput, Topology,
+            Acks, BrokerSample, Disturbance, FailoverSpec, LatencyPercentiles, LoadMode, ModeTag,
+            Resource, RunOutput, Sample, Scenario, Stack, Throughput, Topology,
         },
     },
     anyhow::{Context, Result},
@@ -39,6 +41,7 @@ use {
     refined_type::rule::GreaterU32,
     std::{
         future::Future,
+        iter, mem,
         path::PathBuf,
         pin::Pin,
         sync::{
@@ -46,7 +49,10 @@ use {
             atomic::{AtomicU8, AtomicU64, Ordering},
         },
     },
-    tokio::{task::JoinSet, time::Instant},
+    tokio::{
+        task::JoinSet,
+        time::{Instant, sleep, sleep_until, timeout, timeout_at},
+    },
     tracing::{info, warn},
 };
 
@@ -156,12 +162,11 @@ impl ConsumerBuildRetryPolicy {
 
 impl Default for ConsumerBuildRetryPolicy {
     fn default() -> Self {
-        Self::new(
-            ConsumerBuildAttempts::default(),
-            default_consumer_build_initial_backoff(),
-            default_consumer_build_max_backoff(),
-        )
-        .expect("default consumer-build retry range is ordered")
+        Self {
+            attempts: ConsumerBuildAttempts::default(),
+            initial_backoff: default_consumer_build_initial_backoff(),
+            max_backoff: default_consumer_build_max_backoff(),
+        }
     }
 }
 
@@ -274,10 +279,11 @@ pub struct DriverConfig {
     pub tls: Option<TlsParams>,
 }
 
-/// TLS knobs for the producer and consumer data path. When this is present, both
-/// clients dial the broker's TLS listener and the produce and fetch byte stream
-/// is encrypted. Krabka can serve that path with kTLS sendfile, and Strimzi
-/// serves it with JVM SSL.
+/// TLS knobs for the producer and consumer data path.
+///
+/// When this is present, both clients dial the broker's TLS listener and the
+/// produce and fetch byte stream is encrypted. Krabka can serve that path with
+/// kTLS sendfile, and Strimzi serves it with JVM SSL.
 #[derive(Debug, Clone)]
 pub struct TlsParams {
     /// Mounted CA bundle (`ca.crt`) that the client trusts to verify the broker
@@ -349,6 +355,9 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     // slices. Computed up front (meas_start is t_start + warmup) so it can be
     // handed to each task at spawn time.
     let grid = Grid::new(t_start, started_ns, &scenario, cfg.sample_interval);
+    // Every histogram of the run is built empty from this one, so they share
+    // its bounds and merge without error.
+    let histogram = hist::new().context("build the latency histogram")?;
     let n_intervals = grid.n;
 
     let mut notes: Vec<String> = Vec::new();
@@ -383,6 +392,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
             first_ack: &first_ack_unix_ms,
             kill_at: &kill_at_ms,
         },
+        &histogram,
     );
 
     let mut cons_set: JoinSet<ConsumerOut> = JoinSet::new();
@@ -393,51 +403,57 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         security.as_ref(),
         grid,
         &stop,
+        &histogram,
     );
 
-    let fault = failover_active.then(|| {
-        start_fault(
-            &scenario,
-            &cfg,
-            security.clone(),
-            t_start,
-            kill_at_ms.clone(),
-        )
-    });
+    let fault = scenario
+        .failover
+        .as_ref()
+        .filter(|_| failover_active)
+        .map(|spec| {
+            start_fault(
+                spec,
+                &cfg,
+                security.clone(),
+                t_start,
+                Arc::clone(&kill_at_ms),
+            )
+        });
 
     let warmup_end = t_start + scenario.warmup.to_std();
-    tokio::time::sleep_until(warmup_end).await;
+    sleep_until(warmup_end).await;
     stop.store(STATE_MEASURING, Ordering::SeqCst);
 
     let meas_end = warmup_end + scenario.duration.to_std();
-    tokio::time::sleep_until(meas_end).await;
+    sleep_until(meas_end).await;
     stop.store(STATE_STOP, Ordering::SeqCst);
 
     let fault_at_ms = finish_fault(fault, &mut notes).await;
 
     // ── Join all tasks ──────────────────────────────────────────────────────
-    let mut prod_hist = hist::new();
+    let mut prod_hist = Histogram::new_from(&histogram);
     let mut prod_msgs = 0u64;
     let mut prod_bytes = 0u64;
     let mut prod_dropped = 0u64;
     let mut earliest_recovery_ms = 0u64;
     let mut max_spike = Time::ZERO;
     let mut prod_iv_msgs = vec![0u64; n_intervals];
-    let mut prod_iv_hist: Vec<Histogram<u64>> = (0..n_intervals).map(|_| hist::new()).collect();
+    let mut prod_iv_hist: Vec<Histogram<u64>> =
+        iter::repeat_with(|| Histogram::new_from(&histogram))
+            .take(n_intervals)
+            .collect();
     while let Some(j) = prod_set.join_next().await {
         match j {
             Ok(t) => {
-                prod_hist.add(&t.latency).ok();
+                let _ = prod_hist.add(&t.latency);
                 prod_msgs += t.msgs;
                 prod_bytes += t.bytes;
                 prod_dropped += t.dropped;
-                for iv in 0..n_intervals {
-                    if let Some(m) = t.interval_msgs.get(iv) {
-                        prod_iv_msgs[iv] += *m;
-                    }
-                    if let Some(h) = t.interval_hist.get(iv) {
-                        prod_iv_hist[iv].add(h).ok();
-                    }
+                for (total, m) in prod_iv_msgs.iter_mut().zip(&t.interval_msgs) {
+                    *total += *m;
+                }
+                for (total, h) in prod_iv_hist.iter_mut().zip(&t.interval_hist) {
+                    let _ = total.add(h);
                 }
                 if t.latency_spike_max > max_spike {
                     max_spike = t.latency_spike_max;
@@ -455,32 +471,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         }
     }
 
-    let mut cons_hist = hist::new();
-    let mut cons_msgs = 0u64;
-    let mut cons_bytes = 0u64;
-    let mut cons_iv_msgs = vec![0u64; n_intervals];
-    let mut cons_iv_hist: Vec<Histogram<u64>> = (0..n_intervals).map(|_| hist::new()).collect();
-    while let Some(j) = cons_set.join_next().await {
-        match j {
-            Ok(t) => {
-                cons_hist.add(&t.latency).ok();
-                cons_msgs += t.msgs;
-                cons_bytes += t.bytes;
-                for iv in 0..n_intervals {
-                    if let Some(m) = t.interval_msgs.get(iv) {
-                        cons_iv_msgs[iv] += *m;
-                    }
-                    if let Some(h) = t.interval_hist.get(iv) {
-                        cons_iv_hist[iv].add(h).ok();
-                    }
-                }
-                if !t.error.is_empty() {
-                    errors.push(t.error);
-                }
-            }
-            Err(e) => errors.push(format!("consumer-task-panic: {e}")),
-        }
-    }
+    let consumed = join_consumers(cons_set, n_intervals, &histogram, &mut errors).await;
 
     let samples = build_samples(
         grid.interval(),
@@ -489,8 +480,8 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
             histograms: &prod_iv_hist,
         },
         &IntervalTallies {
-            messages: &cons_iv_msgs,
-            histograms: &cons_iv_hist,
+            messages: &consumed.interval_msgs,
+            histograms: &consumed.interval_hist,
         },
     );
 
@@ -540,14 +531,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         wallclock_end_unix_ms: WallclockMs(wallclock_end),
         throughput: Throughput {
             msgs_produced: MessageCount(prod_msgs),
-            msgs_consumed: MessageCount(cons_msgs),
+            msgs_consumed: MessageCount(consumed.msgs),
             bytes_in: ByteSize::from_bytes(prod_bytes),
-            bytes_out: ByteSize::from_bytes(cons_bytes),
+            bytes_out: ByteSize::from_bytes(consumed.bytes),
             producer_rate: event_rate(prod_msgs, scenario.duration),
-            consumer_rate: event_rate(cons_msgs, scenario.duration),
+            consumer_rate: event_rate(consumed.msgs, scenario.duration),
         },
         producer_latency: hist::percentiles(&prod_hist),
-        consumer_e2e_latency: hist::percentiles(&cons_hist),
+        consumer_e2e_latency: hist::percentiles(&consumed.latency),
         resource,
         disturbance,
         startup: None,
@@ -571,14 +562,14 @@ async fn finish_fault(fault: Option<FaultTask>, notes: &mut Vec<String>) -> u64 
 }
 
 fn start_fault(
-    scenario: &Scenario,
+    spec: &FailoverSpec,
     cfg: &DriverConfig,
     security: Option<ClientSecurity>,
     started_at: Instant,
     kill_at: Arc<AtomicU64>,
 ) -> FaultTask {
     FaultTask::spawn(
-        scenario.failover.as_ref().expect("checked above"),
+        spec,
         FaultConfig {
             stack: cfg.stack,
             namespace: cfg.namespace.clone(),
@@ -631,19 +622,25 @@ fn build_samples(
     producer
         .messages
         .iter()
+        .zip(producer.histograms)
+        .zip(consumer.messages.iter().zip(consumer.histograms))
         .enumerate()
-        .map(|(index, messages)| Sample {
-            t_offset_ms: TimeOffsetMs(
-                u64::try_from(index)
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(interval_ms),
-            ),
-            producer_rate: event_rate(*messages, interval),
-            consumer_rate: event_rate(consumer.messages[index], interval),
-            producer_p50: percentile(&producer.histograms[index], 0.50),
-            producer_p99: percentile(&producer.histograms[index], 0.99),
-            consumer_e2e_p99: percentile(&consumer.histograms[index], 0.99),
-        })
+        .map(
+            |(index, ((messages, producer_histogram), (consumer_messages, consumer_histogram)))| {
+                Sample {
+                    t_offset_ms: TimeOffsetMs(
+                        u64::try_from(index)
+                            .unwrap_or(u64::MAX)
+                            .saturating_mul(interval_ms),
+                    ),
+                    producer_rate: event_rate(*messages, interval),
+                    consumer_rate: event_rate(*consumer_messages, interval),
+                    producer_p50: percentile(producer_histogram, 0.50),
+                    producer_p99: percentile(producer_histogram, 0.99),
+                    consumer_e2e_p99: percentile(consumer_histogram, 0.99),
+                }
+            },
+        )
         .collect()
 }
 
@@ -667,6 +664,7 @@ fn spawn_producers(
     security: Option<&ClientSecurity>,
     grid: Grid,
     shared: &SharedHandles<'_>,
+    histogram: &Histogram<u64>,
 ) {
     let SharedHandles {
         stop,
@@ -687,8 +685,40 @@ fn spawn_producers(
             first_ack: Arc::clone(first_ack),
             kill_at: Arc::clone(kill_at),
             final_drain_timeout: cfg.producer_final_drain_timeout,
+            histogram: Histogram::new_from(histogram),
         }));
     }
+}
+
+/// Wait for every consumer task, merging what each measured. A task that
+/// failed or panicked leaves its error in `errors`.
+async fn join_consumers(
+    mut tasks: JoinSet<ConsumerOut>,
+    intervals: usize,
+    histogram: &Histogram<u64>,
+    errors: &mut Vec<String>,
+) -> TaskMeasurements {
+    let mut merged = TaskMeasurements::new(intervals, histogram);
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok(task) => {
+                let _ = merged.latency.add(&task.latency);
+                merged.msgs += task.msgs;
+                merged.bytes += task.bytes;
+                for (total, m) in merged.interval_msgs.iter_mut().zip(&task.interval_msgs) {
+                    *total += *m;
+                }
+                for (total, h) in merged.interval_hist.iter_mut().zip(&task.interval_hist) {
+                    let _ = total.add(h);
+                }
+                if !task.error.is_empty() {
+                    errors.push(task.error);
+                }
+            }
+            Err(e) => errors.push(format!("consumer-task-panic: {e}")),
+        }
+    }
+    merged
 }
 
 /// Spawn one consumer task per `scenario.consumers`.
@@ -699,6 +729,7 @@ fn spawn_consumers(
     security: Option<&ClientSecurity>,
     grid: Grid,
     stop: &Arc<AtomicU8>,
+    histogram: &Histogram<u64>,
 ) {
     for idx in 0..scenario.consumers {
         tasks.spawn(run_consumer(ConsumerTask {
@@ -714,6 +745,7 @@ fn spawn_consumers(
             build_retry_policy: cfg.consumer_build_retry_policy,
             poll_timeout: cfg.consumer_poll_timeout,
             poll_error_backoff: cfg.consumer_poll_error_backoff,
+            histogram: Histogram::new_from(histogram),
         }));
     }
 }
@@ -824,13 +856,7 @@ fn validate_topology(
         "skipped:topology-mismatch (rf={} brokers={})",
         scenario.replication_factor, cfg.broker_count
     ));
-    let output = empty_output(
-        scenario,
-        cfg,
-        wallclock_start,
-        std::mem::take(notes),
-        Vec::new(),
-    );
+    let output = empty_output(scenario, cfg, wallclock_start, mem::take(notes), Vec::new());
     TopologyCheck {
         failover_active,
         skipped: Some(output),
@@ -1034,6 +1060,8 @@ struct ProducerTask {
     /// kill happened. A producer error says the send failed and nothing more.
     kill_at: Arc<AtomicU64>,
     final_drain_timeout: Time,
+    /// The empty histogram every latency histogram of the task is built from.
+    histogram: Histogram<u64>,
 }
 
 struct TaskMeasurements {
@@ -1045,11 +1073,15 @@ struct TaskMeasurements {
 }
 
 impl TaskMeasurements {
-    fn new(intervals: usize) -> Self {
+    /// Empty measurements over `intervals` slices, each histogram built empty
+    /// from `histogram`.
+    fn new(intervals: usize, histogram: &Histogram<u64>) -> Self {
         Self {
-            latency: hist::new(),
+            latency: Histogram::new_from(histogram),
             interval_msgs: vec![0; intervals],
-            interval_hist: (0..intervals).map(|_| hist::new()).collect(),
+            interval_hist: iter::repeat_with(|| Histogram::new_from(histogram))
+                .take(intervals)
+                .collect(),
             msgs: 0,
             bytes: 0,
         }
@@ -1066,8 +1098,14 @@ struct ProducerObservations<'a> {
 }
 
 impl<'a> ProducerObservations<'a> {
-    fn new(idx: usize, msg_size: u64, grid: Grid, shared: SharedHandles<'a>) -> Self {
-        let measurements = TaskMeasurements::new(grid.n);
+    fn new(
+        idx: usize,
+        msg_size: u64,
+        grid: Grid,
+        shared: SharedHandles<'a>,
+        histogram: &Histogram<u64>,
+    ) -> Self {
+        let measurements = TaskMeasurements::new(grid.n, histogram);
         Self {
             idx,
             msg_size,
@@ -1122,8 +1160,12 @@ impl<'a> ProducerObservations<'a> {
                     self.output.msgs += 1;
                     self.output.bytes += self.msg_size;
                     let iv = self.grid.idx(Instant::now());
-                    self.output.interval_msgs[iv] += 1;
-                    hist::record(&mut self.output.interval_hist[iv], latency);
+                    if let Some(count) = self.output.interval_msgs.get_mut(iv) {
+                        *count += 1;
+                    }
+                    if let Some(histogram) = self.output.interval_hist.get_mut(iv) {
+                        hist::record(histogram, latency);
+                    }
                     // Recovery and the spike are measured against the
                     // shared kill marker, not against this task's own
                     // errors. The marker is published only after the pod
@@ -1181,11 +1223,12 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         first_ack,
         kill_at,
         final_drain_timeout,
+        histogram,
     } = task;
     // Idempotence forces acks=All; turn it off whenever the scenario
     // requested something weaker.
     let enable_idempotence = matches!(scenario.acks, Acks::All);
-    let producer = match Producer::builder()
+    match Producer::builder()
         .bootstrap(bootstrap.clone())
         .dispatch_queue_capacity(dispatch_queue_capacity.get())
         .frame_max(frame_max.size())
@@ -1209,146 +1252,151 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         .await
         .context("build producer")
     {
-        Ok(p) => p,
-        Err(e) => {
-            return ProducerOut {
-                latency: hist::new(),
-                msgs: 0,
-                bytes: 0,
-                dropped: 0,
-                recovery_unix_ms: 0,
-                latency_spike_max: Time::ZERO,
-                error: format!("producer-{idx}-build: {e:#}"),
-                interval_msgs: Vec::new(),
-                interval_hist: Vec::new(),
-            };
-        }
-    };
+        Err(e) => ProducerOut {
+            latency: histogram,
+            msgs: 0,
+            bytes: 0,
+            dropped: 0,
+            recovery_unix_ms: 0,
+            latency_spike_max: Time::ZERO,
+            error: format!("producer-{idx}-build: {e:#}"),
+            interval_msgs: Vec::new(),
+            interval_hist: Vec::new(),
+        },
+        Ok(producer) => {
+            let mut tmpl = payload::template(scenario.msg_size);
+            // Counter behind each record key, so keys vary within this task. The task
+            // index is folded in, so two tasks never mint the same key.
+            let mut sent_records = (idx as u64) << 40;
+            let mut observations = ProducerObservations::new(
+                idx,
+                scenario.msg_size.bytes_u64(),
+                grid,
+                SharedHandles {
+                    stop: &stop,
+                    first_ack: &first_ack,
+                    kill_at: &kill_at,
+                },
+                &histogram,
+            );
 
-    let mut tmpl = payload::template(scenario.msg_size);
-    // Counter behind each record key, so keys vary within this task. The task
-    // index is folded in, so two tasks never mint the same key.
-    let mut sent_records = (idx as u64) << 40;
-    let mut observations =
-        ProducerObservations::new(idx, scenario.msg_size.bytes_u64(), grid, SharedHandles {
-            stop: &stop,
-            first_ack: &first_ack,
-            kill_at: &kill_at,
-        });
-
-    let mut pacer = match scenario.mode {
-        LoadMode::Saturate => None,
-        // The scenario rate is for the whole run, so each task paces at its
-        // share of it. `Pacer` floors the result at one message a second.
-        LoadMode::FixedRate { rate } => Some(Pacer::new(rate / to_f64(scenario.producers.max(1)))),
-    };
-
-    // Pipeline depth: how many records may be in flight (awaiting their ack)
-    // before the loop applies back-pressure. Without pipelining the loop sent
-    // one record and awaited its ack before the next, capping a task's
-    // throughput at 1/RTT regardless of cluster capacity — so the numbers
-    // measured the driver, not the cluster. A bounded window lets throughput
-    // track the cluster while keeping memory in hand.
-    let max_inflight: usize = 512;
-    let mut inflight: FuturesUnordered<AckFuture> = FuturesUnordered::new();
-    let enqueue_limit = enqueue_limit(request_timeout);
-
-    loop {
-        let state = stop.load(Ordering::Relaxed);
-        if state == STATE_STOP {
-            break;
-        }
-        // Drain every ack that has already settled — promptly, so the recorded
-        // latency is the real send→ack time, not how long a record waited in
-        // the in-flight set behind an older stuck send.
-        while let Some(SettledAck {
-            result: res,
-            sent_at: t0,
-        }) = inflight.next().now_or_never().flatten()
-        {
-            observations.record_ack(res, t0);
-        }
-        // Back-pressure: at capacity, block until any send completes. Waiting
-        // for the oldest can make one dead-leader send hide live-partition acks.
-        while inflight.len() >= max_inflight {
-            if let Some(SettledAck {
-                result: res,
-                sent_at: t0,
-            }) = inflight.next().await
-            {
-                observations.record_ack(res, t0);
-            }
-        }
-        if let Some(p) = pacer.as_mut() {
-            p.await_token().await;
-        }
-        let value = payload::stamp_into(&mut tmpl, scenario_id);
-        // A scenario that sets `key_size` gets keyed records. The key changes
-        // per record, so the partitioner spreads them the way a real keyed
-        // workload spreads, and the key's bytes are on the wire the way the
-        // scenario asked for. `key_size: 0` stays keyless.
-        let key = payload::key(scenario.key_size, sent_records);
-        sent_records += 1;
-        let rec = ProducerRecord {
-            topic: topic.clone(),
-            key,
-            value: Some(value),
-            ..Default::default()
-        };
-        let t0 = Instant::now();
-        match within(enqueue_limit, producer.enqueue(rec)).await {
-            Some(Ok(delivery)) => inflight.push(Box::pin(async move {
-                SettledAck {
-                    result: delivery.await,
-                    sent_at: t0,
+            let mut pacer = match scenario.mode {
+                LoadMode::Saturate => None,
+                // The scenario rate is for the whole run, so each task paces at its
+                // share of it. `Pacer` floors the result at one message a second.
+                LoadMode::FixedRate { rate } => {
+                    Some(Pacer::new(rate / to_f64(scenario.producers.max(1))))
                 }
-            })),
-            Some(Err(error)) => observations.record_ack(Err(error), t0),
-            // `enqueue` outlived the producer's own `max_block`: the producer
-            // is stuck, and another send would only wait again. Stop sending;
-            // the bounded drain and teardown below still let the run report.
-            None => {
-                observations.record_enqueue_timeout();
-                break;
+            };
+
+            // Pipeline depth: how many records may be in flight (awaiting their ack)
+            // before the loop applies back-pressure. Without pipelining the loop sent
+            // one record and awaited its ack before the next, capping a task's
+            // throughput at 1/RTT regardless of cluster capacity — so the numbers
+            // measured the driver, not the cluster. A bounded window lets throughput
+            // track the cluster while keeping memory in hand.
+            let max_inflight: usize = 512;
+            let mut inflight: FuturesUnordered<AckFuture> = FuturesUnordered::new();
+            let enqueue_limit = enqueue_limit(request_timeout);
+
+            loop {
+                let state = stop.load(Ordering::Relaxed);
+                if state == STATE_STOP {
+                    break;
+                }
+                // Drain every ack that has already settled — promptly, so the recorded
+                // latency is the real send→ack time, not how long a record waited in
+                // the in-flight set behind an older stuck send.
+                while let Some(SettledAck {
+                    result: res,
+                    sent_at: t0,
+                }) = inflight.next().now_or_never().flatten()
+                {
+                    observations.record_ack(res, t0);
+                }
+                // Back-pressure: at capacity, block until any send completes. Waiting
+                // for the oldest can make one dead-leader send hide live-partition acks.
+                while inflight.len() >= max_inflight {
+                    if let Some(SettledAck {
+                        result: res,
+                        sent_at: t0,
+                    }) = inflight.next().await
+                    {
+                        observations.record_ack(res, t0);
+                    }
+                }
+                if let Some(p) = pacer.as_mut() {
+                    p.await_token().await;
+                }
+                let value = payload::stamp_into(&mut tmpl, scenario_id);
+                // A scenario that sets `key_size` gets keyed records. The key changes
+                // per record, so the partitioner spreads them the way a real keyed
+                // workload spreads, and the key's bytes are on the wire the way the
+                // scenario asked for. `key_size: 0` stays keyless.
+                let key = payload::key(scenario.key_size, sent_records);
+                sent_records += 1;
+                let rec = ProducerRecord {
+                    topic: topic.clone(),
+                    key,
+                    value: Some(value),
+                    ..Default::default()
+                };
+                let t0 = Instant::now();
+                match within(enqueue_limit, producer.enqueue(rec)).await {
+                    Some(Ok(delivery)) => inflight.push(Box::pin(async move {
+                        SettledAck {
+                            result: delivery.await,
+                            sent_at: t0,
+                        }
+                    })),
+                    Some(Err(error)) => observations.record_ack(Err(error), t0),
+                    // `enqueue` outlived the producer's own `max_block`: the producer
+                    // is stuck, and another send would only wait again. Stop sending;
+                    // the bounded drain and teardown below still let the run report.
+                    None => {
+                        observations.record_enqueue_timeout();
+                        break;
+                    }
+                }
             }
-        }
-    }
 
-    // Drain anything still outstanding when the measurement window closed, but
-    // do not let a stuck producer retry slot keep the whole benchmark job alive
-    // forever. Unsettled sends are counted as drops so failover reports capture
-    // the stall instead of timing out without a JSON result.
-    let drain_until = Instant::now() + final_drain_timeout.to_std();
-    while !inflight.is_empty() {
-        let now = Instant::now();
-        if now >= drain_until {
-            observations.record_drain_timeout(inflight.len());
-            break;
-        }
-        match tokio::time::timeout_at(drain_until, inflight.next()).await {
-            Ok(Some(SettledAck {
-                result: res,
-                sent_at: t0,
-            })) => observations.record_ack(res, t0),
-            Ok(None) => break,
-            Err(_) => {
-                observations.record_drain_timeout(inflight.len());
-                break;
+            // Drain anything still outstanding when the measurement window closed, but
+            // do not let a stuck producer retry slot keep the whole benchmark job alive
+            // forever. Unsettled sends are counted as drops so failover reports capture
+            // the stall instead of timing out without a JSON result.
+            let drain_until = Instant::now() + final_drain_timeout.to_std();
+            while !inflight.is_empty() {
+                let now = Instant::now();
+                if now >= drain_until {
+                    observations.record_drain_timeout(inflight.len());
+                    break;
+                }
+                match timeout_at(drain_until, inflight.next()).await {
+                    Ok(Some(SettledAck {
+                        result: res,
+                        sent_at: t0,
+                    })) => observations.record_ack(res, t0),
+                    Ok(None) => break,
+                    Err(_) => {
+                        observations.record_drain_timeout(inflight.len());
+                        break;
+                    }
+                }
             }
+
+            // `flush` and `close` wait on the same sends the drain gave up on, so
+            // they get the same bound: a producer that stops issuing requests must
+            // not hold the run open past its report.
+            if !finished_within(final_drain_timeout, producer.flush()).await {
+                observations.record_teardown_timeout("flush");
+            }
+            if !finished_within(final_drain_timeout, Box::pin(producer.close())).await {
+                observations.record_teardown_timeout("close");
+            }
+
+            observations.output
         }
     }
-
-    // `flush` and `close` wait on the same sends the drain gave up on, so
-    // they get the same bound: a producer that stops issuing requests must
-    // not hold the run open past its report.
-    if !finished_within(final_drain_timeout, producer.flush()).await {
-        observations.record_teardown_timeout("flush");
-    }
-    if !finished_within(final_drain_timeout, Box::pin(producer.close())).await {
-        observations.record_teardown_timeout("close");
-    }
-
-    observations.output
 }
 
 // ── Consumer task ───────────────────────────────────────────────────────────
@@ -1358,6 +1406,8 @@ struct ConsumerTask {
     build_retry_policy: ConsumerBuildRetryPolicy,
     poll_timeout: Time,
     poll_error_backoff: Time,
+    /// The empty histogram every latency histogram of the task is built from.
+    histogram: Histogram<u64>,
 }
 
 async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
@@ -1379,6 +1429,7 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         build_retry_policy,
         poll_timeout,
         poll_error_backoff,
+        histogram,
     } = task;
     let group_id = format!("krabka-bench-{}", scenario.name);
     let mut consumer = match build_consumer_with_retry(
@@ -1399,7 +1450,7 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         Ok(c) => c,
         Err(e) => {
             return ConsumerOut {
-                latency: hist::new(),
+                latency: histogram,
                 msgs: 0,
                 bytes: 0,
                 error: format!("consumer-{idx}-build: {e:#}"),
@@ -1409,7 +1460,7 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         }
     };
 
-    let mut measurements = TaskMeasurements::new(grid.n);
+    let mut measurements = TaskMeasurements::new(grid.n, &histogram);
     let mut error = String::new();
 
     loop {
@@ -1440,8 +1491,12 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
                                 hist::record(&mut measurements.latency, latency);
                                 measurements.msgs += 1;
                                 measurements.bytes += bytes;
-                                measurements.interval_msgs[slice] += 1;
-                                hist::record(&mut measurements.interval_hist[slice], latency);
+                                if let Some(count) = measurements.interval_msgs.get_mut(slice) {
+                                    *count += 1;
+                                }
+                                if let Some(histogram) = measurements.interval_hist.get_mut(slice) {
+                                    hist::record(histogram, latency);
+                                }
                             }
                         } else if phase == STATE_MEASURING {
                             // Non-bench record, left over from an earlier run.
@@ -1457,7 +1512,7 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
                 if error.is_empty() {
                     error = format!("consumer-{idx}-poll: {e}");
                 }
-                tokio::time::sleep(poll_error_backoff.to_std()).await;
+                sleep(poll_error_backoff.to_std()).await;
             }
         }
     }
@@ -1499,12 +1554,12 @@ async fn build_consumer_with_retry(
     for (attempt_idx, delay) in backoff.into_iter().enumerate() {
         let attempt = attempt_idx + 1;
         let result = Consumer::builder()
-            .bootstrap(bootstrap.to_string())
+            .bootstrap(bootstrap.to_owned())
             .dispatch_queue_capacity(policy.dispatch_queue_capacity.get())
             .frame_max(policy.frame_max.size())
             .client_id(format!("bench-consumer-{idx}"))
             .group_id(group_id.clone())
-            .subscribe(vec![topic.to_string()])
+            .subscribe(vec![topic.to_owned()])
             .auto_offset_reset(AutoOffsetReset::Earliest)
             .request_timeout(policy.request_timeout)
             // `None` → plaintext (default). `Some` → all fetch traffic for this
@@ -1524,7 +1579,7 @@ async fn build_consumer_with_retry(
                         error = %e,
                         "consumer build failed; retrying"
                     );
-                    tokio::time::sleep(delay).await;
+                    sleep(delay).await;
                 }
                 None => {
                     return Err(
@@ -1539,7 +1594,7 @@ async fn build_consumer_with_retry(
 
 /// Await `step` for at most `limit`. `None` when the limit ran out first.
 async fn within<T>(limit: Time, step: impl Future<Output = T>) -> Option<T> {
-    tokio::time::timeout(limit.to_std(), step).await.ok()
+    timeout(limit.to_std(), step).await.ok()
 }
 
 /// Await `step` for at most `limit`. `false` when the limit ran out first.
@@ -1582,6 +1637,11 @@ mod tests {
             scenario::{FailoverSpec, ModeTag, fixture::short_scenario},
         },
         assert2::{assert, check},
+        std::{future, sync::atomic::AtomicU16},
+        tokio::{
+            sync::{oneshot, oneshot::Receiver},
+            time,
+        },
     };
 
     #[test]
@@ -1644,8 +1704,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_shutdown_step_is_bounded_by_its_limit() {
         let outcomes = (
-            finished_within(secs(1), std::future::ready(())).await,
-            finished_within(secs(1), std::future::pending::<()>()).await,
+            finished_within(secs(1), future::ready(())).await,
+            finished_within(secs(1), future::pending::<()>()).await,
         );
         assert!(outcomes == (true, false));
     }
@@ -1683,15 +1743,15 @@ mod tests {
         let handles = ObservationHandles::new(STATE_STOP);
         let (grid, shared) = (handles.grid, handles.shared());
 
-        let mut stalled = ProducerObservations::new(4, 100, grid, shared);
+        let mut stalled = ProducerObservations::new(4, 100, grid, shared, &hist::new().unwrap());
         stalled.record_teardown_timeout("flush");
         stalled.record_teardown_timeout("close");
 
-        let mut drained = ProducerObservations::new(4, 100, grid, shared);
+        let mut drained = ProducerObservations::new(4, 100, grid, shared, &hist::new().unwrap());
         drained.record_drain_timeout(3);
         drained.record_teardown_timeout("flush");
 
-        let mut blocked = ProducerObservations::new(4, 100, grid, shared);
+        let mut blocked = ProducerObservations::new(4, 100, grid, shared, &hist::new().unwrap());
         blocked.record_enqueue_timeout();
         blocked.record_teardown_timeout("flush");
 
@@ -1732,11 +1792,12 @@ mod tests {
         for phase in [STATE_RUN, STATE_MEASURING, STATE_STOP] {
             stop.store(phase, Ordering::SeqCst);
             first_ack.store(0, Ordering::SeqCst);
-            let mut observations = ProducerObservations::new(4, 100, grid, shared);
+            let mut observations =
+                ProducerObservations::new(4, 100, grid, shared, &hist::new().unwrap());
             let sent_at = Instant::now();
             observations.record_ack(Err(ProducerError::Server(29)), sent_at);
             assert!(first_ack.load(Ordering::SeqCst) == 0);
-            tokio::time::advance(millis(5).to_std()).await;
+            time::advance(millis(5).to_std()).await;
             observations.record_ack(Ok(metadata.clone()), sent_at);
             let first_receipt = first_ack.load(Ordering::SeqCst);
             assert!(first_receipt > 0);
@@ -1797,9 +1858,10 @@ mod tests {
 
         stop.store(STATE_MEASURING, Ordering::SeqCst);
         first_ack.store(777, Ordering::SeqCst);
-        let mut observations = ProducerObservations::new(4, 100, grid, shared);
+        let mut observations =
+            ProducerObservations::new(4, 100, grid, shared, &hist::new().unwrap());
         let sent_at = Instant::now();
-        tokio::time::advance(millis(20).to_std()).await;
+        time::advance(millis(20).to_std()).await;
         observations.record_ack(Ok(metadata.clone()), sent_at);
         assert!(observations.output.latency_spike_max == Time::ZERO);
 
@@ -1807,20 +1869,20 @@ mod tests {
         // original spike ledger still records latency once a marker exists.
         kill_at.store(u64::MAX, Ordering::SeqCst);
         let sent_at = Instant::now();
-        tokio::time::advance(millis(50).to_std()).await;
+        time::advance(millis(50).to_std()).await;
         observations.record_ack(Ok(metadata.clone()), sent_at);
         assert!(observations.output.recovery_unix_ms == 0);
         assert!(observations.output.latency_spike_max == millis(50));
 
         kill_at.store(1, Ordering::SeqCst);
         let sent_at = Instant::now();
-        tokio::time::advance(millis(20).to_std()).await;
+        time::advance(millis(20).to_std()).await;
         observations.record_ack(Ok(metadata.clone()), sent_at);
         let recovered = observations.output.recovery_unix_ms;
         assert!(recovered >= 1);
         assert!(observations.output.latency_spike_max == millis(50));
         let sent_at = Instant::now();
-        tokio::time::advance(millis(70).to_std()).await;
+        time::advance(millis(70).to_std()).await;
         observations.record_ack(Ok(metadata), sent_at);
         assert!(observations.output.recovery_unix_ms == recovered);
         assert!(observations.output.latency_spike_max == millis(70));
@@ -1839,7 +1901,7 @@ mod tests {
     /// metadata request named a topic and the largest batch it saw.
     struct ProducerBrokerFixture {
         broker: krabka_client_core::MockBroker,
-        started: tokio::sync::oneshot::Receiver<()>,
+        started: Receiver<()>,
         largest_batch: Arc<AtomicU64>,
     }
 
@@ -1865,11 +1927,11 @@ mod tests {
             },
         };
 
-        let port = Arc::new(std::sync::atomic::AtomicU16::new(0));
+        let port = Arc::new(AtomicU16::new(0));
         let handler_port = Arc::clone(&port);
         let largest_batch = Arc::new(AtomicU64::new(0));
         let observed_batch = Arc::clone(&largest_batch);
-        let (started, receiving) = tokio::sync::oneshot::channel();
+        let (started, receiving) = oneshot::channel();
         let mut started = Some(started);
         let broker = krabka_client_core::MockBroker::start(move |api, version, _, body| {
             let mut encoded = BytesMut::new();
@@ -2016,9 +2078,10 @@ mod tests {
                 first_ack: &first_ack,
                 kill_at: &kill_at,
             },
+            &hist::new().unwrap(),
         );
         assert2::assert!(producers.len() == scenario.producers);
-        tokio::time::timeout(secs(10).to_std(), started)
+        time::timeout(secs(10).to_std(), started)
             .await
             .unwrap()
             .expect("producer reaches topic admission");
@@ -2027,17 +2090,17 @@ mod tests {
         // delivery succeeds the window opens at the first ack, so a slow
         // runner still measures something.
         if metadata_error == 0 && delivery_error == 0 {
-            tokio::time::timeout(secs(10).to_std(), async {
+            time::timeout(secs(10).to_std(), async {
                 while first_ack.load(Ordering::SeqCst) == 0 {
-                    tokio::time::sleep(millis(10).to_std()).await;
+                    time::sleep(millis(10).to_std()).await;
                 }
             })
             .await
             .expect("the first record is acknowledged");
         }
-        tokio::time::sleep(millis(200).to_std()).await;
+        time::sleep(millis(200).to_std()).await;
         stop.store(STATE_STOP, Ordering::SeqCst);
-        let output = tokio::time::timeout(secs(10).to_std(), producers.join_next())
+        let output = time::timeout(secs(10).to_std(), producers.join_next())
             .await
             .unwrap()
             .expect("one producer task")
@@ -2089,12 +2152,20 @@ mod tests {
         let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
         let grid = Grid::new(Instant::now(), 0, &scenario, cfg.sample_interval);
         let mut consumers = JoinSet::new();
-        spawn_consumers(&mut consumers, &scenario, &cfg, None, grid, &stop);
+        spawn_consumers(
+            &mut consumers,
+            &scenario,
+            &cfg,
+            None,
+            grid,
+            &stop,
+            &hist::new().unwrap(),
+        );
         assert!(consumers.len() == scenario.consumers);
         let mut errors = Vec::new();
         // Empty bootstrap does no DNS or TCP work; paused time advances the
         // consumer client's internal startup retries to their deadline.
-        while let Some(joined) = tokio::time::timeout(secs(600).to_std(), consumers.join_next())
+        while let Some(joined) = time::timeout(secs(600).to_std(), consumers.join_next())
             .await
             .expect("consumer startup retries end")
         {

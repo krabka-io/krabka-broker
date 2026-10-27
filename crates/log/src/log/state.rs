@@ -22,7 +22,12 @@ use {
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
-    std::{path::Path, time::Instant},
+    std::{
+        iter,
+        path::Path,
+        sync::{Arc, PoisonError},
+        time::{Instant, SystemTime},
+    },
     tracing::instrument,
 };
 
@@ -94,14 +99,18 @@ impl Log {
     /// is a floor it refuses reads below and deletes the archive below once it
     /// leads, so reporting the inferred start would hide and then destroy
     /// every archived record under it.
-    ///
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     #[must_use]
     pub fn reported_log_start(&self) -> Offset {
         match self.established_log_start() {
             Some(start) => start,
-            None if self.config.read().unwrap().remote_storage_enable => Offset(0),
+            None if self
+                .config
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remote_storage_enable =>
+            {
+                Offset(0)
+            }
             None => self.start_offset,
         }
     }
@@ -145,13 +154,10 @@ impl Log {
     /// The first offset the segments on disk begin at, before the global
     /// floor is applied.
     pub(super) fn first_local_offset(&self) -> Offset {
-        if let Some(first) = self.segments.first() {
-            first.base_offset()
-        } else if let Some(active) = &self.active {
-            active.base_offset()
-        } else {
-            Offset(0)
-        }
+        self.segments
+            .first()
+            .or(self.active.as_ref())
+            .map_or(Offset(0), Segment::base_offset)
     }
 
     /// Move the global log start up to `new_start`.
@@ -247,12 +253,14 @@ impl Log {
     /// Whether [`Log::follow_leader_log_start`] would change anything for a
     /// leader that reports `leader_start`. A follower answers this on every
     /// fetch response, so it only reads.
-    ///
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     #[must_use]
     pub fn differs_from_leader_log_start(&self, leader_start: Offset) -> bool {
-        if self.config.read().unwrap().remote_storage_enable {
+        if self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remote_storage_enable
+        {
             self.established_log_start() != Some(leader_start)
         } else {
             leader_start > self.start_offset
@@ -288,11 +296,14 @@ impl Log {
     /// Returns [`LogError::InvalidArgument`] if `leader_start` is negative,
     /// and [`LogError::Io`] if the log-start checkpoint cannot be written or
     /// a raise fails.
-    ///
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     pub fn follow_leader_log_start(&mut self, leader_start: Offset) -> Result<Offset, LogError> {
-        if !self.config.read().unwrap().remote_storage_enable || leader_start > self.start_offset {
+        if !self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remote_storage_enable
+            || leader_start > self.start_offset
+        {
             return self.trim_to_offset(leader_start);
         }
         if leader_start < 0 {
@@ -371,7 +382,7 @@ impl Log {
         self.forget_start_checkpoint();
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
-        new_active.set_io(self.io.clone());
+        new_active.set_io(Arc::clone(&self.io));
         self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
         let stamp_index_path = new_active.stamp_index_path();
         self.clear_producer_and_transaction_state();
@@ -397,7 +408,7 @@ impl Log {
         if new_base.0 > 0 {
             producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
         }
-        self.reap_deleted_files(std::time::SystemTime::now())
+        self.reap_deleted_files(SystemTime::now())
     }
 
     /// Kafka's `ProducerStateManager.takeSnapshot`: write the producer state at
@@ -465,9 +476,6 @@ impl Log {
     /// its `O_DIRECT` handle, or wait for room in its direct write queue. It
     /// errs towards true: a caller that sees false may run the append where a
     /// wait would stall others.
-    ///
-    /// # Panics
-    /// Panics if the log's configuration lock is poisoned.
     pub fn append_may_block(
         &mut self,
         incoming_size: ByteSize,
@@ -477,9 +485,6 @@ impl Log {
     }
 
     /// Whether appending this one verbatim batch can wait on storage. An initialized direct writer with queue space can accept ordinary batches without a worker handoff. Flushes, epoch changes, segment setup, and queue backpressure still require blocking placement. The caller must hold the log lock through the append.
-    ///
-    /// # Panics
-    /// Panics if the log's configuration lock is poisoned.
     pub fn verbatim_append_may_block(&mut self, batch: &VerbatimBatch) -> bool {
         self.append_may_block_with(
             ByteSize::from_bytes(u64::try_from(batch.bytes.len()).unwrap_or(u64::MAX)),
@@ -491,11 +496,13 @@ impl Log {
     fn can_queue_verbatim(&self, batch: &VerbatimBatch, config: &LogConfig) -> bool {
         !batch.is_transactional
             && batch.bytes.len() >= HEADER_LEN
-            && !Attributes(i16::from_be_bytes([
-                batch.bytes[CRC_COVERAGE_START],
-                batch.bytes[CRC_COVERAGE_START + 1],
-            ]))
-            .is_control_batch()
+            && batch
+                .bytes
+                .get(CRC_COVERAGE_START..)
+                .and_then(<[u8]>::first_chunk::<2>)
+                .is_some_and(|&attributes| {
+                    !Attributes(i16::from_be_bytes(attributes)).is_control_batch()
+                })
             && config.delivery_policy == DeliveryPolicy::Immediate
             && config.message_timestamp_type == TimestampType::CreateTime
             && self.active.as_ref().is_some_and(|active| {
@@ -519,7 +526,7 @@ impl Log {
         verbatim: Option<&VerbatimBatch>,
     ) -> bool {
         let (flushes, segment_size, roll_interval, index_size) = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             let storage_may_block = match config.segment_allocation {
                 SegmentAllocation::Preallocate => {
                     verbatim.is_none_or(|batch| !self.can_queue_verbatim(batch, &config))
@@ -685,16 +692,19 @@ impl Log {
     /// Delivery settings apply to subsequent watermark advances. Changing
     /// clock uncertainty does not retract the already published delivery
     /// prefix; see [`LogConfig::delivery_clock_uncertainty`].
-    /// # Panics
-    /// Panics when another thread poisoned the log configuration lock.
-    pub fn set_config(&self, new: LogConfig) { *self.config.write().unwrap() = new; }
+    pub fn set_config(&self, new: LogConfig) {
+        *self.config.write().unwrap_or_else(PoisonError::into_inner) = new;
+    }
 
     /// Snapshot the current config. This allocates a clone, which is cheap
     /// because `LogConfig` is small and `Clone`.
     #[must_use]
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn config_snapshot(&self) -> LogConfig { self.config.read().unwrap().clone() }
+    pub fn config_snapshot(&self) -> LogConfig {
+        self.config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 
     /// Replace the log's I/O implementation for fault-injection tests.
     ///
@@ -704,16 +714,16 @@ impl Log {
     /// functions take -- the producer snapshots, the compaction swap, and the
     /// segment deletions retention performs.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub fn test_set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
-        self.io = io.clone();
+    pub fn test_set_io(&mut self, io: Arc<dyn LogIo>) {
+        self.io = Arc::clone(&io);
         for segment in &mut self.segments {
-            segment.set_io(io.clone());
+            segment.set_io(Arc::clone(&io));
         }
         if let Some(active) = &mut self.active {
-            active.set_io(io.clone());
+            active.set_io(Arc::clone(&io));
         }
         for index in self.stamp_indexes.values_mut() {
-            index.set_io(io.clone());
+            index.set_io(Arc::clone(&io));
         }
         self.epoch_checkpoint.set_io(io);
     }
@@ -741,7 +751,7 @@ impl Log {
                     .range(first_base..)
                     .map(|(_, index)| index)
             });
-        for index in sealed.chain(std::iter::once(&self.active_txn_index)) {
+        for index in sealed.chain(iter::once(&self.active_txn_index)) {
             if index.collect_aborted(start, end, &mut aborted) {
                 break;
             }
@@ -809,6 +819,7 @@ mod tests {
         assert2::check,
         krabka_ids::LeaderEpoch,
         krabka_units::prelude::{kibibytes, minutes},
+        std::path::Path,
         tempfile::tempdir,
     };
 
@@ -933,7 +944,7 @@ mod tests {
         };
         // Three batches of three records, each rolling into its own segment:
         // epoch 1 at 0, epoch 2 at 3, epoch 4 at 6.
-        let filled = |dir: &std::path::Path| {
+        let filled = |dir: &Path| {
             let mut log = Log::open(dir, config.clone()).unwrap();
             for epoch in [1, 2, 4] {
                 log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();

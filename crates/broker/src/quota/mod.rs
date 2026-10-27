@@ -7,6 +7,7 @@ use {
         convert::{ByteRateExt as _, TimeExt},
     },
     num_traits::cast::{NumCast, ToPrimitive as _},
+    std::cmp::Ordering,
 };
 
 mod buckets;
@@ -74,15 +75,11 @@ impl PartialEq<QuotaDelay> for Time {
 }
 
 impl PartialOrd<Time> for QuotaDelay {
-    fn partial_cmp(&self, other: &Time) -> Option<std::cmp::Ordering> {
-        self.delay.partial_cmp(other)
-    }
+    fn partial_cmp(&self, other: &Time) -> Option<Ordering> { self.delay.partial_cmp(other) }
 }
 
 impl PartialOrd<QuotaDelay> for Time {
-    fn partial_cmp(&self, other: &QuotaDelay) -> Option<std::cmp::Ordering> {
-        self.partial_cmp(&other.delay)
-    }
+    fn partial_cmp(&self, other: &QuotaDelay) -> Option<Ordering> { self.partial_cmp(&other.delay) }
 }
 
 #[derive(Clone, Copy)]
@@ -145,10 +142,10 @@ fn consume_configured_quota(
     // whose throttle is bounded keeps no more debt than the bound repays:
     // Kafka forgets a sample after its quota window, so debt past the bound
     // would throttle a client that has stopped overrunning for minutes.
-    let debt = match request.max_debt_wait {
-        Some(wait) => bucket.record_bounded(request.amount, wait),
-        None => bucket.record(request.amount),
-    };
+    let debt = request.max_debt_wait.map_or_else(
+        || bucket.record(request.amount),
+        |wait| bucket.record_bounded(request.amount, wait),
+    );
     let Some(overage) = debt_tokens(debt) else {
         return QuotaDelay::zero();
     };
@@ -211,11 +208,12 @@ pub(crate) mod test_support {
     use {
         krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity},
         krabka_units::{Time, convert::TimeExt, secs},
+        std::sync::Arc,
     };
 
     /// One borrowed entity component of a quota fixture, in wire field order.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub(crate) struct QuotaEntityInput<'a> {
+    pub struct QuotaEntityInput<'a> {
         pub(crate) entity_type: &'a str,
         pub(crate) entity_name: Option<&'a str>,
     }
@@ -244,7 +242,7 @@ pub(crate) mod test_support {
     }
 
     /// A named input builder for one quota kind's rate tests.
-    pub(crate) fn image_with_rate(
+    pub fn image_with_rate(
         entity: Vec<QuotaEntityInput<'_>>,
         key: &str,
         rate: f64,
@@ -259,14 +257,14 @@ pub(crate) mod test_support {
 
     /// A quota rate, the bytes charged against it and the throttle that
     /// charge must earn.
-    pub(crate) struct FractionalBandwidthCase {
+    pub struct FractionalBandwidthCase {
         pub(crate) rate: f64,
         pub(crate) bytes: u64,
         pub(crate) delay: Time,
     }
 
     /// Independent expected throttles for producer and consumer quotas.
-    pub(crate) fn fractional_bandwidth_cases() -> [FractionalBandwidthCase; 7] {
+    pub fn fractional_bandwidth_cases() -> [FractionalBandwidthCase; 7] {
         let case = |rate, bytes, delay| FractionalBandwidthCase { rate, bytes, delay };
         [
             case(1024.0, 1024, <Time as TimeExt>::ZERO),
@@ -280,7 +278,7 @@ pub(crate) mod test_support {
     }
 
     /// Apply the independent fractional-rate table to one byte-charging API.
-    pub(crate) fn check_fractional_bandwidth(
+    pub fn check_fractional_bandwidth(
         key: &str,
         consume: impl Fn(&MetadataImage, &super::QuotaBuckets, u64) -> Time,
     ) {
@@ -296,10 +294,10 @@ pub(crate) mod test_support {
     }
 
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
-    pub(crate) struct QuotaValue(pub f64);
+    pub struct QuotaValue(pub f64);
 
     #[derive(krabka_macros::FieldDefaults)]
-    pub(crate) struct QuotaRecordSetup<'a> {
+    pub struct QuotaRecordSetup<'a> {
         #[default(vec![QuotaEntityInput::user(Some("alice"))])]
         pub entity: Vec<QuotaEntityInput<'a>>,
         #[default("producer_byte_rate")]
@@ -318,16 +316,14 @@ pub(crate) mod test_support {
         ])
     }
 
-    pub(crate) fn shared_image_from_quota_setup(
-        setup: QuotaRecordSetup<'_>,
-    ) -> std::sync::Arc<MetadataImage> {
-        std::sync::Arc::new(image_from_quota_setup(setup))
+    pub fn shared_image_from_quota_setup(setup: QuotaRecordSetup<'_>) -> Arc<MetadataImage> {
+        Arc::new(image_from_quota_setup(setup))
     }
 
     /// A bucket table and the one bucket that `alice_bucket` created in it.
-    pub(crate) struct AliceBucket {
-        pub(crate) buckets: std::sync::Arc<super::QuotaBuckets>,
-        pub(crate) bucket: std::sync::Arc<TokenBucket>,
+    pub struct AliceBucket {
+        pub(crate) buckets: Arc<super::QuotaBuckets>,
+        pub(crate) bucket: Arc<TokenBucket>,
     }
 
     fn record_from_quota_setup(setup: QuotaRecordSetup<'_>) -> ClientQuotaRecord {
@@ -348,10 +344,10 @@ pub(crate) mod test_support {
     krabka_macros::fixture_constructors! { quota: pub(crate) image_with_quota -> MetadataImage = image_from_quota_setup; }
     krabka_macros::fixture_constructors! { quota: pub(crate) quota_record -> ClientQuotaRecord = record_from_quota_setup; }
 
-    pub(crate) type QuotaEntitySpec<'a> = Vec<QuotaEntityInput<'a>>;
+    pub type QuotaEntitySpec<'a> = Vec<QuotaEntityInput<'a>>;
 
     #[derive(krabka_macros::FieldDefaults)]
-    pub(crate) struct UniformQuotaImageSetup<'a> {
+    pub struct UniformQuotaImageSetup<'a> {
         pub entities: Vec<QuotaEntitySpec<'a>>,
         #[default("producer_byte_rate")]
         pub key: &'a str,
@@ -361,7 +357,7 @@ pub(crate) mod test_support {
 
     /// Configure every entity at one probe rate, retaining the input order.
     #[bon::builder]
-    pub(crate) fn uniform_quota_image(
+    pub fn uniform_quota_image(
         #[builder(default)] entities: Vec<QuotaEntitySpec<'_>>,
         #[builder(default = "producer_byte_rate")] key: &'_ str,
         #[builder(into, default = QuotaValue (64.0))] value: QuotaValue,
@@ -386,11 +382,11 @@ pub(crate) mod test_support {
         )
     }
 
-    pub(crate) fn producer_quota_image(entities: Vec<QuotaEntitySpec<'_>>) -> MetadataImage {
+    pub fn producer_quota_image(entities: Vec<QuotaEntitySpec<'_>>) -> MetadataImage {
         uniform_quota_image().entities(entities).call()
     }
 
-    pub(crate) fn app1_producer_quota() -> ClientQuotaRecord {
+    pub fn app1_producer_quota() -> ClientQuotaRecord {
         quota_record()
             .entity(vec![QuotaEntityInput::client_id(Some("app1"))])
             .value(200.0)
@@ -398,7 +394,7 @@ pub(crate) mod test_support {
     }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    pub(crate) struct UserBucketSetup<'a> {
+    pub struct UserBucketSetup<'a> {
         #[default("producer_byte_rate")]
         pub key: &'a str,
         #[default(QuotaValue(0.0))]
@@ -406,19 +402,19 @@ pub(crate) mod test_support {
     }
 
     #[bon::builder]
-    pub(crate) fn alice_bucket(
+    pub fn alice_bucket(
         #[builder(default = "producer_byte_rate")] key: &'_ str,
         #[builder(into, default = QuotaValue (0.0))] rate: QuotaValue,
     ) -> AliceBucket {
         let setup = UserBucketSetup { key, rate };
-        let buckets = std::sync::Arc::new(super::QuotaBuckets::new());
+        let buckets = Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
         let bucket = buckets.get_or_create(setup.key, &key, setup.rate.0);
         AliceBucket { buckets, bucket }
     }
 
     /// The 5,000-byte pair used to compare lookup precedence with bucket refresh.
-    pub(crate) fn alice_app1_producer_quota() -> ClientQuotaRecord {
+    pub fn alice_app1_producer_quota() -> ClientQuotaRecord {
         quota_record()
             .entity(vec![
                 QuotaEntityInput::user(Some("alice")),
@@ -428,7 +424,7 @@ pub(crate) mod test_support {
             .call()
     }
 
-    pub(crate) fn image_with_quotas(records: Vec<ClientQuotaRecord>) -> MetadataImage {
+    pub fn image_with_quotas(records: Vec<ClientQuotaRecord>) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         for record in records {
             image.apply(&MetadataRecord::V1ClientQuota(record));

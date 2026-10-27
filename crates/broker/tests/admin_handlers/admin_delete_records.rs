@@ -19,6 +19,7 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::{NodeId, codes},
+    krabka_log::name,
     krabka_protocol::{
         owned::{
             delete_records_response::DeleteRecordsPartitionResult,
@@ -29,6 +30,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    std::{fs, path::Path},
 };
 
 /// Request timestamp sentinel (-2) asking where the log starts. Kafka's
@@ -204,12 +206,12 @@ async fn trim(
 /// A case reads this to say out loud which segments exist, so "the trim landed
 /// inside the active segment" is a checked precondition rather than an
 /// assumption about the default `segment.bytes`.
-fn segment_base_offsets(log_dir: &std::path::Path, topic: &str) -> Vec<i64> {
-    let dir = krabka_log::name::partition_dir(log_dir, topic, 0);
-    let mut bases: Vec<i64> = std::fs::read_dir(&dir)
+fn segment_base_offsets(log_dir: &Path, topic: &str) -> Vec<i64> {
+    let dir = name::partition_dir(log_dir, topic, 0);
+    let mut bases: Vec<i64> = fs::read_dir(&dir)
         .expect("read partition dir")
         .map(|entry| entry.expect("partition dir entry").file_name())
-        .filter_map(|name| krabka_log::name::parse_log_filename(&name.to_string_lossy()).ok())
+        .filter_map(|name| name::parse_log_filename(&name.to_string_lossy()).ok())
         .collect();
     bases.sort_unstable();
     bases

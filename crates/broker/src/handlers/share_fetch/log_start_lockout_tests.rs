@@ -108,7 +108,7 @@ async fn delete_records(
 ) -> i16 {
     let request = DeleteRecordsRequest {
         topics: vec![DeleteRecordsTopic {
-            name: topic.to_string(),
+            name: topic.to_owned(),
             partitions: vec![DeleteRecordsPartition {
                 partition_index,
                 offset: new_log_start,
@@ -224,7 +224,7 @@ async fn share_fetch_one(
         .unwrap_or_default()
 }
 
-use crate::handlers::test_support::acquired_share_records as acquired;
+use {crate::handlers::test_support::acquired_share_records as acquired, std::fs};
 
 async fn spso(broker: &BrokerHandle, group: &str, topic_id: WireUuid, partition_index: i32) -> i64 {
     let shared = broker.broker_arc_for_test();
@@ -415,14 +415,14 @@ async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedP
     let expected: Vec<PartitionOutcome> = match failure {
         IsolatedPartitionFailure::CorruptBatch => {
             // `batch_length` is bytes 8 to 11; zero is shorter than a batch header.
-            let segment = std::fs::read_dir(dir.path().join(format!("{topic}-0")))
+            let segment = fs::read_dir(dir.path().join(format!("{topic}-0")))
                 .expect("the partition directory")
                 .map(|entry| entry.expect("a directory entry").path())
                 .find(|path| path.extension().is_some_and(|ext| ext == "log"))
                 .expect("a segment file");
-            let mut bytes = std::fs::read(&segment).expect("read the segment");
+            let mut bytes = fs::read(&segment).expect("read the segment");
             bytes[8..12].copy_from_slice(&0_i32.to_be_bytes());
-            std::fs::write(&segment, bytes).expect("corrupt the segment");
+            fs::write(&segment, bytes).expect("corrupt the segment");
             vec![
                 PartitionOutcome {
                     partition_index: 0,

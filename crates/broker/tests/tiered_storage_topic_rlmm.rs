@@ -30,9 +30,10 @@
 //! [`topic_rlmm_copy_then_fetch_round_trip`]: rlmm_loopback::topic_rlmm_copy_then_fetch_round_trip
 //! [`delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it`]: rlmm_delete_records::delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it
 //! [`an_idle_tiered_partition_leaves_local_disk_through_its_last_record`]: rlmm_idle_partition::an_idle_tiered_partition_leaves_local_disk_through_its_last_record
+#![cfg(test)]
 
 mod support;
-use crate::support::tiered as topic_fixture;
+use {crate::support::tiered as topic_fixture, tokio::runtime::Builder};
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
@@ -65,7 +66,7 @@ fn run_broker_test(test: impl Future<Output = ()>) {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("broker test lock should not be poisoned");
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()

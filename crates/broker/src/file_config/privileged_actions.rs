@@ -19,6 +19,7 @@ use {
         operator_keys::{OperatorKeyEntry, OperatorKeys},
     },
     krabka_units::Time,
+    std::path::PathBuf,
 };
 
 /// TOML shape of one `[[operator_keys]]` entry. Maps to
@@ -29,6 +30,7 @@ use {
 /// principal binding is what stops one operator's key signing in another
 /// operator's name.
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileOperatorKey {
     /// Stable identifier that a signed freeze record or break-glass approval
     /// names. Must be unique across the array.
@@ -49,7 +51,7 @@ impl From<&FileOperatorKey> for OperatorKeyEntry {
         Self {
             key_id: file.key_id.clone(),
             principal: file.principal.clone(),
-            public_key_path: std::path::PathBuf::from(&file.public_key_path),
+            public_key_path: PathBuf::from(&file.public_key_path),
         }
     }
 }

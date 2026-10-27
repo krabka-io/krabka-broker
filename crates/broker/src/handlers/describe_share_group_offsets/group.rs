@@ -92,37 +92,40 @@ pub(super) async fn describe_group(
     // the group's initialized topics and then drops the ones the caller
     // cannot describe with no row at all, the same way Kafka hides topic
     // existence from such a caller.
-    let (requested, unauthorized) = if let Some(topics) = group.topics {
-        let allowed = allowed_topics(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx,
-            AclOperation::Describe,
-            topics.iter().map(|topic| topic.topic_name.as_str()),
-        );
-        let (requested, denied): (Vec<_>, Vec<_>) = topics
-            .into_iter()
-            .partition(|topic| allowed.contains(topic.topic_name.as_str()));
-        (
-            requested,
-            denied.into_iter().map(unauthorized_topic).collect(),
-        )
-    } else {
-        let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
-        let initialized = initialized_topics(metadata.as_ref(), image);
-        let allowed = allowed_topics(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx,
-            AclOperation::Describe,
-            initialized.iter().map(|topic| topic.topic_name.as_str()),
-        );
-        let requested = initialized
-            .into_iter()
-            .filter(|topic| allowed.contains(topic.topic_name.as_str()))
-            .collect();
-        (requested, Vec::new())
-    };
+    let (requested, unauthorized) = group.topics.map_or_else(
+        || {
+            let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
+            let initialized = initialized_topics(metadata.as_ref(), image);
+            let allowed = allowed_topics(
+                broker.config.authorizer.as_ref(),
+                image,
+                ctx,
+                AclOperation::Describe,
+                initialized.iter().map(|topic| topic.topic_name.as_str()),
+            );
+            let requested = initialized
+                .into_iter()
+                .filter(|topic| allowed.contains(topic.topic_name.as_str()))
+                .collect();
+            (requested, Vec::new())
+        },
+        |topics| {
+            let allowed = allowed_topics(
+                broker.config.authorizer.as_ref(),
+                image,
+                ctx,
+                AclOperation::Describe,
+                topics.iter().map(|topic| topic.topic_name.as_str()),
+            );
+            let (requested, denied): (Vec<_>, Vec<_>) = topics
+                .into_iter()
+                .partition(|topic| allowed.contains(topic.topic_name.as_str()));
+            (
+                requested,
+                denied.into_iter().map(unauthorized_topic).collect(),
+            )
+        },
+    );
 
     let end_offsets = NetworkLatestOffsets { broker };
     match describe_topics(persister.as_ref(), &end_offsets, image, &gid, requested).await {
@@ -154,7 +157,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            authorizer::{AuthorizationResult, Authorizer},
+            authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
             coordinator::unified::share::persistence::{
                 ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
@@ -331,7 +334,7 @@ mod tests {
             leader_epoch: 0,
             lag: -1,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some("Topic authorization failed.".to_string()),
+            error_message: Some("Topic authorization failed.".to_owned()),
         })
     }
 
@@ -477,7 +480,7 @@ mod tests {
         let cases = vec![
             Case {
                 name: "all topics allowed returns the normal row",
-                authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+                authorizer: Arc::new(AllowAllAuthorizer),
                 include_secret: false,
                 expected: vec![orders_row.clone()],
             },
@@ -546,7 +549,7 @@ mod tests {
         let cases = vec![
             Case {
                 name: "all topics allowed returns every initialized topic",
-                authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+                authorizer: Arc::new(AllowAllAuthorizer),
                 expected_names: vec!["orders", "secret"],
             },
             Case {

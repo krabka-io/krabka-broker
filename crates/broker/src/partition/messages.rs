@@ -7,7 +7,7 @@ use {
     bytes::Bytes,
     krabka_compression::CompressionType,
     krabka_log::{LeaderEpoch, Log, LogConfig, Offset, ProducerId, VerbatimBatch},
-    krabka_protocol::records::RecordBatch,
+    krabka_protocol::records::{RecordBatch, RecordsError},
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -82,10 +82,7 @@ pub struct EncodedBatch {
 impl EncodedBatch {
     /// Bytes that `batch.encode_with_compression_level(level)` writes for
     /// `batch` as it is, under its own codec.
-    pub(crate) fn encode(
-        batch: &RecordBatch,
-        level: Option<i32>,
-    ) -> Result<Self, krabka_protocol::records::RecordsError> {
+    pub(crate) fn encode(batch: &RecordBatch, level: Option<i32>) -> Result<Self, RecordsError> {
         let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
         batch.encode_with_compression_level(&mut buf, level)?;
         // The buffer is sized for the uncompressed batch. A compressed encode
@@ -118,7 +115,7 @@ impl EncodedBatch {
 
 /// `bytes`, the wire encoding of `batch`, with the header fields the log's
 /// verbatim append reads copied from `batch` rather than parsed back out.
-pub(crate) fn verbatim_of(batch: &RecordBatch, bytes: Bytes) -> VerbatimBatch {
+pub fn verbatim_of(batch: &RecordBatch, bytes: Bytes) -> VerbatimBatch {
     VerbatimBatch {
         bytes,
         last_offset_delta: batch.last_offset_delta,
@@ -194,19 +191,15 @@ impl ProduceData {
     }
 
     #[must_use]
-    pub(crate) fn record_count(&self) -> u32 {
-        match self {
-            Self::Verbatim(batch) => u32::try_from(batch.last_offset_delta + 1)
-                .expect("verbatim batch offset count is non-negative"),
-            Self::Owned(batch) | Self::OwnedEncoded { batch, .. } => {
-                u32::try_from(batch.last_offset_delta + 1)
-                    .expect("owned batch offset count is non-negative")
+    pub(crate) fn record_count(&self) -> i64 {
+        let last_offset_delta = match self {
+            Self::Verbatim(batch) => batch.last_offset_delta,
+            Self::Owned(batch) | Self::OwnedEncoded { batch, .. } => batch.last_offset_delta,
+            Self::OwnedControl(batch) | Self::OwnedCommitMarker { batch, .. } => {
+                batch.last_offset_delta
             }
-            Self::OwnedControl(batch) => u32::try_from(batch.last_offset_delta + 1)
-                .expect("control batch offset count is non-negative"),
-            Self::OwnedCommitMarker { batch, .. } => u32::try_from(batch.last_offset_delta + 1)
-                .expect("commit marker offset count is non-negative"),
-        }
+        };
+        i64::from(last_offset_delta) + 1
     }
 
     /// The bytes this job appends and the newest timestamp it carries, which
@@ -324,14 +317,14 @@ pub enum WriterMessage {
     /// Run one compaction pass. The writer actor serializes this with
     /// appends to preserve the single-writer invariant on `Log`.
     Compact {
-        ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+        ack: oneshot::Sender<Result<(), BrokerError>>,
     },
     /// Run one local-retention pass: the time-based segment roll, then the
     /// `retention.ms` and `retention.bytes` eviction of sealed segments. The
     /// writer actor serializes this with appends for the same reason
     /// [`WriterMessage::Compact`] is serialized -- both mutate the log.
     Retain {
-        ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+        ack: oneshot::Sender<Result<(), BrokerError>>,
     },
     /// Trim from the start of the log: drop sealed segments whose last
     /// offset is `< new_start`, advance `log_start_offset` if `new_start`
@@ -341,14 +334,14 @@ pub enum WriterMessage {
     /// semantics. The `DeleteRecords` handler sends this message.
     TrimToOffset {
         new_start: Offset,
-        ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+        ack: oneshot::Sender<Result<Offset, BrokerError>>,
     },
     /// Take the leader's global log start as this follower's own, as
     /// [`krabka_log::Log::follow_leader_log_start`] describes. Returns the
     /// resulting `log_start_offset`. The replicator sends this message.
     FollowLeaderLogStart {
         leader_start: Offset,
-        ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+        ack: oneshot::Sender<Result<Offset, BrokerError>>,
     },
     /// Test-only: shift the in-memory `log_start_offset` and do not
     /// physically truncate segments. This simulates retention-driven
@@ -407,14 +400,18 @@ pub enum SwapOutcome {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        krabka_protocol::records::{Attributes, Record},
+    };
 
     #[test]
     fn commit_marker_record_count_uses_batch_offset_span() {
         let data = ProduceData::OwnedCommitMarker {
-            batch: krabka_protocol::records::RecordBatch {
+            batch: RecordBatch {
                 last_offset_delta: 3,
-                ..krabka_protocol::records::RecordBatch::default()
+                ..RecordBatch::default()
             },
             commit_stamp: 99,
         };
@@ -429,9 +426,8 @@ mod tests {
     fn an_encoded_batch_holds_its_bytes_and_sizes_its_job_as_the_owned_batch() {
         let value = Bytes::from(vec![b'x'; 64 * 1024]);
         let batch = RecordBatch {
-            attributes: krabka_protocol::records::Attributes::default()
-                .with_compression(CompressionType::Gzip),
-            records: vec![krabka_protocol::records::Record {
+            attributes: Attributes::default().with_compression(CompressionType::Gzip),
+            records: vec![Record {
                 value: Some(value),
                 ..Default::default()
             }],

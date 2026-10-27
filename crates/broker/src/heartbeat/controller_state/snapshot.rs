@@ -42,16 +42,19 @@ impl ControllerLivenessState {
         want_fence: bool,
         is_caught_up: bool,
     ) -> bool {
-        let mut map = self.brokers.lock().await;
-        let Some(entry) = map.get_mut(&broker_id) else {
-            return true;
-        };
-        if want_fence {
-            entry.fenced = true;
-        } else if is_caught_up {
-            entry.fenced = false;
-        }
-        entry.fenced
+        // A broker the registry does not know reads as fenced.
+        self.brokers
+            .lock()
+            .await
+            .get_mut(&broker_id)
+            .is_none_or(|entry| {
+                if want_fence {
+                    entry.fenced = true;
+                } else if is_caught_up {
+                    entry.fenced = false;
+                }
+                entry.fenced
+            })
     }
 
     /// Snapshot the set of active broker ids under a single
@@ -115,7 +118,7 @@ mod tests {
             test_support::expired_broker_fixture,
         },
         assert2::assert,
-        std::time::Duration,
+        std::{iter, time::Duration},
     };
 
     #[tokio::test]
@@ -153,7 +156,7 @@ mod tests {
         assert!(transitions == vec![LivenessTransition::AliveToDead(1)]);
 
         let dead = liveness.dead_snapshot().await;
-        assert!(dead == [1].into_iter().collect());
+        assert!(dead == iter::once(1).collect());
         // The fenced broker is unavailable but not dead.
         assert!(liveness.unavailable_snapshot().await.contains(&3));
         assert!(!dead.contains(&99));

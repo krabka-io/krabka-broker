@@ -30,7 +30,7 @@ pub fn detect_bootstrap_mode(metadata_log_dir: &Path) -> BootstrapMode {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, tempfile::tempdir};
+    use {super::*, assert2::check, std::fs, tempfile::tempdir};
 
     /// Only a `quorum-state` file or a segment that holds bytes, in the
     /// metadata partition directory, marks a restart.
@@ -116,8 +116,8 @@ mod tests {
             let dir = tempdir().unwrap();
             for File { path, contents } in files {
                 let path = dir.path().join(path);
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                std::fs::write(path, contents).unwrap();
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, contents).unwrap();
             }
             check!(detect_bootstrap_mode(dir.path()) == expected, "{what}");
         }

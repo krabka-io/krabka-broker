@@ -1,15 +1,15 @@
 //! Quorum-backed diskless WAL implementation.
 
-pub(crate) mod engine;
-pub(crate) mod follower;
-pub(crate) mod log_view;
+pub mod engine;
+pub mod follower;
+pub mod log_view;
 #[cfg(test)]
 mod membership;
-pub(crate) mod placement;
-pub(crate) mod registry;
-pub(crate) mod router;
+pub mod placement;
+pub mod registry;
+pub mod router;
 mod shard_dirs;
-pub(crate) mod wire;
+pub mod wire;
 
 #[cfg(test)]
 mod distributed_tests;
@@ -22,9 +22,7 @@ mod recovery_tests;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::shard_dirs::{
-    ShardRemoval, prune_orphaned_shard_dirs, remove_shard, shard_dir,
-};
+pub use self::shard_dirs::{ShardRemoval, prune_orphaned_shard_dirs, remove_shard, shard_dir};
 #[cfg(test)]
 use self::{
     engine::OpenMode,
@@ -34,6 +32,8 @@ use self::{
 use krabka_kraft_core::NodeId;
 #[cfg(test)]
 use krabka_log::LogConfig;
+#[cfg(test)]
+use std::path::Path;
 use {
     self::engine::WalShardEngine,
     super::WalStore,
@@ -42,13 +42,13 @@ use {
     krabka_ids::{Offset, PartitionIndex},
     krabka_log::Log,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::{Arc, Mutex},
+    std::sync::{Arc, Mutex, PoisonError},
     uuid::Uuid,
 };
 
 /// A [`WalStore`] backed by a quorum of durable WAL replica logs.
 #[derive(Debug, Clone)]
-pub(crate) struct QuorumWalStore {
+pub struct QuorumWalStore {
     source: Arc<Mutex<Log>>,
     engine: Arc<WalShardEngine>,
     hot_tail: Option<HotTailTarget>,
@@ -77,17 +77,17 @@ impl QuorumWalStore {
         topic: &str,
         topic_id: Option<Uuid>,
         partition: PartitionIndex,
-        log_dir: &std::path::Path,
+        log_dir: &Path,
         source: Arc<Mutex<Log>>,
         hot_tail: Option<Arc<HotTailCache>>,
         replica_count: usize,
     ) -> Result<Self, BrokerError> {
         let config = source
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .config_snapshot();
         let mut replicas = Vec::with_capacity(replica_count);
-        replicas.push(engine::WalReplica::for_test(NodeId(0), source.clone()));
+        replicas.push(engine::WalReplica::for_test(NodeId(0), Arc::clone(&source)));
         let root = shard_dir(log_dir, topic, topic_id, partition);
         for id in 1..replica_count {
             let id = NodeId(u64::try_from(id).map_err(|_| {
@@ -130,7 +130,7 @@ impl QuorumWalStore {
         voter_count: usize,
     ) -> Result<Self, BrokerError> {
         let engine = Arc::new(WalShardEngine::new_distributed(
-            source.clone(),
+            Arc::clone(&source),
             voter_count,
         )?);
         let hot_tail = hot_tail.map(|cache| HotTailTarget {
@@ -145,7 +145,7 @@ impl QuorumWalStore {
         })
     }
 
-    pub(crate) fn engine(&self) -> Arc<WalShardEngine> { self.engine.clone() }
+    pub(crate) fn engine(&self) -> Arc<WalShardEngine> { Arc::clone(&self.engine) }
 }
 
 #[cfg(test)]
@@ -166,7 +166,7 @@ impl WalStore for QuorumWalStore {
             let raw = self
                 .source
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 // The hot tail must mirror every batch that just went durable,
                 // so the read is uncapped.
                 .read_raw(start, durable, ByteSize::from_bytes(u64::MAX))?;

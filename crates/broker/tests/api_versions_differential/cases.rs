@@ -9,7 +9,7 @@ use {
     },
     assert2::assert,
     krabka_protocol::owned::api_versions_response::ApiVersion,
-    std::{collections::BTreeSet, path::PathBuf},
+    std::{collections::BTreeSet, env, path::PathBuf},
 };
 
 /// Where the checked-in report lives.
@@ -28,7 +28,7 @@ fn expectation_path() -> PathBuf {
 /// --test api_versions_differential -- --ignored`. A Bazel sandbox cannot write
 /// to the source tree, which is the other reason this is off by default.
 fn regenerating() -> bool {
-    std::env::var("KRABKA_UPDATE_API_VERSIONS_EXPECTATION").is_ok_and(|v| v == "1")
+    env::var("KRABKA_UPDATE_API_VERSIONS_EXPECTATION").is_ok_and(|v| v == "1")
 }
 
 /// What the client listener advertises, in the order the JVM tool prints,

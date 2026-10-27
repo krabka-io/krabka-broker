@@ -28,6 +28,7 @@ use {
         },
         records::RecordBatch,
     },
+    std::sync::Arc,
     tokio::sync::oneshot,
 };
 
@@ -43,7 +44,7 @@ pub enum GroupActorMessage {
         /// `TopicRegexResolver` does with the request context of the
         /// heartbeat. The actor calls it only when the group's resolutions
         /// need to be made or refreshed.
-        regex_resolver: std::sync::Arc<dyn TopicRegexResolver>,
+        regex_resolver: Arc<dyn TopicRegexResolver>,
         reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
     },
     /// Validate an `OffsetCommit` or `TxnOffsetCommit` against the group's
@@ -68,7 +69,7 @@ pub enum GroupActorMessage {
         /// Resolves a consumer group's regular expressions with this
         /// principal, as Kafka's `maybeUpdateRegularExpressions` does with the
         /// request context of a classic join to a consumer group.
-        regex_resolver: std::sync::Arc<dyn TopicRegexResolver>,
+        regex_resolver: Arc<dyn TopicRegexResolver>,
         reply: oneshot::Sender<JoinResult>,
     },
     ClassicSync {
@@ -196,7 +197,7 @@ pub enum GroupActorMessage {
     /// `ClassicGroup.requestMetadataRefresh` does nothing.
     MetadataUpdate {
         /// The names of the created, changed and deleted topics.
-        topics: std::sync::Arc<[String]>,
+        topics: Arc<[String]>,
     },
 
     // ── in-flight transactional offsets (KIP-447) ──

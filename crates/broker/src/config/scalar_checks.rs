@@ -8,6 +8,7 @@ use {
         config::BrokerConfig,
         config_keys::{SEGMENT_BYTES, validate_topic_config},
     },
+    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_units::{
         ByteSize, Time,
         convert::{ByteSizeExt, TimeExt},
@@ -252,10 +253,7 @@ impl BrokerConfig {
                 "metadata_snapshot_interval_records must be positive".into(),
             ));
         }
-        krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
-            self.metadata_snapshot_fetch_max,
-        )
-        .map_err(|error| {
+        MetadataSnapshotFetchMax::new(self.metadata_snapshot_fetch_max).map_err(|error| {
             BrokerError::InvalidRuntimeConfig(format!(
                 "metadata_snapshot_fetch_max is invalid: {error}"
             ))
@@ -304,7 +302,7 @@ impl BrokerConfig {
         let fetch_max_bytes = self.fetch_max_bytes.bytes_u64();
         if !self.fetch_max_bytes.bytes_f64().is_finite()
             || ByteSize::from_bytes(fetch_max_bytes) != self.fetch_max_bytes
-            || fetch_max_bytes > u64::try_from(i32::MAX).expect("i32::MAX fits u64")
+            || fetch_max_bytes > u64::from(i32::MAX.unsigned_abs())
         {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "fetch_max_bytes must be a whole number of bytes from 0 to 2147483647".into(),
@@ -593,8 +591,8 @@ enum MillisFloor {
 impl MillisFloor {
     fn lower_bound(self) -> i64 {
         match self {
-            MillisFloor::Zero => 0,
-            MillisFloor::One => 1,
+            Self::Zero => 0,
+            Self::One => 1,
         }
     }
 }

@@ -58,10 +58,12 @@ pub(super) fn segment_maximum_proves_delivery(
     uncertainty: i64,
     now: i64,
 ) -> bool {
-    match earliest_max_timestamp_index(activations) {
-        Some(index) => scheduled_delivery_visible(true, uncertainty, activations[index], now),
-        None => true,
-    }
+    let Some(index) = earliest_max_timestamp_index(activations) else {
+        return true;
+    };
+    activations
+        .get(index)
+        .is_some_and(|&activation| scheduled_delivery_visible(true, uncertainty, activation, now))
 }
 
 type ScheduledPrefix = (i64, FetchVisibility, FetchVisibility);
@@ -113,13 +115,16 @@ pub(super) fn scheduled_prefix_bounds_fetch(
         && !scheduled_activation_due(activations@[j]@, uncertainty@, now@))]
     #[variant(batches@.len() - i@)]
     while i < batches.len() {
-        let (base, delta) = batches[i];
+        let &(base, delta) = batches.get(i)?;
         let next = restore_batch_step(cursor, base, delta)?;
         if next > w.log_end {
             return None;
         }
         if !all_due
-            && !scheduled_delivery_visible(true, uncertainty, activations[i], now)
+            && !matches!(
+                activations.get(i),
+                Some(&activation) if scheduled_delivery_visible(true, uncertainty, activation, now)
+            )
             && base < candidate
         {
             candidate = base;

@@ -10,7 +10,8 @@ use {
     crate::support,
     assert2::{assert, check},
     krabka_broker::{NodeId, coordinator::AUDIT_TOPIC},
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, time::Duration},
+    tokio::time,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -50,7 +51,7 @@ async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one
                 metrics.partitions_led.get() >= 1
             })
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
 
         check!(
             placement

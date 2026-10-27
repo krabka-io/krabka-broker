@@ -24,6 +24,11 @@ use {
     crate::{error::LogError, io::DirectFile, name},
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
+    std::{
+        fmt,
+        io::{self, ErrorKind},
+        sync::Arc,
+    },
 };
 
 /// The `O_DIRECT` writer of an active segment and the newest bytes it wrote.
@@ -36,8 +41,8 @@ pub(super) struct DirectMode {
     pub(super) cache: TailCache,
 }
 
-impl std::fmt::Debug for DirectMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DirectMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DirectMode")
             .field("end", &self.writer.end())
             .field("cached_from", &self.cache.start())
@@ -55,13 +60,12 @@ impl Drop for DirectMode {
 impl Segment {
     pub(crate) fn writes_direct(&self) -> bool { self.direct.is_some() }
 
-    /// The reservation and direct handle already exist, and one append fits the write queue. A configuration change that grows the reservation still takes the blocking path.
+    /// The reservation runs far enough ahead, the direct handle exists, and
+    /// one append fits the write queue. An append that needs the next
+    /// reservation step, or a configuration change that grows the
+    /// reservation, still takes the blocking path, where `reserve` runs.
     pub(crate) fn can_queue_append(&self, bytes: usize, segment_size: ByteSize) -> bool {
-        segment_size.bytes_u64()
-            <= self
-                .log_size
-                .max(self.reserved_end)
-                .max(self.reserve_requested)
+        !self.needs_reservation(segment_size)
             && self
                 .direct
                 .as_ref()
@@ -107,7 +111,7 @@ impl Segment {
         }
     }
 
-    fn open_direct_mode(&self, tail_cache: ByteSize) -> std::io::Result<DirectMode> {
+    fn open_direct_mode(&self, tail_cache: ByteSize) -> io::Result<DirectMode> {
         let DirectFile {
             file,
             mem_align,
@@ -124,7 +128,7 @@ impl Segment {
             },
             self.log_size,
             tail,
-            std::sync::Arc::clone(&self.io),
+            Arc::clone(&self.io),
         )?;
         Ok(DirectMode {
             writer,
@@ -152,7 +156,7 @@ impl Segment {
     ///
     /// # Errors
     /// The error of a failed write.
-    pub(crate) fn drain_direct(&self) -> std::io::Result<()> {
+    pub(crate) fn drain_direct(&self) -> io::Result<()> {
         self.direct
             .as_ref()
             .map_or(Ok(()), |mode| mode.writer.drain())
@@ -181,19 +185,17 @@ impl Segment {
 
     /// The bytes of the block `log_size` falls in, from its start to
     /// `log_size`, read through the buffered handle.
-    fn read_partial_block(&self, block: usize) -> std::io::Result<Vec<u8>> {
-        let block = u64::try_from(block)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    fn read_partial_block(&self, block: usize) -> io::Result<Vec<u8>> {
+        let block = u64::try_from(block).map_err(|_| io::Error::from(ErrorKind::InvalidInput))?;
         let in_block = self.log_size.checked_rem(block).unwrap_or(0);
         let mut tail = vec![
             0;
-            usize::try_from(in_block).map_err(|_| std::io::Error::from(
-                std::io::ErrorKind::InvalidInput
-            ))?
+            usize::try_from(in_block)
+                .map_err(|_| io::Error::from(ErrorKind::InvalidInput))?
         ];
         let read = read_full_at(&self.log_file, self.log_size - in_block, &mut tail)?;
         if read < tail.len() {
-            return Err(std::io::ErrorKind::UnexpectedEof.into());
+            return Err(ErrorKind::UnexpectedEof.into());
         }
         Ok(tail)
     }

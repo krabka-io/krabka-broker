@@ -5,6 +5,7 @@
 //! networking these suites depend on. The binary root carries only the module
 //! tree, and each child covers one conversion path: the pure-legacy round
 //! trip, the two mixed-vintage round trips, and the compressed batches.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;

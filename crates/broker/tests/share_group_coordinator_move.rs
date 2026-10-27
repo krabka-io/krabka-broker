@@ -8,6 +8,7 @@
 //! then stopped cleanly. The broker that took the partition over had none of
 //! them, and it answered every member's next heartbeat with
 //! `GROUP_ID_NOT_FOUND`, which a share consumer cannot recover from.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -23,6 +24,7 @@ use {
     },
     std::time::{Duration, Instant},
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -79,7 +81,7 @@ async fn coordinator_of(client: &Client, excluded: Option<u64>) -> u64 {
         assert!(Instant::now() < deadline, "FindCoordinator: {found:?}");
         // intentional: a client has no awaiter for the creation or the
         // move; it retries, as Kafka's clients do.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -112,7 +114,7 @@ async fn heartbeat_once_loaded(
             return response;
         }
         // intentional: the client retries a coordinator that is loading.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

@@ -118,7 +118,7 @@ impl DeadlineHeap {
 }
 
 /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
-pub(crate) async fn run(
+pub async fn run(
     partitions: Arc<PartitionRegistry>,
     node_id: NodeId,
     config: DeliveryConfig,

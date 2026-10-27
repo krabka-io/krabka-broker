@@ -11,7 +11,10 @@ use {
     },
     krabka_security::{ListenerProtocol, Principal, SaslMechanism},
     std::{net::SocketAddr, sync::Arc},
-    tokio::net::{TcpListener, TcpStream},
+    tokio::{
+        net::{TcpListener, TcpStream},
+        task::JoinHandle,
+    },
     tokio_util::codec::Framed,
 };
 
@@ -37,9 +40,9 @@ pub(super) async fn serve_loop(
         .expect("bind loopback");
     let addr = listener.local_addr().expect("listener addr");
     let spec = ListenerSpec {
-        name: name.to_string(),
+        name: name.to_owned(),
         bind_addr: addr,
-        advertised: "127.0.0.1:9092".to_string(),
+        advertised: "127.0.0.1:9092".to_owned(),
         protocol,
         tls_config: None,
         sasl_mechanisms,
@@ -55,7 +58,7 @@ pub(super) async fn serve_loop(
                 // as a fetch plan is, leaves at once rather than behind Nagle.
                 stream.set_nodelay(true).expect("TCP_NODELAY");
                 super::serve_connection_stream(
-                    broker.clone(),
+                    Arc::clone(&broker),
                     stream,
                     spec.clone(),
                     peer,
@@ -69,7 +72,7 @@ pub(super) async fn serve_loop(
 
 pub(super) async fn plaintext_loop(
     broker: Arc<Broker>,
-) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
+) -> (JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     let ServeLoop { addr, serve } = serve_loop(
         broker,
         "PLAINTEXT",

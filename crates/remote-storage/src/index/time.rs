@@ -10,6 +10,7 @@ use {
     super::{RelativeOffset, TimestampMs, corrupt_index},
     crate::error::RemoteStorageError,
     krabka_verified::log_index::TimeEntry,
+    std::mem,
     zerocopy::{
         BigEndian, FromBytes, Immutable, KnownLayout, Unaligned,
         byteorder::{I64, U32},
@@ -29,13 +30,14 @@ pub struct TimeIndexEntry {
 }
 
 /// Byte length of one serialized time-index entry.
-const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
+const TIME_INDEX_ENTRY_LEN: usize = mem::size_of::<TimeIndexEntry>();
 
 const _: [(); 12] = [(); TIME_INDEX_ENTRY_LEN];
 
 /// Borrows Kafka's `TimeIndex` on-disk format as a zero-copy
-/// `&[TimeIndexEntry]`, at 12 bytes per entry: ts i64 BE, then rel u32 BE. It
-/// ignores trailing bytes that do not complete a 12-byte entry. The result
+/// `&[TimeIndexEntry]`.
+///
+/// Each entry is 12 bytes: ts i64 BE, then rel u32 BE. It ignores trailing bytes that do not complete a 12-byte entry. The result
 /// borrows from `bytes`.
 ///
 /// # Errors
@@ -44,7 +46,10 @@ const _: [(); 12] = [(); TIME_INDEX_ENTRY_LEN];
 /// do not form an entry array.
 pub fn parse_time_index(bytes: &[u8]) -> Result<&[TimeIndexEntry], RemoteStorageError> {
     let truncated_len = (bytes.len() / TIME_INDEX_ENTRY_LEN) * TIME_INDEX_ENTRY_LEN;
-    <[TimeIndexEntry]>::ref_from_bytes(&bytes[..truncated_len]).map_err(|_| corrupt_index("time"))
+    bytes
+        .get(..truncated_len)
+        .and_then(|whole| <[TimeIndexEntry]>::ref_from_bytes(whole).ok())
+        .ok_or_else(|| corrupt_index("time"))
 }
 
 /// Returns a safe relative-offset floor for an exact timestamp scan.
@@ -66,12 +71,13 @@ pub fn relative_offset_floor_for_timestamp(
     let candidate_count = krabka_verified::remote_time_index_candidate_count(&decoded, target_ts);
     candidate_count
         .checked_sub(1)
-        .map_or(0, |index| decoded[index].coordinate)
+        .and_then(|index| decoded.get(index))
+        .map_or(0, |entry| entry.coordinate)
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, std::fs};
 
     /// A time index entry's decoded timestamp and relative offset.
     #[derive(Debug, PartialEq, Eq)]
@@ -187,9 +193,9 @@ mod tests {
             segment.append(&batch, interval).unwrap();
         }
         segment.flush().unwrap();
-        let time_bytes = std::fs::read(dir.path().join("00000000000000000100.timeindex")).unwrap();
-        let offset_bytes = std::fs::read(dir.path().join("00000000000000000100.index")).unwrap();
-        let log_bytes = std::fs::read(dir.path().join("00000000000000000100.log")).unwrap();
+        let time_bytes = fs::read(dir.path().join("00000000000000000100.timeindex")).unwrap();
+        let offset_bytes = fs::read(dir.path().join("00000000000000000100.index")).unwrap();
+        let log_bytes = fs::read(dir.path().join("00000000000000000100.log")).unwrap();
         let mut padded = time_bytes.clone();
         padded.extend_from_slice(&[0; 24]);
         for time_bytes in [&time_bytes[..], &padded[..]] {

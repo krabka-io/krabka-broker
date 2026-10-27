@@ -23,6 +23,7 @@ use {
         Arc,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::SeqCst},
     },
+    tokio::{task, task::JoinHandle},
 };
 
 pub fn product() -> ProductInfo {
@@ -57,25 +58,18 @@ pub fn header(rec: &AuditRecord, key: &str) -> Option<String> {
         .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
 }
 
-pub fn spawn_writer(
-    receiver: AuditReceiver,
-    params: AuditWriterParams,
-) -> tokio::task::JoinHandle<()> {
+pub fn spawn_writer(receiver: AuditReceiver, params: AuditWriterParams) -> JoinHandle<()> {
     tokio::spawn(AuditWriter::new(receiver, params).run())
 }
 
 /// Close the only event sender, then wait for the writer's final drain.
-pub async fn finish_writer(log: Arc<AuditLog>, handle: tokio::task::JoinHandle<()>) {
+pub async fn finish_writer(log: Arc<AuditLog>, handle: JoinHandle<()>) {
     drop(log);
     handle.await.unwrap();
 }
 
 /// Emit the supplied lifecycle sequence and drain it through the writer's shutdown.
-pub async fn finish_lifecycle_writer(
-    log: Arc<AuditLog>,
-    handle: tokio::task::JoinHandle<()>,
-    nodes: &[NodeId],
-) {
+pub async fn finish_lifecycle_writer(log: Arc<AuditLog>, handle: JoinHandle<()>, nodes: &[NodeId]) {
     emit_lifecycle(&log, nodes);
     finish_writer(log, handle).await;
 }
@@ -116,7 +110,7 @@ pub fn record_sequences(records: &[AuditRecord]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) use crate::test_support::shared_signer as test_signer;
+pub use crate::test_support::shared_signer as test_signer;
 
 #[derive(Debug, krabka_macros::FieldDefaults)]
 pub struct FailableSink {
@@ -298,7 +292,7 @@ pub async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
         if cond() {
             return;
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     panic!("condition never held: {what}");
 }

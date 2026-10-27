@@ -26,7 +26,7 @@ struct MemberIdentityIn {
 /// Port of `handlers/leave_group.rs`. It removes the resolved members. If the
 /// group was `Stable` or `CompletingRebalance` and members survive, it reopens
 /// a rebalance and sets the deadline. It returns the per-member responses.
-pub(crate) fn handle_leave(
+pub fn handle_leave(
     state: &mut ClassicState,
     req: &LeaveGroupRequest,
     version: i16,
@@ -65,18 +65,19 @@ pub(crate) fn handle_leave(
         }
         let (resolved_id, code) =
             match (ident.group_instance_id.as_deref(), ident.member_id.as_str()) {
-                (Some(iid), "") => match state.current_member_id_for_instance(iid) {
-                    Some(pinned) => (Some(pinned.to_string()), codes::NONE),
-                    None => (None, codes::UNKNOWN_MEMBER_ID),
-                },
+                (Some(iid), "") => state
+                    .current_member_id_for_instance(iid)
+                    .map_or((None, codes::UNKNOWN_MEMBER_ID), |pinned| {
+                        (Some(pinned.to_owned()), codes::NONE)
+                    }),
                 (Some(iid), mid) => match state.current_member_id_for_instance(iid) {
-                    Some(pinned) if pinned == mid => (Some(pinned.to_string()), codes::NONE),
+                    Some(pinned) if pinned == mid => (Some(pinned.to_owned()), codes::NONE),
                     Some(_) => (None, codes::FENCED_INSTANCE_ID),
                     None => (None, codes::UNKNOWN_MEMBER_ID),
                 },
                 (None, mid) => {
                     if state.members.contains_key(mid) {
-                        (Some(mid.to_string()), codes::NONE)
+                        (Some(mid.to_owned()), codes::NONE)
                     } else {
                         (None, codes::UNKNOWN_MEMBER_ID)
                     }

@@ -134,8 +134,10 @@ fn produce(req: &ProduceRequest, failure: &RequestFailure<'_>) -> Option<Produce
     let mut responses: Vec<TopicProduceResponse> = Vec::new();
     for topic in &req.topic_data {
         for partition in &topic.partition_data {
-            let rows =
-                &mut topic_rows(&mut responses, &topic.name, topic.topic_id).partition_responses;
+            let Some(topic_row) = topic_rows(&mut responses, &topic.name, topic.topic_id) else {
+                continue;
+            };
+            let rows = &mut topic_row.partition_responses;
             if rows.iter().all(|row| row.index != partition.index) {
                 rows.push(PartitionProduceResponse {
                     index: partition.index,
@@ -162,7 +164,7 @@ fn topic_rows<'a>(
     responses: &'a mut Vec<TopicProduceResponse>,
     name: &str,
     topic_id: Uuid,
-) -> &'a mut TopicProduceResponse {
+) -> Option<&'a mut TopicProduceResponse> {
     let index = responses
         .iter()
         .position(|topic| topic.name == name && topic.topic_id == topic_id)
@@ -174,7 +176,7 @@ fn topic_rows<'a>(
             });
             responses.len() - 1
         });
-    &mut responses[index]
+    responses.get_mut(index)
 }
 
 /// `ListOffsetsRequest.getErrorResponse`: every requested partition with the

@@ -1,4 +1,5 @@
 //! Serde validates quantities through both emitted magnitude policies.
+#![cfg(test)]
 
 use {
     assert2::assert,

@@ -12,7 +12,7 @@ use {
     },
     assert2::assert,
     krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel},
-    std::time::Duration,
+    std::time::{Duration, Instant},
 };
 
 /// Consume-process-produce loop with `send_offsets_to_transaction`. After the
@@ -37,8 +37,9 @@ async fn send_offsets_to_transaction_atomic_with_records() {
             send_ok(&nt, rec("input", v)).await;
         }
         nt.flush().await.unwrap();
-        nt.close().await.unwrap();
+        nt.close().await
     }
+    .unwrap();
 
     // Consume-process-produce loop inside one transaction.
     {
@@ -46,7 +47,7 @@ async fn send_offsets_to_transaction_atomic_with_records() {
             .bootstrap(bootstrap.clone())
             .group_id("cpp-g")
             .auto_offset_reset(AutoOffsetReset::Earliest)
-            .subscribe(["input".to_string()])
+            .subscribe(["input".to_owned()])
             .build()
             .await
             .unwrap();
@@ -57,8 +58,8 @@ async fn send_offsets_to_transaction_atomic_with_records() {
         // Read all 5 records from input.
         let mut last_offset = None;
         let mut read = 0usize;
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while read < 5 && std::time::Instant::now() < deadline {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while read < 5 && Instant::now() < deadline {
             for r in input_consumer
                 .poll(krabka_units::millis(200))
                 .await
@@ -90,8 +91,9 @@ async fn send_offsets_to_transaction_atomic_with_records() {
         broker.wait_until_local_log_end_offset("output", 0, 5).await;
 
         input_consumer.close().await.unwrap();
-        producer.close().await.unwrap();
+        producer.close().await
     }
+    .unwrap();
 
     // Verify that 5 records arrived on the output topic under read_committed.
     let mut c2 = Consumer::builder()
@@ -99,13 +101,13 @@ async fn send_offsets_to_transaction_atomic_with_records() {
         .group_id("cpp-verify")
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe(["output".to_string()])
+        .subscribe(["output".to_owned()])
         .build()
         .await
         .unwrap();
     let mut seen = 0usize;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while seen < 5 && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while seen < 5 && Instant::now() < deadline {
         seen += c2.poll(krabka_units::millis(200)).await.unwrap().len();
     }
     assert!(seen == 5, "expected 5 records on output topic");

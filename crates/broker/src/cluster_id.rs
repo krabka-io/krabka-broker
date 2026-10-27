@@ -14,14 +14,12 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 /// Kafka's `Uuid.toString()`: URL-safe unpadded base64 of the 16 raw bytes.
 #[must_use]
-pub(crate) fn encode(cluster_id: uuid::Uuid) -> String {
-    URL_SAFE_NO_PAD.encode(cluster_id.as_bytes())
-}
+pub fn encode(cluster_id: uuid::Uuid) -> String { URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()) }
 
 /// Whether `request` names `cluster_id`, in either Kafka's base64 `Uuid` form
 /// or `java.util.UUID`'s hyphenated form.
 #[must_use]
-pub(crate) fn matches(request: &str, cluster_id: uuid::Uuid) -> bool {
+pub fn matches(request: &str, cluster_id: uuid::Uuid) -> bool {
     request == encode(cluster_id) || request == cluster_id.to_string()
 }
 

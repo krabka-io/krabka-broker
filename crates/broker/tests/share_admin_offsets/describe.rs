@@ -26,13 +26,15 @@ use {
                 DescribeShareGroupOffsetsRequestTopic,
             },
             describe_share_group_offsets_response::{
-                DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
+                DescribeShareGroupOffsetsResponseGroup, DescribeShareGroupOffsetsResponsePartition,
+                DescribeShareGroupOffsetsResponseTopic,
             },
             update_features_request::UpdateFeaturesRequest,
         },
         primitives::uuid::Uuid,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 /// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
@@ -45,8 +47,7 @@ pub async fn describe_offsets(
     group: &str,
     topic: &str,
     partitions: Vec<i32>,
-) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
-{
+) -> DescribeShareGroupOffsetsResponseGroup {
     describe_group(
         client,
         group,
@@ -64,8 +65,7 @@ pub async fn describe_offsets(
 pub async fn describe_all_offsets(
     client: &Client,
     group: &str,
-) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
-{
+) -> DescribeShareGroupOffsetsResponseGroup {
     describe_group(client, group, None).await
 }
 
@@ -73,8 +73,7 @@ async fn describe_group(
     client: &Client,
     group: &str,
     topics: Option<Vec<DescribeShareGroupOffsetsRequestTopic>>,
-) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
-{
+) -> DescribeShareGroupOffsetsResponseGroup {
     let resp = client
         .send(DescribeShareGroupOffsetsRequest {
             groups: vec![DescribeShareGroupOffsetsRequestGroup {
@@ -98,8 +97,7 @@ pub async fn describe_until(
     topic: &str,
     partitions: Vec<i32>,
     want_spso: i64,
-) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
-{
+) -> DescribeShareGroupOffsetsResponseGroup {
     let mut last = describe_offsets(client, group, topic, partitions.clone()).await;
     for _ in 0..40 {
         if let Some(p) = last.topics.first().and_then(|t| t.partitions.first())
@@ -110,7 +108,7 @@ pub async fn describe_until(
         // intentional: bounded Describe-RPC poll for the async persister write of the
         // SPSO; returns the response for assertions and also serves the deleted (-1)
         // case that no share-SPSO awaiter covers.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
         last = describe_offsets(client, group, topic, partitions.clone()).await;
     }
     last
@@ -233,7 +231,7 @@ async fn admin_offsets_rejected_when_share_disabled() {
 
 /// The initialized partition indexes for a topic; missing topics have no indexes.
 pub fn initialized_partitions(
-    group: &krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
+    group: &DescribeShareGroupOffsetsResponseGroup,
     topic: &str,
 ) -> Vec<i32> {
     group

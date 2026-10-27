@@ -18,7 +18,7 @@ pub enum TxnState {
 
 impl TxnState {
     /// Can the machine move from `self` to `other`?
-    pub fn can_transition_to(self, other: TxnState) -> bool {
+    pub fn can_transition_to(self, other: Self) -> bool {
         use TxnState::{
             CompleteAbort, CompleteCommit, Dead, Empty, Ongoing, PrepareAbort, PrepareCommit,
         };
@@ -51,13 +51,13 @@ impl TxnState {
     #[must_use]
     pub fn to_kafka_status(self) -> i8 {
         match self {
-            TxnState::Empty => 0,
-            TxnState::Ongoing => 1,
-            TxnState::PrepareCommit => 2,
-            TxnState::PrepareAbort => 3,
-            TxnState::CompleteCommit => 4,
-            TxnState::CompleteAbort => 5,
-            TxnState::Dead => 6,
+            Self::Empty => 0,
+            Self::Ongoing => 1,
+            Self::PrepareCommit => 2,
+            Self::PrepareAbort => 3,
+            Self::CompleteCommit => 4,
+            Self::CompleteAbort => 5,
+            Self::Dead => 6,
         }
     }
 
@@ -65,15 +65,15 @@ impl TxnState {
     /// that Krabka does not model, such as 7 for `PrepareEpochFence`, and for
     /// an id outside the range.
     #[must_use]
-    pub fn from_kafka_status(id: i8) -> Option<TxnState> {
+    pub fn from_kafka_status(id: i8) -> Option<Self> {
         Some(match id {
-            0 => TxnState::Empty,
-            1 => TxnState::Ongoing,
-            2 => TxnState::PrepareCommit,
-            3 => TxnState::PrepareAbort,
-            4 => TxnState::CompleteCommit,
-            5 => TxnState::CompleteAbort,
-            6 => TxnState::Dead,
+            0 => Self::Empty,
+            1 => Self::Ongoing,
+            2 => Self::PrepareCommit,
+            3 => Self::PrepareAbort,
+            4 => Self::CompleteCommit,
+            5 => Self::CompleteAbort,
+            6 => Self::Dead,
             _ => return None,
         })
     }

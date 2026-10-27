@@ -3,19 +3,23 @@
 use {
     crate::meta::expression_tokens,
     moxy::{
-        ast::{Attributed, Fields, ItemEnum, List, ParseError, Parser, Token},
+        ast::{
+            Attributed, Fields, FromMeta, ItemEnum, List, Meta, MetaContent, ParseError, Parser,
+            Token,
+        },
         token::{LitStr, TokenStream},
     },
+    std::iter,
 };
 
 /// The value of a `key` or `key = name` argument: `None` for the bare key,
 /// which asks for the default name.
 struct FnName(Option<TokenStream>);
 
-impl moxy::ast::FromMeta for FnName {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for FnName {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         match &meta.content {
-            moxy::ast::MetaContent::Unit => Ok(Self(None)),
+            MetaContent::Unit => Ok(Self(None)),
             _ => expression_tokens(meta, "expected `key` or `key = name`")
                 .map(|expr| Self(Some(expr))),
         }
@@ -25,10 +29,10 @@ impl moxy::ast::FromMeta for FnName {
 /// The value of `alias = "a"` or `alias("a", "b")`.
 struct Aliases(Vec<String>);
 
-impl moxy::ast::FromMeta for Aliases {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for Aliases {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         match &meta.content {
-            moxy::ast::MetaContent::List(group) => {
+            MetaContent::List(group) => {
                 let parser = Parser::from_tokens(&group.tokens);
                 let list = List::<LitStr, Token![,]>::parse_all(&parser)?;
                 Ok(Self(
@@ -97,7 +101,7 @@ fn apply_case(ident: &str, case: Option<&str>) -> Result<String, String> {
 }
 
 /// Expands `#[derive(EnumStr)]` on `item`.
-pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
     let span = item.ident.span();
     let args = item.parse_meta::<EnumArgs>("enum_str")?.unwrap_or_default();
     let as_str = args
@@ -132,7 +136,7 @@ pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
         };
         name_arms.push(moxy::template! { {{ pattern }} => {{ text }}, });
         if variant.fields.is_unit() {
-            let texts: Vec<LitStr> = std::iter::once(name)
+            let texts: Vec<LitStr> = iter::once(name)
                 .chain(aliases.into_iter().flatten())
                 .map(|text| LitStr::new(&text, ident.span()))
                 .collect();

@@ -5,6 +5,8 @@
 
 #[cfg(test)]
 use crate::broker::Broker;
+#[cfg(any(test, feature = "test-helpers"))]
+use std::future::Future;
 use {
     crate::{
         broker::BrokerHandle,
@@ -17,8 +19,8 @@ use {
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
-    std::{net::SocketAddr, sync::Arc},
-    tokio::task::JoinHandle,
+    std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
+    tokio::{sync::watch, task::JoinHandle, time},
 };
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -46,13 +48,13 @@ mod transactions;
 async fn await_until<F, Fut>(mut condition: F) -> bool
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
+    Fut: Future<Output = bool>,
 {
     use crate::broker::TEST_AWAITER_TIMEOUT;
 
-    tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+    time::timeout(TEST_AWAITER_TIMEOUT, async {
         while !condition().await {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
@@ -123,7 +125,7 @@ impl BrokerHandle {
     /// tests that drive a subsystem taking `&Arc<Broker>` directly rather than
     /// over a socket. `BrokerControllerAdminRouter::bind` is one.
     #[cfg(test)]
-    pub(crate) fn broker_for_test(&self) -> &std::sync::Arc<Broker> { &self.broker }
+    pub(crate) fn broker_for_test(&self) -> &Arc<Broker> { &self.broker }
 
     /// The bound address of the listener that serves this node's Kafka
     /// requests. This is useful when `BrokerConfig.listen_addr` used port 0
@@ -205,7 +207,7 @@ impl BrokerHandle {
     /// Forwards the underlying raft errors as [`BrokerError::Replication`].
     pub async fn change_membership(
         &self,
-        new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
+        new_voters: BTreeSet<krabka_raft::NodeId>,
     ) -> Result<(), BrokerError> {
         self.broker
             .controller
@@ -225,7 +227,7 @@ impl BrokerHandle {
     pub async fn add_learner(
         &self,
         node_id: krabka_raft::NodeId,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
     ) -> Result<(), BrokerError> {
         // KIP-853 membership keys on the full `Node` identity. This
         // `SocketAddr`-shaped convenience wrapper (used by integration tests)
@@ -317,7 +319,7 @@ impl BrokerHandle {
     /// `controlled_shutdown` when this fires, and exit non-zero for a fatal
     /// fault, as Kafka halts the process.
     #[must_use]
-    pub fn should_shutdown_rx(&self) -> tokio::sync::watch::Receiver<bool> {
+    pub fn should_shutdown_rx(&self) -> watch::Receiver<bool> {
         self.broker.should_shutdown.subscribe()
     }
 
@@ -351,7 +353,7 @@ impl BrokerHandle {
     /// so a caller that must know whether the controller faulted while it was
     /// stopping the broker takes this first and reads it afterwards.
     #[must_use]
-    pub fn fatal_fault_watch(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+    pub fn fatal_fault_watch(&self) -> watch::Receiver<Option<String>> {
         self.broker.controller.watch_fatal()
     }
 
@@ -380,10 +382,7 @@ impl BrokerHandle {
     /// - `BrokerError::ShutdownTimeout`: the controller did not
     ///   acknowledge `should_shut_down=true` within `timeout`. The broker was
     ///   hard-shut-down anyway.
-    pub async fn controlled_shutdown(
-        self,
-        timeout: std::time::Duration,
-    ) -> Result<(), BrokerError> {
+    pub async fn controlled_shutdown(self, timeout: Duration) -> Result<(), BrokerError> {
         if !self.broker.config.is_broker() {
             self.shutdown().await;
             return Ok(());
@@ -409,7 +408,7 @@ impl BrokerHandle {
         };
         // `if`/`else` rather than `match { Ok(()) => .., Err(_) => .. }` to
         // satisfy `clippy::single_match_else`.
-        if tokio::time::timeout(timeout, wait).await.is_ok() {
+        if time::timeout(timeout, wait).await.is_ok() {
             self.shutdown().await;
             Ok(())
         } else {
@@ -462,10 +461,12 @@ impl BrokerHandle {
         // ordinary and WAL follower tasks. Its run loop races every reconcile
         // after startup against this token, so awaiting it is bounded even if
         // a network-backed reconciliation was in flight.
-        if let Some(task) = self.broker.supervisor_handle.lock().await.take() {
+        let task = self.broker.supervisor_handle.lock().await.take();
+        if let Some(task) = task {
             let _ = task.await;
         }
-        if let Some(task) = self.broker.disk_scanner_handle.lock().await.take() {
+        let task = self.broker.disk_scanner_handle.lock().await.take();
+        if let Some(task) = task {
             let _ = task.await;
         }
         // A crash does not wait for a copy to stop; it stops mid-copy. The
@@ -477,7 +478,8 @@ impl BrokerHandle {
 
         shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
-        if let Some(task) = self.broker.audit_writer_handle.lock().await.take() {
+        let task = self.broker.audit_writer_handle.lock().await.take();
+        if let Some(task) = task {
             task.abort();
             let _ = task.await;
         }
@@ -539,7 +541,8 @@ impl BrokerHandle {
         // in-flight replication tasks must observe a clean cancellation
         // rather than a torn-down metadata-watch channel.
         self.broker.supervisor_shutdown.cancel();
-        if let Some(h) = self.broker.supervisor_handle.lock().await.take() {
+        let h = self.broker.supervisor_handle.lock().await.take();
+        if let Some(h) = h {
             let _ = h.await;
         }
         // Drain the disk-usage scanner if it was spawned.
@@ -547,7 +550,8 @@ impl BrokerHandle {
         // its sibling tasks do; awaiting the handle here ensures the
         // background tick is fully wound down before we tear the rest
         // of the broker apart.
-        if let Some(h) = self.broker.disk_scanner_handle.lock().await.take() {
+        let h = self.broker.disk_scanner_handle.lock().await.take();
+        if let Some(h) = h {
             let _ = h.await;
         }
         // The remote-log-manager sweep observes `supervisor_shutdown` too: its
@@ -577,7 +581,8 @@ impl BrokerHandle {
                 time_ms: now_ms(),
             });
         self.broker.audit_log.close();
-        if let Some(task) = self.broker.audit_writer_handle.lock().await.take() {
+        let task = self.broker.audit_writer_handle.lock().await.take();
+        if let Some(task) = task {
             let _ = task.await;
         }
         shutdown_moves(&self.broker.future_logs).await;

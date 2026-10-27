@@ -12,7 +12,12 @@ use {
         wal::quorum::{ShardRemoval, registry::ShardId, remove_shard},
     },
     krabka_metadata::MetadataImage,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        fs, io,
+        path::Path,
+        sync::PoisonError,
+    },
     tracing::warn,
 };
 
@@ -26,7 +31,7 @@ impl ReplicatorSupervisor {
             let mut known_topic_ids = self
                 .known_topic_ids
                 .lock()
-                .expect("replicator supervisor topic identities poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             let obsolete = known_topic_ids
                 .iter()
                 .filter(|(name, id)| current_topic_ids.get(*name) != Some(*id))
@@ -115,9 +120,9 @@ impl ReplicatorSupervisor {
     }
 }
 
-fn remove_partition_dir(path: &std::path::Path) -> std::io::Result<()> {
-    match std::fs::remove_dir_all(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+fn remove_partition_dir(path: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
     }
 }
@@ -136,7 +141,7 @@ mod tests {
         assert2::assert,
         krabka_ids::PartitionIndex,
         krabka_raft::NodeId,
-        std::sync::Arc,
+        std::{fs, sync::Arc},
     };
 
     #[derive(Debug, PartialEq, Eq)]
@@ -222,7 +227,7 @@ mod tests {
         supervisor.wal_shards.insert(
             deleted_shard,
             Arc::new(WalShardEngine::for_logs(
-                maplit::btreemap! {NodeId(2) => original["deleted"].log.clone()},
+                maplit::btreemap! {NodeId(2) => Arc::clone(&original["deleted"].log)},
             )),
         );
         let deleted_wal_dir = shard_dir(
@@ -231,7 +236,7 @@ mod tests {
             Some(deleted_topic_id),
             PartitionIndex(0),
         );
-        std::fs::create_dir_all(&deleted_wal_dir).expect("deleted WAL shard directory");
+        fs::create_dir_all(&deleted_wal_dir).expect("deleted WAL shard directory");
 
         supervisor.reconcile(&after_delete).await;
 
@@ -323,11 +328,11 @@ mod tests {
         supervisor.wal_shards.insert(
             shard,
             Arc::new(WalShardEngine::for_logs(
-                maplit::btreemap! {NodeId(2) => original.log.clone()},
+                maplit::btreemap! {NodeId(2) => Arc::clone(&original.log)},
             )),
         );
         let wal_dir = shard_dir(dir.path(), "moved", Some(topic_id), PartitionIndex(0));
-        std::fs::create_dir_all(&wal_dir).expect("WAL shard directory");
+        fs::create_dir_all(&wal_dir).expect("WAL shard directory");
 
         supervisor.reconcile(&reassigned).await;
 
@@ -365,7 +370,7 @@ mod tests {
         remove_partition_dir(&missing).expect("missing directory is already removed");
 
         let file = dir.path().join("file");
-        std::fs::write(&file, b"not a directory").expect("test file");
+        fs::write(&file, b"not a directory").expect("test file");
         assert!(remove_partition_dir(&file).is_err());
     }
 }

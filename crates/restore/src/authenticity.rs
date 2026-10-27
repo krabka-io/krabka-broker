@@ -12,18 +12,23 @@ use {
     },
     krabka_remote_storage_topic::Snapshot,
     object_store::path::Path as ObjectPath,
-    std::collections::BTreeMap,
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        fs as std_fs,
+        path::Path,
+    },
+    tokio::fs,
 };
 
 /// Inputs accepted by the restore trust policy before target writes.
-pub(super) struct AuthenticatedInputs {
+pub struct AuthenticatedInputs {
     pub(super) source: Option<SourceAuthentication>,
     pub(super) capture: Option<CaptureAuthentication>,
     pub(super) snapshots: AuthenticatedSnapshots,
     pub(super) has_classic: bool,
     pub(super) unclaimed: Vec<SkippedSegment>,
 }
-pub(super) async fn authenticate_inputs(
+pub async fn authenticate_inputs(
     store: &ArchiveStore,
     args: &RestoreArgs,
     archive: &mut ArchiveInventory,
@@ -79,7 +84,7 @@ pub(super) async fn authenticate_inputs(
     })
 }
 
-pub(super) struct AuthenticatedSnapshots {
+pub struct AuthenticatedSnapshots {
     pub(super) metadata: Option<Vec<u8>>,
     pub(super) rlmm: Option<Snapshot>,
 }
@@ -119,8 +124,8 @@ async fn authenticate_snapshots(
     })
 }
 
-pub(crate) async fn authenticate_captured_snapshot(
-    path: Option<&std::path::Path>,
+pub async fn authenticate_captured_snapshot(
+    path: Option<&Path>,
     expected: Option<Sha256Digest>,
     authenticated_restore: bool,
     flag: &str,
@@ -145,7 +150,7 @@ pub(crate) async fn authenticate_captured_snapshot(
     let expected = expected.ok_or_else(|| RestoreError::Authenticity {
         reason: format!("{flag} is not bound to the signed diskless capture"),
     })?;
-    let bytes = tokio::fs::read(path).await?;
+    let bytes = fs::read(path).await?;
     let actual = Sha256Digest::of(&bytes);
     if actual != expected {
         return Err(RestoreError::Authenticity {
@@ -162,13 +167,13 @@ pub(crate) async fn authenticate_captured_snapshot(
 fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &str, count: usize) {
     let source = authenticated.get_or_insert_with(|| SourceAuthentication {
         archive: None,
-        unclaimed: std::collections::BTreeSet::new(),
+        unclaimed: BTreeSet::new(),
         report: AuthenticationReport {
             partitions: 0,
             manifests: 0,
             objects: 0,
             trusted_keys: count,
-            chain_heads: std::collections::BTreeMap::new(),
+            chain_heads: BTreeMap::new(),
             tail_truncation_protected: true,
         },
     });
@@ -226,22 +231,20 @@ struct TrustedKeySet {
 /// What authenticating the classic archive established: the authenticated
 /// objects, when the archive holds classic segments, and the coverage the
 /// report states.
-pub(super) struct SourceAuthentication {
+pub struct SourceAuthentication {
     pub(super) archive: Option<AuthenticatedArchive>,
     pub(super) report: AuthenticationReport,
     /// Objects inside a partition directory that no manifest names: an upload
     /// whose manifest was never written. They make no signed claim, so the
     /// restore leaves their segments out rather than trust them.
-    unclaimed: std::collections::BTreeSet<String>,
+    unclaimed: BTreeSet<String>,
 }
 
 async fn authenticate_source(
     store: &ArchiveStore,
     args: &RestoreArgs,
     trusted: &TrustedKeySet,
-    diskless_claims: Option<
-        &std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>,
-    >,
+    diskless_claims: Option<&BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
 ) -> Result<Option<SourceAuthentication>, RestoreError> {
     let request = VerifyRequest {
         prefix: store.prefix().map(str::to_owned),
@@ -282,7 +285,7 @@ async fn authenticate_source(
         .filter_map(|value| value.split_once('='))
         .filter(|(partition, _)| *partition != CAPTURE_HEAD_NAME)
         .map(|(partition, head)| (partition.to_owned(), head.to_ascii_lowercase()))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let actual_heads = report
         .partitions
         .iter()
@@ -291,7 +294,7 @@ async fn authenticate_source(
                 .head
                 .map(|head| (partition.partition_dir.clone(), head.to_string()))
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     if expected_heads != actual_heads {
         return Err(RestoreError::Authenticity {
             reason: format!(
@@ -333,7 +336,7 @@ fn trusted_keys(args: &RestoreArgs) -> Result<Option<TrustedKeySet>, RestoreErro
         .iter()
         .zip(&args.archive.worm_public_key)
         .map(|(id, path)| {
-            std::fs::read(path)
+            std_fs::read(path)
                 .map(|key| (id.clone(), key))
                 .map_err(|error| {
                     RestoreError::InvalidArgument(format!(
@@ -351,7 +354,7 @@ fn trusted_keys(args: &RestoreArgs) -> Result<Option<TrustedKeySet>, RestoreErro
 }
 
 /// What authenticating a diskless capture established.
-pub(super) struct CaptureAuthentication {
+pub struct CaptureAuthentication {
     /// The objects the signed capture vouches for, by key.
     pub(super) claims: BTreeMap<String, ObjectEntry>,
     /// The head of the capture's WORM chain.
@@ -382,7 +385,7 @@ fn authenticate_capture(
     Ok(CaptureAuthentication { claims, head })
 }
 
-pub(super) fn object_claim<'a>(
+pub fn object_claim<'a>(
     key: &ObjectPath,
     authenticated: Option<&'a BTreeMap<String, ObjectEntry>>,
 ) -> Result<Option<&'a ObjectEntry>, RestoreError> {
@@ -394,7 +397,7 @@ pub(super) fn object_claim<'a>(
     }
     Ok(expected)
 }
-pub(super) fn verify_object_size(
+pub fn verify_object_size(
     key: &ObjectPath,
     expected: Option<&ObjectEntry>,
     size: u64,
@@ -411,7 +414,7 @@ pub(super) fn verify_object_size(
     }
     Ok(())
 }
-pub(super) fn verify_object_bytes(
+pub fn verify_object_bytes(
     key: &ObjectPath,
     expected: Option<&ObjectEntry>,
     bytes: &[u8],

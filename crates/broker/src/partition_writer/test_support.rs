@@ -17,11 +17,19 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig, Offset},
     krabka_protocol::records::RecordBatch,
-    std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicI64, AtomicUsize, Ordering},
+    std::{
+        path::Path,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicI64, AtomicUsize, Ordering},
+        },
+        time::Instant,
     },
-    tokio::sync::{Notify, mpsc, oneshot},
+    tokio::{
+        sync,
+        sync::{Notify, mpsc, oneshot},
+        task::JoinHandle,
+    },
 };
 
 #[derive(Debug)]
@@ -58,7 +66,7 @@ pub(super) use crate::test_support::default_records_batch as sample_batch;
 
 pub(super) struct GatedWal {
     sync_started: Mutex<Option<oneshot::Sender<()>>>,
-    release_sync: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
+    release_sync: sync::Mutex<Option<oneshot::Receiver<()>>>,
     pub(super) trimmed_to: AtomicI64,
     trim_failures: AtomicUsize,
     hot_tail: Option<HotTailTarget>,
@@ -88,7 +96,7 @@ impl GatedWal {
     ) -> Self {
         Self {
             sync_started: Mutex::new(Some(sync_started)),
-            release_sync: tokio::sync::Mutex::new(Some(release_sync)),
+            release_sync: sync::Mutex::new(Some(release_sync)),
             trimmed_to: AtomicI64::new(-1),
             trim_failures: AtomicUsize::new(0),
             hot_tail: None,
@@ -120,7 +128,8 @@ impl GatedWal {
 #[async_trait::async_trait]
 impl WalStore for GatedWal {
     async fn sync_durable(&self, leo: Offset) -> Result<Offset, BrokerError> {
-        if let Some(started) = self.sync_started.lock().unwrap().take() {
+        let started = self.sync_started.lock().unwrap().take();
+        if let Some(started) = started {
             let _ = started.send(());
         }
         let release = self
@@ -159,7 +168,7 @@ impl WalStore for GatedWal {
     }
 }
 
-pub(super) fn open_log_with_records(path: &std::path::Path, records: i32) -> Log {
+pub(super) fn open_log_with_records(path: &Path, records: i32) -> Log {
     let mut log = Log::open(path, LogConfig::default()).expect("open log");
     if records > 0 {
         log.append(&mut sample_batch().count(records).call())
@@ -175,7 +184,7 @@ pub(super) struct WriterOptions {
     pub(super) topic: String,
     pub(super) partition: PartitionIndex,
     pub(super) append_notify: Arc<Notify>,
-    pub(super) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(super) replica_state: Arc<sync::Mutex<ReplicaState>>,
     pub(super) hw_advance_notify: Arc<Notify>,
     pub(super) delivery: DeliveryHandles,
     pub(super) log_dir_status: LogDirRegistry,
@@ -191,7 +200,7 @@ impl Default for WriterOptions {
             topic: "t".into(),
             partition: PartitionIndex(0),
             append_notify: Arc::new(Notify::new()),
-            replica_state: Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
+            replica_state: Arc::new(sync::Mutex::new(ReplicaState::new())),
             hw_advance_notify: Arc::new(Notify::new()),
             delivery: DeliveryHandles::new(),
             log_dir_status: LogDirRegistry::default(),
@@ -204,11 +213,11 @@ impl Default for WriterOptions {
 }
 
 pub(super) fn spawn_writer(
-    dir: &std::path::Path,
+    dir: &Path,
     log: Arc<Mutex<Log>>,
     receiver: mpsc::Receiver<WriterMessage>,
     options: WriterOptions,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(run_with_sequencer(
         WriterIdentity {
             topic: options.topic,
@@ -235,7 +244,7 @@ pub(super) fn spawn_writer(
     ))
 }
 
-pub(super) fn open_default_log(dir: &std::path::Path) -> Arc<Mutex<Log>> {
+pub(super) fn open_default_log(dir: &Path) -> Arc<Mutex<Log>> {
     Arc::new(Mutex::new(
         Log::open(dir, LogConfig::default()).expect("open log"),
     ))
@@ -247,7 +256,7 @@ pub(super) struct DefaultWriter {
     pub(super) dir: tempfile::TempDir,
     pub(super) log: Arc<Mutex<Log>>,
     pub(super) sender: mpsc::Sender<WriterMessage>,
-    pub(super) writer: tokio::task::JoinHandle<()>,
+    pub(super) writer: JoinHandle<()>,
     pub(super) notify: Arc<Notify>,
 }
 
@@ -256,8 +265,8 @@ pub(super) fn default_writer() -> DefaultWriter {
     let log = open_default_log(dir.path());
     let (sender, receiver) = mpsc::channel(1);
     let notify = Arc::new(Notify::new());
-    let writer = spawn_writer(dir.path(), log.clone(), receiver, WriterOptions {
-        append_notify: notify.clone(),
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), receiver, WriterOptions {
+        append_notify: Arc::clone(&notify),
         ..Default::default()
     });
     DefaultWriter {
@@ -290,27 +299,25 @@ pub(super) async fn queue_batch(
     receiver
 }
 
-pub(super) async fn replica_with_isr(nodes: &[u64]) -> Arc<tokio::sync::Mutex<ReplicaState>> {
-    let replica = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+pub(super) async fn replica_with_isr(nodes: &[u64]) -> Arc<sync::Mutex<ReplicaState>> {
+    let replica = Arc::new(sync::Mutex::new(ReplicaState::new()));
     let nodes: Vec<_> = nodes.iter().copied().map(krabka_audit::NodeId).collect();
-    replica.lock().await.install_isr(
-        &nodes,
-        &nodes,
-        krabka_audit::NodeId(1),
-        std::time::Instant::now(),
-    );
+    replica
+        .lock()
+        .await
+        .install_isr(&nodes, &nodes, krabka_audit::NodeId(1), Instant::now());
     replica
 }
 
 /// RF=1 writer notifications and replica state for high-watermark tests.
 pub(super) struct ObservedWriter {
-    pub(super) writer: tokio::task::JoinHandle<()>,
-    pub(super) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(super) writer: JoinHandle<()>,
+    pub(super) replica_state: Arc<sync::Mutex<ReplicaState>>,
     pub(super) hw_advance_notify: Arc<Notify>,
 }
 
 pub(super) async fn observed_single_replica_writer(
-    dir: &std::path::Path,
+    dir: &Path,
     log: Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
     update: impl FnOnce(&mut WriterOptions),
@@ -321,7 +328,7 @@ pub(super) async fn observed_single_replica_writer(
 }
 
 pub(super) fn observed_writer(
-    dir: &std::path::Path,
+    dir: &Path,
     log: Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
     options: WriterOptions,
@@ -345,9 +352,9 @@ pub(super) async fn single_replica_options() -> WriterOptions {
 
 /// A running writer with a one-slot queue, retaining caller ownership of its log.
 pub(super) fn spawn_default_writer(
-    path: &std::path::Path,
+    path: &Path,
     log: Arc<Mutex<Log>>,
-) -> (mpsc::Sender<WriterMessage>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::Sender<WriterMessage>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(1);
     let writer = spawn_writer(path, log, rx, WriterOptions::default());
     (tx, writer)

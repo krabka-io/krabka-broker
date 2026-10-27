@@ -14,6 +14,7 @@ use {
         },
     },
     assert2::{assert, check},
+    std::collections::HashSet,
 };
 
 #[tokio::test]
@@ -142,7 +143,7 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
         producers.len() == 2,
         "expected both producers: {producers:?}"
     );
-    let seen: std::collections::HashSet<i64> = producers.iter().map(|p| p.producer_id).collect();
+    let seen: HashSet<i64> = producers.iter().map(|p| p.producer_id).collect();
     assert!(seen.contains(&pid_a) && seen.contains(&pid_b));
 
     p.broker.shutdown().await;

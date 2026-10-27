@@ -14,12 +14,16 @@ use {
     },
     krabka_log::Offset,
     krabka_protocol::records::RecordBatch,
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, PoisonError},
+    },
     tokio::sync::oneshot,
 };
 
 /// Whether an internal produce definitely failed or may already be appended.
 #[derive(Debug)]
-pub(crate) enum ProduceBatchError {
+pub enum ProduceBatchError {
     /// The partition writer reported failure or never accepted the command.
     Rejected(BrokerError),
     /// The command was accepted, but its acknowledgement channel closed.
@@ -82,10 +86,10 @@ impl Partition {
         supports_epoch_bump: bool,
         clock: (i64, i64),
     ) -> Result<krabka_log::VerificationGuard, krabka_log::TransactionAppendRefusal> {
-        let log = std::sync::Arc::clone(&self.log);
+        let log = Arc::clone(&self.log);
         let start = move || {
             log.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .maybe_start_transaction_verification(batch, supports_epoch_bump, clock)
         };
         run_blocking(start).await.unwrap_or(Err(
@@ -101,16 +105,16 @@ impl Partition {
     /// Returns an error if the blocking task cannot complete.
     pub(crate) async fn apply_log_config_overrides(
         &self,
-        overrides: &std::collections::BTreeMap<String, String>,
+        overrides: &BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
-        let log = self.log.clone();
+        let log = Arc::clone(&self.log);
         let writer = self.writer_tx.clone();
         run_blocking(move || {
             let mut log = log
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             let current = log.config_snapshot();
             if current == merged {
                 return;
@@ -410,6 +414,15 @@ mod tests {
             test_support::default_records_batch,
         },
         assert2::assert,
+        krabka_log::name,
+        std::{
+            collections::BTreeMap,
+            fs,
+            sync::{Arc, mpsc},
+            thread,
+            time::{Duration, SystemTime},
+        },
+        tokio::sync::{Notify, mpsc::channel},
     };
 
     /// A tiered log reopens at the checkpointed start with no floor at its
@@ -417,8 +430,8 @@ mod tests {
     /// before a config change turns the log tiered.
     #[tokio::test]
     async fn enabling_remote_storage_writes_the_start_retention_moved() {
-        let (part, dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
-        let checkpoint = krabka_log::name::log_start_offset_checkpoint_path(dir.path());
+        let (part, dir) = test_partition(Arc::new(Notify::new()));
+        let checkpoint = name::log_start_offset_checkpoint_path(dir.path());
         let base = {
             let mut log = part.log.lock().unwrap();
             log.set_config(krabka_log::LogConfig {
@@ -431,26 +444,26 @@ mod tests {
                 log.append(&mut default_records_batch().call()).unwrap();
             }
             log.set_log_start_offset(Offset(1)).unwrap();
-            log.tick(std::time::SystemTime::now(), Offset(2)).unwrap();
+            log.tick(SystemTime::now(), Offset(2)).unwrap();
             log.config_snapshot()
         };
-        assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+        assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
 
         let overrides = [("remote.storage.enable".to_owned(), "true".to_owned())].into();
         part.apply_log_config_overrides(&overrides, &base)
             .await
             .unwrap();
 
-        assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
+        assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
     }
 
     #[tokio::test]
     async fn config_changes_do_not_wait_behind_a_stalled_writer() {
         let (mut part, _dir) = test_partition_with_writer();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, mut rx) = channel(1);
         part.writer_tx = tx;
         let base = part.log.lock().unwrap().config_snapshot();
-        part.apply_log_config_overrides(&std::collections::BTreeMap::new(), &base)
+        part.apply_log_config_overrides(&BTreeMap::new(), &base)
             .await
             .unwrap();
         assert!(rx.try_recv().is_err());
@@ -477,17 +490,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_contended_config_swap_does_not_block_the_current_thread_runtime() {
-        let (part, _dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
+        let (part, _dir) = test_partition(Arc::new(Notify::new()));
         let base = part.log.lock().unwrap().config_snapshot();
-        let log = part.log.clone();
-        let (locked, lock_held) = tokio::sync::oneshot::channel();
-        let (release, released) = std::sync::mpsc::channel();
-        let holder = std::thread::spawn(move || {
+        let log = Arc::clone(&part.log);
+        let (locked, lock_held) = oneshot::channel();
+        let (release, released) = mpsc::channel();
+        let holder = thread::spawn(move || {
             let _guard = log.lock().unwrap();
             locked.send(()).unwrap();
-            released
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .is_ok()
+            released.recv_timeout(Duration::from_secs(5)).is_ok()
         });
         lock_held.await.unwrap();
         let overrides = [("segment.bytes".into(), "1048576".into())].into();

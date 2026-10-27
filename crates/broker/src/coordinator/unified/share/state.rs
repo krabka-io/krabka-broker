@@ -520,7 +520,10 @@ mod tests {
         super::*,
         crate::coordinator::unified::test_support::assert_group_epoch_exhaustion,
         assert2::assert,
-        std::time::{Duration, Instant},
+        std::{
+            iter,
+            time::{Duration, Instant},
+        },
     };
 
     #[test]
@@ -533,7 +536,7 @@ mod tests {
             "m1",
             "c1",
             "h1",
-            ["t1".to_string()].into_iter().collect(),
+            iter::once("t1".to_owned()).collect(),
         ));
         assert!(g.members.len() == 1);
         assert!((g.group_epoch, g.target.epoch) == (1, 1));
@@ -568,7 +571,7 @@ mod tests {
         // The same member is overdue once the timeout shrinks below its silence.
         let later = Instant::now() + Duration::from_millis(50);
         let evicted = g.evict_expired(later, Duration::from_millis(1));
-        assert!(evicted == vec!["m1".to_string()]);
+        assert!(evicted == vec!["m1".to_owned()]);
         assert!(g.members.is_empty());
     }
 

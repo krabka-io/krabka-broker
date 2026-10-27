@@ -11,6 +11,7 @@ use {
         owned::fetch_response::AbortedTransaction,
         records::{Attributes, Record, RecordBatch},
     },
+    std::sync::Arc,
 };
 
 fn data_batch(transactional: bool) -> RecordBatch {
@@ -100,9 +101,10 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
             dir.path().to_path_buf(),
             log,
             broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
+            Arc::clone(&broker.producer_state),
             false,
-        );
+        )
+        .unwrap();
         part.replica_state.lock().await.hw = end;
         let mut pending = out_of_range_at(&part, 0);
         pending.read_committed = true;

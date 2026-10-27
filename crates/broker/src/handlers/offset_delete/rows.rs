@@ -94,7 +94,7 @@ pub(super) fn build_response_rows(
             let code = if subscribed {
                 codes::GROUP_SUBSCRIBED_TO_TOPIC
             } else {
-                to_delete.push((name.to_string(), index));
+                to_delete.push((name.to_owned(), index));
                 codes::NONE
             };
             push_row(&mut out, name, index, code);
@@ -119,7 +119,7 @@ fn push_row(out: &mut Vec<OffsetDeleteResponseTopic>, name: &str, index: i32, co
         topic.partitions.push(row);
     } else {
         out.push(OffsetDeleteResponseTopic {
-            name: name.to_string(),
+            name: name.to_owned(),
             partitions: vec![row],
             ..Default::default()
         });
@@ -189,7 +189,7 @@ mod tests {
         SubscribedTopics::Named(
             topics
                 .iter()
-                .map(|s| (*s).to_string())
+                .map(|s| (*s).to_owned())
                 .collect::<HashSet<_>>(),
         )
     }
@@ -256,7 +256,7 @@ mod tests {
                     name: "denied",
                     partitions: &[0, 1],
                 }],
-                subscribed: none.clone(),
+                subscribed: none,
                 want: &[ExpectedTopicRows {
                     name: "denied",
                     partitions: &[
@@ -412,7 +412,7 @@ mod tests {
                         partitions: &[0],
                     },
                 ],
-                subscribed: none.clone(),
+                subscribed: none,
                 want: &[
                     ExpectedTopicRows {
                         name: "denied",

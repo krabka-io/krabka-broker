@@ -25,7 +25,7 @@ impl ObjectProtectionReport {
     pub(super) fn record(&mut self, key: &str) {
         self.count = self.count.saturating_add(1);
         if self.sample.len() < PROTECTION_SAMPLE_LIMIT {
-            self.sample.push(key.to_string());
+            self.sample.push(key.to_owned());
         }
     }
 }
@@ -163,7 +163,7 @@ pub(super) fn broken_before_walk(
     first_break: VerifyBreak,
 ) -> PartitionVerifyReport {
     PartitionVerifyReport {
-        partition_dir: dir.to_string(),
+        partition_dir: dir.to_owned(),
         manifests: 0,
         objects_checked: 0,
         create_precondition_objects: ObjectProtectionReport::default(),
@@ -276,7 +276,8 @@ mod tests {
                 seq: ManifestSeq(1),
                 prev_head: head,
             })
-            .to_custom_metadata(),
+            .to_custom_metadata()
+            .unwrap(),
         );
         let sealed = WormArchiver::new(Some(Arc::clone(&archive.signer)))
             .seal(&stamped, segment.entries.clone())

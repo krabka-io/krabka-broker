@@ -23,7 +23,7 @@ use {
 /// The archive's delete policy and the first segment whose activation scan
 /// did not prove it due. Its identity bounds every retention axis.
 #[derive(Clone, Copy)]
-pub(crate) struct RetentionProtection {
+pub struct RetentionProtection {
     archive: ArchiveMode,
     first_blocked: Option<uuid::Uuid>,
 }
@@ -83,7 +83,7 @@ impl From<ArchiveMode> for RetentionProtection {
 /// [`ArchiveMode::WriteOnce`] evicts nothing, whatever the topic's retention
 /// settings and log start say: remote retention is a delete, and a write-once
 /// archive has none to give.
-pub(crate) fn remote_retention_eviction_set(
+pub fn remote_retention_eviction_set(
     protection: RetentionProtection,
     finished: &[RemoteLogSegmentMetadata],
     retention: Option<Time>,
@@ -137,7 +137,7 @@ pub(crate) fn remote_retention_eviction_set(
 /// archive below it as it was. A follower reads this before it lowers a floor
 /// it established to a lower start its leader reports: see
 /// [`super::follow_unenforced_floor`].
-pub(crate) fn archive_enforces_floor(segments: &[RemoteLogSegmentMetadata], floor: Offset) -> bool {
+pub fn archive_enforces_floor(segments: &[RemoteLogSegmentMetadata], floor: Offset) -> bool {
     !segments.iter().any(|segment| {
         segment.state() == RemoteLogSegmentState::CopySegmentFinished
             && segment.end_offset() < floor.0
@@ -155,7 +155,7 @@ pub(crate) fn archive_enforces_floor(segments: &[RemoteLogSegmentMetadata], floo
 /// `earliest_epoch` is [`krabka_log::Log::log_start_epoch`]: `None`, which
 /// disables the rule, unless the epoch cache was cut from an established log
 /// start.
-pub(crate) fn epoch_cache_eviction_set(
+pub fn epoch_cache_eviction_set(
     segments: &[RemoteLogSegmentMetadata],
     earliest_epoch: Option<LeaderEpoch>,
 ) -> Vec<RemoteLogSegmentMetadata> {
@@ -183,7 +183,7 @@ fn segment_size(md: &RemoteLogSegmentMetadata) -> ByteSize {
 /// it: the sealed local segments, and the whole local size with the active
 /// segment in it. The tick reads both under one hold of the log lock.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LocalLogFootprint<'a> {
+pub struct LocalLogFootprint<'a> {
     /// Every sealed local segment, oldest first, including any below the
     /// global log start.
     pub sealed: &'a [SegmentExport],
@@ -225,7 +225,7 @@ impl LocalLogFootprint<'_> {
 /// a delete at all, the two readings of the partition's global log start, and
 /// the clock reading segments are aged against.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RemoteRetentionBounds<'a> {
+pub struct RemoteRetentionBounds<'a> {
     pub log_config: &'a LogConfig,
     /// The partition's current `log_start_offset`, whatever established it.
     /// The pass may only report a floor above this one, and only across
@@ -247,7 +247,7 @@ pub(crate) struct RemoteRetentionBounds<'a> {
 
 /// What one [`remote_retention_pass`] did to a partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct RemoteRetentionOutcome {
+pub struct RemoteRetentionOutcome {
     /// Segments that reached `DeleteSegmentFinished`.
     pub deleted: usize,
     /// The floor the caller must raise the partition's `log_start_offset` to,
@@ -284,7 +284,7 @@ pub(crate) struct RemoteRetentionOutcome {
 /// Under [`ArchiveMode::WriteOnce`] the pass returns before it lists
 /// anything, so a partition on a write-once archive costs a 30-second tick
 /// nothing at all.
-pub(crate) async fn remote_retention_pass(
+pub async fn remote_retention_pass(
     tp: &TopicIdPartition,
     broker_id: i32,
     bounds: RemoteRetentionBounds<'_>,
@@ -364,7 +364,11 @@ pub(crate) async fn remote_retention_pass(
     // Kafka runs the epoch-cache-truncation cleanup after the retention
     // deletes, over what they leave (`cleanupExpiredRemoteLogSegments`).
     let scheduled = evict.len();
-    let outside_lineage = epoch_cache_eviction_set(&finished[scheduled..], earliest_epoch);
+    // `evict` is a prefix of `finished`, so the rest is what it leaves.
+    let outside_lineage = epoch_cache_eviction_set(
+        finished.get(scheduled..).unwrap_or_default(),
+        earliest_epoch,
+    );
     // KIP-405's `RemoteDeleteLagSegments` / `RemoteDeleteLagBytes`, recorded
     // before the round the way `RLMExpirationTask` does: the remote segments
     // this pass has decided to remove and has not removed yet. A tier whose

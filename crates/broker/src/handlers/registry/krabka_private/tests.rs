@@ -11,7 +11,7 @@ use {
         },
     },
     assert2::{assert, check},
-    std::collections::BTreeSet,
+    std::{collections::BTreeSet, ptr},
 };
 
 /// A krabka-private api key, the adapter that dispatch must reach, and the
@@ -99,7 +99,7 @@ fn registry_dispatches_every_krabka_private_key_to_its_own_handler() {
             .unwrap_or_else(|| panic!("{label} ({api_key}) is registered"));
 
         assert!(let DispatchKind::Context(handler) = entry.kind(), "{label}");
-        check!(std::ptr::fn_addr_eq(handler, adapter), "{label}");
+        check!(ptr::fn_addr_eq(handler, adapter), "{label}");
         // Version 0 only, flexible framing, and exempt from the
         // request-quota accounting a Kafka client drives.
         check!(entry.body_flexible(0), "{label}");

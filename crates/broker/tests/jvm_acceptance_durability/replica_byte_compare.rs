@@ -8,9 +8,8 @@
 
 use {
     crate::{
-        jvm_acceptance::KAFKA_IMAGE,
-        prepare_replication_topic,
-        support::{init_jvm_tracing, jvm_acks_all_producer, start_jvm_cluster},
+        durability_cluster, jvm_acceptance::KAFKA_IMAGE, prepare_replication_topic,
+        support::jvm_acks_all_producer,
     },
     assert2::assert,
     std::{io::Write as _, process::Command},
@@ -39,8 +38,6 @@ use {
 async fn three_node_replication_byte_compare() {
     const TOPIC: &str = "krabka-replication-itest";
 
-    init_jvm_tracing("krabka_broker=debug,info");
-
     // Distinct ports from `three_node_jvm_round_trip` (which uses
     // 9192/9292/9392 + 9193/9293/9393). Linux's TIME_WAIT keeps the prior
     // test's sockets bound for ~60s after teardown; running this test
@@ -50,7 +47,7 @@ async fn three_node_replication_byte_compare() {
     let client_ports = [9492u16, 9592, 9692];
     let controller_ports = [9493u16, 9593, 9693];
 
-    let cluster = start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
+    let cluster = durability_cluster(client_ports, controller_ports, |_| {}).await;
 
     let (_bootstrap_1, bootstrap_all) =
         prepare_replication_topic(&cluster[0].0, TOPIC, &client_ports).await;

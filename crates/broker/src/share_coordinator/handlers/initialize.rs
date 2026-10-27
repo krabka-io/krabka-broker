@@ -393,7 +393,9 @@ mod tests {
                 row.request.group_id.clone()
             };
             let topic_id = uuid::Uuid::from_bytes(topic.0);
-            let state_partition = coordinator.state_partition_for(&key_group, &topic_id, partition);
+            let state_partition = coordinator
+                .state_partition_for(&key_group, &topic_id, partition)
+                .unwrap();
             let before = logged_records(&coordinator, state_partition).len();
             if matches!(row.leadership, StateLeadership::Follower) {
                 coordinator

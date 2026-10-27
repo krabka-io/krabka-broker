@@ -11,8 +11,9 @@ use {
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     bytes::{Bytes, BytesMut},
     krabka_metadata::MetadataImage,
-    krabka_protocol::owned::describe_cluster_response::{
-        DescribeClusterBroker, DescribeClusterResponse,
+    krabka_protocol::owned::{
+        describe_cluster_request,
+        describe_cluster_response::{DescribeClusterBroker, DescribeClusterResponse},
     },
 };
 
@@ -94,7 +95,7 @@ pub(super) async fn describe_cluster_response_body(
 /// is `leader_id` only when that list holds it.
 fn describe_cluster_response(
     version: i16,
-    req: &krabka_protocol::owned::describe_cluster_request::DescribeClusterRequest,
+    req: &describe_cluster_request::DescribeClusterRequest,
     image: &MetadataImage,
     listener_name: &str,
     leader_id: i32,
@@ -191,6 +192,7 @@ mod tests {
         krabka_protocol::{
             Decode, Encode, owned::describe_cluster_request::DescribeClusterRequest,
         },
+        std::collections::BTreeMap,
         uuid::Uuid,
     };
 
@@ -223,13 +225,13 @@ mod tests {
             endpoints: listeners
                 .iter()
                 .map(|name| BrokerEndpoint {
-                    name: (*name).to_string(),
+                    name: (*name).to_owned(),
                     host: format!("c{id}-{}", name.to_ascii_lowercase()),
                     port: 9093,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 })
                 .collect(),
-            features: std::collections::BTreeMap::new(),
+            features: BTreeMap::new(),
         })
     }
 
@@ -246,7 +248,7 @@ mod tests {
     fn refused(error_code: i16, message: &str) -> DescribeClusterResponse {
         DescribeClusterResponse {
             error_code,
-            error_message: Some(message.to_string()),
+            error_message: Some(message.to_owned()),
             ..Default::default()
         }
     }
@@ -260,7 +262,7 @@ mod tests {
     /// id that must be in that list, and the KIP-430 bitfield.
     #[test]
     fn describe_cluster_follows_compute_describe_cluster_response() {
-        const OPS: i32 = 1 << 7 | 1 << 8;
+        const OPS: i32 = (1 << 7) | (1 << 8);
         let ok = |brokers: Vec<DescribeClusterBroker>, controller_id: i32, ops: i32| {
             DescribeClusterResponse {
                 cluster_id: "AAAAAAAAAAAAAAAAAAAAAA".into(),

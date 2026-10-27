@@ -88,20 +88,14 @@ mod tests {
             krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
             Some(krabka_raft::NodeId(7)),
         ));
-        let source: Arc<dyn MetadataSource> = fake.clone();
+        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
         let leader = adapter(&source, 7);
         let follower = adapter(&source, 8);
 
-        assert!(crate::leader_rebalance::ControllerLike::is_leader(&leader));
-        assert!(!crate::leader_rebalance::ControllerLike::is_leader(
-            &follower
-        ));
-        assert!(crate::reassignment::ReassignmentController::is_leader(
-            &leader
-        ));
-        assert!(!crate::reassignment::ReassignmentController::is_leader(
-            &follower
-        ));
+        assert!(ControllerLike::is_leader(&leader));
+        assert!(!ControllerLike::is_leader(&follower));
+        assert!(ReassignmentController::is_leader(&leader));
+        assert!(!ReassignmentController::is_leader(&follower));
         fake.set_leader(Some(NodeId(8)));
         assert!(!ControllerLike::is_leader(&leader));
         assert!(!ReassignmentController::is_leader(&leader));
@@ -119,7 +113,7 @@ mod tests {
             krabka_metadata::MetadataImage::new(cluster_id),
             Some(krabka_raft::NodeId(1)),
         ));
-        let source: Arc<dyn MetadataSource> = fake.clone();
+        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
         let adapter = adapter(&source, 1);
 
         let images = [
@@ -159,7 +153,7 @@ mod tests {
             krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
             Some(NodeId(1)),
         ));
-        let source: Arc<dyn MetadataSource> = fake.clone();
+        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
         let adapter = adapter(&source, 1);
         let records = [
             metadata_topic_record("rebalance", uuid::Uuid::from_u128(1)),

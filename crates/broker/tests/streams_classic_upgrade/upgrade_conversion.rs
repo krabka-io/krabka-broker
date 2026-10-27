@@ -16,6 +16,7 @@ use {
         upgrade_streams::{streams_join_and_converge, topology},
     },
     assert2::assert,
+    krabka_broker::coordinator::unified::GroupType,
     krabka_protocol::owned::{
         leave_group_request::{LeaveGroupRequest, MemberIdentity},
         offset_commit_request::OffsetCommitRequest,
@@ -82,12 +83,9 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
     assert!(lr.error_code == ERR_NONE, "LeaveGroup failed: {lr:?}");
 
     // Precondition: the group must be Classic-typed.
-    broker
-        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Classic)
-        .await;
+    broker.wait_until_group_type("g", GroupType::Classic).await;
     assert!(
-        broker.group_type_for_test("g")
-            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
+        broker.group_type_for_test("g") == Some(GroupType::Classic),
         "precondition: group_type must be Classic before upgrade, got {:?}",
         broker.group_type_for_test("g")
     );
@@ -107,12 +105,9 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
     );
 
     // Group must now be Streams-typed.
-    broker
-        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Streams)
-        .await;
+    broker.wait_until_group_type("g", GroupType::Streams).await;
     assert!(
-        broker.group_type_for_test("g")
-            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
+        broker.group_type_for_test("g") == Some(GroupType::Streams),
         "group_type must be Streams after upgrade, got {:?}",
         broker.group_type_for_test("g")
     );

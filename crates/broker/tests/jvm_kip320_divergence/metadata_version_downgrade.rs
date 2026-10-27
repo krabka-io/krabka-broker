@@ -14,10 +14,15 @@ use {
         topic_admin::create_mixed_topic,
     },
     krabka_broker::BrokerHandle,
-    std::time::{Duration, Instant},
+    krabka_metadata::metadata_version,
+    std::{
+        process::Output,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
-fn run_features(bootstrap: &str, command: &[&str]) -> std::process::Output {
+fn run_features(bootstrap: &str, command: &[&str]) -> Output {
     let mut args = vec![
         "/opt/kafka/bin/kafka-features.sh",
         "--bootstrap-server",
@@ -44,7 +49,7 @@ async fn wait_for_jvm_metadata_max(cluster: &MixedCluster, expected: i16) {
                     .and_then(|registration| {
                         registration
                             .features
-                            .get(krabka_metadata::metadata_version::METADATA_VERSION_FEATURE)
+                            .get(metadata_version::METADATA_VERSION_FEATURE)
                             .map(|(_, max)| *max)
                     })
             })
@@ -57,7 +62,7 @@ async fn wait_for_jvm_metadata_max(cluster: &MixedCluster, expected: i16) {
             "JVM broker did not advertise metadata.version max {expected} on every Krabka \
              broker; observed {observed:?}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 

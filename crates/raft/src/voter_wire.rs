@@ -3,17 +3,20 @@
 
 use {
     krabka_metadata::{NodeId, Voter, VoterEndpoint, voters::KRaftVersionRange},
-    krabka_protocol::owned::voters_record::{
-        Endpoint as WireVoterEndpoint, KRaftVersionFeature as WireKRaftVersionFeature,
-        Voter as WireVoter, VotersRecord as WireVotersRecord,
+    krabka_protocol::{
+        owned::voters_record::{
+            Endpoint as WireVoterEndpoint, KRaftVersionFeature as WireKRaftVersionFeature,
+            Voter as WireVoter, VotersRecord as WireVotersRecord,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     uuid::Uuid,
 };
 
-pub(crate) fn to_wire(voter: &Voter, id: i32, min: i16, max: i16) -> WireVoter {
+pub fn to_wire(voter: &Voter, id: i32, min: i16, max: i16) -> WireVoter {
     WireVoter {
         voter_id: id,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid(*voter.directory_id.as_bytes()),
+        voter_directory_id: WireUuid(*voter.directory_id.as_bytes()),
         endpoints: voter
             .endpoints
             .iter()
@@ -33,7 +36,7 @@ pub(crate) fn to_wire(voter: &Voter, id: i32, min: i16, max: i16) -> WireVoter {
     }
 }
 
-pub(crate) fn record(voters: Vec<WireVoter>) -> WireVotersRecord {
+pub fn record(voters: Vec<WireVoter>) -> WireVotersRecord {
     WireVotersRecord {
         version: 0,
         voters,
@@ -41,7 +44,7 @@ pub(crate) fn record(voters: Vec<WireVoter>) -> WireVotersRecord {
     }
 }
 
-pub(crate) fn endpoint(name: &str, host: &str, port: u16) -> VoterEndpoint {
+pub fn endpoint(name: &str, host: &str, port: u16) -> VoterEndpoint {
     VoterEndpoint {
         name: name.to_owned(),
         host: host.to_owned(),
@@ -49,7 +52,7 @@ pub(crate) fn endpoint(name: &str, host: &str, port: u16) -> VoterEndpoint {
     }
 }
 
-pub(crate) fn from_wire(
+pub fn from_wire(
     voter: &WireVoter,
     id: NodeId,
     directory_id: Uuid,

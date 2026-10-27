@@ -39,7 +39,7 @@ const FIRST_SKIP_ASSIGNMENT_VERSION: i16 = 9;
 
 /// The request-independent inputs of a `JoinGroup`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct JoinContext<'a> {
+pub struct JoinContext<'a> {
     pub client_id: &'a str,
     pub client_host: &'a str,
     pub version: i16,
@@ -52,7 +52,7 @@ pub(crate) struct JoinContext<'a> {
 
 /// What the actor should do with a `ClassicJoin`.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum JoinAction {
+pub enum JoinAction {
     /// Reply right away with no state to persist.
     Immediate(JoinResult),
     /// A static member replaced its old member id in a `Stable` group
@@ -68,7 +68,7 @@ pub(crate) enum JoinAction {
 
 /// The result of [`handle_join`].
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct JoinOutcome {
+pub struct JoinOutcome {
     pub action: JoinAction,
     /// The old member id of a static member that joined again with an empty
     /// member id. Its parked `JoinGroup` and `SyncGroup` get
@@ -99,7 +99,7 @@ impl JoinOutcome {
 /// The coordinator answers such a join with `MEMBER_ID_REQUIRED` and the id
 /// that the member must join with again. A classic group and a consumer group
 /// that hosts classic members both apply this rule.
-pub(crate) fn requires_known_member_id(req: &JoinGroupRequest, version: i16) -> bool {
+pub fn requires_known_member_id(req: &JoinGroupRequest, version: i16) -> bool {
     req.group_instance_id.is_none()
         && req.member_id.is_empty()
         && version >= FIRST_KNOWN_MEMBER_ID_VERSION
@@ -108,7 +108,7 @@ pub(crate) fn requires_known_member_id(req: &JoinGroupRequest, version: i16) -> 
 /// Kafka's `classicGroupJoinToClassicGroup`. On a new member id the request's
 /// `member_id` becomes the id the group gave it, so the actor parks the reply
 /// under that id.
-pub(crate) fn handle_join(
+pub fn handle_join(
     state: &mut ClassicState,
     req: &mut JoinGroupRequest,
     ctx: &JoinContext<'_>,
@@ -192,7 +192,7 @@ fn join_new_member(
     if let Some(instance_id) = req.group_instance_id.clone() {
         if let Some(old_member_id) = state
             .current_member_id_for_instance(&instance_id)
-            .map(str::to_string)
+            .map(str::to_owned)
         {
             return update_static_member(
                 state,
@@ -267,8 +267,8 @@ fn add_member_then_rebalance(
 ) -> JoinAction {
     let mut member = Member::new(
         req.member_id.clone(),
-        ctx.client_id.to_string(),
-        ctx.client_host.to_string(),
+        ctx.client_id.to_owned(),
+        ctx.client_host.to_owned(),
         session_timeout(req),
         rebalance_timeout(req),
         request_protocols(req),
@@ -404,7 +404,7 @@ fn update_static_member(
 
 /// Build a successful `JoinResult` for the current generation. The leader
 /// gets the member list, and followers get an empty list.
-pub(crate) fn build_join_result(state: &ClassicState, member_id: &str) -> JoinResult {
+pub fn build_join_result(state: &ClassicState, member_id: &str) -> JoinResult {
     let is_leader = state.leader_id.as_deref() == Some(member_id);
     let mut members: Vec<JoinResultMember> = if is_leader {
         state
@@ -429,14 +429,14 @@ pub(crate) fn build_join_result(state: &ClassicState, member_id: &str) -> JoinRe
         protocol_name: state.protocol_name.clone(),
         leader: state.leader_id.clone().unwrap_or_default(),
         skip_assignment: false,
-        member_id: member_id.to_string(),
+        member_id: member_id.to_owned(),
         members,
     }
 }
 
 /// Why a round could not complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompleteError {
+pub enum CompleteError {
     /// No protocol is common to all members. The protocol gate in
     /// `handle_join` keeps a joined group out of this state, but a group
     /// loaded from the log or converted from a consumer group can be in it.
@@ -446,7 +446,7 @@ pub(crate) enum CompleteError {
 
 /// What [`try_complete`] did to the group.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Completion {
+pub enum Completion {
     /// The group was not in `PreparingRebalance`.
     NotPreparing,
     /// A new generation started, in `CompletingRebalance`, and every member
@@ -470,10 +470,7 @@ pub(crate) enum Completion {
 /// # Errors
 /// Returns why the round could not complete. The group is unchanged then,
 /// except for the removed members.
-pub(crate) fn try_complete(
-    state: &mut ClassicState,
-    now: Instant,
-) -> Result<Completion, CompleteError> {
+pub fn try_complete(state: &mut ClassicState, now: Instant) -> Result<Completion, CompleteError> {
     if state.state != GroupState::PreparingRebalance {
         return Ok(Completion::NotPreparing);
     }
@@ -561,8 +558,8 @@ mod tests {
     fn stable_group() -> ClassicState {
         let mut g = stable_two_member_group();
         g.install_assignments(HashMap::from([
-            ("m1".to_string(), Bytes::from_static(b"a1")),
-            ("m2".to_string(), Bytes::from_static(b"a2")),
+            ("m1".to_owned(), Bytes::from_static(b"a1")),
+            ("m2".to_owned(), Bytes::from_static(b"a2")),
         ]));
         g
     }
@@ -804,7 +801,7 @@ mod tests {
             &join_ctx("h"),
         );
         check!(outcome == parked());
-        check!(sorted_members(&g) == vec![required.member_id.clone()]);
+        check!(sorted_members(&g) == vec![required.member_id]);
         check!(g.pending_members.is_empty());
     }
 
@@ -995,8 +992,8 @@ mod tests {
             try_complete(&mut g, Instant::now()).unwrap();
             if row.stable {
                 g.install_assignments(HashMap::from([
-                    ("m1".to_string(), Bytes::from_static(b"a1")),
-                    ("m2".to_string(), Bytes::from_static(b"a2")),
+                    ("m1".to_owned(), Bytes::from_static(b"a1")),
+                    ("m2".to_owned(), Bytes::from_static(b"a2")),
                 ]));
             }
 
@@ -1095,11 +1092,11 @@ mod tests {
             check!(
                 try_complete(&mut g, Instant::now())
                     == Ok(Completion::Generation {
-                        removed: vec![removed.to_string()],
+                        removed: vec![removed.to_owned()],
                     }),
                 "{name}"
             );
-            check!(sorted_members(&g) == vec![rejoined.to_string()], "{name}");
+            check!(sorted_members(&g) == vec![rejoined.to_owned()], "{name}");
             check!(g.leader_id.as_deref() == Some(leader), "{name}");
             check!(g.generation_id == 2, "{name}");
             check!(

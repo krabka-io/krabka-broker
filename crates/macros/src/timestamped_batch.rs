@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
     function(
         input,
         &moxy::template! {},

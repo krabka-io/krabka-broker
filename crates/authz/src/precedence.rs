@@ -27,7 +27,7 @@ use {
         ResourceType,
     },
     krabka_security::{AuthMethod, Principal},
-    std::{collections::HashSet, net::SocketAddr},
+    std::{collections::HashSet, iter, net::SocketAddr},
     uuid::Uuid,
 };
 
@@ -260,7 +260,7 @@ fn acl_precedence_exhaustive() {
     let reqs = requests(&alice, &bob, &h1, &h2);
 
     let no_super: HashSet<String> = HashSet::new();
-    let super_alice: HashSet<String> = std::iter::once(ALICE.to_string()).collect();
+    let super_alice: HashSet<String> = iter::once(ALICE.to_owned()).collect();
 
     for mask in 0u32..(1u32 << k) {
         let entries: Vec<AclEntry> = (0..k)
@@ -278,9 +278,9 @@ fn acl_precedence_exhaustive() {
 mod fuzz {
     use {
         super::{check, principal},
-        crate::AuthorizationRequest,
+        crate::{AuthorizationRequest, test_support},
         krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType},
-        proptest::prelude::*,
+        proptest::{collection, prelude::*},
         std::{collections::HashSet, net::SocketAddr},
     };
 
@@ -318,7 +318,7 @@ mod fuzz {
             perm in any::<bool>(), op in 0u8..11, rt in 0u8..5, name in 0u8..6,
             princ in 0u8..3, host in 0u8..3, pat in any::<bool>(),
         ) -> AclEntry {
-            crate::test_support::acl()
+            test_support::acl()
                 .rt(rt_of(rt))
                 .name(name_of(name))
                 .pattern(if pat { PatternType::Prefixed } else { PatternType::Literal })
@@ -334,7 +334,7 @@ mod fuzz {
         #![proptest_config(ProptestConfig::with_cases(3000))]
         #[test]
         fn authorize_matches_oracle_and_sources_agree(
-            entries in proptest::collection::vec(arb_entry(), 0..12),
+            entries in collection::vec(arb_entry(), 0..12),
             req_princ in 0u8..3, req_host in 0u8..3, req_rt in 0u8..5,
             req_name in 0u8..6, req_op in 0u8..11,
             super_alice in any::<bool>(), super_bob in any::<bool>(),

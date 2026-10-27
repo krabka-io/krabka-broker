@@ -17,6 +17,7 @@ use {
     },
     assert2::check,
     krabka_units::prelude::{bytes, days, gibibytes, millis},
+    std::{path::Path, thread, time::Duration},
 };
 
 /// A metadata log whose every batch gets its own segment, so a cleaning that
@@ -49,7 +50,7 @@ fn commit_topic(engine: &mut Engine, name: &str, id: u128) {
 }
 
 /// The snapshot ids in the partition directory, oldest first.
-fn snapshot_ids(dir: &std::path::Path) -> Vec<SnapshotId> {
+fn snapshot_ids(dir: &Path) -> Vec<SnapshotId> {
     let mut ids = checkpoint_ids(dir);
     ids.sort_unstable();
     ids
@@ -103,7 +104,7 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
 
         // The age rule compares the snapshot's last record with the wall
         // clock, which must move past it.
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
         commit_topic(&mut engine, "second", 2);
         engine.write_snapshot_and_clean().expect("second snapshot");
         let second = engine.log.hwm().0;

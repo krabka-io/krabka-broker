@@ -20,7 +20,7 @@ use {
     crate::{cordoned_log_dirs::CordonedLogDirs, partition::Partition},
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    std::sync::Arc,
+    std::{path::PathBuf, sync::Arc},
 };
 
 /// A partition of one incarnation of a topic, named by the topic's id.
@@ -38,9 +38,9 @@ struct TopicIncarnationPartition {
 /// `String`. That matters on the produce and fetch hot path, where one request
 /// can resolve hundreds of partitions.
 #[derive(Debug, Default)]
-pub(crate) struct PartitionRegistry {
+pub struct PartitionRegistry {
     inner: DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>,
-    preferred_log_dirs: DashMap<TopicIncarnationPartition, std::path::PathBuf>,
+    preferred_log_dirs: DashMap<TopicIncarnationPartition, PathBuf>,
     /// KIP-1066: the log directories this broker holds cordoned, which new
     /// partition directories avoid. It lives beside the preferred directories
     /// because both decide where a partition this broker opens goes.
@@ -87,9 +87,8 @@ impl PartitionRegistry {
     /// partition, if the registry holds it.
     #[must_use]
     pub(crate) fn get(&self, topic: &str, partition: PartitionIndex) -> Option<Arc<Partition>> {
-        self.inner
-            .get(topic)
-            .and_then(|m| m.get(&partition).map(|p| Arc::clone(&p)))
+        let m = self.inner.get(topic)?;
+        m.get(&partition).map(|p| Arc::clone(&p))
     }
 
     /// The registry's own copy of `topic`, as a cheap `Arc` clone.
@@ -200,7 +199,7 @@ impl PartitionRegistry {
         &self,
         topic_id: uuid::Uuid,
         partition: PartitionIndex,
-        log_dir: std::path::PathBuf,
+        log_dir: PathBuf,
     ) {
         self.preferred_log_dirs.insert(
             TopicIncarnationPartition {
@@ -216,7 +215,7 @@ impl PartitionRegistry {
         &self,
         topic_id: uuid::Uuid,
         partition: PartitionIndex,
-    ) -> Option<std::path::PathBuf> {
+    ) -> Option<PathBuf> {
         self.preferred_log_dirs
             .get(&TopicIncarnationPartition {
                 topic_id,
@@ -267,7 +266,7 @@ mod tests {
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
         krabka_log::{Log, LogConfig},
-        std::{path::Path, sync::Arc},
+        std::{fs, path::Path, sync::Arc},
         tempfile::tempdir,
     };
 
@@ -276,7 +275,7 @@ mod tests {
     /// `future_log`.
     fn fixture_partition(log_dir: &Path, topic: &str, partition: PartitionIndex) -> Arc<Partition> {
         let part_dir = partition_dir(log_dir, topic, partition.get());
-        std::fs::create_dir_all(&part_dir).unwrap();
+        fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
         spawn_standalone_partition()
             .log_dir(log_dir)
@@ -418,8 +417,8 @@ mod tests {
     async fn materialize_if_vacant_propagates_error() {
         let reg = PartitionRegistry::new();
         let err =
-            reg.materialize_if_vacant::<String>("t", PartitionIndex(2), || Err("boom".to_string()));
-        assert!(err == Err("boom".to_string()));
+            reg.materialize_if_vacant::<String>("t", PartitionIndex(2), || Err("boom".to_owned()));
+        assert!(err == Err("boom".to_owned()));
         assert!(!reg.contains("t", PartitionIndex(2)));
     }
 
@@ -434,10 +433,10 @@ mod tests {
         reg.insert("orders".into(), index, Arc::clone(&replacement));
         let canonical = partition_dir(dir.path(), "orders", index.get());
         let marker = canonical.join("replacement-marker");
-        std::fs::write(&marker, b"new generation").unwrap();
+        fs::write(&marker, b"new generation").unwrap();
 
         reg.remove_captured_with_cleanup("orders", index, &captured, || {
-            std::fs::remove_dir_all(&canonical).unwrap();
+            fs::remove_dir_all(&canonical).unwrap();
         });
 
         assert!(marker.exists());
@@ -450,7 +449,7 @@ mod tests {
         // Its absent slot still permits idempotent cleanup before recreation.
         reg.remove("orders", index);
         reg.remove_captured_with_cleanup("orders", index, &captured, || {
-            std::fs::remove_dir_all(&canonical).unwrap();
+            fs::remove_dir_all(&canonical).unwrap();
         });
         assert!(!canonical.exists());
         assert!(reg.get("orders", index).is_none());

@@ -1,4 +1,4 @@
-use super::*;
+use {super::*, proptest::collection};
 
 proptest! {
     #[test]
@@ -27,7 +27,7 @@ proptest! {
 
     #[test]
     fn quorum_matches_iterator_oracle(
-        voters_per_site in proptest::collection::vec(0i64..8, 0..7),
+        voters_per_site in collection::vec(0i64..8, 0..7),
     ) {
         prop_assert_eq!(
             quorum_survives_any_single_site_loss(&voters_per_site),

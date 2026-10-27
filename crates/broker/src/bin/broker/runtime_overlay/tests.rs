@@ -7,13 +7,14 @@ use {
     clap::Parser,
     krabka_broker::{
         authorizer::{AuthorizationRequest, AuthorizationResult},
+        config_value::PositiveCount,
         file_config::FileConfig,
         security_clients::assemble,
     },
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_security::{AuthMethod, Principal},
     krabka_units::{convert::TimeExt as _, secs},
-    std::time::Duration,
+    std::{iter, time::Duration},
     uuid::Uuid,
     wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
 };
@@ -299,8 +300,8 @@ fn partition_verification_switch_applies_from_cli(
     named: bool,
 ) {
     let _guard = env_guard();
-    let args = Args::try_parse_from(std::iter::once("krabka-broker").chain(flag))
-        .expect("parse the switch");
+    let args =
+        Args::try_parse_from(iter::once("krabka-broker").chain(flag)).expect("parse the switch");
     let mut config = BrokerConfig::default();
 
     args.apply_runtime_to(&mut config, None)
@@ -318,7 +319,7 @@ fn partition_verification_switch_applies_from_cli(
     );
 }
 
-fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConfig {
+fn file_runtime_with_nondefault_values() -> FileConfig {
     toml::from_str(
         r#"
         [runtime]
@@ -459,7 +460,7 @@ fn metadata_log_settings_apply_from_cli_and_environment() {
 
     let _guard = env_guard();
 
-    let file: krabka_broker::file_config::FileConfig = toml::from_str(
+    let file: FileConfig = toml::from_str(
         r#"
         [runtime]
         metadata_log_segment_bytes = "32MiB"
@@ -558,7 +559,7 @@ fn queued_max_requests_flag_reaches_the_runtime_config() {
     assert!(
         args.runtime
             .queued_max_requests
-            .map(krabka_broker::config_value::PositiveCount::into_value)
+            .map(PositiveCount::into_value)
             == Some(5)
     );
 }
@@ -626,7 +627,7 @@ async fn opa_client_uses_the_final_runtime_timeout() {
                 let mut config = BrokerConfig::default();
                 file.apply_before_runtime_overlay(&mut config)
                     .expect("resolve file policy");
-                let args = Args::try_parse_from(std::iter::once("krabka-broker").chain(flag))
+                let args = Args::try_parse_from(iter::once("krabka-broker").chain(flag))
                     .expect("parse timeout override");
                 args.apply_runtime_to(&mut config, None)
                     .expect("resolve final runtime policy");

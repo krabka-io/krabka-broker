@@ -3,7 +3,8 @@
 use {
     clap::{Parser, Subcommand},
     krabka_audit::{TrustedKeys, verify_partition_dir},
-    std::{path::PathBuf, process::ExitCode},
+    std::{fs, path::PathBuf, process::ExitCode},
+    tracing::{field, field::Empty},
 };
 
 #[derive(Parser)]
@@ -32,7 +33,7 @@ enum Command {
 #[tracing::instrument(
     level = "info",
     skip_all,
-    fields(command = tracing::field::Empty, partition_dir = tracing::field::Empty, key_id = tracing::field::Empty)
+    fields(command = Empty, partition_dir = Empty, key_id = Empty)
 )]
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -44,12 +45,9 @@ fn main() -> ExitCode {
         } => {
             let span = tracing::Span::current();
             span.record("command", "verify");
-            span.record(
-                "partition_dir",
-                tracing::field::display(partition_dir.display()),
-            );
-            span.record("key_id", tracing::field::display(&key_id));
-            let pubkey = match std::fs::read(&public_key) {
+            span.record("partition_dir", field::display(partition_dir.display()));
+            span.record("key_id", field::display(&key_id));
+            let pubkey = match fs::read(&public_key) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("error: read public key {}: {e}", public_key.display());
@@ -59,11 +57,13 @@ fn main() -> ExitCode {
             let trusted = TrustedKeys::single(key_id, pubkey);
             match verify_partition_dir(&partition_dir, &trusted) {
                 Ok(report) if !report.ok => {
-                    let b = report.first_break.expect("not ok implies a break");
-                    eprintln!(
-                        "TAMPER DETECTED at offset {} (seq {:?}): {}",
-                        b.offset, b.seq, b.reason
-                    );
+                    match &report.first_break {
+                        Some(b) => eprintln!(
+                            "TAMPER DETECTED at offset {} (seq {:?}): {}",
+                            b.offset, b.seq, b.reason
+                        ),
+                        None => eprintln!("TAMPER DETECTED (the report names no break)"),
+                    }
                     eprintln!(
                         "verified {} records, {} checkpoints before the break",
                         report.records, report.checkpoints

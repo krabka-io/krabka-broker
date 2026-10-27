@@ -25,7 +25,7 @@ use {
     tempfile::{TempDir, tempdir},
 };
 
-pub(crate) const GROUP: &str = "orders-cut";
+pub const GROUP: &str = "orders-cut";
 
 fn config() -> BarrierConfig {
     BarrierConfig {
@@ -39,10 +39,10 @@ fn config() -> BarrierConfig {
 }
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
-pub(crate) struct RetainedCutCount(pub i32);
+pub struct RetainedCutCount(pub i32);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct GroupSpecSetup<'a> {
+pub struct GroupSpecSetup<'a> {
     #[default(&["orders"])]
     pub(crate) topics: &'a [&'a str],
     pub(crate) interval: Option<Time>,
@@ -51,7 +51,7 @@ pub(crate) struct GroupSpecSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn spec(
+pub fn spec(
     #[builder(default = & ["orders"])] topics: &'_ [&'_ str],
     interval: Option<Time>,
     #[builder(into, default = RetainedCutCount (4))] retained_cuts: RetainedCutCount,
@@ -78,7 +78,7 @@ fn cluster_records() -> Vec<MetadataRecord> {
 }
 
 // A broker that leads every state partition and every data partition.
-pub(crate) struct Fixture {
+pub struct Fixture {
     _dir: TempDir,
     pub(super) registry: Arc<PartitionRegistry>,
     pub(crate) source: Arc<FakeMetadataSource>,
@@ -146,7 +146,7 @@ impl Fixture {
                 }
             }
         }
-        let controller: Arc<dyn MetadataSource> = Arc::clone(&self.source) as _;
+        let controller = Arc::clone(&self.source) as Arc<dyn MetadataSource>;
         let coordinator = BarrierCoordinator::new(
             NodeId(1),
             Arc::clone(&self.registry),
@@ -186,7 +186,7 @@ impl Fixture {
     }
 }
 
-pub(crate) async fn fixture_with_coordinator() -> (Fixture, BarrierCoordinator) {
+pub async fn fixture_with_coordinator() -> (Fixture, BarrierCoordinator) {
     let fixture = Fixture::new();
     let coordinator = fixture.coordinator().await;
     (fixture, coordinator)

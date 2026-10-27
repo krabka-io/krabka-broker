@@ -15,6 +15,7 @@ use {
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
     krabka_verified::{FreezeMutationDecision, FreezeMutationKind, freeze_mutation_decision},
+    std::collections::HashSet,
 };
 
 /// Builds the set of topic names that a KFC-9 write freeze covers.
@@ -26,8 +27,8 @@ use {
 pub(super) fn frozen_topics(
     image: &MetadataImage,
     topics: &[AddPartitionsToTxnTopic],
-    denied: &std::collections::HashSet<String>,
-) -> std::collections::HashSet<String> {
+    denied: &HashSet<String>,
+) -> HashSet<String> {
     topics
         .iter()
         .filter(|t| {
@@ -54,8 +55,8 @@ pub(super) fn frozen_topics(
 /// read it.
 pub(super) fn topic_refusal(
     name: &str,
-    denied: &std::collections::HashSet<String>,
-    frozen: &std::collections::HashSet<String>,
+    denied: &HashSet<String>,
+    frozen: &HashSet<String>,
 ) -> Option<i16> {
     match freeze_mutation_decision(
         !denied.contains(name),
@@ -82,6 +83,7 @@ mod tests {
             },
             txn::{
                 bootstrap::TOPIC,
+                coordinator::leadership::LoadStatus,
                 handlers::add_partitions_to_txn::{
                     handle,
                     test_support::{
@@ -104,7 +106,12 @@ mod tests {
             add_partitions_to_txn_response::AddPartitionsToTxnResponse,
             common::add_partitions_to_txn_response::add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
         },
-        std::{collections::HashSet, sync::Arc},
+        std::{
+            collections::HashSet,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::time::sleep,
     };
 
     krabka_macros::wire_codec_helpers! {
@@ -197,8 +204,8 @@ mod tests {
 
     #[test]
     fn topic_refusal_ranks_the_acl_deny_above_the_freeze() {
-        let denied = maplit::hashset! {"denied".to_string(), "both".to_string()};
-        let frozen = maplit::hashset! {"frozen".to_string(), "both".to_string()};
+        let denied = maplit::hashset! {"denied".to_owned(), "both".to_owned()};
+        let frozen = maplit::hashset! {"frozen".to_owned(), "both".to_owned()};
 
         for (label, name, want) in [
             ("a topic under neither refusal proceeds", "clean", None),
@@ -237,10 +244,10 @@ mod tests {
     }}
 
     async fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !ready() {
-            assert!(std::time::Instant::now() <= deadline, "timed out: {label}");
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            assert!(Instant::now() <= deadline, "timed out: {label}");
+            sleep(Duration::from_millis(25)).await;
         }
     }
 
@@ -300,9 +307,9 @@ mod tests {
         assert!(
             broker
                 .txn_coordinator
-                .wait_for_load(PartitionIndex(0), std::time::Duration::from_secs(30))
+                .wait_for_load(PartitionIndex(0), Duration::from_secs(30))
                 .await
-                == Some(crate::txn::coordinator::leadership::LoadStatus::Loaded),
+                == Some(LoadStatus::Loaded),
             "__transaction_state-0 loads"
         );
         let txnv = resolve_txn_version(&image);
@@ -438,7 +445,7 @@ mod tests {
                 .map(|tp| tp.topic.clone())
                 .collect();
             check!(
-                enrolled == maplit::hashset! {UNFROZEN_TOPIC.to_string()},
+                enrolled == maplit::hashset! {UNFROZEN_TOPIC.to_owned()},
                 "{label}"
             );
 

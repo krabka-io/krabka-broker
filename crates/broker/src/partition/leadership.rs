@@ -3,6 +3,8 @@
 //! epoch from the metadata image. That publication is a locking protocol of its
 //! own, shared with produce admission, so it lives in its own module.
 
+#[cfg(any(test, feature = "test-helpers"))]
+use tokio::sync::RwLock;
 use {
     crate::{
         codes::{FENCED_LEADER_EPOCH, UNKNOWN_LEADER_EPOCH},
@@ -11,7 +13,11 @@ use {
         producer_state::ProducerState,
     },
     krabka_log::Log,
-    std::sync::{Arc, atomic::Ordering},
+    std::{
+        future::Future,
+        sync::{Arc, PoisonError, atomic::Ordering},
+    },
+    tokio::sync::{OwnedRwLockReadGuard, RwLockWriteGuard},
 };
 
 #[cfg(test)]
@@ -28,16 +34,15 @@ fn assign_leader_epoch_start(log: &mut Log, epoch: i32) -> Result<(), BrokerErro
 /// follower log. A read guard over this value linearizes replication writes
 /// with [`Partition::install_leader_change`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReplicationTarget {
+pub struct ReplicationTarget {
     pub(crate) topic_id: Option<uuid::Uuid>,
     pub(crate) leader_node_id: krabka_raft::NodeId,
     pub(crate) leader_epoch: krabka_metadata::LeaderEpoch,
 }
 
-pub(crate) fn initial_replication_target(
-    topic_id: Option<uuid::Uuid>,
-) -> Arc<tokio::sync::RwLock<ReplicationTarget>> {
-    Arc::new(tokio::sync::RwLock::new(ReplicationTarget {
+#[cfg(any(test, feature = "test-helpers"))]
+pub fn initial_replication_target(topic_id: Option<uuid::Uuid>) -> Arc<RwLock<ReplicationTarget>> {
+    Arc::new(RwLock::new(ReplicationTarget {
         topic_id,
         leader_node_id: krabka_raft::NodeId(0),
         leader_epoch: krabka_metadata::LeaderEpoch(0),
@@ -49,10 +54,8 @@ impl Partition {
     /// A diskless nominal-leader promotion takes the matching write lock while
     /// it hydrates the canonical log and rebuilds producer state, so no append
     /// can race that publication boundary.
-    pub(crate) async fn lock_produce_transition(
-        &self,
-    ) -> tokio::sync::OwnedRwLockReadGuard<ReplicationTarget> {
-        self.replication_target.clone().read_owned().await
+    pub(crate) async fn lock_produce_transition(&self) -> OwnedRwLockReadGuard<ReplicationTarget> {
+        Arc::clone(&self.replication_target).read_owned().await
     }
 
     /// Lock this partition for a mutation from `expected`, rejecting a stale
@@ -60,8 +63,8 @@ impl Partition {
     pub(crate) async fn lock_replication_target(
         &self,
         expected: ReplicationTarget,
-    ) -> Result<tokio::sync::OwnedRwLockReadGuard<ReplicationTarget>, BrokerError> {
-        let current = self.replication_target.clone().read_owned().await;
+    ) -> Result<OwnedRwLockReadGuard<ReplicationTarget>, BrokerError> {
+        let current = Arc::clone(&self.replication_target).read_owned().await;
         if *current != expected {
             return Err(BrokerError::Replication(format!(
                 "stale replication target: expected {expected:?}, current {:?}",
@@ -108,9 +111,13 @@ impl Partition {
         // Wait for any accepted follower mutation to finish before making the
         // new local role visible. Conversely, a mutation that arrives after
         // this write lock observes the new tuple and is fenced.
-        let target = self.replication_target.write().await;
-        self.publish_replication_target(target, topic_id, new_leader, new_epoch)
-            .await;
+        self.publish_replication_target(
+            self.replication_target.write().await,
+            topic_id,
+            new_leader,
+            new_epoch,
+        )
+        .await;
     }
 
     /// Whether the installed target already is `(topic_id, leader, epoch)`,
@@ -190,14 +197,30 @@ impl Partition {
             // in-flight Produce requests, which hold read guards too.
             let target = self.replication_target.read().await;
             if Self::target_matches(&target, topic_id, local_node, epoch) {
-                let mut log = self
-                    .log
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
                 return assign_leader_epoch_start(&mut log, epoch);
             }
         }
-        let target = self.replication_target.write().await;
+        self.promote_under_write_guard(
+            self.replication_target.write().await,
+            producer_state,
+            topic_id,
+            local_node,
+            epoch,
+        )
+        .await
+    }
+
+    /// The write-guarded half of [`Self::install_local_leadership`]: `target`
+    /// is held from the epoch check until the new target is published.
+    async fn promote_under_write_guard(
+        &self,
+        target: RwLockWriteGuard<'_, ReplicationTarget>,
+        producer_state: &ProducerState,
+        topic_id: Option<uuid::Uuid>,
+        local_node: u64,
+        epoch: i32,
+    ) -> Result<(), BrokerError> {
         if target.leader_epoch.0 > epoch {
             // A reconcile that raced a newer promotion: the newer epoch is
             // installed and recorded, and recording this one would rewind it.
@@ -207,10 +230,7 @@ impl Partition {
         // of the log, so the producer state read here is the state at the log
         // end where the new epoch starts.
         let prepared = {
-            let mut log = self
-                .log
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
             assign_leader_epoch_start(&mut log, epoch).map(|()| log.recovered_producers())
         };
         producer_state
@@ -236,14 +256,32 @@ impl Partition {
         after_prepare: impl FnOnce(T) -> F,
     ) -> Result<(), BrokerError>
     where
-        F: std::future::Future<Output = ()>,
+        F: Future<Output = ()>,
     {
-        let target = self.replication_target.write().await;
+        self.prepare_and_publish(
+            self.replication_target.write().await,
+            (topic_id, new_leader, new_epoch),
+            (prepare, after_prepare),
+        )
+        .await
+    }
+
+    /// The write-guarded body of
+    /// [`Self::install_replication_target_after_log_prepare`]: `target` is
+    /// held through the preparation until the new target is published.
+    async fn prepare_and_publish<T, F, P, A>(
+        &self,
+        target: RwLockWriteGuard<'_, ReplicationTarget>,
+        (topic_id, new_leader, new_epoch): (Option<uuid::Uuid>, u64, i32),
+        (prepare, after_prepare): (P, A),
+    ) -> Result<(), BrokerError>
+    where
+        P: FnOnce(&mut Log) -> Result<T, BrokerError>,
+        A: FnOnce(T) -> F,
+        F: Future<Output = ()>,
+    {
         let prepared = {
-            let mut log = self
-                .log
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
             prepare(&mut log)?
         };
         after_prepare(prepared).await;
@@ -254,7 +292,7 @@ impl Partition {
 
     async fn publish_replication_target(
         &self,
-        mut target: tokio::sync::RwLockWriteGuard<'_, ReplicationTarget>,
+        mut target: RwLockWriteGuard<'_, ReplicationTarget>,
         topic_id: Option<uuid::Uuid>,
         new_leader: u64,
         new_epoch: i32,
@@ -356,8 +394,7 @@ impl Partition {
     /// forced epoch bump mid-Produce.
     #[cfg(any(test, feature = "test-helpers"))]
     pub fn test_set_leader_epoch(&self, epoch: i32) {
-        self.current_leader_epoch
-            .store(epoch, std::sync::atomic::Ordering::Release);
+        self.current_leader_epoch.store(epoch, Ordering::Release);
     }
 }
 
@@ -373,7 +410,9 @@ mod tests {
         },
         assert2::assert,
         krabka_log::Offset,
-        tokio::sync::Notify,
+        krabka_protocol::records::{Record, RecordBatch},
+        std::time::Duration,
+        tokio::{sync::Notify, task, time},
     };
 
     #[tokio::test]
@@ -412,10 +451,10 @@ mod tests {
             .await
             .expect("current target");
         let update = tokio::spawn({
-            let partition = partition.clone();
+            let partition = Arc::clone(&partition);
             async move { partition.install_replication_target(None, 2, 8).await }
         });
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         assert!(
             !update.is_finished(),
             "leader install waits for mutation guard"
@@ -434,8 +473,8 @@ mod tests {
             .await;
 
         let produce_guard = partition.lock_produce_transition().await;
-        tokio::time::timeout(
-            std::time::Duration::from_millis(100),
+        time::timeout(
+            Duration::from_millis(100),
             partition.install_replication_target(Some(topic_id), 1, 7),
         )
         .await
@@ -475,7 +514,7 @@ mod tests {
                 p.current_leader_epoch.load(Ordering::Acquire) == epoch,
                 "case ({leader}, {epoch})"
             );
-            let st = p.replica_state.lock().await;
+            let st = p.replica_state.lock().await.clone();
             assert!(st.per_follower.is_empty(), "case ({leader}, {epoch})");
             assert!(
                 st.current_leader_epoch == krabka_ids::LeaderEpoch(epoch),
@@ -485,9 +524,9 @@ mod tests {
     }
 
     fn append_at_epoch(partition: &Partition, epoch: i32) {
-        let mut batch = krabka_protocol::records::RecordBatch {
+        let mut batch = RecordBatch {
             partition_leader_epoch: epoch,
-            records: vec![krabka_protocol::records::Record::default()],
+            records: vec![Record::default()],
             ..Default::default()
         };
         partition

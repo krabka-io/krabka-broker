@@ -39,11 +39,10 @@ pub fn sasl_session_expiry(
         (Some(credential), Some(cap)) => Some(credential.min(cap)),
         (credential, cap) => credential.or(cap),
     };
-    let lifetime = match expiry {
-        None => 0,
-        Some(at) => at.saturating_sub(now_ms).max(0),
+    let Some(at) = expiry else {
+        return (expiry, 0);
     };
-    (expiry, lifetime)
+    (expiry, at.saturating_sub(now_ms).max(0))
 }
 
 /// Kafka's `KafkaChannel.MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS`, in ms: a
@@ -51,9 +50,10 @@ pub fn sasl_session_expiry(
 pub const MIN_REAUTH_INTERVAL_MS: i64 = 1_000;
 
 /// Whether a `SaslHandshake` on a session that expires at `expiry_ms` begins
-/// a KIP-368 re-authentication, as Kafka's
-/// `KafkaChannel.maybeBeginServerReauthentication` decides: the session must
-/// have an expiry, and the last re-authentication on the connection, if any,
+/// a KIP-368 re-authentication.
+///
+/// Kafka's `KafkaChannel.maybeBeginServerReauthentication` decides it: the
+/// session must have an expiry, and the last re-authentication on the connection, if any,
 /// must have started [`MIN_REAUTH_INTERVAL_MS`] or more before `now_ms`.
 #[ensures(result == (expiry_ms != None && match last_start_ms {
     None => true,

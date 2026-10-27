@@ -7,7 +7,10 @@
 
 use {
     super::OperatorKeyError,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 /// Byte length of a raw Ed25519 public key.
@@ -25,7 +28,7 @@ pub struct OperatorKeyEntry {
 }
 
 pub fn read_public_key(key_id: &str, path: &Path) -> Result<Vec<u8>, OperatorKeyError> {
-    let bytes = std::fs::read(path).map_err(|source| OperatorKeyError::Unreadable {
+    let bytes = fs::read(path).map_err(|source| OperatorKeyError::Unreadable {
         key_id: key_id.to_owned(),
         path: path.to_path_buf(),
         source,

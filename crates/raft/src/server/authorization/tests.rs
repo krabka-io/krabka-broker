@@ -7,6 +7,7 @@ use {
             ConnectionContext, Unstable, handle_conn,
             test_support::{encoded, single_voter_engine, wait_for_leader},
         },
+        test_support,
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
             KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,
@@ -38,7 +39,10 @@ use {
         records::RecordsPayload,
     },
     std::{collections::BTreeSet, sync::Arc},
-    tokio::io::{AsyncReadExt as _, AsyncWriteExt as _},
+    tokio::{
+        io,
+        io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream},
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -176,7 +180,7 @@ fn fetch_request(version: i16) -> Bytes {
     let request = FetchRequest {
         session_id: 7,
         topics: vec![FetchTopic {
-            topic: "__cluster_metadata".to_string(),
+            topic: "__cluster_metadata".to_owned(),
             topic_id: WireUuid([1; 16]),
             partitions: vec![
                 FetchPartition {
@@ -221,7 +225,7 @@ fn fetch_and_quorum_refusals_are_kafka_error_responses() {
                 error_code: 31,
                 session_id: 7,
                 responses: vec![FetchableTopicResponse {
-                    topic: "__cluster_metadata".to_string(),
+                    topic: "__cluster_metadata".to_owned(),
                     // Fetch carries topic ids from v13 on.
                     topic_id: WireUuid([0; 16]),
                     partitions: vec![fetch_row(0), fetch_row(1)],
@@ -321,7 +325,7 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
             body: Bytes::new(),
             expected: Refusal::ControllerRegistration(ControllerRegistrationResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }),
         },
@@ -342,7 +346,7 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
             body: Bytes::new(),
             expected: Refusal::AddRaftVoter(AddRaftVoterResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }),
         },
@@ -353,7 +357,7 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
             body: Bytes::new(),
             expected: Refusal::RemoveRaftVoter(RemoveRaftVoterResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }),
         },
@@ -364,7 +368,7 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
             body: Bytes::new(),
             expected: Refusal::DescribeCluster(DescribeClusterResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }),
         },
@@ -375,7 +379,7 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
             body: Bytes::new(),
             expected: Refusal::DescribeQuorum(DescribeQuorumResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }),
         },
@@ -436,18 +440,13 @@ impl ClusterGrants for Grants {
         [("Alter", 7), ("Describe", 8), ("ClusterAction", 9)]
             .into_iter()
             .filter(|(name, _)| self.0.contains(name))
-            .fold(0, |bits, (_, code)| bits | 1 << code)
+            .fold(0, |bits, (_, code)| bits | (1 << code))
     }
 }
 
 /// Sends one flexible-header request on `client` and returns the response
 /// body after the flexible response header.
-async fn exchange(
-    client: &mut tokio::io::DuplexStream,
-    api: i16,
-    version: i16,
-    body: &[u8],
-) -> Bytes {
+async fn exchange(client: &mut DuplexStream, api: i16, version: i16, body: &[u8]) -> Bytes {
     let mut frame = BytesMut::new();
     frame.put_i16(api);
     frame.put_i16(version);
@@ -471,7 +470,7 @@ async fn exchange(
 
 fn submit_change(topic: &str) -> Bytes {
     let records = vec![MetadataRecord::V1Topic(
-        crate::test_support::single_partition_topic(topic, uuid::Uuid::new_v4()),
+        test_support::single_partition_topic(topic, uuid::Uuid::new_v4()),
     )];
     let records =
         <serde_wincode::SerdeCompat<Vec<MetadataRecord>> as wincode::Serialize>::serialize(
@@ -517,7 +516,7 @@ async fn a_denied_request_never_reaches_the_engine() {
     let describe_quorum = encoded(
         &DescribeQuorumRequest {
             topics: vec![TopicData {
-                topic_name: "__cluster_metadata".to_string(),
+                topic_name: "__cluster_metadata".to_owned(),
                 partitions: vec![PartitionData {
                     partition_index: 0,
                     ..Default::default()
@@ -572,7 +571,7 @@ async fn a_denied_request_never_reaches_the_engine() {
             body: describe_quorum.clone(),
             refused: Some(Refusal::DescribeQuorum(DescribeQuorumResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             })),
             committed_topic: None,
@@ -585,7 +584,7 @@ async fn a_denied_request_never_reaches_the_engine() {
             body: describe_cluster,
             refused: Some(Refusal::DescribeCluster(DescribeClusterResponse {
                 error_code: 31,
-                error_message: Some(MESSAGE.to_string()),
+                error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             })),
             committed_topic: None,
@@ -611,7 +610,7 @@ async fn a_denied_request_never_reaches_the_engine() {
         committed_topic,
     } in cases
     {
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let (mut client, server) = io::duplex(64 * 1024);
         let connection = tokio::spawn(handle_conn(
             server,
             engine.clone(),

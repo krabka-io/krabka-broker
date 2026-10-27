@@ -11,6 +11,11 @@ use {
     super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota},
     krabka_metadata::MetadataImage,
     krabka_units::{Time, convert::TimeExt},
+    std::{
+        future,
+        future::Future,
+        time::{Duration, Instant},
+    },
 };
 
 /// Consumes `elapsed_micros` of request-handler time from the
@@ -59,9 +64,9 @@ pub fn consume_request_quota(
 pub(super) fn request_percentage_token_rate(rate_pct: f64) -> f64 { rate_pct * 10_000.0 }
 
 /// The output of a future, and the time spent inside its `poll` calls.
-pub(crate) struct Timed<T> {
+pub struct Timed<T> {
     pub(crate) output: T,
-    pub(crate) active: std::time::Duration,
+    pub(crate) active: Duration,
 }
 
 /// Awaits `future` and reports, beside its output, the time spent inside its
@@ -70,11 +75,11 @@ pub(crate) struct Timed<T> {
 /// This is the handler time KIP-124 charges to `request_percentage`: Kafka
 /// meters the time a request holds a handler thread, so a handler parked on a
 /// timer, a long poll, a channel or a raft commit is not charged for the wait.
-pub(crate) async fn with_active_time<F: std::future::Future>(future: F) -> Timed<F::Output> {
+pub async fn with_active_time<F: Future>(future: F) -> Timed<F::Output> {
     let mut future = std::pin::pin!(future);
-    let mut active = std::time::Duration::ZERO;
-    let output = std::future::poll_fn(|cx| {
-        let polled_at = std::time::Instant::now();
+    let mut active = Duration::ZERO;
+    let output = future::poll_fn(|cx| {
+        let polled_at = Instant::now();
         let poll = future.as_mut().poll(cx);
         active += polled_at.elapsed();
         poll
@@ -87,31 +92,29 @@ pub(crate) async fn with_active_time<F: std::future::Future>(future: F) -> Timed
 /// through [`Self::run`]: the time since [`Self::start`], less the time those
 /// awaits spent parked between polls. A long poll's wait is therefore not
 /// charged, as Kafka parks such a request off the handler thread.
-pub(crate) struct ActiveClock {
-    started: std::time::Instant,
-    parked: std::time::Duration,
+pub struct ActiveClock {
+    started: Instant,
+    parked: Duration,
 }
 
 impl ActiveClock {
     pub(crate) fn start() -> Self {
         Self {
-            started: std::time::Instant::now(),
-            parked: std::time::Duration::ZERO,
+            started: Instant::now(),
+            parked: Duration::ZERO,
         }
     }
 
     /// Awaits `future`, and counts the time it spent parked.
-    pub(crate) async fn run<F: std::future::Future>(&mut self, future: F) -> F::Output {
-        let awaited_at = std::time::Instant::now();
+    pub(crate) async fn run<F: Future>(&mut self, future: F) -> F::Output {
+        let awaited_at = Instant::now();
         let Timed { output, active } = with_active_time(future).await;
         self.parked += awaited_at.elapsed().saturating_sub(active);
         output
     }
 
     /// The handler time so far, parked time excluded.
-    pub(crate) fn active(&self) -> std::time::Duration {
-        self.started.elapsed().saturating_sub(self.parked)
-    }
+    pub(crate) fn active(&self) -> Duration { self.started.elapsed().saturating_sub(self.parked) }
 }
 
 #[cfg(test)]
@@ -123,6 +126,8 @@ mod tests {
         },
         assert2::assert,
         krabka_units::{millis, secs},
+        std::{thread, time::Duration},
+        tokio::time,
     };
 
     fn img_with_quota(
@@ -186,7 +191,7 @@ mod tests {
 
         // 1000 seconds of handler time in one request: the throttle is capped.
         let during = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000_000, bound);
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
         let after = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000, bound);
 
         assert!(during == bound, "{during:?}");
@@ -273,7 +278,7 @@ mod tests {
             output: value,
             active: parked,
         } = with_active_time(async {
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            time::sleep(Duration::from_millis(300)).await;
             7
         })
         .await;
@@ -284,7 +289,7 @@ mod tests {
             output: (),
             active: working,
         } = with_active_time(async {
-            std::thread::sleep(Duration::from_millis(60));
+            thread::sleep(Duration::from_millis(60));
         })
         .await;
         check!(working >= Duration::from_millis(60), "{working:?}");
@@ -297,11 +302,11 @@ mod tests {
         use {assert2::check, std::time::Duration};
 
         let mut clock = ActiveClock::start();
-        std::thread::sleep(Duration::from_millis(40));
+        thread::sleep(Duration::from_millis(40));
         let value = clock
             .run(async {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                std::thread::sleep(Duration::from_millis(20));
+                time::sleep(Duration::from_millis(300)).await;
+                thread::sleep(Duration::from_millis(20));
                 7
             })
             .await;

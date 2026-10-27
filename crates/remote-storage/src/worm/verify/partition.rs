@@ -100,7 +100,7 @@ mod tests {
         let trusted = archive.trusted();
 
         let other_topic = VerifyRequest {
-            topic: Some("payments".to_string()),
+            topic: Some("payments".to_owned()),
             ..Default::default()
         };
         check!(
@@ -112,7 +112,7 @@ mod tests {
         );
 
         let this_topic = VerifyRequest {
-            topic: Some(TOPIC.to_string()),
+            topic: Some(TOPIC.to_owned()),
             partition: Some(PARTITION),
             ..Default::default()
         };

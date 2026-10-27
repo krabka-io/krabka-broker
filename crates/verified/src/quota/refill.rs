@@ -1,9 +1,11 @@
 use {super::quota_credit, creusot_std::prelude::*};
 
 /// Credit elapsed nanoseconds at a micro-token rate, retaining the fractional
-/// micro-token numerator. Repay debt before filling the bucket, and discard
-/// the fraction when the bucket reaches its burst. The caller claims the
-/// whole elapsed interval together with the returned state.
+/// micro-token numerator.
+///
+/// Repay debt before filling the bucket, and discard the fraction when the
+/// bucket reaches its burst. The caller claims the whole elapsed interval
+/// together with the returned state.
 #[requires(fraction@ < 1_000_000_000)]
 #[requires(available@ <= burst@ && (available@ == 0 || debt@ == 0))]
 #[ensures(result.0@ <= burst@ && (result.0@ == 0 || result.1@ == 0))]

@@ -30,7 +30,7 @@ fn assert_topic_name_encoding<E>(
 /// The type is [`PartialEq`] but not [`Eq`], because [`Time`] is backed by a
 /// float.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GroupValue {
+pub struct GroupValue {
     /// The topics the group cuts across.
     pub(crate) topics: Vec<String>,
     /// How often the coordinator injects without a trigger request. `None`
@@ -47,7 +47,7 @@ pub(crate) struct GroupValue {
 /// # Errors
 /// Returns [`codec::BrokerError::Protocol`] when a topic name is longer than 32767
 /// bytes, which the `i16` length cannot carry.
-pub(crate) fn encode_group(value: &GroupValue) -> Result<Vec<u8>, codec::BrokerError> {
+pub fn encode_group(value: &GroupValue) -> Result<Vec<u8>, codec::BrokerError> {
     let mut out = Vec::new();
     codec::put_i16(&mut out, codec::RECORD_VERSION);
     codec::put_array_len(&mut out, value.topics.len(), false);
@@ -66,7 +66,7 @@ pub(crate) fn encode_group(value: &GroupValue) -> Result<Vec<u8>, codec::BrokerE
 /// Returns a [`codec::ProtocolError`] when the value is truncated, carries a version
 /// other than [`codec::RECORD_VERSION`], holds a negative array length, holds a
 /// non-UTF-8 topic name, or has trailing bytes.
-pub(crate) fn decode_group(bytes: &[u8]) -> Result<GroupValue, codec::ProtocolError> {
+pub fn decode_group(bytes: &[u8]) -> Result<GroupValue, codec::ProtocolError> {
     let mut cur = bytes;
     codec::expect_version(&mut cur)?;
     let topics = codec::decode_vec(&mut cur, |c| codec::get_string_owned(c))?;

@@ -5,10 +5,15 @@
 //! `ApiVersions`. Validation rejects an unsupported feature and a level
 //! outside the range with Kafka's top-level error. `validate_only` runs every
 //! check and persists nothing.
+#![cfg(test)]
 
 use {
     crate::support::{configs::feature_update, discovery::api_versions_request_for},
     assert2::assert,
+    krabka_protocol::owned::{
+        api_versions_response::ApiVersionsResponse,
+        update_features_response::UpdateFeaturesResponse,
+    },
 };
 mod support;
 
@@ -217,10 +222,7 @@ async fn share_version_two_is_finalizable_under_unstable_feature_versions() {
 
 /// Kafka answers a failed feature with `INVALID_UPDATE_VERSION` (95) at the
 /// top level, a message naming the feature, and no rows, at every version.
-fn assert_feature_error(
-    resp: &krabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
-    feature: &str,
-) {
+fn assert_feature_error(resp: &UpdateFeaturesResponse, feature: &str) {
     assert!(resp.error_code == 95, "{resp:?}");
     assert!(resp.results.is_empty(), "{resp:?}");
     assert!(
@@ -255,9 +257,7 @@ async fn rejects_level_above_supported_max() {
     p.broker.shutdown().await;
 }
 
-fn metadata_version(
-    api_versions: &krabka_protocol::owned::api_versions_response::ApiVersionsResponse,
-) -> i16 {
+fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
     api_versions
         .finalized_features
         .iter()

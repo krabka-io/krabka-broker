@@ -255,7 +255,7 @@ mod tests {
             },
             producer_snapshot::ProducerSnapshotEntry,
             segment::Segment,
-            test_support::open_log,
+            test_support::{aborted_txn, open_log},
             txn_index::AbortedTxn,
         },
         assert2::check,
@@ -678,7 +678,7 @@ mod tests {
         abort = {
             "abort",
             abort_marker(1000, 2),
-            vec![crate::test_support::aborted_txn().call()],
+            vec![aborted_txn().call()],
             vec![None, None, None, None]
         },
     )]

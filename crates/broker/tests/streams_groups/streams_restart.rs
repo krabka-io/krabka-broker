@@ -17,6 +17,7 @@ use {
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 const GROUP: &str = "streams-restart";
@@ -116,7 +117,7 @@ async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart()
         }
         reloaded.heartbeat(&client).await;
         joining.heartbeat(&client).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     assert!(

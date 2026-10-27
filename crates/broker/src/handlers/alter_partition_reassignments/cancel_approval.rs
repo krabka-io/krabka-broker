@@ -183,7 +183,7 @@ mod tests {
             test_support::{ReassignmentSetup, StartedBroker, start_broker_no_audit_with},
         },
         assert2::{assert, check},
-        std::sync::Arc,
+        std::{slice, sync::Arc},
         uuid::Uuid,
     };
 
@@ -240,7 +240,7 @@ mod tests {
         let cases: [GateCase; 4] = [
             GateCase {
                 label: "an approved proposal on the partition",
-                img: img_reassigning(std::slice::from_ref(&approved)),
+                img: img_reassigning(slice::from_ref(&approved)),
                 config: gated_config(),
                 expected: true,
             },
@@ -285,7 +285,7 @@ mod tests {
             boot [gated_cancel_broker()];
         );
         let proposal = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
-        let image = img_reassigning(std::slice::from_ref(&proposal));
+        let image = img_reassigning(slice::from_ref(&proposal));
         let CancelOutcome { row, batch } = cancel(&broker, &image);
 
         check!(row.error_code == 0);

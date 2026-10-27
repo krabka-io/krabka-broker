@@ -28,7 +28,7 @@ use {
     krabka_metadata::{BreakGlassAction, MetadataRecord},
     krabka_protocol::owned::elect_leaders_response::PartitionResult,
     krabka_units::convert::TimeExt as _,
-    tokio::sync::oneshot,
+    tokio::{sync::oneshot, time},
     uuid::Uuid,
 };
 
@@ -106,7 +106,7 @@ pub(super) async fn run_offset_aware_recovery(
     broker
         .unclean_recovery
         .enqueue(RecoveryJob {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition,
             strategy,
             reply: Some(tx),
@@ -114,7 +114,7 @@ pub(super) async fn run_offset_aware_recovery(
         })
         .await;
     let (error_code, error_message) =
-        match tokio::time::timeout(broker.config.operator_recovery_deadline.to_std(), rx).await {
+        match time::timeout(broker.config.operator_recovery_deadline.to_std(), rx).await {
             Ok(Ok(RecoveryOutcome::Elected(_))) => (codes::NONE, None),
             Ok(Ok(RecoveryOutcome::NoEligibleReplica)) => (
                 codes::ELIGIBLE_LEADERS_NOT_AVAILABLE,

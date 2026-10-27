@@ -6,11 +6,16 @@ use {
     super::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey},
     crate::{
         break_glass::{ALL_ACTIONS, action_name},
-        config::{BackgroundUncleanRecovery, BrokerConfig},
+        config::{
+            BackgroundUncleanRecovery, BreakGlassConfig, BrokerConfig,
+            DEFAULT_BREAK_GLASS_SIGNED_ACTIONS, FreezeConfig,
+        },
         file_config::{FileConfig, FileConfigError, test_support::configured},
+        operator_keys::OperatorKey,
     },
     assert2::{assert, check},
     krabka_units::{hours, minutes, secs},
+    std::{fs, path::Path},
     tempfile::TempDir,
 };
 
@@ -27,7 +32,7 @@ fn check_operator_key_refusal(file: FileConfig, cfg: &mut BrokerConfig, case: &s
 // signature here; only the length is checked at load.
 fn operator_key_fixture(dir: &TempDir, key_id: &str, principal: &str) -> String {
     let path = dir.path().join(format!("{key_id}.pub"));
-    std::fs::write(&path, [7u8; 32]).expect("write operator key file");
+    fs::write(&path, [7u8; 32]).expect("write operator key file");
     format!(
         "[[operator_keys]]\nkey_id = {key_id:?}\nprincipal = {principal:?}\n\
          public_key_path = {:?}\n",
@@ -99,7 +104,7 @@ signature_max_skew = "5m"
 
 #[test]
 fn freeze_section_rejects_a_misspelled_key() {
-    let toml = r"
+    let toml = "
 [freeze]
 require_signatures = true
 ";
@@ -110,7 +115,7 @@ require_signatures = true
 fn freeze_signature_max_skew_rejects_a_bare_number() {
     // The human duration serde is what keeps `5` from meaning
     // five of whatever unit the reader assumed.
-    let toml = r"
+    let toml = "
 [freeze]
 signature_max_skew = 300
 ";
@@ -194,24 +199,24 @@ fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
         "[freeze]\n[break_glass]\napprovers = [\"User:alice\", \"User:bob\"]\n",
     );
 
-    check!(cfg.freeze == crate::config::FreezeConfig::default());
+    check!(cfg.freeze == FreezeConfig::default());
     check!(
         cfg.break_glass
-            == crate::config::BreakGlassConfig {
+            == BreakGlassConfig {
                 approvers: vec!["User:alice".to_owned(), "User:bob".to_owned()],
                 signed_actions: vec![
                     "unclean_elect_leaders".to_owned(),
                     "unclean_recovery".to_owned(),
                     "delete_topic".to_owned(),
                 ],
-                ..crate::config::BreakGlassConfig::default()
+                ..BreakGlassConfig::default()
             }
     );
     check!(cfg.operator_keys.len() == 1);
     check!(
         cfg.operator_keys
             .get("alice-yubi")
-            .map(crate::operator_keys::OperatorKey::principal)
+            .map(OperatorKey::principal)
             == Some("User:alice")
     );
 }
@@ -221,8 +226,8 @@ fn absent_privileged_action_sections_retain_the_broker_defaults() {
     let cfg = configured("", "parse empty config").expect("apply empty config");
 
     check!(cfg.operator_keys.is_empty());
-    check!(cfg.freeze == crate::config::FreezeConfig::default());
-    check!(cfg.break_glass == crate::config::BreakGlassConfig::default());
+    check!(cfg.freeze == FreezeConfig::default());
+    check!(cfg.break_glass == BreakGlassConfig::default());
     check!(cfg.break_glass.signed_actions.is_empty());
 }
 
@@ -240,7 +245,7 @@ fn freeze_and_break_glass_values_replace_the_broker_defaults() {
 
     check!(
         cfg.freeze
-            == crate::config::FreezeConfig {
+            == FreezeConfig {
                 max_entries: 25,
                 require_signature: true,
                 signature_max_skew: secs(90),
@@ -248,7 +253,7 @@ fn freeze_and_break_glass_values_replace_the_broker_defaults() {
     );
     check!(
         cfg.break_glass
-            == crate::config::BreakGlassConfig {
+            == BreakGlassConfig {
                 approvers: vec![
                     "User:alice".to_owned(),
                     "User:bob".to_owned(),
@@ -383,7 +388,7 @@ fn a_signed_action_that_names_no_action_is_a_startup_error(label: &str, spelling
 fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
     // The default set and each name in turn. This is the positive half of
     // the check above: the validation must not refuse a correct spelling.
-    let mut names = vec![crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS.join(",")];
+    let mut names = vec![DEFAULT_BREAK_GLASS_SIGNED_ACTIONS.join(",")];
     names.extend(
         ALL_ACTIONS
             .into_iter()
@@ -418,11 +423,11 @@ fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
 fn an_unloadable_operator_key_is_a_startup_error() {
     let dir = TempDir::new().expect("tempdir");
     let good = dir.path().join("alice.pub");
-    std::fs::write(&good, [7u8; 32]).expect("write good key");
+    fs::write(&good, [7u8; 32]).expect("write good key");
     let short = dir.path().join("short.pub");
-    std::fs::write(&short, [7u8; 31]).expect("write short key");
+    fs::write(&short, [7u8; 31]).expect("write short key");
     let missing = dir.path().join("absent.pub");
-    let entry = |key_id: &str, principal: &str, path: &std::path::Path| {
+    let entry = |key_id: &str, principal: &str, path: &Path| {
         format!(
             "[[operator_keys]]\nkey_id = {key_id:?}\nprincipal = {principal:?}\n\
              public_key_path = {:?}\n",

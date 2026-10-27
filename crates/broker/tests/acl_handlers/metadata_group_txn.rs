@@ -29,13 +29,14 @@ use {
         },
     },
     assert2::assert,
+    std::net::SocketAddr,
 };
 
 /// A running broker with its data directory and listen address.
 struct AliceMetadataFixture {
     handle: krabka_broker::BrokerHandle,
     dir: tempfile::TempDir,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
 }
 
 /// Only t1 is visible to Alice, with a real ACL image disabling the compat shim.
@@ -197,7 +198,7 @@ async fn init_producer_id_denied_without_txn_acl() {
     seed_dummy_acl(&handle).await;
 
     let req = init_producer_request()
-        .maybe_transactional_id(Some("tx-1".to_string()))
+        .maybe_transactional_id(Some("tx-1".to_owned()))
         .call();
     let resp = drive_init_producer_id_as_plain(addr, req, &PlainAuthenticationSetup {
         client_id: CLIENT_ID,

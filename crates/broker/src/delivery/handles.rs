@@ -13,9 +13,12 @@ use {
     krabka_ids::Offset,
     krabka_log::{DeliveryPolicy, Log},
     qubit_clock::{StdWallClock, WallClock},
-    std::sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicI64, Ordering},
+    std::{
+        fmt::{Debug, Formatter, Result},
+        sync::{
+            Arc, Mutex, PoisonError,
+            atomic::{AtomicI64, Ordering},
+        },
     },
     tokio::sync::Notify,
 };
@@ -28,7 +31,7 @@ use {
 /// refresh the mirror after an append without reaching back through the
 /// [`Partition`](crate::partition::Partition).
 #[derive(Clone)]
-pub(crate) struct DeliveryHandles {
+pub struct DeliveryHandles {
     /// Delivery watermark as the last [`Self::publish`] left it.
     ///
     /// It is a cache for readers that must not take the log mutex, such as the
@@ -90,6 +93,7 @@ impl DeliveryHandles {
             let scheduled = guard.config_snapshot().delivery_policy == DeliveryPolicy::Scheduled;
             let advance = guard.advance_delivery_watermark(now_ms);
             let log_end = guard.log_end_offset();
+            drop(guard);
             (advance, scheduled, log_end)
         };
 
@@ -147,8 +151,8 @@ impl Default for DeliveryHandles {
     fn default() -> Self { Self::new() }
 }
 
-impl std::fmt::Debug for DeliveryHandles {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for DeliveryHandles {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("DeliveryHandles")
             .field("watermark", &self.watermark())
             .field("adopted", &self.rearm.load().is_some())
@@ -164,6 +168,7 @@ mod tests {
         assert2::check,
         krabka_log::LogConfig,
         qubit_clock::{FixedWallClock, ManualMonotonicClock},
+        std::time::Duration,
         tempfile::tempdir,
     };
 
@@ -251,7 +256,7 @@ mod tests {
         // registered, and a `Notified` registers on its first poll.
         parked.as_mut().enable();
         clock
-            .advance(std::time::Duration::from_millis(
+            .advance(Duration::from_millis(
                 u64::try_from(10_000 + BOUND_MS).expect("positive"),
             ))
             .expect("manual time moves forward");

@@ -22,7 +22,7 @@ use {
 
 /// Account one gated transition that the broker refused for want of an approved
 /// proposal.
-pub(crate) fn record_refusal(metrics: &BrokerMetrics, action: BreakGlassAction) {
+pub fn record_refusal(metrics: &BrokerMetrics, action: BreakGlassAction) {
     metrics.record_break_glass_refusal(ActionLabel(action));
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn record_refusal(metrics: &BrokerMetrics, action: BreakGlassAction) 
 /// The background unclean-recovery path is the only caller. It has nobody to
 /// ask for an approval, so under the `audit-only` policy it runs and counts the
 /// bypass here.
-pub(crate) fn record_bypass(metrics: &BrokerMetrics, action: BreakGlassAction) {
+pub fn record_bypass(metrics: &BrokerMetrics, action: BreakGlassAction) {
     metrics.record_break_glass_bypass(ActionLabel(action));
 }
 
@@ -43,7 +43,7 @@ pub(crate) fn record_bypass(metrics: &BrokerMetrics, action: BreakGlassAction) {
 ///
 /// A withdrawn proposal counts in no state. It is not pending, nothing approved
 /// it into use, it did not expire, and no transition consumed it.
-pub(crate) fn record_proposal_states(
+pub fn record_proposal_states(
     metrics: &BrokerMetrics,
     image: &MetadataImage,
     config: &BreakGlassConfig,
@@ -52,12 +52,16 @@ pub(crate) fn record_proposal_states(
     let policy = BreakGlassPolicy::new(config);
     let mut counts = [0_i64; 4];
     for proposal in image.break_glass_proposals() {
-        if let Some(state) = proposal_state(policy, proposal, now_ms) {
-            counts[state_index(state)] += 1;
+        if let Some(count) = proposal_state(policy, proposal, now_ms)
+            .and_then(|state| counts.get_mut(state_index(state)))
+        {
+            *count += 1;
         }
     }
     for state in BreakGlassState::ALL {
-        metrics.record_break_glass_proposals(state, counts[state_index(state)]);
+        if let Some(count) = counts.get(state_index(state)) {
+            metrics.record_break_glass_proposals(state, *count);
+        }
     }
 }
 
@@ -190,7 +194,7 @@ mod tests {
                 "withdrawn",
                 BreakGlassProposalRecord {
                     withdrawn: true,
-                    ..base.clone()
+                    ..base
                 },
                 None,
             ),

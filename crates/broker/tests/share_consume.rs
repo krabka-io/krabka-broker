@@ -27,6 +27,7 @@
 //! acknowledgement outcomes, the record bytes a fetch returns, the
 //! acquisition-lock lifetime, the share-session state machine, and
 //! `read_committed` isolation.
+#![cfg(test)]
 
 mod support;
 

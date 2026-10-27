@@ -43,9 +43,12 @@
 //! caller learns that it is unauthorized, or that it reached the wrong broker,
 //! before it learns anything about the topic's freeze state.
 
-use krabka_protocol::owned::{
-    add_partitions_to_txn_request::AddPartitionsToTxnRequest,
-    add_partitions_to_txn_response::AddPartitionsToTxnResponse,
+use {
+    krabka_protocol::owned::{
+        add_partitions_to_txn_request::AddPartitionsToTxnRequest,
+        add_partitions_to_txn_response::AddPartitionsToTxnResponse,
+    },
+    std::sync::Arc,
 };
 
 mod authz;
@@ -70,14 +73,14 @@ use {
     },
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AddPartitionsToTxnRequest,
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<AddPartitionsToTxnResponse, BrokerError> {
-    let coord = broker.txn_coordinator.clone();
-    let controller = broker.controller.clone();
+    let coord = Arc::clone(&broker.txn_coordinator);
+    let controller = Arc::clone(&broker.controller);
     let authorizer = broker.config.authorizer.as_ref();
 
     // Versions 4 and later come only from brokers. A deny is

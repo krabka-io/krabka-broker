@@ -39,7 +39,7 @@ pub(super) async fn list_archive(
         let key = meta.location.to_string();
         let dir = key
             .rsplit_once('/')
-            .map_or_else(String::new, |(dir, _)| dir.to_string());
+            .map_or_else(String::new, |(dir, _)| dir.to_owned());
         dirs.entry(dir).or_default().insert(key, meta.size);
     }
     Ok(dirs)

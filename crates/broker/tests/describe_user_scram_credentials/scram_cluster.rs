@@ -13,17 +13,17 @@ use {
     krabka_broker::BrokerHandle,
     krabka_metadata::{AclOperation, MetadataRecord, ResourceType},
     krabka_security::SaslMechanism,
-    std::net::SocketAddr,
+    std::{net::SocketAddr, pin::Pin},
     tempfile::TempDir,
 };
 
-pub(crate) fn admin_test_password() -> String {
+pub fn admin_test_password() -> String {
     ['a', 'd', 'm', 'i', 'n', '-', 's', 'e', 'c', 'r', 'e', 't']
         .iter()
         .collect()
 }
 
-pub(crate) fn alice_test_password() -> String {
+pub fn alice_test_password() -> String {
     ['a', 'l', 'i', 'c', 'e', '-', 's', 'e', 'c', 'r', 'e', 't']
         .iter()
         .collect()
@@ -31,10 +31,9 @@ pub(crate) fn alice_test_password() -> String {
 
 /// Start a single-broker SASL/PLAINTEXT cluster.
 /// Returns `(handle, _dir, addr)`.
-pub(crate) type BrokerStartup =
-    std::pin::Pin<Box<dyn std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)>>>;
+pub type BrokerStartup = Pin<Box<dyn Future<Output = (BrokerHandle, TempDir, SocketAddr)>>>;
 
-pub(crate) fn start_single_broker_sasl_plaintext_with_users(
+pub fn start_single_broker_sasl_plaintext_with_users(
     super_user: &str,
     users: &[(&str, &str)],
 ) -> BrokerStartup {
@@ -42,26 +41,22 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_users(
     start_single_broker_sasl_plaintext_with_acl_authorizer(&super_users, users)
 }
 
-pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
+pub fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     super_users: &[&str],
     users: &[(&str, &str)],
 ) -> BrokerStartup {
     let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     for (name, pass) in users {
         cfg.plain_credentials
-            .insert((*name).to_string(), (*pass).to_string());
+            .insert((*name).to_owned(), (*pass).to_owned());
     }
-    cfg.super_users = super_users.iter().map(|user| (*user).to_string()).collect();
+    cfg.super_users = super_users.iter().map(|user| (*user).to_owned()).collect();
     use_simple_acl_authorizer(&mut cfg);
 
     Box::pin(start_broker(cfg, log_dir))
 }
 
-pub(crate) async fn seed_cluster_acl(
-    handle: &BrokerHandle,
-    principal: &str,
-    operation: AclOperation,
-) {
+pub async fn seed_cluster_acl(handle: &BrokerHandle, principal: &str, operation: AclOperation) {
     handle
         .submit_metadata_record_for_test(
             cluster_acl_record()
@@ -79,7 +74,7 @@ pub(crate) async fn seed_cluster_acl(
         .await;
 }
 
-pub(crate) async fn seed_scram_credential(
+pub async fn seed_scram_credential(
     handle: &BrokerHandle,
     user: &str,
     mechanism: SaslMechanism,

@@ -7,6 +7,7 @@
 //! `listener.security.protocol.map` with `DescribeConfigs`, and sets both to
 //! the static values plus one listener. Deleting them closes that listener
 //! again.
+#![cfg(test)]
 
 mod kafka_wire;
 mod support;
@@ -20,7 +21,7 @@ use {
         wire::HeaderEncoding,
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes},
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::DescribeConfigsResponse,
@@ -35,7 +36,11 @@ use {
         time::{Duration, Instant},
     },
     tempfile::TempDir,
-    tokio::{io::AsyncReadExt as _, net::TcpStream},
+    tokio::{
+        io::AsyncReadExt as _,
+        net::{TcpListener, TcpStream},
+        time,
+    },
 };
 
 /// The client id every request header in this suite carries.
@@ -49,9 +54,7 @@ const PROTOCOL_MAP: &str = "listener.security.protocol.map";
 
 /// A loopback address no socket holds: bound and dropped at once.
 async fn free_addr() -> SocketAddr {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     listener.local_addr().expect("local address")
 }
 
@@ -77,7 +80,7 @@ async fn eventually_served(addr: SocketAddr) -> Option<TcpStream> {
         // The alter is committed before its response, but the listener opens
         // once the broker applies the image, which has no signal a test can
         // wait on.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -95,7 +98,7 @@ async fn eventually_refused(addr: SocketAddr) -> bool {
         if Instant::now() >= deadline {
             return false;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -103,7 +106,7 @@ async fn eventually_refused(addr: SocketAddr) -> bool {
 async fn closed_by_peer(stream: &mut TcpStream) -> bool {
     let mut byte = [0_u8; 1];
     matches!(
-        tokio::time::timeout(PROPAGATION, stream.read(&mut byte)).await,
+        time::timeout(PROPAGATION, stream.read(&mut byte)).await,
         Ok(Ok(0) | Err(_))
     )
 }
@@ -111,7 +114,7 @@ async fn closed_by_peer(stream: &mut TcpStream) -> bool {
 /// The response row of an alter of `resource` that succeeded.
 fn accepted(resource: String) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::NONE,
+        error_code: codes::NONE,
         error_message: None,
         resource_type: BROKER_RESOURCE,
         resource_name: resource,
@@ -273,7 +276,7 @@ async fn an_added_sasl_listener_offers_its_own_mechanisms() {
     assert!(
         handshake
             == SaslHandshakeResponse {
-                error_code: krabka_broker::codes::NONE,
+                error_code: codes::NONE,
                 mechanisms: vec!["SCRAM-SHA-256".to_owned()],
                 ..Default::default()
             }
@@ -355,7 +358,7 @@ async fn a_listener_change_kafka_refuses_is_refused() {
         assert!(
             refused
                 == AlterConfigsResourceResponse {
-                    error_code: krabka_broker::codes::INVALID_REQUEST,
+                    error_code: codes::INVALID_REQUEST,
                     error_message: Some(message),
                     ..accepted(broker.resource())
                 }

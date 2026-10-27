@@ -56,22 +56,23 @@ use {
         replicator_supervisor::materialize_partition,
         txn::coordinator::leadership::LoadStatus,
     },
+    std::{sync::Arc, time::Duration},
 };
 
 /// How long a transactional `InitProducerId` waits for the load of its
 /// `__transaction_state` partition before it answers
 /// `COORDINATOR_LOAD_IN_PROGRESS`.
-const INIT_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+const INIT_LOAD_WAIT: Duration = Duration::from_secs(1);
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: InitProducerIdRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<InitProducerIdResponse, BrokerError> {
-    let producer_ids = broker.producer_ids.clone();
-    let coord = broker.txn_coordinator.clone();
-    let controller = broker.controller.clone();
+    let producer_ids = Arc::clone(&broker.producer_ids);
+    let coord = Arc::clone(&broker.txn_coordinator);
+    let controller = Arc::clone(&broker.controller);
     let log_dirs = broker.config.all_log_dirs();
     let log_dir_status = broker.log_dir_status.clone();
 
@@ -227,7 +228,9 @@ pub(crate) async fn handle(
                 Err(error_code) => return Ok(refusal(version, error_code)),
             };
             drop(coord.refresh_leader_partitions(&image).await);
-            let txn_partition = coord.partition_for(tid);
+            let Some(txn_partition) = coord.partition_for(tid) else {
+                return Ok(refusal(version, codes::COORDINATOR_NOT_AVAILABLE));
+            };
             if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {
                 // This broker leads the `__transaction_state` partition, but
                 // its log is not open yet. The replicator supervisor opens it

@@ -24,6 +24,7 @@
 //! validating against the real registry through failover, lives there too, in
 //! `tests/live_registry.rs`: the registry dev-depends on this broker, so a
 //! dependency in this direction would pin each repository to the other.
+#![cfg(test)]
 
 mod support;
 

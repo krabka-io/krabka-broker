@@ -8,6 +8,7 @@
 //! exercises election, pull-replication, and divergence-truncation against
 //! genuine byte-level log I/O, and the asserts compare the committed bytes and
 //! not only the offsets.
+#![cfg(test)]
 
 mod sim_harness;
 

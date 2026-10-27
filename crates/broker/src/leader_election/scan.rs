@@ -38,6 +38,7 @@ use {
     },
     krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord},
     krabka_raft::NodeId,
+    std::collections::{HashMap, HashSet},
     tracing::warn,
 };
 
@@ -58,7 +59,7 @@ mod unfence_tests;
 /// scan walks partitions, not topics, so without this a thousand-partition
 /// topic would parse that value a thousand times.
 #[derive(Default)]
-struct ScanElr(std::collections::HashMap<String, TopicElr>);
+struct ScanElr(HashMap<String, TopicElr>);
 
 impl ScanElr {
     /// The ELR state `image` publishes for one partition.
@@ -75,8 +76,8 @@ impl ScanElr {
         image: &MetadataImage,
         pr: &PartitionRecord,
         departed: NodeId,
-        alive: &std::collections::HashSet<NodeId>,
-        witnesses: &std::collections::HashSet<NodeId>,
+        alive: &HashSet<NodeId>,
+        witnesses: &HashSet<NodeId>,
     ) -> FailoverDecision {
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
@@ -95,9 +96,9 @@ impl ScanElr {
 /// What a scan reads once before it walks the image.
 struct ScanInputs {
     /// The nodes the liveness registry holds alive.
-    alive: std::collections::HashSet<NodeId>,
+    alive: HashSet<NodeId>,
     /// The nodes that carry the witness role, which leader selection skips.
-    witnesses: std::collections::HashSet<NodeId>,
+    witnesses: HashSet<NodeId>,
     /// The per-topic ELR cache the scan fills as it goes.
     elr: ScanElr,
 }
@@ -220,7 +221,7 @@ fn shrink_or_mark_unavailable(
 /// `image`. Pure: no I/O beyond `liveness.is_alive` lookups. This function is
 /// separate so the failover policy, including the KIP-841 unclean toggle, is
 /// unit-testable without spinning up a controller.
-pub(crate) async fn compute_failover_changes(
+pub async fn compute_failover_changes(
     image: &MetadataImage,
     dead: NodeId,
     liveness: &ControllerLivenessState,
@@ -339,10 +340,10 @@ pub(crate) async fn compute_failover_changes(
 ///
 /// Pure and idempotent. After the change `broker` is neither leader nor in
 /// ISR, so a repeat yields an empty plan.
-pub(crate) async fn compute_offline_dir_failover_changes(
+pub async fn compute_offline_dir_failover_changes(
     image: &MetadataImage,
     broker: NodeId,
-    offline_uuids: &std::collections::HashSet<uuid::Uuid>,
+    offline_uuids: &HashSet<uuid::Uuid>,
     liveness: &ControllerLivenessState,
     metrics: &BrokerMetrics,
 ) -> FailoverPlan {
@@ -456,7 +457,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
 /// and the caller drives `recoveries` and `unavailable` the same way, because
 /// a partition the returning broker was leading is a partition with a dead
 /// leader whichever event the controller noticed first.
-pub(crate) async fn compute_unclean_restart_changes(
+pub async fn compute_unclean_restart_changes(
     image: &MetadataImage,
     returning: NodeId,
     liveness: &ControllerLivenessState,
@@ -490,10 +491,10 @@ pub(crate) async fn compute_unclean_restart_changes(
 /// `alive` is the set of brokers that may take a leadership over: Kafka's
 /// `ClusterControlManager.isActive`. The caller reads it from its liveness
 /// registry, or, before it has one, from the registrations `image` holds.
-pub(crate) fn compute_reregistration_changes(
+pub fn compute_reregistration_changes(
     image: &MetadataImage,
     returning: NodeId,
-    alive: &std::collections::HashSet<NodeId>,
+    alive: &HashSet<NodeId>,
     metrics: &BrokerMetrics,
 ) -> FailoverPlan {
     restart_plan(image, returning, alive, metrics, Vec::new())
@@ -503,7 +504,7 @@ pub(crate) fn compute_reregistration_changes(
 fn restart_plan(
     image: &MetadataImage,
     returning: NodeId,
-    alive: &std::collections::HashSet<NodeId>,
+    alive: &HashSet<NodeId>,
     metrics: &BrokerMetrics,
     withdrawals: Vec<MetadataRecord>,
 ) -> FailoverPlan {
@@ -628,7 +629,7 @@ fn restart_plan(
 ///
 /// The caller submits the records after the registration change that unfences
 /// the broker, in Kafka's order.
-pub(crate) async fn compute_unfence_changes(
+pub async fn compute_unfence_changes(
     image: &MetadataImage,
     unfenced: NodeId,
     liveness: &ControllerLivenessState,

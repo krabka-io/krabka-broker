@@ -1,4 +1,5 @@
 //! Coordinator schemas and native commit actions keep their observable contracts.
+#![cfg(test)]
 
 extern crate self as krabka_log;
 

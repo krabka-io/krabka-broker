@@ -46,7 +46,7 @@ impl Checkpoint {
     ) -> Self {
         let msg = checkpoint_signing_bytes(signer.key_id(), seq_high, chain_head, time_ms);
         Self {
-            key_id: signer.key_id().to_string(),
+            key_id: signer.key_id().to_owned(),
             seq_high,
             chain_head: *chain_head,
             time_ms,
@@ -85,7 +85,7 @@ impl Checkpoint {
             class: AuditEventClass::Checkpoint,
             value,
             headers: vec![(
-                "event_class".to_string(),
+                "event_class".to_owned(),
                 EVENT_CLASS_CHECKPOINT.as_bytes().to_vec(),
             )],
         }
@@ -96,7 +96,7 @@ impl Checkpoint {
     /// Returns `None` if any field is missing or malformed.
     #[must_use]
     pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        let key_id = v.get("key_id")?.as_str()?.to_string();
+        let key_id = v.get("key_id")?.as_str()?.to_owned();
         let seq_high = Seq(v.get("seq_high")?.as_u64()?);
         let chain_head = from_hex32(v.get("chain_head")?.as_str()?)?;
         let time_ms = EpochMs(v.get("time")?.as_i64()?);
@@ -117,7 +117,10 @@ impl Checkpoint {
 mod tests {
     use {
         super::*,
-        crate::test_support::{TestSigner, signer},
+        crate::{
+            event::AuditEventClass,
+            test_support::{TestSigner, signer},
+        },
         assert2::check,
     };
 
@@ -133,7 +136,7 @@ mod tests {
 
         // serialize to a record, parse back from its value, still verifies
         let rec = cp.to_record();
-        check!(rec.class == crate::event::AuditEventClass::Checkpoint);
+        check!(rec.class == AuditEventClass::Checkpoint);
         check!(
             rec.headers
                 .iter()

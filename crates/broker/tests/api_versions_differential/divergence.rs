@@ -9,14 +9,15 @@
 //! file for the version columns of `docs/KIP_MATRIX.md`.
 
 use {
+    krabka_broker::telemetry,
     krabka_protocol::owned::api_versions_response::ApiVersion,
     serde::{Deserialize, Serialize},
-    std::path::Path,
+    std::{collections::BTreeSet, fs, path::Path},
 };
 
 /// An inclusive advertised version range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct VersionRange {
+pub struct VersionRange {
     pub(crate) min: i16,
     pub(crate) max: i16,
 }
@@ -33,7 +34,7 @@ impl From<&ApiVersion> for VersionRange {
 /// How krabka's row for one API key stands against the Kafka oracle's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Verdict {
+pub enum Verdict {
     /// Both advertise the key over the same range.
     Same,
     /// Both advertise the key, over different ranges.
@@ -50,7 +51,7 @@ pub(crate) enum Verdict {
 
 /// One API key's row of the join.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ApiRow {
+pub struct ApiRow {
     pub(crate) api_key: i16,
     /// The canonical Kafka request name, from krabka-protocol's generated
     /// `ApiKey` registry.
@@ -154,7 +155,7 @@ fn range_divergence_intent(intents: Intents<'_>, api_key: i16, verdict: Verdict)
 
 /// Both advertised tables, joined and sorted by API key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct DivergenceReport {
+pub struct DivergenceReport {
     /// The image the `kafka` column was read from, tag included.
     pub(crate) oracle_image: String,
     pub(crate) apis: Vec<ApiRow>,
@@ -199,7 +200,7 @@ impl DivergenceReport {
             .iter()
             .chain(kafka)
             .map(|api| api.api_key)
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         keys.sort_unstable();
@@ -238,7 +239,7 @@ impl DivergenceReport {
                 };
                 ApiRow {
                     api_key,
-                    name: krabka_broker::telemetry::api_name(api_key).to_owned(),
+                    name: telemetry::api_name(api_key).to_owned(),
                     krabka,
                     kafka,
                     verdict,
@@ -260,8 +261,8 @@ impl DivergenceReport {
     /// Panics when the file is missing or does not deserialize, both of which
     /// mean the expectation has to be regenerated rather than compared.
     pub(crate) fn load(path: &Path) -> Self {
-        let body = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let body =
+            fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         serde_json::from_str(&body).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
     }
 
@@ -274,10 +275,10 @@ impl DivergenceReport {
         let mut body = serde_json::to_string_pretty(self).expect("serialize divergence report");
         body.push('\n');
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
+            fs::create_dir_all(parent)
                 .unwrap_or_else(|e| panic!("create {}: {e}", parent.display()));
         }
-        std::fs::write(path, &body).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+        fs::write(path, &body).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
         eprintln!(
             "KRABKA[test] rewrote {} ({} bytes)",
             path.display(),
@@ -288,7 +289,11 @@ impl DivergenceReport {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        std::{collections::BTreeSet, fs},
+    };
 
     fn api(api_key: i16, min_version: i16, max_version: i16) -> ApiVersion {
         ApiVersion {
@@ -382,8 +387,7 @@ mod tests {
             .iter()
             .chain(SERVED_RANGE_DIVERGENCES)
             .collect();
-        let unique: std::collections::BTreeSet<i16> =
-            all.iter().map(|recorded| recorded.api_key).collect();
+        let unique: BTreeSet<i16> = all.iter().map(|recorded| recorded.api_key).collect();
         assert!(unique.len() == all.len());
         assert!(
             all.iter()
@@ -451,13 +455,13 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let decoded = dir.path().join("decoded.json");
-        std::fs::write(&decoded, CHECKED_IN).expect("write checked-in");
+        fs::write(&decoded, CHECKED_IN).expect("write checked-in");
         let report = DivergenceReport::load(&decoded);
 
         let rewritten = dir.path().join("divergence.json");
         report.store(&rewritten);
 
-        assert!(std::fs::read_to_string(&rewritten).expect("read rewritten") == CHECKED_IN);
+        assert!(fs::read_to_string(&rewritten).expect("read rewritten") == CHECKED_IN);
     }
 
     #[test]

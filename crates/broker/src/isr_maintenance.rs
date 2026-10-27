@@ -20,7 +20,11 @@ use {
     },
     krabka_raft::NodeId,
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::Arc,
+    std::{
+        collections::HashSet,
+        sync::{Arc, atomic},
+    },
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::warn,
 };
@@ -37,7 +41,7 @@ use self::{
     request_builder::IsrChange,
 };
 
-pub(crate) struct Config {
+pub struct Config {
     /// How a leader reaches the CONTROLLER listener of the active controller.
     pub dialer: ControllerDialer,
     pub node_id: NodeId,
@@ -54,8 +58,8 @@ pub(crate) struct Config {
     pub metrics: BrokerMetrics,
 }
 
-pub(crate) async fn run(cfg: Config) {
-    let mut tick = tokio::time::interval(cfg.scan_interval.to_std());
+pub async fn run(cfg: Config) {
+    let mut tick = time::interval(cfg.scan_interval.to_std());
     // Reused across ticks to avoid re-allocating the snapshot Vec each second.
     // Holds cheap `Arc<Partition>` clones (no String allocation, no second
     // registry lookup). Cleared and refilled each tick.
@@ -71,11 +75,7 @@ pub(crate) async fn run(cfg: Config) {
         snapshot.clear();
         snapshot.extend(cfg.partitions.arcs());
         for part in snapshot.drain(..) {
-            if part
-                .current_leader
-                .load(std::sync::atomic::Ordering::Acquire)
-                != cfg.node_id
-            {
+            if part.current_leader.load(atomic::Ordering::Acquire) != cfg.node_id {
                 continue;
             }
             let image = cfg.controller.current_image();
@@ -100,10 +100,8 @@ pub(crate) async fn run(cfg: Config) {
                     // bumps fires. Reusing its captured `prev_isr` avoids a second
                     // `replica_state` lock and closes the TOCTOU window where the ISR
                     // could change between the two acquisitions.
-                    let prev_isr: std::collections::HashSet<NodeId> =
-                        proposal.prev_isr.iter().copied().collect();
-                    let next_isr: std::collections::HashSet<NodeId> =
-                        proposal.new_isr.iter().copied().collect();
+                    let prev_isr: HashSet<NodeId> = proposal.prev_isr.iter().copied().collect();
+                    let next_isr: HashSet<NodeId> = proposal.new_isr.iter().copied().collect();
                     if prev_isr.difference(&next_isr).next().is_some() {
                         cfg.metrics.isr_shrinks_total.inc();
                     }
@@ -159,6 +157,7 @@ mod tests {
         krabka_units::{hours, secs},
         std::{sync::atomic::Ordering, time::Duration},
         tempfile::tempdir,
+        tokio::time::{sleep, timeout},
     };
 
     /// One scan of a leader partition whose only follower last caught up
@@ -213,9 +212,9 @@ mod tests {
         // to be polled to completion of that tick. Poll for the counter rather
         // than sleeping for a guessed duration; the bound only has to outlast
         // scheduler starvation on a loaded machine, never a real interval.
-        tokio::time::timeout(Duration::from_secs(30), async {
+        timeout(Duration::from_secs(30), async {
             while metrics.isr_shrinks_total.get() == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                sleep(Duration::from_millis(5)).await;
             }
         })
         .await

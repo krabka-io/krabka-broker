@@ -268,35 +268,38 @@ impl AcquisitionState {
         let mut i = 0;
         let mut any_change = false;
         let mut archived = false;
-        while i < self.batches.len() {
+        while let Some(batch) = self.batches.get(i) {
             if remaining <= 0 {
                 break;
             }
-            if self.batches[i].first_offset > last_offset {
+            if batch.first_offset > last_offset {
                 break;
             }
-            if self.batches[i].state != RecordState::Available {
+            if batch.state != RecordState::Available {
                 i += 1;
                 continue;
             }
+            let first = batch.first_offset;
+            let delivery_count = batch.delivery_count;
+            let batch_len = batch.len();
             // Poison pill: archive without handing out.
-            if self.batches[i].delivery_count >= max_attempts {
+            if delivery_count >= max_attempts {
                 let (batches, mut archive) = self.runs_and_sink();
-                archive.archive(&mut batches[i], DlqCause::DeliveryCountExceeded);
+                if let Some(batch) = batches.get_mut(i) {
+                    archive.archive(batch, DlqCause::DeliveryCountExceeded);
+                }
                 any_change = true;
                 archived = true;
                 i += 1;
                 continue;
             }
-            let first = self.batches[i].first_offset;
-            let delivery_count = self.batches[i].delivery_count;
             let throttled = delivery_count >= throttle_limit;
             if throttled && !acquired.is_empty() {
                 break;
             }
             let take = if throttled {
                 let halvings = u32::try_from(delivery_count - throttle_limit + 1).unwrap_or(63);
-                let portion = (self.batches[i].len() >> halvings.min(63)).max(1);
+                let portion = (batch_len >> halvings.min(63)).max(1);
                 let alone = max_attempts > 2 && delivery_count == max_attempts - 1;
                 if alone { 1 } else { portion.min(remaining) }
             } else {
@@ -313,10 +316,12 @@ impl AcquisitionState {
             }
             let split_at = split_at.min(Offset(last_offset.0.saturating_add(1)));
             self.split_at(i, split_at);
-            let b = &mut self.batches[i];
+            let Some(b) = self.batches.get_mut(i) else {
+                break;
+            };
             b.state = RecordState::Acquired;
             b.delivery_count += 1;
-            b.acquired_by = Some(member.to_string());
+            b.acquired_by = Some(member.to_owned());
             b.lock_deadline = Some(now + lock_dur);
             acquired.push(AcquiredRange {
                 first: b.first_offset,

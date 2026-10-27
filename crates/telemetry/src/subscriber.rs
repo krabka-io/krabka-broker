@@ -7,6 +7,8 @@
 use {
     crate::{config::OtlpConfig, error::TelemetryError, log_levels::LogLevelController},
     opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider},
+    std::{env, io},
+    tokio::task::JoinHandle,
     tracing_subscriber::{
         EnvFilter, Layer, Registry, layer::SubscriberExt as _, util::SubscriberInitExt as _,
     },
@@ -24,7 +26,7 @@ type StdoutLayer = Box<dyn Layer<Registry> + Send + Sync>;
 pub struct TelemetryGuard {
     provider: Option<SdkTracerProvider>,
     logger_provider: Option<SdkLoggerProvider>,
-    heartbeat_task: Option<tokio::task::JoinHandle<()>>,
+    heartbeat_task: Option<JoinHandle<()>>,
     log_levels: LogLevelController,
 }
 
@@ -93,14 +95,14 @@ pub fn init(
     // The stdout layer's filter is the one an operator retargets at runtime,
     // so it is a `LogLevelFilter` and not a bare `EnvFilter`. It starts from
     // `RUST_LOG` when that is set and from `fmt_default_filter` otherwise.
-    let fmt_spec = std::env::var("RUST_LOG")
+    let fmt_spec = env::var("RUST_LOG")
         .ok()
         .filter(|spec| EnvFilter::try_new(spec).is_ok())
         .unwrap_or_else(|| fmt_default_filter.to_owned());
     let (log_levels, fmt_filter) = LogLevelController::new(&fmt_spec);
     // Structured Cloud Logging-friendly JSON to stdout (see `krabka_logfmt`),
     // so GKE / Cloud Logging ingests fields rather than ANSI-coloured text.
-    let fmt_layer = krabka_logfmt::layer(fmt_filter, std::io::stdout);
+    let fmt_layer = krabka_logfmt::layer(fmt_filter, io::stdout);
 
     let Some(cfg) = otlp else {
         tracing_subscriber::registry().with(fmt_layer).init();
@@ -130,11 +132,12 @@ mod otlp {
             log_levels::LogLevelController,
         },
         krabka_units::prelude::TimeExt,
-        opentelemetry::trace::TracerProvider as _,
+        opentelemetry::{global, trace::TracerProvider as _},
         opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge,
         opentelemetry_sdk::{
             logs::SdkLoggerProvider, propagation::TraceContextPropagator, trace::SdkTracerProvider,
         },
+        std::env,
         tracing_subscriber::{
             EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
         },
@@ -166,13 +169,13 @@ mod otlp {
             .build();
         let tracer = provider.tracer(tracer_name.to_owned());
 
-        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
-        opentelemetry::global::set_tracer_provider(provider.clone());
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        global::set_tracer_provider(provider.clone());
 
         let otel_layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
             .with_location(false)
-            .with_filter(otel_filter(otel_default_filter, |k| std::env::var(k).ok()));
+            .with_filter(otel_filter(otel_default_filter, |k| env::var(k).ok()));
 
         // OTLP LOGS: a `tracing` → OTLP-log-record bridge so services ship their
         // logs over OTLP (alloy:4317 → logs-distributor) — Docker-stdout tailing
@@ -187,7 +190,7 @@ mod otlp {
             "{otel_default_filter},opentelemetry=warn,opentelemetry_sdk=warn,opentelemetry_otlp=warn,hyper_util=warn,tonic=warn,h2=warn,tower=warn"
         );
         let otel_logs_layer = OpenTelemetryTracingBridge::new(&logger_provider)
-            .with_filter(otel_filter(&logs_default, |k| std::env::var(k).ok()));
+            .with_filter(otel_filter(&logs_default, |k| env::var(k).ok()));
 
         tracing_subscriber::registry()
             .with(fmt_layer)
@@ -267,11 +270,19 @@ mod otlp {
 mod tests {
     use {
         super::*,
-        opentelemetry_sdk::error::OTelSdkResult,
-        std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering::SeqCst},
+        opentelemetry_sdk::{
+            error::OTelSdkResult,
+            trace::{SpanData, SpanExporter},
         },
+        std::{
+            future::{self, Future},
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering::SeqCst},
+            },
+            time::Duration,
+        },
+        tokio::sync::oneshot,
     };
 
     #[derive(Clone, Debug)]
@@ -279,28 +290,32 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    impl opentelemetry_sdk::trace::SpanExporter for ShutdownCountingSpanExporter {
-        fn export(
-            &self,
-            _batch: Vec<opentelemetry_sdk::trace::SpanData>,
-        ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
-            std::future::ready(Ok(()))
+    impl SpanExporter for ShutdownCountingSpanExporter {
+        fn export(&self, _batch: Vec<SpanData>) -> impl Future<Output = OTelSdkResult> + Send {
+            future::ready(Ok(()))
         }
 
-        fn shutdown_with_timeout(&self, _timeout: std::time::Duration) -> OTelSdkResult {
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
             self.calls.fetch_add(1, SeqCst);
             Ok(())
         }
     }
 
-    #[test]
-    fn telemetry_guard_shutdown_flushes_held_provider_clone() {
+    /// A tracer provider whose exporter counts its shutdowns into the
+    /// returned counter.
+    fn counting_provider() -> (Arc<AtomicUsize>, SdkTracerProvider) {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(ShutdownCountingSpanExporter {
                 calls: Arc::clone(&calls),
             })
             .build();
+        (calls, provider)
+    }
+
+    #[test]
+    fn telemetry_guard_shutdown_flushes_held_provider_clone() {
+        let (calls, provider) = counting_provider();
         let held_clone = provider.clone();
 
         TelemetryGuard {
@@ -317,19 +332,14 @@ mod tests {
 
     #[tokio::test]
     async fn telemetry_guard_drop_shuts_down_providers_and_stops_the_heartbeat() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(ShutdownCountingSpanExporter {
-                calls: calls.clone(),
-            })
-            .build();
+        let (calls, provider) = counting_provider();
         let held_clone = provider.clone();
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (finished, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (started, ready) = oneshot::channel();
+        let (finished, stopped) = oneshot::channel::<()>();
         let heartbeat_task = tokio::spawn(async move {
             let _finished = finished;
             started.send(()).unwrap();
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         });
         ready.await.unwrap();
         drop(TelemetryGuard {

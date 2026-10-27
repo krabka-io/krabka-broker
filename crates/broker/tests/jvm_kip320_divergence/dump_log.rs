@@ -61,7 +61,7 @@ pub fn dump_log_in_container(container: &str, partition_dir: &str) -> String {
 /// `--print-data-log` dump (max of any `lastOffset:` / `offset:` field).
 pub fn max_offset_in_dump(dump: &str) -> Option<i64> {
     let mut max = None;
-    let mut tokens = dump.split_whitespace().peekable();
+    let mut tokens = dump.split_whitespace();
     while let Some(token) = tokens.next() {
         let raw = if matches!(token, "lastOffset:" | "offset:") {
             tokens.next()

@@ -19,19 +19,16 @@ use {
     krabka_client_admin::{AdminClient, CreateTopicSpec},
     krabka_client_core::{Client, security::ClientSecurity},
     krabka_protocol::krabka::freeze::SetTopicFreezeRequest,
+    std::collections::BTreeMap,
 };
 
 /// A plaintext host-side client for the krabka-private APIs.
-pub(super) async fn plain_client(bootstrap: &str) -> Client {
+pub async fn plain_client(bootstrap: &str) -> Client {
     support::client::connect_owned(bootstrap, "kfc9-jvm-acceptance", "client build").await
 }
 
 /// Create every topic a case needs, and fail the case when one does not open.
-pub(super) async fn create_topics(
-    bootstrap: &str,
-    security: Option<ClientSecurity>,
-    names: &[&str],
-) {
+pub async fn create_topics(bootstrap: &str, security: Option<ClientSecurity>, names: &[&str]) {
     let mut admin = AdminClient::connect_secured(&[bootstrap.to_owned()], security)
         .await
         .expect("admin connect");
@@ -41,8 +38,8 @@ pub(super) async fn create_topics(
             name: (*name).to_owned(),
             partitions: 1,
             replicas: 1,
-            configs: std::collections::BTreeMap::default(),
-            replica_assignments: std::collections::BTreeMap::new(),
+            configs: BTreeMap::default(),
+            replica_assignments: BTreeMap::new(),
         })
         .collect();
     let outcomes = admin
@@ -65,7 +62,7 @@ pub(super) async fn create_topics(
 /// The request is unsigned, which the broker accepts for a freeze while
 /// `freeze.require_signature` is off. A freeze is the safe direction, and
 /// KFC-9 keeps it reachable in one command on a cluster with no key material.
-pub(super) async fn freeze(client: &Client, scope: &str, pattern_type: i8, reason: &str) {
+pub async fn freeze(client: &Client, scope: &str, pattern_type: i8, reason: &str) {
     let response = client
         .send(SetTopicFreezeRequest {
             scope: scope.to_owned(),
@@ -87,7 +84,7 @@ pub(super) async fn freeze(client: &Client, scope: &str, pattern_type: i8, reaso
 /// lets a proposal on a topic cover every partition of it for the actions that
 /// name a partition, and an unclean election is one of those, so this also
 /// checks that widening on the way through.
-pub(super) async fn approved_unclean_election(bootstrap: &str, target: &str) {
+pub async fn approved_unclean_election(bootstrap: &str, target: &str) {
     let proposal_id = propose(
         bootstrap,
         PROPOSER,
@@ -115,7 +112,7 @@ pub(super) async fn approved_unclean_election(bootstrap: &str, target: &str) {
 }
 
 /// Plaintext fixture with all topics installed before the first control-plane mutation.
-pub(super) async fn plain_topic_fixture(names: &[&str]) -> (JvmBroker, Client) {
+pub async fn plain_topic_fixture(names: &[&str]) -> (JvmBroker, Client) {
     let broker = start_jvm_broker(|_| {}).await;
     let client = plain_client(&broker.host).await;
     create_topics(&broker.host, None, names).await;

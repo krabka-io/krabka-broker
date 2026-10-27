@@ -24,11 +24,16 @@ use {
     crate::{codes, config::ListenerSpec, network::auth},
     krabka_metadata::{MetadataImage, NodeId},
     krabka_security::{ClientAuthMode, TlsConfig},
-    rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject},
+    rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject},
+        server::WebPkiClientVerifier,
+    },
     std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet, HashMap},
-        fmt::Write as _,
+        fmt::{Display, Write as _},
+        fs,
+        net::Ipv4Addr,
         path::{Path, PathBuf},
         sync::{Arc, Mutex, PoisonError},
         time::SystemTime,
@@ -48,7 +53,7 @@ const CONFIG_EXCEPTION: &str = "org.apache.kafka.common.config.ConfigException";
 /// The listener SSL keys of `SslConfigs.RECONFIGURABLE_CONFIGS` one listener
 /// has set, by their unprefixed name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ListenerSsl {
+pub struct ListenerSsl {
     keystore_type: Option<String>,
     keystore_location: Option<String>,
     keystore_password: Option<String>,
@@ -94,9 +99,7 @@ impl ListenerSsl {
 }
 
 /// A Kafka `InvalidConfigurationException`, as its `toString` reads.
-fn invalid(message: impl std::fmt::Display) -> String {
-    format!("{INVALID_CONFIGURATION}: {message}")
-}
+fn invalid(message: impl Display) -> String { format!("{INVALID_CONFIGURATION}: {message}") }
 
 /// The PEM type check Kafka makes of a store that is given as text.
 fn require_pem(kind: &str, store_type: Option<&str>) -> Result<(), String> {
@@ -146,7 +149,7 @@ fn pem_private_key(
 
 /// Read a store file, with Kafka's `FileBasedPemStore` failure text.
 fn read_store(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path)
+    fs::read_to_string(path)
         .map_err(|error| invalid(format!("Failed to load PEM SSL keystore {path}: {error}")))
 }
 
@@ -180,7 +183,7 @@ fn store_files(static_tls: &TlsConfig, ssl: &ListenerSsl) -> Vec<PathBuf> {
     files
 }
 
-fn modified(path: &Path) -> Option<SystemTime> { std::fs::metadata(path).ok()?.modified().ok() }
+fn modified(path: &Path) -> Option<SystemTime> { fs::metadata(path).ok()?.modified().ok() }
 
 impl Material {
     /// The keystore: the dynamic one, checked as Kafka's
@@ -245,7 +248,7 @@ impl Material {
             ));
         }
         let certs = pem_certificates(&read_store(&static_tls.cert_chain_path.to_string_lossy())?)?;
-        let key = std::fs::read_to_string(&static_tls.private_key_path)
+        let key = fs::read_to_string(&static_tls.private_key_path)
             .map_err(invalid)
             .and_then(|pem| PrivateKeyDer::from_pem_slice(pem.as_bytes()).map_err(invalid))?;
         Ok((certs, key))
@@ -326,7 +329,7 @@ impl Material {
                 for root in self.client_roots.iter().flatten() {
                     roots.add(root.clone()).map_err(invalid)?;
                 }
-                let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots));
+                let verifier = WebPkiClientVerifier::builder(Arc::new(roots));
                 let verifier = if client_auth == ClientAuthMode::Optional {
                     verifier.allow_unauthenticated().build()
                 } else {
@@ -336,11 +339,10 @@ impl Material {
                 builder.with_client_cert_verifier(verifier)
             }
         };
-        let mut config = builder
+        let config = builder
             .with_single_cert(self.certs.clone(), self.key.clone_key())
             .map_err(invalid)?;
-        export_secrets(&mut config);
-        Ok(Arc::new(config))
+        Ok(Arc::new(export_secrets(config)))
     }
 
     /// The subject DN and SANs of the leaf certificate.
@@ -355,25 +357,24 @@ impl Material {
 
 /// As in `TlsConfig::build_server_config`: on Linux, kTLS installs the
 /// traffic secrets rustls exports.
-fn export_secrets(config: &mut rustls::ServerConfig) {
-    #[cfg(target_os = "linux")]
-    {
-        config.enable_secret_extraction = true;
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = config;
-    }
+#[cfg(target_os = "linux")]
+fn export_secrets(mut config: rustls::ServerConfig) -> rustls::ServerConfig {
+    config.enable_secret_extraction = true;
+    config
 }
+
+/// Elsewhere there is no kTLS, so rustls exports nothing.
+#[cfg(not(target_os = "linux"))]
+const fn export_secrets(config: rustls::ServerConfig) -> rustls::ServerConfig { config }
 
 /// A `GeneralName` as Java's `X509Certificate.getSubjectAlternativeNames`
 /// prints it: `[type, value]`.
 fn general_name(der: &[u8]) -> String {
     let tag = der.first().map_or(0, |tag| tag & 0x1F);
     let value = der.get(2..).unwrap_or_default();
-    let text = match (tag, value.len()) {
+    let text = match (tag, <[u8; 4]>::try_from(value)) {
         (1 | 2 | 6, _) => String::from_utf8_lossy(value).into_owned(),
-        (7, 4) => std::net::Ipv4Addr::new(value[0], value[1], value[2], value[3]).to_string(),
+        (7, Ok(octets)) => Ipv4Addr::from(octets).to_string(),
         _ => value.iter().fold(String::new(), |mut hex, b| {
             let _ = write!(hex, "{b:02X}");
             hex
@@ -433,7 +434,7 @@ fn refusal(cause: &str) -> (i16, String) {
 /// listeners it runs, a listener a dynamic `listeners` added among them, and
 /// the broker-wide `tls_config` a listener without its own uses.
 #[derive(Clone)]
-pub(crate) struct ListenerTlsInputs<'a> {
+pub struct ListenerTlsInputs<'a> {
     pub(crate) listeners: Cow<'a, [ListenerSpec]>,
     pub(crate) tls_config: Option<&'a TlsConfig>,
 }
@@ -498,7 +499,7 @@ struct Built {
 /// Each TLS listener's server config built from its dynamic SSL keys, rebuilt
 /// when the keys or a store file change.
 #[derive(Default)]
-pub(crate) struct ListenerTlsCache {
+pub struct ListenerTlsCache {
     built: Mutex<HashMap<String, Built>>,
 }
 
@@ -514,60 +515,77 @@ impl ListenerTlsCache {
         static_tls: &TlsConfig,
     ) -> Option<Arc<rustls::ServerConfig>> {
         let ssl = ListenerSsl::from_image(image, node_id, listener);
-        let mut built = self.built.lock().unwrap_or_else(PoisonError::into_inner);
-        if ssl.is_empty() {
-            built.remove(listener);
-            return None;
+        // The lock is held across the check and the rebuild, so two accepts
+        // on one listener do not both rebuild its stores.
+        refresh_built(
+            &mut self.built.lock().unwrap_or_else(PoisonError::into_inner),
+            listener,
+            static_tls,
+            ssl,
+        )
+    }
+}
+
+/// The body of [`ListenerTlsCache::server_config`], run on the cache while its
+/// lock is held.
+fn refresh_built(
+    built: &mut HashMap<String, Built>,
+    listener: &str,
+    static_tls: &TlsConfig,
+    ssl: ListenerSsl,
+) -> Option<Arc<rustls::ServerConfig>> {
+    if ssl.is_empty() {
+        built.remove(listener);
+        return None;
+    }
+    let files: Vec<_> = store_files(static_tls, &ssl)
+        .into_iter()
+        .map(|path| {
+            let at = modified(&path);
+            (path, at)
+        })
+        .collect();
+    if let Some(entry) = built.get(listener)
+        && entry.ssl == ssl
+        && entry.files == files
+    {
+        return Some(Arc::clone(&entry.config));
+    }
+    match Material::load(static_tls, &ssl).and_then(|material| {
+        let config = material.server_config(static_tls.client_auth)?;
+        Ok((config, material.certs.into_iter().next()))
+    }) {
+        Ok((config, leaf)) => {
+            let dn = |leaf: Option<&CertificateDer<'_>>| {
+                leaf.and_then(|cert| auth::subject_dn_rfc2253(cert))
+                    .unwrap_or_default()
+            };
+            tracing::info!(
+                listener,
+                previous = %dn(built.get(listener).and_then(|entry| entry.leaf.as_ref())),
+                serving = %dn(leaf.as_ref()),
+                "listener SSL stores rebuilt from the dynamic config"
+            );
+            built.insert(listener.to_owned(), Built {
+                ssl,
+                files,
+                config: Arc::clone(&config),
+                leaf,
+            });
+            Some(config)
         }
-        let files: Vec<_> = store_files(static_tls, &ssl)
-            .into_iter()
-            .map(|path| {
-                let at = modified(&path);
-                (path, at)
-            })
-            .collect();
-        if let Some(entry) = built.get(listener)
-            && entry.ssl == ssl
-            && entry.files == files
-        {
-            return Some(Arc::clone(&entry.config));
-        }
-        match Material::load(static_tls, &ssl).and_then(|material| {
-            let config = material.server_config(static_tls.client_auth)?;
-            Ok((config, material.certs.into_iter().next()))
-        }) {
-            Ok((config, leaf)) => {
-                let dn = |leaf: Option<&CertificateDer<'_>>| {
-                    leaf.and_then(|cert| auth::subject_dn_rfc2253(cert))
-                        .unwrap_or_default()
-                };
-                tracing::info!(
-                    listener,
-                    previous = %dn(built.get(listener).and_then(|entry| entry.leaf.as_ref())),
-                    serving = %dn(leaf.as_ref()),
-                    "listener SSL stores rebuilt from the dynamic config"
-                );
-                built.insert(listener.to_owned(), Built {
-                    ssl,
-                    files,
-                    config: Arc::clone(&config),
-                    leaf,
-                });
-                Some(config)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    listener,
-                    %error,
-                    "dynamic listener SSL stores failed to load; keeping the stores in force"
-                );
-                let entry = built.get_mut(listener)?;
-                // Remember what failed, so the next accept does not retry it
-                // until the keys or the files change again.
-                entry.ssl = ssl;
-                entry.files = files;
-                Some(Arc::clone(&entry.config))
-            }
+        Err(error) => {
+            tracing::warn!(
+                listener,
+                %error,
+                "dynamic listener SSL stores failed to load; keeping the stores in force"
+            );
+            let entry = built.get_mut(listener)?;
+            // Remember what failed, so the next accept does not retry it
+            // until the keys or the files change again.
+            entry.ssl = ssl;
+            entry.files = files;
+            Some(Arc::clone(&entry.config))
         }
     }
 }

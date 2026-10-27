@@ -8,7 +8,10 @@
 //! performs live here, apart from the flag definitions they read.
 
 use {
-    krabka_metadata::{FeatureLevelRecord, metadata_version::KRAFT_VERSION_FEATURE},
+    krabka_metadata::{
+        FeatureLevelRecord,
+        metadata_version::{self, KRAFT_VERSION_FEATURE, from_version_string, is_supported_level},
+    },
     krabka_raft::UnstableFeatureVersions,
     std::collections::BTreeMap,
 };
@@ -26,7 +29,7 @@ pub(super) struct ResolvedFeatures {
 /// Kafka 4.3's latest production level, or with unstable feature versions the
 /// highest level krabka knows (Kafka's `MetadataVersion.latestTesting()`).
 fn metadata_version_ceiling(unstable: UnstableFeatureVersions) -> i16 {
-    krabka_metadata::feature(krabka_metadata::metadata_version::METADATA_VERSION_FEATURE)
+    krabka_metadata::feature(metadata_version::METADATA_VERSION_FEATURE)
         .map_or(LATEST_PRODUCTION_METADATA_VERSION, |feature| {
             krabka_raft::supported_feature_range(feature, unstable).1
         })
@@ -54,7 +57,8 @@ fn kafka_version_key(s: &str) -> &str {
     significant
         .match_indices('.')
         .nth(1)
-        .map_or(s, |(end, _)| &significant[..end])
+        .and_then(|(end, _)| significant.get(..end))
+        .unwrap_or(s)
 }
 
 /// Map a release string to a supported `metadata.version` feature level, as
@@ -70,16 +74,13 @@ fn resolve_release_level(s: &str, unstable: UnstableFeatureVersions) -> Result<i
     let ceiling = metadata_version_ceiling(unstable);
     Some(kafka_version_key(s))
         .filter(|key| key.trim() == *key)
-        .and_then(krabka_metadata::metadata_version::from_version_string)
-        .map(krabka_metadata::metadata_version::MetadataVersion::feature_level)
-        .filter(|level| {
-            krabka_metadata::metadata_version::is_supported_level(*level) && *level <= ceiling
-        })
+        .and_then(from_version_string)
+        .map(metadata_version::MetadataVersion::feature_level)
+        .filter(|level| is_supported_level(*level) && *level <= ceiling)
         .ok_or_else(|| {
-            let supported: Vec<&str> = (krabka_metadata::metadata_version::METADATA_VERSION_MIN
-                ..=ceiling)
-                .filter_map(krabka_metadata::metadata_version::from_feature_level)
-                .map(krabka_metadata::metadata_version::MetadataVersion::ivn)
+            let supported: Vec<&str> = (metadata_version::METADATA_VERSION_MIN..=ceiling)
+                .filter_map(metadata_version::from_feature_level)
+                .map(metadata_version::MetadataVersion::ivn)
                 .collect();
             format!(
                 "Unknown metadata.version '{s}'. Supported metadata.version are: {}",
@@ -102,7 +103,7 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<FeatureLevelRecord, String> 
         .parse()
         .map_err(|e| format!("feature level: {e}"))?;
     Ok(FeatureLevelRecord {
-        name: name.to_string(),
+        name: name.to_owned(),
         level,
     })
 }
@@ -125,7 +126,7 @@ fn unsupported_feature(name: &str) -> String {
     let mut supported: Vec<&str> = krabka_metadata::feature_registry()
         .iter()
         .map(|feat| feat.name())
-        .filter(|feature| *feature != krabka_metadata::metadata_version::METADATA_VERSION_FEATURE)
+        .filter(|feature| *feature != metadata_version::METADATA_VERSION_FEATURE)
         .collect();
     supported.sort_unstable();
     format!(
@@ -252,7 +253,7 @@ pub(super) fn resolve_format_features(
                 .get(f.name())
                 .copied()
                 .unwrap_or_else(|| f.default_level(bootstrap_mv));
-            (f.name().to_string(), level)
+            (f.name().to_owned(), level)
         })
         .collect();
     krabka_metadata::validate_feature_dependencies(&resolved)?;
@@ -266,7 +267,11 @@ pub(super) fn resolve_format_features(
 #[cfg(test)]
 mod tests {
 
-    use {super::*, assert2::check, krabka_metadata::MetadataRecord};
+    use {
+        super::*,
+        assert2::check,
+        krabka_metadata::{MetadataRecord, metadata_version},
+    };
 
     /// `unstable.feature.versions.enable` at Kafka's default.
     const STRICT: UnstableFeatureVersions = UnstableFeatureVersions::Disabled;
@@ -302,7 +307,7 @@ mod tests {
 
     #[test]
     fn bootstrap_seeds_every_nonzero_feature_at_release_default() {
-        let bootstrap_mv = krabka_metadata::metadata_version::from_version_string("4.0")
+        let bootstrap_mv = metadata_version::from_version_string("4.0")
             .unwrap()
             .feature_level();
         // Exercises the exact helper `run()` uses, so it tracks the registry

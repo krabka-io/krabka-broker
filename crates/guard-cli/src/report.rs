@@ -63,7 +63,7 @@ pub fn code_name(code: i16) -> String {
 }
 
 /// One error code and its message, as a line.
-pub(super) fn described_error(code: i16, message: Option<&str>) -> String {
+pub fn described_error(code: i16, message: Option<&str>) -> String {
     format!(
         "{}{}",
         code_name(code),
@@ -72,13 +72,13 @@ pub(super) fn described_error(code: i16, message: Option<&str>) -> String {
 }
 
 /// Print a refusal and turn it into an exit code.
-pub(super) fn report_error(code: i16, message: Option<&str>) -> i32 {
+pub fn report_error(code: i16, message: Option<&str>) -> i32 {
     eprintln!("{}", described_error(code, message));
     exit_for_code(code)
 }
 
 /// The outcome of one freeze or thaw.
-pub(super) fn report_set_freeze(response: &api::SetTopicFreezeResponse, frozen: bool) -> i32 {
+pub fn report_set_freeze(response: &api::SetTopicFreezeResponse, frozen: bool) -> i32 {
     if response.error_code != 0 {
         return report_error(response.error_code, response.error_message.as_deref());
     }
@@ -87,7 +87,7 @@ pub(super) fn report_set_freeze(response: &api::SetTopicFreezeResponse, frozen: 
 }
 
 /// One line per registry entry.
-pub(super) fn print_freeze(freeze: &api::DescribedTopicFreeze, checked: Option<&CheckedEntry>) {
+pub fn print_freeze(freeze: &api::DescribedTopicFreeze, checked: Option<&CheckedEntry>) {
     let proof = match checked.map(|entry| entry.unproved) {
         None => String::new(),
         Some(None) => format!("\tverified by {}", freeze.key_id),
@@ -104,7 +104,7 @@ pub(super) fn print_freeze(freeze: &api::DescribedTopicFreeze, checked: Option<&
 }
 
 /// One block per proposal.
-pub(super) fn print_proposal(proposal: &bg::DescribedBreakGlassProposal) {
+pub fn print_proposal(proposal: &bg::DescribedBreakGlassProposal) {
     let state = if proposal.withdrawn {
         "withdrawn"
     } else if proposal.consumed_at_ms > 0 {
@@ -148,7 +148,12 @@ fn approval_evidence(approval: &bg::BreakGlassApproval) -> String {
     format!(
         "signed by {} ({}...)",
         approval.key_id,
-        hex::encode(&approval.signature[..approval.signature.len().min(PREFIX)])
+        hex::encode(
+            approval
+                .signature
+                .get(..PREFIX)
+                .unwrap_or(&approval.signature)
+        )
     )
 }
 
@@ -157,7 +162,7 @@ fn approval_evidence(approval: &bg::BreakGlassApproval) -> String {
 /// A signature that failed outranks a key this machine does not hold, because
 /// the first says the tool checked and the answer is wrong, and the second says
 /// the tool could not check.
-pub(super) fn report_verify(freezes: &[api::DescribedTopicFreeze], outcome: &VerifyOutcome) -> i32 {
+pub fn report_verify(freezes: &[api::DescribedTopicFreeze], outcome: &VerifyOutcome) -> i32 {
     for (freeze, checked) in freezes.iter().zip(&outcome.entries) {
         print_freeze(freeze, Some(checked));
     }

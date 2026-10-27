@@ -1,6 +1,7 @@
 use {
     super::*,
     crate::{authz::controller_request_admission, jwks::JwksCacheFacts, oauth::*},
+    proptest::collection,
 };
 
 type Trace = (Option<i64>, Vec<bool>, (u64, u64));
@@ -62,7 +63,7 @@ fn expected(
             && i128::from(finish) - i128::from(cache.last_successful_fetch_ms)
                 > i128::from(cache.expiry_ms));
     let deadline = (!rejected).then_some(facts.token_expires_at_ms);
-    let rows = if let Some(expiry) = deadline {
+    let rows = deadline.map_or_else(Vec::new, |expiry| {
         requests
             .iter()
             .take_while(|(clock, _)| *clock <= expiry)
@@ -71,9 +72,7 @@ fn expected(
                     || (!a.saw_deny && (a.saw_allow || a.default_decision == AclDefault::Allow))
             })
             .collect()
-    } else {
-        Vec::new()
-    };
+    });
     (deadline, rows, (generation, count))
 }
 
@@ -141,8 +140,8 @@ fn admitted_session_handles_exact_prefix_and_cannot_resurrect_after_expiry() {
 proptest! {
     #[test]
     fn arbitrary_request_clocks_and_acl_changes_obey_the_first_close(
-        raw in any::<u64>(), fetches in proptest::collection::vec(any::<bool>(), 0..32),
-        pending in any::<bool>(), history in proptest::collection::vec((any::<i64>(), any::<u8>()), 0..64),
+        raw in any::<u64>(), fetches in collection::vec(any::<bool>(), 0..32),
+        pending in any::<bool>(), history in collection::vec((any::<i64>(), any::<u8>()), 0..64),
     ) {
         let (facts, mut cache) = fixture(i64::MAX);
         cache.generation_before = raw & !1;

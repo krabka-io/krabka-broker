@@ -6,6 +6,7 @@
 use {
     super::*,
     crate::{
+        error,
         heartbeat::controller_state::{LivenessTransition, TestClock},
         leader_election::test_support::{
             expected_partition, fake_source, img_with_partition, liveness_with_alive,
@@ -19,6 +20,7 @@ use {
     },
     assert2::assert,
     krabka_metadata::{LeaderEpoch, PartitionRecord},
+    std::{iter, sync, time::Duration},
 };
 
 struct SweepFixture {
@@ -70,7 +72,10 @@ impl SweepFixture {
 async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
     let img = img_with_partition().call();
     let source = fake_source(img, Some(NodeId(7)));
-    let context = failover_test_context().source(source.clone()).call().await;
+    let context = failover_test_context()
+        .source(sync::Arc::<FakeMetadataSource>::clone(&source))
+        .call()
+        .await;
 
     on_broker_dead(
         &context.controller,
@@ -117,7 +122,7 @@ async fn a_failover_plan_cannot_overwrite_an_intervening_election_or_controller(
                 })
                 .build(),
         );
-        let controller: Arc<dyn MetadataSource> = source.clone();
+        let controller: Arc<dyn MetadataSource> = sync::Arc::<FakeMetadataSource>::clone(&source);
         let liveness = liveness_with_alive(&[2, 3]).await;
         let metrics = BrokerMetrics::new();
         let recovery = recovery_handle_for_tests();
@@ -153,7 +158,10 @@ async fn a_failover_plan_cannot_overwrite_an_intervening_election_or_controller(
 async fn on_broker_dead_bounds_a_stalled_commit() {
     let img = img_with_partition().call();
     let source = stalled_fake_source(img, Some(NodeId(7)));
-    let context = failover_test_context().source(source.clone()).call().await;
+    let context = failover_test_context()
+        .source(sync::Arc::<FakeMetadataSource>::clone(&source))
+        .call()
+        .await;
 
     // Paused time: the runtime auto-advances past the bound as soon as
     // the only pending future is the timeout itself.
@@ -168,7 +176,7 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
     .await;
 
     let error = result.expect_err("a stalled commit must surface as an error");
-    assert!(matches!(error, crate::error::BrokerError::Replication(_)));
+    assert!(matches!(error, error::BrokerError::Replication(_)));
     assert!(source.submitted().is_empty());
 }
 
@@ -179,10 +187,10 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
         .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(2)])
         .call();
     let source = fake_source(img, Some(NodeId(7)));
-    let controller: Arc<dyn MetadataSource> = source.clone();
+    let controller: Arc<dyn MetadataSource> = sync::Arc::<FakeMetadataSource>::clone(&source);
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
-        std::time::Duration::from_millis(10),
+        Duration::from_millis(10),
         &clock,
     ));
     let metrics = BrokerMetrics::new();
@@ -192,7 +200,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     // Broker 1 heartbeats once and then its session expires. Broker 3 is
     // alive but out of the ISR. Broker 2 has not heartbeated yet.
     liveness.record_heartbeat(1).await;
-    clock.advance(std::time::Duration::from_millis(11));
+    clock.advance(Duration::from_millis(11));
     liveness.record_heartbeat(3).await;
     assert!(liveness.tick().await == vec![LivenessTransition::AliveToDead(1)]);
 
@@ -318,7 +326,7 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
             .isr(case.isr)
             .call();
         let source = fake_source(img, case.controller_leader);
-        let controller: Arc<dyn MetadataSource> = source.clone();
+        let controller: Arc<dyn MetadataSource> = sync::Arc::<FakeMetadataSource>::clone(&source);
         let mut fixture = SweepFixture::new(case.dead, case.alive).await;
         fixture.sweep(&controller).await;
 
@@ -345,7 +353,7 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
         .call();
     register_brokers(&mut img, &[1, 2, 3]);
     let source = fake_source(img, Some(NodeId(7)));
-    let controller: Arc<dyn MetadataSource> = source.clone();
+    let controller: Arc<dyn MetadataSource> = sync::Arc::<FakeMetadataSource>::clone(&source);
     let mut fixture = SweepFixture::new(&[1], &[2, 3]).await;
     fixture.sweep(&controller).await;
     let memo = fixture
@@ -354,7 +362,7 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
         .as_ref()
         .expect("a clean sweep is remembered");
     assert!(Arc::ptr_eq(&memo.image, &controller.current_image()));
-    assert!(memo.dead == [1].into_iter().collect());
+    assert!(memo.dead == iter::once(1).collect());
     assert!(source.submitted().is_empty());
 
     // Broker 1 comes back: the dead set changes and the memo is dropped.

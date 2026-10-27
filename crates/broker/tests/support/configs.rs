@@ -1,14 +1,18 @@
 //! Configuration and feature update request fixtures.
 
 use {
-    krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    krabka_broker::{codes, config::BrokerConfig, file_config::FileConfig},
+    krabka_metadata::metadata_version,
     krabka_protocol::owned::{
-        describe_configs_request::DescribeConfigsResource,
+        alter_configs_request::{self, AlterConfigsRequest},
+        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_response::DescribeConfigsResourceResult,
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
         update_features_request::FeatureUpdateKey,
     },
+    std::collections::BTreeMap,
 };
 
 /// The [`BrokerConfig`] a broker's TOML node file `text` applies to,
@@ -180,25 +184,23 @@ pub async fn topic_config(
     client: &krabka_client_core::Client,
     topic: &str,
     name: &str,
-) -> krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult {
+) -> DescribeConfigsResourceResult {
     let response = client
-        .send(
-            krabka_protocol::owned::describe_configs_request::DescribeConfigsRequest {
-                resources: vec![describe_resource(
-                    2,
-                    topic.to_owned(),
-                    Some(vec![name.to_owned()]),
-                )],
-                include_synonyms: false,
-                include_documentation: false,
-                ..Default::default()
-            },
-        )
+        .send(DescribeConfigsRequest {
+            resources: vec![describe_resource(
+                2,
+                topic.to_owned(),
+                Some(vec![name.to_owned()]),
+            )],
+            include_synonyms: false,
+            include_documentation: false,
+            ..Default::default()
+        })
         .await
         .expect("DescribeConfigs");
     let result = &response.results[0];
     assert2::assert!(
-        result.error_code == krabka_broker::codes::NONE,
+        result.error_code == codes::NONE,
         "DescribeConfigs({topic}): {result:?}"
     );
     result
@@ -261,8 +263,8 @@ pub async fn alter_topic_config(
 pub fn legacy_config(
     name: String,
     value: Option<String>,
-) -> krabka_protocol::owned::alter_configs_request::AlterableConfig {
-    krabka_protocol::owned::alter_configs_request::AlterableConfig {
+) -> alter_configs_request::AlterableConfig {
+    alter_configs_request::AlterableConfig {
         name,
         value,
         ..Default::default()
@@ -273,9 +275,9 @@ pub fn legacy_config(
 pub fn legacy_resource(
     resource_type: i8,
     resource_name: String,
-    configs: Vec<krabka_protocol::owned::alter_configs_request::AlterableConfig>,
-) -> krabka_protocol::owned::alter_configs_request::AlterConfigsResource {
-    krabka_protocol::owned::alter_configs_request::AlterConfigsResource {
+    configs: Vec<alter_configs_request::AlterableConfig>,
+) -> alter_configs_request::AlterConfigsResource {
+    alter_configs_request::AlterConfigsResource {
         resource_type,
         resource_name,
         configs,
@@ -285,10 +287,10 @@ pub fn legacy_resource(
 
 /// Preserve legacy replacement semantics and the explicit validation mode.
 pub fn legacy_request(
-    resources: Vec<krabka_protocol::owned::alter_configs_request::AlterConfigsResource>,
+    resources: Vec<alter_configs_request::AlterConfigsResource>,
     validate_only: bool,
-) -> krabka_protocol::owned::alter_configs_request::AlterConfigsRequest {
-    krabka_protocol::owned::alter_configs_request::AlterConfigsRequest {
+) -> AlterConfigsRequest {
+    AlterConfigsRequest {
         resources,
         validate_only,
         ..Default::default()
@@ -305,9 +307,9 @@ pub fn controller_registration(
             incarnation_id: uuid::Uuid::from_u128(u128::from(node_id.0)),
             zk_migration_ready: false,
             endpoints: Vec::new(),
-            features: std::collections::BTreeMap::from([(
+            features: BTreeMap::from([(
                 "metadata.version".to_owned(),
-                (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+                (7, metadata_version::METADATA_VERSION_MAX),
             )]),
         },
     )

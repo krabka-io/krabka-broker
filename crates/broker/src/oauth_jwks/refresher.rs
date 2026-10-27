@@ -46,7 +46,7 @@ mod tests;
 /// successful refresh updates
 /// [`last_successful_fetch_ms`](Self::last_successful_fetch_ms). The validator
 /// reads that field to enforce hard cache expiry.
-pub(crate) struct JwksRefresher {
+pub struct JwksRefresher {
     /// JWKS endpoint URL.
     pub endpoint: String,
     /// Shared key cell that the validator reads. This task stores into it.

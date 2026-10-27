@@ -56,7 +56,7 @@ fn copy(field: &Field) -> Result<Option<Assignment>, ParseError> {
 }
 
 /// Expands `#[derive(RuntimeOverlay)]` on `item`.
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let Some(target) = item.parse_meta::<OverlayTarget>("overlay")? else {
         return Err(ParseError::new(
             item.ident.span(),

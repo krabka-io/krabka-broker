@@ -28,7 +28,9 @@ use {
     std::{
         collections::BTreeMap,
         fs,
+        io::ErrorKind,
         path::{Path, PathBuf},
+        str::FromStr,
     },
 };
 
@@ -44,14 +46,14 @@ pub enum Side {
 
 impl Side {
     /// Both sides, reference first.
-    pub const BOTH: [Side; 2] = [Side::Reference, Side::Candidate];
+    pub const BOTH: [Self; 2] = [Self::Reference, Self::Candidate];
 
     /// The directory name and record spelling of this side.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Side::Reference => "reference",
-            Side::Candidate => "candidate",
+            Self::Reference => "reference",
+            Self::Candidate => "candidate",
         }
     }
 }
@@ -185,7 +187,7 @@ impl PerformanceRecord {
     /// Returns [`BudgetError`] when the bytes are not a record or declare
     /// another format version.
     pub fn from_json(bytes: &[u8]) -> Result<Self, BudgetError> {
-        let record: PerformanceRecord = serde_json::from_slice(bytes)?;
+        let record: Self = serde_json::from_slice(bytes)?;
         if record.format_version != FORMAT_VERSION {
             return Err(BudgetError::FormatVersion {
                 what: "record",
@@ -198,7 +200,7 @@ impl PerformanceRecord {
 
 fn artifact_error(path: &str, reason: impl Into<String>) -> BudgetError {
     BudgetError::InvalidArtifact {
-        path: path.to_string(),
+        path: path.to_owned(),
         reason: reason.into(),
     }
 }
@@ -221,7 +223,7 @@ pub fn parse_env(path: &str, text: &str) -> Result<BTreeMap<String, String>, Bud
             return Err(artifact_error(path, format!("line {line:?} has no '='")));
         };
         if values
-            .insert(key.trim().to_string(), value.trim().to_string())
+            .insert(key.trim().to_owned(), value.trim().to_owned())
             .is_some()
         {
             return Err(artifact_error(path, format!("key {key} appears twice")));
@@ -241,7 +243,7 @@ fn take(
         .ok_or_else(|| artifact_error(path, format!("missing {key}")))
 }
 
-fn take_number<T: std::str::FromStr>(
+fn take_number<T: FromStr>(
     path: &str,
     values: &mut BTreeMap<String, String>,
     key: &str,
@@ -313,10 +315,10 @@ pub fn parse_snapshot(
             return Err(artifact_error(path, format!("line {line:?} has no '='")));
         };
         if key == "pod" {
-            if pods.insert(value.to_string(), BTreeMap::new()).is_some() {
+            if pods.insert(value.to_owned(), BTreeMap::new()).is_some() {
                 return Err(artifact_error(path, format!("pod {value} appears twice")));
             }
-            current = Some(value.to_string());
+            current = Some(value.to_owned());
             continue;
         }
         let Some(pod) = &current else {
@@ -326,7 +328,7 @@ pub fn parse_snapshot(
             ));
         };
         if let Some(block) = pods.get_mut(pod) {
-            block.insert(key.to_string(), value.to_string());
+            block.insert(key.to_owned(), value.to_owned());
         }
     }
     if pods.is_empty() {
@@ -359,7 +361,7 @@ pub fn resource_delta(
     clock_ticks_per_second: u32,
 ) -> Result<(f64, u64), String> {
     if before.keys().ne(after.keys()) {
-        return Err("the broker pod set changed during the trial".to_string());
+        return Err("the broker pod set changed during the trial".to_owned());
     }
     let mut ticks = 0_u64;
     let mut rss_bytes = 0_u64;
@@ -405,7 +407,7 @@ fn last_log_line(log: &str) -> Option<&str> {
 fn read_optional(path: &Path) -> Result<Option<String>, BudgetError> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
@@ -419,13 +421,13 @@ fn trial_outcome(
     let failed = |reason: String| Ok(TrialOutcome::Failed { reason });
     let Some(workload) = read_optional(&directory.join("workload.json"))? else {
         let log = read_optional(&directory.join("workload.log"))?.unwrap_or_default();
-        return failed(match last_log_line(&log) {
-            Some(line) => format!("the workload reported no result: {line}"),
-            None => "the workload reported no result".to_string(),
-        });
+        return failed(last_log_line(&log).map_or_else(
+            || "the workload reported no result".to_owned(),
+            |line| format!("the workload reported no result: {line}"),
+        ));
     };
     let Ok(result) = serde_json::from_str::<WorkloadResult>(&workload) else {
-        return failed("workload.json is not a workload result".to_string());
+        return failed("workload.json is not a workload result".to_owned());
     };
     let snapshot = |name: &str| -> Result<Option<BTreeMap<String, ProcessSample>>, BudgetError> {
         read_optional(&directory.join(name))?
@@ -436,7 +438,7 @@ fn trial_outcome(
         snapshot("resources-before.txt")?,
         snapshot("resources-after.txt")?,
     ) else {
-        return failed("a resource snapshot is missing".to_string());
+        return failed("a resource snapshot is missing".to_owned());
     };
     let (cpu_seconds, peak_rss_bytes) =
         match resource_delta(&before, &after, clock_ticks_per_second) {

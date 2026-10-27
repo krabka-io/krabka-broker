@@ -93,7 +93,7 @@ fn expected_response(rows: &[ExpectedRow]) -> TxnOffsetCommitResponse {
                      partition,
                      code,
                  }| TxnOffsetCommitResponseTopic {
-                    name: topic.to_string(),
+                    name: topic.to_owned(),
                     partitions: vec![TxnOffsetCommitResponsePartition {
                         partition_index: partition,
                         error_code: code,
@@ -112,13 +112,13 @@ fn expected_response(rows: &[ExpectedRow]) -> TxnOffsetCommitResponse {
 /// `NOT_COORDINATOR`.
 async fn lead_group_elsewhere(handle: &BrokerHandle, group_id: &str) {
     let broker = handle.broker_arc_for_test();
-    let partition = partition_for_group(&broker.controller.current_image(), group_id);
+    let partition = partition_for_group(&broker.controller.current_image(), group_id).unwrap();
     let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
     broker
         .controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1Partition(
             krabka_metadata::PartitionRecord {
-                topic: OFFSETS_TOPIC.to_string(),
+                topic: OFFSETS_TOPIC.to_owned(),
                 partition,
                 leader: elsewhere,
                 replicas: vec![elsewhere],
@@ -152,7 +152,7 @@ async fn bootstrap_transaction_state(handle: &BrokerHandle) {
 /// the state an interrupted `InitProducerId` leaves behind.
 async fn stage_producer_identity(broker: &Broker, transactional_id: &str, producer_id: i64) {
     let mut entry = TxnEntry::new_empty(
-        transactional_id.to_string(),
+        transactional_id.to_owned(),
         ProducerId(producer_id),
         0,
         60_000,
@@ -324,7 +324,7 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
         }
         let (member_id, generation_id) = match case.member {
             Member::Simple => (String::new(), -1),
-            Member::Unregistered => ("never-registered-member".to_string(), 0),
+            Member::Unregistered => ("never-registered-member".to_owned(), 0),
         };
         let request = TxnOffsetCommitRequest {
             transactional_id,

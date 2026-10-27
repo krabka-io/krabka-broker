@@ -8,10 +8,14 @@
 use {
     super::{BytePosition, RelativeOffset, corrupt_index},
     crate::error::RemoteStorageError,
+    krabka_verified::remote_read::remote_fetch_end_position,
+    std::mem,
     zerocopy::{BigEndian, FromBytes, Immutable, KnownLayout, Unaligned, byteorder::U32},
 };
 
-/// 8 bytes per entry: rel u32 BE, then pos u32 BE. It mirrors
+/// 8 bytes per entry: rel u32 BE, then pos u32 BE.
+///
+/// It mirrors
 /// `krabka_log::index::OffsetEntryRaw`, so the remote-tier copy of an
 /// `OffsetIndex` file decodes through the same byte layout that wrote the
 /// local index.
@@ -25,7 +29,7 @@ pub struct OffsetIndexEntry {
 }
 
 /// Byte length of one serialized offset-index entry.
-const OFFSET_INDEX_ENTRY_LEN: usize = std::mem::size_of::<OffsetIndexEntry>();
+const OFFSET_INDEX_ENTRY_LEN: usize = mem::size_of::<OffsetIndexEntry>();
 
 const _: [(); 8] = [(); OFFSET_INDEX_ENTRY_LEN];
 
@@ -41,16 +45,13 @@ pub fn end_position_for(
     max_bytes: usize,
 ) -> Option<BytePosition> {
     let max_bytes_u32 = u32::try_from(max_bytes).unwrap_or(u32::MAX);
-    krabka_verified::remote_read::remote_fetch_end_position(
-        start_position,
-        segment_size,
-        max_bytes_u32,
-    )
+    remote_fetch_end_position(start_position, segment_size, max_bytes_u32)
 }
 
 /// Borrows Kafka's `OffsetIndex` on-disk format as a zero-copy
-/// `&[OffsetIndexEntry]`, at 8 bytes per entry: rel u32 BE, then pos u32 BE.
-/// It ignores trailing bytes that do not complete an 8-byte entry. The result
+/// `&[OffsetIndexEntry]`.
+///
+/// Each entry is 8 bytes: rel u32 BE, then pos u32 BE. It ignores trailing bytes that do not complete an 8-byte entry. The result
 /// borrows from `bytes`.
 ///
 /// # Errors
@@ -59,12 +60,16 @@ pub fn end_position_for(
 /// do not form an entry array.
 pub fn parse_offset_index(bytes: &[u8]) -> Result<&[OffsetIndexEntry], RemoteStorageError> {
     let truncated_len = (bytes.len() / OFFSET_INDEX_ENTRY_LEN) * OFFSET_INDEX_ENTRY_LEN;
-    <[OffsetIndexEntry]>::ref_from_bytes(&bytes[..truncated_len])
-        .map_err(|_| corrupt_index("offset"))
+    bytes
+        .get(..truncated_len)
+        .and_then(|whole| <[OffsetIndexEntry]>::ref_from_bytes(whole).ok())
+        .ok_or_else(|| corrupt_index("offset"))
 }
 
 /// Floor lookup: the byte position of the largest entry with
-/// `rel <= target_rel`. It returns 0 when the index is empty, and when the
+/// `rel <= target_rel`.
+///
+/// It returns 0 when the index is empty, and when the
 /// target is before the first entry. It runs directly against the borrowed
 /// zero-copy slice and builds no owned `Vec`.
 #[must_use]
@@ -72,11 +77,13 @@ pub fn position_for_relative_offset(
     entries: &[OffsetIndexEntry],
     target_rel: RelativeOffset,
 ) -> BytePosition {
-    match entries.binary_search_by_key(&target_rel, |e| e.relative_offset.get()) {
-        Ok(i) => entries[i].position.get(),
-        Err(0) => 0,
-        Err(i) => entries[i - 1].position.get(),
-    }
+    let floor = match entries.binary_search_by_key(&target_rel, |e| e.relative_offset.get()) {
+        Ok(i) => Some(i),
+        Err(i) => i.checked_sub(1),
+    };
+    floor
+        .and_then(|i| entries.get(i))
+        .map_or(0, |entry| entry.position.get())
 }
 
 #[cfg(test)]

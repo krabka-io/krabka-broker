@@ -23,17 +23,19 @@ use {
     },
     std::{
         collections::HashSet,
+        future,
         sync::{
-            Arc, Mutex as StdMutex,
+            Arc, Mutex as StdMutex, PoisonError,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     },
+    tokio::time,
 };
 
 /// How fast the wrapped log's subscription delivers what it replays.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum ReplayPace {
+pub enum ReplayPace {
     /// Deliver one record per interval.
     OneEvery(Duration),
     /// Deliver nothing, ever, without closing the stream. This is the shape a
@@ -45,7 +47,7 @@ pub(crate) enum ReplayPace {
 
 /// Wraps a [`MetadataEventLog`] and paces its subscription. Every other
 /// method delegates.
-pub(crate) struct PacedReplayLog {
+pub struct PacedReplayLog {
     inner: Arc<dyn MetadataEventLog>,
     pace: ReplayPace,
 }
@@ -67,8 +69,8 @@ impl MetadataEventLog for PacedReplayLog {
         let pace = self.pace;
         let paced = stream.then(move |event| async move {
             match pace {
-                ReplayPace::OneEvery(interval) => tokio::time::sleep(interval).await,
-                ReplayPace::Never => std::future::pending::<()>().await,
+                ReplayPace::OneEvery(interval) => time::sleep(interval).await,
+                ReplayPace::Never => future::pending::<()>().await,
             }
             event
         });
@@ -80,7 +82,7 @@ impl MetadataEventLog for PacedReplayLog {
 /// the projection has started: what its subscription delivers, as a broker
 /// whose index fetch loop wedges does, or the replay fences published on it,
 /// as a broker whose Produce to an index partition hangs does.
-pub(crate) struct StallableLog {
+pub struct StallableLog {
     inner: Arc<dyn MetadataEventLog>,
     delivery_stalled: Arc<AtomicBool>,
     fences_stalled: AtomicBool,
@@ -115,7 +117,7 @@ impl MetadataEventLog for StallableLog {
             let stalled = Arc::clone(&stalled);
             async move {
                 if stalled.load(Ordering::SeqCst) {
-                    std::future::pending::<()>().await;
+                    future::pending::<()>().await;
                 }
                 event
             }
@@ -130,7 +132,7 @@ impl MetadataEventLog for StallableLog {
         value: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
         if self.fences_stalled.load(Ordering::SeqCst) && key.as_ref() == REPLAY_FENCE_KEY {
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         }
         self.inner.publish_keyed(partition, key, value).await
     }
@@ -141,13 +143,13 @@ impl MetadataEventLog for StallableLog {
 /// its subscription. A watermark read *before* subscribing steps over that
 /// record; one read after cannot.
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct RacingAppendSetup {
+pub struct RacingAppendSetup {
     pub partition: PartitionIndex,
     pub key: Bytes,
     pub event: Bytes,
 }
 
-pub(crate) struct RacingAppendLog {
+pub struct RacingAppendLog {
     inner: Arc<dyn MetadataEventLog>,
     racing: StdMutex<Option<RacingAppendSetup>>,
 }
@@ -185,7 +187,7 @@ impl MetadataEventLog for RacingAppendLog {
         let racing = self
             .racing
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
         if let Some(setup) = racing {
             // `subscribe` is synchronous, so this drives the append to
@@ -208,7 +210,7 @@ impl MetadataEventLog for RacingAppendLog {
 /// A record whose key is failing is refused. The rest of its group still
 /// lands, as records bound for other metadata partitions can when one Produce
 /// request fails.
-pub(crate) struct GroupAckLog {
+pub struct GroupAckLog {
     inner: Arc<dyn MetadataEventLog>,
     ack_delay: Duration,
     failing: StdMutex<HashSet<Bytes>>,
@@ -235,7 +237,7 @@ impl GroupAckLog {
     pub(crate) fn groups(&self) -> Vec<Vec<WalIndexKey>> {
         self.groups
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
@@ -243,11 +245,11 @@ impl GroupAckLog {
     pub(crate) fn heal(&self) {
         self.failing
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clear();
         self.groups
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clear();
     }
 }
@@ -261,14 +263,14 @@ impl MetadataEventLog for GroupAckLog {
     ) -> Result<Vec<i64>, MetadataLogError> {
         self.groups
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .push(
                 events
                     .iter()
                     .map(|event| WalIndexKey::from_bytes(&event.key).expect("a range key"))
                     .collect(),
             );
-        tokio::time::sleep(self.ack_delay).await;
+        time::sleep(self.ack_delay).await;
         let mut offsets = Vec::with_capacity(events.len());
         let mut failure = None;
         for KeyedEvent {
@@ -280,7 +282,7 @@ impl MetadataEventLog for GroupAckLog {
             let failing = self
                 .failing
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .contains(&key);
             if failing {
                 failure.get_or_insert_with(|| MetadataLogError::Publish("injected".into()));
@@ -299,7 +301,7 @@ impl MetadataEventLog for GroupAckLog {
 
 /// One input WAL range; timestamps and byte spans vary only where a case needs them.
 #[derive(Clone, Copy)]
-pub(crate) struct WalFlushSetup<'a> {
+pub struct WalFlushSetup<'a> {
     pub topic_id: uuid::Uuid,
     pub object_key: &'a str,
     pub first_offset: krabka_log::Offset,
@@ -343,7 +345,7 @@ impl WalFlushSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn flush_record(
+pub fn flush_record(
     #[builder(default = WalFlushSetup::default().topic_id)] topic_id: uuid::Uuid,
     #[builder(default = WalFlushSetup::default().object_key)] object_key: &'_ str,
     #[builder(into, default = WalFlushSetup::default().first_offset)]
@@ -387,7 +389,7 @@ pub(crate) fn flush_record(
     }
 }
 
-pub(crate) fn second_object_flush_record(topic_id: uuid::Uuid) -> WalFlushRecord {
+pub fn second_object_flush_record(topic_id: uuid::Uuid) -> WalFlushRecord {
     let setup = WalFlushSetup::second_object(topic_id);
     flush_record()
         .topic_id(setup.topic_id)
@@ -399,7 +401,7 @@ pub(crate) fn second_object_flush_record(topic_id: uuid::Uuid) -> WalFlushRecord
         .call()
 }
 
-pub(crate) fn three_record_flush(topic_id: uuid::Uuid, object_key: &str) -> WalFlushRecord {
+pub fn three_record_flush(topic_id: uuid::Uuid, object_key: &str) -> WalFlushRecord {
     let setup = WalFlushSetup::three_records();
     flush_record()
         .topic_id(topic_id)

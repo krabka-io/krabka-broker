@@ -21,12 +21,19 @@ use {
     assert2::{assert, check},
     krabka_ids::Offset,
     krabka_metadata::{DeleteTopicRecord, MetadataImage, MetadataRecord, TopicConfigRecord},
-    std::{sync::Arc, time::Duration as StdDuration},
-    tokio::sync::oneshot,
+    std::{
+        slice,
+        sync::Arc,
+        time::{Duration as StdDuration, SystemTime, UNIX_EPOCH},
+    },
+    tokio::{
+        sync::{oneshot, watch::Receiver},
+        time,
+    },
 };
 
 async fn acknowledge_tip(ctrl: &KraftController, follower: NodeId) {
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     commit_pending(ctrl, follower).await;
 }
 
@@ -47,7 +54,7 @@ fn waiter_offsets(engine: &super::Engine) -> Vec<Offset> {
 struct TopicSubmitFixture {
     engine: Engine,
     _directory: tempfile::TempDir,
-    _images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+    _images: Receiver<Arc<MetadataImage>>,
     expected_image: Arc<MetadataImage>,
 }
 
@@ -203,7 +210,7 @@ fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
         over("retention.ms", "30000"),
     ]);
     let (reply, mut result) = oneshot::channel();
-    engine.on_submit_change_if_image(std::slice::from_ref(&merged), Some(&expected), reply);
+    engine.on_submit_change_if_image(slice::from_ref(&merged), Some(&expected), reply);
     assert!(matches!(result.try_recv(), Ok(Ok(_))));
     assert!(let MetadataRecord::V1TopicConfig(merged) = merged);
     assert!(engine.image.topic_config("orders") == Some(&merged.overrides));
@@ -338,15 +345,15 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     let first_ctrl = ctrl.clone();
     let first =
         tokio::spawn(async move { first_ctrl.submit_change(offset_advance("topic", 3)).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     let second_ctrl = ctrl.clone();
     let second =
         tokio::spawn(async move { second_ctrl.submit_change(offset_advance("topic", 5)).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     let third_ctrl = ctrl.clone();
     let third =
         tokio::spawn(async move { third_ctrl.submit_change(offset_advance("other", 4)).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
 
     let qs = super::test_support::commit_pending(&ctrl, NodeId(2)).await;
 
@@ -441,7 +448,7 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
         )])
         .await;
 
-    let concurrent = tokio::time::timeout(
+    let concurrent = time::timeout(
         StdDuration::from_secs(1),
         ctrl.submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())]),
     )
@@ -522,7 +529,7 @@ async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
     commit_pending(&ctrl, NodeId(2)).await;
     let consume_ctrl = ctrl.clone();
     let consume = tokio::spawn(async move { consume_ctrl.submit_change(vec![consumed]).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     commit_pending(&ctrl, NodeId(2)).await;
     consume.await.unwrap().unwrap();
     ctrl.shutdown().await;
@@ -579,7 +586,7 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
         )])
         .await;
 
-    let concurrent = tokio::time::timeout(
+    let concurrent = time::timeout(
         StdDuration::from_secs(1),
         ctrl.submit_change(vec![MetadataRecord::V1TopicFreeze(replacement.clone())]),
     )
@@ -607,20 +614,20 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
 
     fn principal(name: &str) -> KafkaPrincipal {
         KafkaPrincipal {
-            principal_type: "User".to_string(),
-            name: name.to_string(),
+            principal_type: "User".to_owned(),
+            name: name.to_owned(),
         }
     }
 
     let now = i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis(),
     )
     .unwrap();
     let original = DelegationTokenRecord {
-        token_id: "token-273".to_string(),
+        token_id: "token-273".to_owned(),
         owner: principal("alice"),
         requester: principal("alice"),
         issue_timestamp_ms: now - 1_000,
@@ -657,9 +664,9 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
                 .await
         })
     };
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
 
-    let concurrent_delete = tokio::time::timeout(
+    let concurrent_delete = time::timeout(
         StdDuration::from_secs(1),
         ctrl.submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
             expected: original.clone(),
@@ -719,7 +726,7 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
             }])
             .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     commit_pending(&ctrl, NodeId(2)).await;
     delete.await.unwrap().unwrap();
     assert2::check!(
@@ -749,7 +756,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
     let result = ctrl
         .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
             PartitionOffsetAdvanceRecord {
-                topic: "topic".to_string(),
+                topic: "topic".to_owned(),
                 partition: 0,
                 count: 1,
             },
@@ -766,7 +773,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
         retry_ctrl
             .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
                 PartitionOffsetAdvanceRecord {
-                    topic: "topic".to_string(),
+                    topic: "topic".to_owned(),
                     partition: 0,
                     count: 1,
                 },
@@ -817,7 +824,7 @@ fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
 async fn submit_change_commits_on_single_voter_leader() {
     let (ctrl, _dir) = super::test_support::single_voter_leader().await;
 
-    tokio::time::timeout(
+    time::timeout(
         StdDuration::from_secs(5),
         ctrl.submit_change(topic_record("orders")),
     )
@@ -859,7 +866,7 @@ async fn submit_waiter_fails_on_leadership_loss() {
     let submit = super::test_support::spawn_submit(&ctrl, topic_record("orders"));
 
     // Give the submit a moment to reach the engine and park its waiter.
-    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    time::sleep(StdDuration::from_millis(50)).await;
 
     // A strictly-higher-epoch BeginQuorumEpoch from node 2 forces node 1 to
     // step down from Leader to Follower.
@@ -871,7 +878,7 @@ async fn submit_waiter_fails_on_leadership_loss() {
     .unwrap();
 
     // The parked submit must resolve promptly (bounded) with NotLeader.
-    let result = tokio::time::timeout(StdDuration::from_secs(5), submit)
+    let result = time::timeout(StdDuration::from_secs(5), submit)
         .await
         .expect("submit did not hang on leadership loss")
         .expect("join");
@@ -909,7 +916,7 @@ async fn rejection_scoped_to_owning_waiter_range() {
 
     let zero = super::test_support::pending_submission(&ctrl, topic_record_named("zero", 9)).await;
     commit_pending(&ctrl, NodeId(2)).await;
-    let rz = tokio::time::timeout(StdDuration::from_secs(5), zero)
+    let rz = time::timeout(StdDuration::from_secs(5), zero)
         .await
         .expect("seed did not hang")
         .expect("join");
@@ -920,33 +927,33 @@ async fn rejection_scoped_to_owning_waiter_range() {
     let cc = ctrl.clone();
     let a = tokio::spawn(async move {
         ca.submit_change(vec![MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
-            name: "zero".to_string(),
+            name: "zero".to_owned(),
         })])
         .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     let b = tokio::spawn(async move {
         cb.submit_change(vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "zero".to_string(),
-            overrides: [("retention.ms".to_string(), "1000".to_string())].into(),
+            topic: "zero".to_owned(),
+            overrides: [("retention.ms".to_owned(), "1000".to_owned())].into(),
         })])
         .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     let c = tokio::spawn(async move { cc.submit_change(topic_record_named("third", 3)).await });
-    tokio::time::sleep(StdDuration::from_millis(40)).await;
+    time::sleep(StdDuration::from_millis(40)).await;
 
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let ra = tokio::time::timeout(StdDuration::from_secs(5), a)
+    let ra = time::timeout(StdDuration::from_secs(5), a)
         .await
         .expect("A did not hang")
         .expect("join");
-    let rb = tokio::time::timeout(StdDuration::from_secs(5), b)
+    let rb = time::timeout(StdDuration::from_secs(5), b)
         .await
         .expect("B did not hang")
         .expect("join");
-    let rc = tokio::time::timeout(StdDuration::from_secs(5), c)
+    let rc = time::timeout(StdDuration::from_secs(5), c)
         .await
         .expect("C did not hang")
         .expect("join");
@@ -1037,7 +1044,7 @@ async fn second_create_of_uncommitted_topic_is_refused_before_append() {
             .iter()
             .map(|waiter| waiter.creates.clone())
             .collect::<Vec<_>>()
-            == vec![vec!["first".to_string()]]
+            == vec![vec!["first".to_owned()]]
     );
 
     // Node 2 fetches the whole log. With node 1, that is a majority of three.
@@ -1127,7 +1134,7 @@ fn partition_with_reported_directory(engine: &mut super::Engine) -> ReportedDire
     };
 
     let stale = PartitionRecord {
-        topic: "dirs".to_string(),
+        topic: "dirs".to_owned(),
         partition: 0,
         leader: NodeId(1),
         replicas: vec![NodeId(1), NodeId(2)],
@@ -1142,7 +1149,7 @@ fn partition_with_reported_directory(engine: &mut super::Engine) -> ReportedDire
     for records in [
         vec![
             MetadataRecord::V1Topic(TopicRecord {
-                name: "dirs".to_string(),
+                name: "dirs".to_owned(),
                 topic_id: uuid::Uuid::from_u128(0x70),
                 partitions: 1,
                 replication_factor: 2,
@@ -1151,7 +1158,7 @@ fn partition_with_reported_directory(engine: &mut super::Engine) -> ReportedDire
         ],
         vec![MetadataRecord::V1PartitionDirAssignment(
             PartitionDirAssignmentRecord {
-                topic: "dirs".to_string(),
+                topic: "dirs".to_owned(),
                 partition: 0,
                 replica: NodeId(2),
                 directory,

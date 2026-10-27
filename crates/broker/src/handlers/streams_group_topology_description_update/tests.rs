@@ -2,7 +2,10 @@
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::*,
-    crate::test_support::{ControllerPeerAllowed, GrantsInPrincipalName, start_broker_with},
+    crate::{
+        features,
+        test_support::{ControllerPeerAllowed, GrantsInPrincipalName, start_broker_with},
+    },
     assert2::assert,
     krabka_metadata::{FeatureLevelRecord, MetadataRecord},
     krabka_protocol::owned::{
@@ -57,7 +60,7 @@ async fn set_streams_version(broker: &Broker, level: i16) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::STREAMS_VERSION.into(),
+            name: features::STREAMS_VERSION.into(),
             level,
         })])
         .await

@@ -31,24 +31,25 @@ use {
         path::Path,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// Counts current `*.log` files and legacy files named `log` under `root`.
 /// Each one is the `LocalTieredStorage` segment-bytes object of a copied
 /// segment. This is the same helper as in `tiered_storage_topic_rlmm.rs`.
-fn count_remote_log_files(root: &std::path::Path) -> usize { remote_log_files(root).len() }
+fn count_remote_log_files(root: &Path) -> usize { remote_log_files(root).len() }
 
 /// Counts `*.log` files directly under one partition's local log directory.
 /// A tiered partition that has evicted everything it copied is down to its
 /// active segment, so this reaching 1 is the eviction having happened.
-fn count_local_segment_files(partition_dir: &std::path::Path) -> usize {
+fn count_local_segment_files(partition_dir: &Path) -> usize {
     local_log_segment_metadata(partition_dir).len()
 }
 
 /// Polls `partition_dir` until its `*.log` count satisfies `done`, or fails
 /// against `deadline` with `expectation`.
 async fn await_segment_count(
-    partition_dir: &std::path::Path,
+    partition_dir: &Path,
     deadline: Instant,
     expectation: &str,
     done: impl Fn(usize) -> bool,
@@ -63,7 +64,7 @@ async fn await_segment_count(
             "{} holds {segments} segment file(s); expected {expectation}",
             partition_dir.display()
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -85,7 +86,7 @@ async fn await_segment_count(
 ///
 /// `log_dir` is the follower broker's log directory root; the partition's own
 /// directory is the Kafka-conventional `<topic>-<partition>` below it.
-pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
+pub async fn await_follower_local_eviction(log_dir: &Path) {
     let partition_dir = log_dir.join(format!("{TOPIC}-0"));
     let deadline = Instant::now() + Duration::from_mins(1);
     // An open log always holds its active segment, so one `*.log` file is the
@@ -107,7 +108,7 @@ pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
     .await;
 }
 
-pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
+pub async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
     let assignment = AssignedTopicSetup::on_replicas(TOPIC, vec![
         krabka_metadata::NodeId(1),
         krabka_metadata::NodeId(2),
@@ -128,10 +129,7 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
     .await;
 }
 
-pub(crate) async fn produce_and_await_remote_segments(
-    admin: &Client,
-    remote_dir: &std::path::Path,
-) {
+pub async fn produce_and_await_remote_segments(admin: &Client, remote_dir: &Path) {
     let topic_id = topic_id_for(admin, TOPIC).await;
     for index in 0..RECORDS {
         let batch = batch_from_records(vec![Record {
@@ -156,7 +154,7 @@ pub(crate) async fn produce_and_await_remote_segments(
             Instant::now() <= deadline,
             "fewer than two segments were tiered"
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -166,7 +164,7 @@ pub(crate) async fn produce_and_await_remote_segments(
 /// archived segment, which is the only signal a tiered partition gives on
 /// disk: the *global* log start does not move when a segment is merely
 /// evicted, only when it is deleted from the tier as well.
-pub(crate) fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
+pub fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
     local_log_files(partition_dir)
         .into_iter()
         .map(|(base, _)| base)

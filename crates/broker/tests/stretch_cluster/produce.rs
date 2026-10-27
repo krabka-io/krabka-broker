@@ -16,10 +16,11 @@ use {
     krabka_client_core::Client,
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 pub async fn client_at(addr: &str) -> Client {
-    connect_owned(addr.to_string(), "stretch-cluster-test", "client build").await
+    connect_owned(addr.to_owned(), "stretch-cluster-test", "client build").await
 }
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
@@ -56,7 +57,7 @@ pub async fn produce_until_committed(addr: &str, topic_id: WireUuid) -> i16 {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut code = produce_once(&client, topic_id, 5_000).await;
     while code != codes::NONE && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
         code = produce_once(&client, topic_id, 5_000).await;
     }
     code

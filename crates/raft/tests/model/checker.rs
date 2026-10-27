@@ -157,12 +157,11 @@ impl Model for ConsensusModel {
         // A client appends to the single current (live) leader (only when the
         // target is unambiguous and the append budget remains). A fresh client id
         // per append keeps every linearizability "thread" single-op.
-        let leaders: Vec<NodeId> = state
+        let leader_count = state
             .nodes
             .iter()
             .filter(|(id, n)| is_leader(n) && !state.crashed.contains(*id))
-            .map(|(&id, _)| id)
-            .collect();
+            .count();
         if state.appends_issued < self.max_appends {
             let client = ClientId::from(state.appends_issued) + 1;
             let value = u64::from(state.appends_issued) + 1;
@@ -180,7 +179,7 @@ impl Model for ConsensusModel {
                     assert2::assert!(appender < APPENDER_COUNT);
                     actions.push(ModelAction::AppendVia(appender, client, value));
                 }
-            } else if leaders.len() == 1 {
+            } else if leader_count == 1 {
                 actions.push(ModelAction::ClientAppend(client, value));
             }
         }
@@ -299,7 +298,7 @@ impl Model for ConsensusModel {
             // Anti-vacuity witness for the property above: the resignation is
             // actually reached, rather than the check holding because no
             // check-quorum expiry was ever explored.
-            Property::sometimes("leader_resigns", |m: &ConsensusModel, s: &ModelState| {
+            Property::sometimes("leader_resigns", |m: &Self, s: &ModelState| {
                 // Only required where the expiry is offered; a config that
                 // does not explore it satisfies this trivially.
                 !m.enable_check_quorum || s.leader_resigned
@@ -340,19 +339,16 @@ impl Model for ConsensusModel {
             // Without this, `linearizable` could hold vacuously because no
             // client value ever committed (a control-record-only HWM advance
             // would not count).
-            Property::sometimes("entry_committed", |m: &ConsensusModel, s: &ModelState| {
+            Property::sometimes("entry_committed", |m: &Self, s: &ModelState| {
                 // Only required when client appends are enabled; a no-append
                 // config (election focus) satisfies this trivially.
                 m.max_appends == 0 || !s.committed.is_empty()
             }),
-            Property::sometimes(
-                "two_appenders_concurrent",
-                |m: &ConsensusModel, s: &ModelState| {
-                    !m.enable_append_via
-                        || (s.appenders_seen.len() == usize::from(APPENDER_COUNT)
-                            && s.pending.len() == usize::from(APPENDER_COUNT))
-                },
-            ),
+            Property::sometimes("two_appenders_concurrent", |m: &Self, s: &ModelState| {
+                !m.enable_append_via
+                    || (s.appenders_seen.len() == usize::from(APPENDER_COUNT)
+                        && s.pending.len() == usize::from(APPENDER_COUNT))
+            }),
             // Safety (Raft log matching): two logs may diverge only as an
             // uncommitted suffix — if they disagree on the epoch at some offset
             // `k`, they must not agree again at any later offset (equal entries
@@ -404,30 +400,24 @@ impl Model for ConsensusModel {
             // fallen behind. The transition that delivers the request
             // establishes the reason by running the voter's real machine on
             // the same request with only the candidate's log end changed.
-            Property::sometimes(
-                "stale_candidate_refused",
-                |m: &ConsensusModel, s: &ModelState| {
-                    // Only reachable where a majority can fall behind a
-                    // committed prefix: three voters that take client appends.
-                    if m.voter_ids.len() < 3 || m.max_appends == 0 {
-                        return true;
-                    }
-                    s.step_witness == Some(StepWitness::StaleCandidateRefused)
-                },
-            ),
+            Property::sometimes("stale_candidate_refused", |m: &Self, s: &ModelState| {
+                // Only reachable where a majority can fall behind a
+                // committed prefix: three voters that take client appends.
+                if m.voter_ids.len() < 3 || m.max_appends == 0 {
+                    return true;
+                }
+                s.step_witness == Some(StepWitness::StaleCandidateRefused)
+            }),
             // Anti-vacuity witness for `log_matching`: a follower whose log
             // disagrees with the leader's is cut back by the production
             // truncation path, since the model never overwrites a log.
-            Property::sometimes(
-                "divergent_log_truncated",
-                |m: &ConsensusModel, s: &ModelState| {
-                    // Required where a node can be cut off from a leader it
-                    // then outlives: the crash configs. Without a crash the
-                    // bounded configs never leave a follower holding an entry
-                    // the next leader lacks.
-                    m.max_crashes == 0 || s.step_witness == Some(StepWitness::DivergentLogTruncated)
-                },
-            ),
+            Property::sometimes("divergent_log_truncated", |m: &Self, s: &ModelState| {
+                // Required where a node can be cut off from a leader it
+                // then outlives: the crash configs. Without a crash the
+                // bounded configs never leave a follower holding an entry
+                // the next leader lacks.
+                m.max_crashes == 0 || s.step_witness == Some(StepWitness::DivergentLogTruncated)
+            }),
             // Safety: no node's committed high-watermark exceeds its own log end
             // (a node cannot have committed past what it physically holds).
             Property::always("hwm_within_log", |_, s: &ModelState| {

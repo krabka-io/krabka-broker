@@ -27,11 +27,13 @@
 use {
     super::state::TxnState,
     crate::codes::INVALID_TRANSACTION_TIMEOUT,
-    krabka_verified::transaction::{IdleTransactionState, should_abort_idle_transaction},
+    krabka_verified::transaction::{
+        IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS, should_abort_idle_transaction,
+    },
 };
 
 /// Persisted 2PC timeout sentinel.
-pub(crate) const NO_TIMEOUT_MS: i32 = krabka_verified::transaction::NO_TRANSACTION_TIMEOUT_MS;
+pub const NO_TIMEOUT_MS: i32 = NO_TRANSACTION_TIMEOUT_MS;
 
 /// The `TransactionTimeoutMs` to persist for an `InitProducerId`, or
 /// `INVALID_TRANSACTION_TIMEOUT` when the request asks for a timeout that
@@ -52,7 +54,7 @@ pub(crate) const NO_TIMEOUT_MS: i32 = krabka_verified::transaction::NO_TRANSACTI
 ///
 /// Returns `INVALID_TRANSACTION_TIMEOUT` (50) for a timeout that is not
 /// positive, or that is above `max_timeout_ms`.
-pub(crate) fn resolve_txn_timeout(
+pub fn resolve_txn_timeout(
     enable_2pc: bool,
     requested_ms: i32,
     max_timeout_ms: i32,
@@ -71,7 +73,7 @@ pub(crate) fn resolve_txn_timeout(
 /// Kafka's `isDistributedTwoPhaseCommitTxn`.
 #[must_use]
 #[cfg(test)]
-pub(crate) fn is_two_phase_commit(txn_timeout_ms: i32) -> bool { txn_timeout_ms == NO_TIMEOUT_MS }
+pub fn is_two_phase_commit(txn_timeout_ms: i32) -> bool { txn_timeout_ms == NO_TIMEOUT_MS }
 
 /// THE safety-critical decision: should the idle-transaction reaper abort the
 /// transaction in `state` as of `now_ms`? The transaction carries the persisted
@@ -99,7 +101,7 @@ pub(crate) fn is_two_phase_commit(txn_timeout_ms: i32) -> bool { txn_timeout_ms 
 /// aborts a transaction with a nonnegative timeout, which is every timeout
 /// [`resolve_txn_timeout`] persists.
 #[must_use]
-pub(crate) fn should_abort_idle_txn(
+pub fn should_abort_idle_txn(
     state: TxnState,
     txn_timeout_ms: i32,
     start_ms: i64,

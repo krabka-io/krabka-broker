@@ -27,24 +27,27 @@ use {
                 ShareSessionSetup, StartedShareTopic, acknowledge_partition, acknowledge_request,
                 acknowledge_success, acknowledge_topic, join_consume_member, start_group_topic,
             },
-            topics::topic_configs,
+            topics::{self, topic_configs},
         },
     },
     assert2::{assert, check},
     bytes::Bytes,
     krabka_broker::{
-        BrokerConfig, BrokerHandle, RemoteStorageBackend, api_catalog::UnstableApiVersions,
+        BrokerConfig, BrokerHandle, RemoteStorageBackend,
+        api_catalog::UnstableApiVersions,
+        metrics::{BrokerMetrics, ShareGroupIdLabel},
     },
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
             create_topics_request::CreateTopicsRequest, list_offsets_request::ListOffsetsRequest,
-            share_acknowledge_request::AcknowledgementBatch,
+            share_acknowledge_request::AcknowledgementBatch, share_fetch_response::PartitionData,
             update_features_request::UpdateFeaturesRequest,
         },
         records::{Record, RecordBatch, RecordsPayload},
     },
-    std::time::Duration,
+    std::{iter, sync::Arc, time::Duration},
+    tokio::time,
 };
 
 const GROUP: &str = "g1";
@@ -91,7 +94,7 @@ async fn create_dead_letter_topic_with(
     extra: &[ConfigEntry<'_>],
 ) {
     let configs = topic_configs(
-        std::iter::once(("errors.deadletterqueue.group.enable", "true")).chain(
+        iter::once(("errors.deadletterqueue.group.enable", "true")).chain(
             extra
                 .iter()
                 .map(|ConfigEntry { name, value }| (*name, *value)),
@@ -100,7 +103,7 @@ async fn create_dead_letter_topic_with(
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![
-                crate::support::topics::creatable_topic_with_configs()
+                topics::creatable_topic_with_configs()
                     .name(DLQ_TOPIC.into())
                     .configs(configs)
                     .call(),
@@ -235,7 +238,7 @@ async fn wait_for_dead_letters(
     count: ShareRecordCount,
 ) -> Vec<Record> {
     let expected = usize::try_from(count.0).expect("dead-letter count fits usize");
-    tokio::time::timeout(Duration::from_secs(60), async {
+    time::timeout(Duration::from_secs(60), async {
         loop {
             let records = dead_letter_records(broker, client).await;
             if records.len() >= expected {
@@ -243,7 +246,7 @@ async fn wait_for_dead_letters(
             }
             // intentional: bounded poll of a topic that a background task writes;
             // nothing signals the append to the test.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await
@@ -256,7 +259,7 @@ krabka_macros::record_header_text!(header, lossy);
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct RejectRangesSetup<'a> {
     topic_id: uuid::Uuid,
-    #[default(crate::support::share::ShareSessionEpoch(1))]
+    #[default(ShareSessionEpoch(1))]
     epoch: ShareSessionEpoch,
     #[default(&[])]
     ranges: &'a [RejectedRange],
@@ -276,8 +279,7 @@ async fn reject_ranges(
     client: &Client,
     member: &str,
     #[builder(default)] topic_id: uuid::Uuid,
-    #[builder(into, default = crate :: support :: share :: ShareSessionEpoch (1))]
-    epoch: ShareSessionEpoch,
+    #[builder(into, default = ShareSessionEpoch(1))] epoch: ShareSessionEpoch,
     #[builder(default = & [])] ranges: &'_ [RejectedRange],
 ) {
     let setup = RejectRangesSetup {
@@ -325,15 +327,15 @@ krabka_macros::share_dlq_meters!(
     /// What the `DeadLetterQueue*` meters of the group count on the broker: the
     /// records written, the attempts to produce, and the writes that failed.
     meters,
-    krabka_broker::metrics::BrokerMetrics,
-    krabka_broker::metrics::ShareGroupIdLabel
+    BrokerMetrics,
+    ShareGroupIdLabel
 );
 
 /// Starts a trunk broker with a source topic `t` of `records` records and a
 /// member that holds all of them acquired, then returns what a test drives.
 struct Cluster {
     broker: BrokerHandle,
-    client: std::sync::Arc<Client>,
+    client: Arc<Client>,
     tid: uuid::Uuid,
     member: String,
     _dir: tempfile::TempDir,
@@ -357,7 +359,7 @@ struct DeadLetterReadSetup {
 /// The parts of a [`Cluster`] a test reads, borrowed.
 struct ClusterParts<'a> {
     broker: &'a BrokerHandle,
-    client: &'a std::sync::Arc<Client>,
+    client: &'a Arc<Client>,
     tid: &'a uuid::Uuid,
     member: &'a String,
 }
@@ -415,7 +417,7 @@ enum DeadLetterShareVersion {
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct DeadLetterQueueSetup<'a> {
-    #[default(crate::support::share::ShareRecordCount(3))]
+    #[default(ShareRecordCount(3))]
     records: ShareRecordCount,
     version: DeadLetterShareVersion,
     #[default(&[])]
@@ -438,7 +440,7 @@ async fn configure_dead_letters(
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct AcquiredRecordsSetup {
-    #[default(crate::support::share::ShareRecordCount(3))]
+    #[default(ShareRecordCount(3))]
     records: ShareRecordCount,
 }
 
@@ -475,7 +477,7 @@ async fn acquired_records(
 /// A joined member and the row of its first acquiring fetch.
 struct AcquiredMember {
     member: String,
-    row: krabka_protocol::owned::share_fetch_response::PartitionData,
+    row: PartitionData,
 }
 
 /// [`acquired_records`], with the records that `produce` writes to `t` in place
@@ -496,8 +498,7 @@ async fn join_and_acquire(
 
 #[bon::builder]
 async fn acquired_records_from<T, C, P>(
-    #[builder(into, default = crate :: support :: share :: ShareRecordCount (3))]
-    records: ShareRecordCount,
+    #[builder(into, default = ShareRecordCount(3))] records: ShareRecordCount,
     hooks: AcquisitionHooks<T, C, P>,
 ) -> Cluster
 where
@@ -773,7 +774,7 @@ async fn a_reject_below_share_version_two_writes_nothing() {
         .await;
     // intentional: no signal says that a write that must not happen has not
     // happened yet, so the test gives it time before it reads the topic.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
 
     cluster.check_empty_dead_letter_topic().await;
     cluster.broker.shutdown().await;
@@ -958,7 +959,7 @@ async fn tier_the_source_topic(broker: &BrokerHandle, client: &Client) {
         ])
         .call()
         .await;
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         loop {
             if broker
                 .partition_log_config_for_test("t", 0)
@@ -971,7 +972,7 @@ async fn tier_the_source_topic(broker: &BrokerHandle, client: &Client) {
             }
             // intentional: the reconcile loop applies the topic config to the
             // partition's `LogConfig` with no awaiter or metric.
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
@@ -981,7 +982,7 @@ async fn tier_the_source_topic(broker: &BrokerHandle, client: &Client) {
 // Waits until `ListOffsets(EARLIEST_LOCAL)` on `t` answers `offset`: every
 // record below it is in the remote tier and gone from local disk.
 async fn wait_until_local_log_start(client: &Client, offset: krabka_ids::Offset) {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         loop {
             let mut response = client
                 .send(ListOffsetsRequest {
@@ -1000,7 +1001,7 @@ async fn wait_until_local_log_start(client: &Client, offset: krabka_ids::Offset)
             }
             // intentional: the remote-log manager moves the local log start
             // on its own timer, and nothing signals it to the test.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
@@ -1062,8 +1063,7 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
 #[bon::builder]
 async fn acquired_dead_letters(
     customize: impl FnOnce(&mut BrokerConfig),
-    #[builder(into, default = crate :: support :: share :: ShareRecordCount (3))]
-    records: ShareRecordCount,
+    #[builder(into, default = ShareRecordCount(3))] records: ShareRecordCount,
     #[builder(default)] version: DeadLetterShareVersion,
     #[builder(default = & [])] topic_configs: &'_ [ConfigEntry<'_>],
 ) -> Cluster {

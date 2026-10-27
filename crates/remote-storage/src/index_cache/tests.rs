@@ -5,9 +5,13 @@
 use {
     super::*,
     assert2::check,
-    std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    std::{
+        fs, io,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
     },
 };
 
@@ -16,8 +20,8 @@ fn simultaneous_fills_never_publish_partial_cached_bytes() {
     let TestCache { dir: _dir, cache } = test_cache(4 * 1024 * 1024);
     let segment = Uuid::new_v4();
     let expected = vec![7; 1024 * 1024];
-    let fill_barrier = std::sync::Barrier::new(16);
-    std::thread::scope(|scope| {
+    let fill_barrier = Barrier::new(16);
+    thread::scope(|scope| {
         for _ in 0..16 {
             scope.spawn(|| {
                 let (bytes, _) = cache
@@ -58,7 +62,7 @@ fn stale_temporary_paths_do_not_prevent_cache_replacement() {
         index_type: IndexType::Offset,
     };
     let path = entry_path(&directory.path().join(REMOTE_INDEX_CACHE_DIR), key);
-    std::fs::create_dir(path.with_extension("tmp")).unwrap();
+    fs::create_dir(path.with_extension("tmp")).unwrap();
     cache.store(key, &path, &[9; 64]);
     let (bytes, outcome) = cache
         .get_or_fetch(segment, IndexType::Offset, || {
@@ -211,7 +215,7 @@ fn removing_a_segment_releases_every_index_it_held() {
                 bytes: 0,
             }
     );
-    let files = std::fs::read_dir(dir.path().join(REMOTE_INDEX_CACHE_DIR))
+    let files = fs::read_dir(dir.path().join(REMOTE_INDEX_CACHE_DIR))
         .expect("cache dir")
         .count();
     check!(files == 0);
@@ -240,7 +244,7 @@ fn a_fetch_failure_is_returned_and_leaves_the_cache_empty() {
     let TestCache { dir: _dir, cache } = test_cache(1 << 20);
 
     let result = cache.get_or_fetch(Uuid::new_v4(), IndexType::Offset, || {
-        Err(RemoteStorageError::Io(std::io::Error::other("boom")))
+        Err(RemoteStorageError::Io(io::Error::other("boom")))
     });
 
     match result {
@@ -256,13 +260,13 @@ fn a_fetch_failure_is_returned_and_leaves_the_cache_empty() {
 fn opening_the_cache_empties_a_directory_an_earlier_process_left() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join(REMOTE_INDEX_CACHE_DIR);
-    std::fs::create_dir_all(&root).expect("pre-create");
-    std::fs::write(root.join("stale.index"), b"stale").expect("stale entry");
+    fs::create_dir_all(&root).expect("pre-create");
+    fs::write(root.join("stale.index"), b"stale").expect("stale entry");
 
     let cache = RemoteIndexCache::new(dir.path(), 1 << 20).expect("cache");
 
     check!(cache.stats() == IndexCacheStats::default());
-    check!(std::fs::read_dir(&root).expect("cache dir").count() == 0);
+    check!(fs::read_dir(&root).expect("cache dir").count() == 0);
 }
 
 /// What a cache of four 40-byte entries holds after one resize.
@@ -313,7 +317,7 @@ fn resizing_a_live_cache_evicts_down_to_the_new_budget(new_budget: u64, expected
     cache.resize(new_budget);
 
     let stats = cache.stats();
-    let files = std::fs::read_dir(dir.path().join(REMOTE_INDEX_CACHE_DIR))
+    let files = fs::read_dir(dir.path().join(REMOTE_INDEX_CACHE_DIR))
         .expect("cache dir")
         .count();
     let cached = segments.map(|segment| {

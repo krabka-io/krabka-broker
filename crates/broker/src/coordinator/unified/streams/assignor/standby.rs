@@ -60,7 +60,11 @@ pub(super) fn assign_standby(state: &mut LocalState, stateful_tasks: &[Task]) {
 /// Returns whether it placed the copy.
 fn place_on_prev_owner(state: &mut LocalState, task: &Task) -> bool {
     if let Some(prev) = state.active_task_to_prev_member.get(task).cloned() {
-        let holds = state.processes[&prev.process_id].has_task(task);
+        // A previous owner whose process is gone cannot take the copy.
+        let holds = state
+            .processes
+            .get(&prev.process_id)
+            .is_none_or(|process| process.has_task(task));
         if !holds && state.member_count(&prev) < state.total_tasks_per_member {
             let count = state.add_task(&prev, task, false);
             state.maybe_update_total_tasks_per_member(count);
@@ -82,11 +86,12 @@ fn place_on_prev_owner(state: &mut LocalState, task: &Task) -> bool {
 /// Places one standby copy of `task` on the least loaded member of the least
 /// loaded process that does not hold the task yet. Returns whether one did.
 fn place_on_least_loaded_process(state: &mut LocalState, task: &Task) -> bool {
-    let Some(process_id) = state
-        .processes_by_load()
-        .into_iter()
-        .find(|id| !state.processes[id].has_task(task))
-    else {
+    let Some(process_id) = state.processes_by_load().into_iter().find(|id| {
+        state
+            .processes
+            .get(id)
+            .is_some_and(|process| !process.has_task(task))
+    }) else {
         return false;
     };
     let count = state.processes.get_mut(&process_id).map_or(0, |process| {

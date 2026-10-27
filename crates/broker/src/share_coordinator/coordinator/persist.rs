@@ -27,7 +27,10 @@ use {
     krabka_log::Offset,
     krabka_protocol::records::{Record, RecordBatch},
     std::sync::{Arc, atomic::Ordering},
-    tokio::sync::Mutex,
+    tokio::{
+        sync::{Mutex, Notify},
+        time::{Instant, sleep_until, timeout},
+    },
     tracing::warn,
 };
 
@@ -39,7 +42,7 @@ mod tests;
 /// validate against the shard's potentially stale live state.
 struct AppendUncertainty<'a> {
     shards: &'a DashMap<PartitionIndex, ()>,
-    recovery_needed: &'a tokio::sync::Notify,
+    recovery_needed: &'a Notify,
     partition: PartitionIndex,
     determinate: bool,
 }
@@ -177,7 +180,7 @@ impl ShareCoordinator {
         });
         batch.last_offset_delta = 0;
 
-        tokio::time::timeout(
+        timeout(
             self.config.write_timeout,
             self.append_as_leader(&part, term, batch),
         )
@@ -278,7 +281,7 @@ impl ShareCoordinator {
         let Some(part) = self.partitions.get(bootstrap::TOPIC, term.partition) else {
             return Err(AppendError::NotLeader(term.partition));
         };
-        let deadline = tokio::time::Instant::now() + self.config.write_timeout;
+        let deadline = Instant::now() + self.config.write_timeout;
         loop {
             // Register for the next notice before the reads, so a notice
             // between the reads and the wait is not lost. The partition
@@ -298,7 +301,7 @@ impl ShareCoordinator {
             }
             tokio::select! {
                 () = &mut notice => {}
-                () = tokio::time::sleep_until(deadline) => return Err(AppendError::TimedOut),
+                () = sleep_until(deadline) => return Err(AppendError::TimedOut),
             }
         }
     }
@@ -329,9 +332,9 @@ impl ShareCoordinator {
                 .iter()
                 .filter(|e| {
                     let (g, t, p) = e.key();
-                    self.state_partition_for(g, t, *p) == state_partition
+                    self.state_partition_for(g, t, *p) == Some(state_partition)
                 })
-                .map(|e| e.value().clone())
+                .map(|e| Arc::clone(e.value()))
                 .collect();
 
             let mut offsets = Vec::with_capacity(handles.len());

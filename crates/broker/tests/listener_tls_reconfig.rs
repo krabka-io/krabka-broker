@@ -5,6 +5,7 @@
 //! `IncrementalAlterConfigs` of `listener.name.ssl.ssl.keystore.*` then
 //! changes what the SSL listener serves, or is refused, as Kafka 4.3.1's
 //! `SslFactory` reconfiguration does.
+#![cfg(test)]
 
 mod kafka_wire;
 mod support;
@@ -19,17 +20,21 @@ use {
         },
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, codes},
     krabka_protocol::owned::incremental_alter_configs_response::AlterConfigsResourceResponse,
     krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig},
+    krabka_units::{Time, convert::TimeExt},
     rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair},
+    rustls::crypto::aws_lc_rs,
     std::{
+        fs::{self, File},
         net::SocketAddr,
         path::Path,
         sync::Arc,
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime},
     },
     tempfile::TempDir,
+    tokio::{net::TcpListener, time},
 };
 
 /// The client id every request header in this suite carries.
@@ -70,7 +75,7 @@ impl Identity {
 
     /// Write this identity as one PEM keystore file, key first.
     fn write_keystore(&self, path: &Path) {
-        std::fs::write(path, format!("{}{}", self.key, self.cert)).expect("write keystore");
+        fs::write(path, format!("{}{}", self.key, self.cert)).expect("write keystore");
     }
 }
 
@@ -86,16 +91,16 @@ struct TlsBroker {
 
 impl TlsBroker {
     async fn start() -> Self {
-        drop(rustls::crypto::aws_lc_rs::default_provider().install_default());
+        drop(aws_lc_rs::default_provider().install_default());
         let dir = tempfile::tempdir().expect("tempdir");
         let served = Identity::new("localhost", &["localhost"]);
         let cert_chain_path = dir.path().join("static-cert.pem");
         let private_key_path = dir.path().join("static-key.pem");
-        std::fs::write(&cert_chain_path, &served.cert).unwrap();
-        std::fs::write(&private_key_path, &served.key).unwrap();
+        fs::write(&cert_chain_path, &served.cert).unwrap();
+        fs::write(&private_key_path, &served.key).unwrap();
 
-        let plaintext = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let ssl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plaintext = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ssl = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (admin, ssl_addr) = (plaintext.local_addr().unwrap(), ssl.local_addr().unwrap());
         let mut config = BrokerConfig::for_tests(dir.path().join("log"));
         config.listeners = vec![
@@ -111,7 +116,7 @@ impl TlsBroker {
             client_auth: ClientAuthMode::Disabled,
         });
         // The static file watcher plays no part in these cases.
-        config.tls_reload_interval = <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO;
+        config.tls_reload_interval = <Time as TimeExt>::ZERO;
         let handle = Broker::start_with_listeners(config, None, [plaintext, ssl])
             .await
             .expect("broker start");
@@ -175,7 +180,7 @@ impl TlsBroker {
             // The alter is committed before its response, but the listener
             // reads the image the broker has applied, which has no signal a
             // test can wait on.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         }
     }
 }
@@ -183,7 +188,7 @@ impl TlsBroker {
 /// The response row of an alter of `resource` that succeeded.
 fn accepted(resource: String) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::NONE,
+        error_code: codes::NONE,
         error_message: None,
         resource_type: BROKER_RESOURCE,
         resource_name: resource,
@@ -215,9 +220,9 @@ async fn a_renewed_keystore_is_served_without_restart() {
     // Kafka reloads a keystore whose path did not change when the key is
     // altered again; the new contents are served.
     let rotated = Identity::new("localhost", &["localhost"]);
-    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    let later = SystemTime::now() + Duration::from_secs(5);
     rotated.write_keystore(Path::new(&location));
-    std::fs::File::options()
+    File::options()
         .write(true)
         .open(&location)
         .unwrap()
@@ -246,7 +251,7 @@ async fn a_renewed_keystore_is_served_without_restart() {
 /// `cause`, as Kafka's `ConfigAdminManager` answers it.
 fn refusal(resource: String, cause: &str) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::INVALID_REQUEST,
+        error_code: codes::INVALID_REQUEST,
         error_message: Some(format!(
             "Invalid value org.apache.kafka.common.config.ConfigException: Validation of dynamic \
              config update of SSLFactory failed: {cause} for configuration Invalid dynamic \

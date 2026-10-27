@@ -23,7 +23,7 @@ use {
         },
         error::BrokerError,
     },
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
 };
 
 /// Decodes `value` as the value of `key`'s record type and drops the result.
@@ -345,12 +345,10 @@ pub(super) fn apply_group_metadata(
         } else {
             m.rebalance_timeout_ms
         };
-        let session_timeout = std::time::Duration::from_millis(
-            u64::try_from(m.session_timeout_ms.max(0)).unwrap_or(30_000),
-        );
-        let rebalance_timeout = std::time::Duration::from_millis(
-            u64::try_from(rebalance_timeout_ms.max(0)).unwrap_or(60_000),
-        );
+        let session_timeout =
+            Duration::from_millis(u64::try_from(m.session_timeout_ms.max(0)).unwrap_or(30_000));
+        let rebalance_timeout =
+            Duration::from_millis(u64::try_from(rebalance_timeout_ms.max(0)).unwrap_or(60_000));
         let protocols = v
             .protocol_name
             .iter()

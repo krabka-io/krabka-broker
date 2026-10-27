@@ -10,7 +10,7 @@ use {
         wal::quorum::{ShardRemoval, registry::WalShardRegistry, remove_shard},
     },
     krabka_ids::PartitionIndex,
-    std::{path::PathBuf, sync::Arc},
+    std::{fs, io::ErrorKind, path::PathBuf, sync::Arc},
     uuid::Uuid,
 };
 
@@ -38,9 +38,9 @@ impl LocalDeletion {
         indices: &[PartitionIndex],
     ) -> Self {
         Self {
-            registry: broker.partitions.clone(),
-            hot_tail: broker.hot_tail.clone(),
-            wal_shards: broker.wal_shards.clone(),
+            registry: Arc::clone(&broker.partitions),
+            hot_tail: Arc::clone(&broker.hot_tail),
+            wal_shards: Arc::clone(&broker.wal_shards),
             name: name.to_owned(),
             topic_id,
             captured: indices
@@ -88,8 +88,8 @@ impl LocalDeletion {
                         &self.name,
                         captured.index.get(),
                     );
-                    if let Err(error) = std::fs::remove_dir_all(dir)
-                        && error.kind() != std::io::ErrorKind::NotFound
+                    if let Err(error) = fs::remove_dir_all(dir)
+                        && error.kind() != ErrorKind::NotFound
                     {
                         tracing::warn!(topic = %self.name, partition = captured.index.get(), %error,
                         "failed to remove deleted topic partition directory");

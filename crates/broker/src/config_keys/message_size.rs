@@ -20,7 +20,7 @@ use {
 /// string here that does not parse means a damaged metadata image and not an
 /// operator's intent.
 #[must_use]
-pub(crate) fn resolve_max_message_bytes(
+pub fn resolve_max_message_bytes(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     broker_default: ByteSize,

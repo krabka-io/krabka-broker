@@ -38,11 +38,11 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use {self::group::describe_group, crate::codes};
+use {self::group::describe_group, crate::codes, std::sync::Arc};
 
 // cargo-mutants: share-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeShareGroupOffsetsRequest,
     _version: ApiVersion,
@@ -69,7 +69,7 @@ pub(crate) async fn handle(
         return Ok(resp);
     }
 
-    let ng_opt = Some(broker.group_coordinator.clone());
+    let ng_opt = Some(Arc::clone(&broker.group_coordinator));
 
     let mut groups: Vec<DescribeShareGroupOffsetsResponseGroup> =
         Vec::with_capacity(req.groups.len());

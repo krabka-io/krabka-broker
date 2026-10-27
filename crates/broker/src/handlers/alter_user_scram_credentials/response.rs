@@ -23,7 +23,7 @@ pub(super) fn err_result(name: String, code: i16, msg: &str) -> AlterUserScramCr
     AlterUserScramCredentialsResult {
         user: name,
         error_code: code,
-        error_message: Some(msg.to_string()),
+        error_message: Some(msg.to_owned()),
         ..Default::default()
     }
 }

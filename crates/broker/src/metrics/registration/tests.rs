@@ -29,14 +29,11 @@ async fn declared_clock_bound_is_exported_in_seconds() {
         drop(r);
 
         let name = "krabka_broker_delivery_clock_uncertainty_seconds ";
-        let line = buf
+        let value = buf
             .lines()
-            .find(|line| line.starts_with(name))
+            .find_map(|line| line.strip_prefix(name))
             .expect("the declared bound is registered and exported");
-        let exported: f64 = line[name.len()..]
-            .trim()
-            .parse()
-            .expect("the gauge encodes a number");
+        let exported: f64 = value.trim().parse().expect("the gauge encodes a number");
 
         // Bit equality rather than `==`: the assertion is that the
         // encode/parse round trip returns the same `f64`, not that two
@@ -397,7 +394,7 @@ async fn break_glass_action_label_covers_every_gated_transition() {
     ];
     // An action added to the metadata enum needs a row here, so the closed
     // label set stays covered.
-    assert!(cases.len() == crate::break_glass::ALL_ACTIONS.len());
+    assert!(cases.len() == ALL_ACTIONS.len());
     for action in ALL_ACTIONS {
         assert!(
             cases.iter().any(|(_, cased)| *cased == action),

@@ -16,7 +16,7 @@ use {
         },
     },
     assert2::{assert, check},
-    bytes::{Bytes, BytesMut},
+    bytes::BytesMut,
     krabka_client_core::{MockBroker, MockReply},
     krabka_protocol::{
         Encode as _, UnknownTaggedFields,
@@ -32,10 +32,11 @@ use {
     },
     krabka_raft::NodeId,
     std::{
-        collections::VecDeque,
+        collections::{BTreeMap, VecDeque},
         net::{IpAddr, SocketAddr},
         sync::{Arc, Mutex},
     },
+    tokio::net::TcpSocket,
 };
 
 /// A retry timeout short enough that a test sees [`TopicCreatorError::Timeout`]
@@ -144,7 +145,7 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
         .image(&image)
         .node(broker.config.node_id)
         .topic("fresh")
-        .overrides(&std::collections::BTreeMap::new())
+        .overrides(&BTreeMap::new())
         .call();
     let created = response(CreatableTopicResult {
         name: "fresh".to_owned(),
@@ -285,8 +286,8 @@ fn creator_over(controller: FakeMetadataSource, voters: Vec<(NodeId, String)>) -
 
 /// Reserve an address without listening, so another parallel fixture cannot
 /// bind the supposedly closed endpoint and answer the request.
-fn closed_socket() -> tokio::net::TcpSocket {
-    let socket = tokio::net::TcpSocket::new_v4().expect("probe socket");
+fn closed_socket() -> TcpSocket {
+    let socket = TcpSocket::new_v4().expect("probe socket");
     socket
         .bind("127.0.0.1:0".parse().expect("loopback address"))
         .expect("reserve a closed endpoint");
@@ -506,12 +507,14 @@ impl FakeController {
                             address,
                         }),
                     });
+                    drop(state);
                     reply
                 } else {
                     state.received.push(Received {
                         client_id,
                         forwarded: None,
                     });
+                    drop(state);
                     plain_answer(answer, version)
                 }
             })
@@ -834,7 +837,7 @@ fn an_embedded_response_with_another_correlation_id_is_refused() {
     response(scripted_created_row("scripted"))
         .encode(&mut body, forwarded.api_version)
         .expect("encode");
-    let data: Bytes = envelope::wrap_response(&forwarded, &body);
+    let data = envelope::wrap_response(&forwarded, &body);
 
     check!(
         parse_embedded_response(&data, 42, forwarded.api_version)

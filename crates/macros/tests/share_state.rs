@@ -1,4 +1,5 @@
 //! Share-state schemas retain native operations, concurrent row order and commit boundaries.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -28,11 +29,12 @@ use {
         task::{Poll, Waker},
         time::Duration,
     },
+    tokio::{task, time},
 };
 
 // The generated protocol conversion needs only these two UUID operations.
 mod uuid {
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Uuid {
         pub bytes: [u8; 16],
     }
@@ -207,7 +209,7 @@ async fn all_partitions_start_concurrently_and_results_keep_request_order() {
             format!("{group}:{}:{}", topic.bytes[0], row.partition)
         })
     };
-    let results = tokio::time::timeout(Duration::from_secs(1), operation)
+    let results = time::timeout(Duration::from_secs(1), operation)
         .await
         .expect("all four rows must reach the barrier");
     assert!(arrivals.get() == 4);
@@ -248,16 +250,16 @@ impl Drop for Active<'_> {
 }
 
 impl AdmissionDomain {
-    fn state_partition_for(&self, group: &str, topic: &[u8; 16], partition: i32) -> usize {
+    async fn active_for_key(
+        &self,
+        group: &str,
+        topic: &[u8; 16],
+        partition: i32,
+    ) -> Result<Active<'_>, ()> {
         assert!(group == "group" && topic[0] == 1 && partition == 2);
         self.events.borrow_mut().push("key");
-        0
-    }
-
-    async fn active(&self, partition: usize) -> Result<Active<'_>, ()> {
-        assert!(partition == 0);
         self.events.borrow_mut().push("acquire");
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         if self.admitted {
             Ok(Active { domain: self })
         } else {
@@ -271,7 +273,7 @@ impl AdmissionDomain {
         result: Result<T, ShareStateError>,
     ) -> Result<T, ShareStateError> {
         guard.domain.events.borrow_mut().push("answer");
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         let answer = if self.committed {
             result
         } else {
@@ -290,7 +292,7 @@ impl AdmissionDomain {
         partition: i32,
     ) -> Result<usize, ShareStateError> {
         active.domain.events.borrow_mut().push("operation");
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         if image == "refuse" {
             Err(ShareStateError::Refused)
         } else {

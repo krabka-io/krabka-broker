@@ -12,15 +12,12 @@ use {
 };
 
 /// One independently constructed partition hint in a wire response.
-pub(crate) struct PartitionHint {
-    pub(crate) index: i32,
-    pub(crate) leader_id: i32,
+pub struct PartitionHint {
+    pub index: i32,
+    pub leader_id: i32,
 }
 
-pub(crate) fn hinted_partitions<P>(
-    leader_ids: &[i32],
-    make: impl Fn(PartitionHint) -> P,
-) -> Vec<P> {
+pub fn hinted_partitions<P>(leader_ids: &[i32], make: impl Fn(PartitionHint) -> P) -> Vec<P> {
     leader_ids
         .iter()
         .enumerate()
@@ -34,9 +31,9 @@ pub(crate) fn hinted_partitions<P>(
 }
 
 /// Independent expected wire rows; the production endpoint converter is not used.
-pub(crate) struct ExpectedEndpoints {
-    pub(crate) fetch: FetchEndpoint,
-    pub(crate) produce: ProduceEndpoint,
+pub struct ExpectedEndpoints {
+    pub fetch: FetchEndpoint,
+    pub produce: ProduceEndpoint,
 }
 
 fn expected_endpoint(node_id: i32, host: &str, port: i32, rack: Option<&str>) -> ExpectedEndpoints {
@@ -72,8 +69,8 @@ struct EndpointCase<R> {
 
 fn endpoint(name: &str, host: &str, port: u16) -> BrokerEndpoint {
     BrokerEndpoint {
-        name: name.to_string(),
-        host: host.to_string(),
+        name: name.to_owned(),
+        host: host.to_owned(),
         port,
         protocol: krabka_security::ListenerProtocol::Plaintext,
     }
@@ -90,7 +87,7 @@ fn image() -> MetadataImage {
         },
         BrokerCase {
             node_id: 2,
-            rack: Some("rack-b".to_string()),
+            rack: Some("rack-b".to_owned()),
         },
     ] {
         image.apply(&MetadataRecord::V1BrokerRegistration(
@@ -110,7 +107,7 @@ fn image() -> MetadataImage {
 }
 
 /// Checks listener selection, missing leaders, ordering and deduplication.
-pub(crate) fn check_endpoints<R: Debug + PartialEq>(
+pub fn check_endpoints<R: Debug + PartialEq>(
     project: impl Fn(&MetadataImage, &str, &[i32]) -> Vec<R>,
     select_expected: impl Fn(ExpectedEndpoints) -> R,
 ) {

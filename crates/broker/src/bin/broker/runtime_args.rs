@@ -7,11 +7,12 @@ use {
     krabka_broker::{
         config_value::{PositiveCount, PositiveI16, PositiveI32, PositiveI64},
         coordinator::unified::streams::config::StreamsAssignorKind,
+        file_config::RuntimeFileConfig,
     },
     krabka_client_core::{
-        ClientFrameMax, ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
+        ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
     },
-    krabka_units::{ByteSize, Ratio, Time},
+    krabka_units::{ByteSize, Ratio, Time, parse},
 };
 
 fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
@@ -26,7 +27,7 @@ fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
 #[krabka_macros::runtime_policy_fields(cli)]
 #[krabka_macros::krabka_env]
 #[derive(Debug, clap::Args, krabka_macros::RuntimeOverlay)]
-#[overlay(target = krabka_broker::file_config::RuntimeFileConfig)]
+#[overlay(target = RuntimeFileConfig)]
 pub struct RuntimeArgs {
     #[arg(
         long,
@@ -202,8 +203,7 @@ fn parse_kafka_int_byte_size(value: &str) -> Result<ByteSize, String> {
     const KAFKA_INT_MAX: u64 = 2_147_483_647;
     const DOMAIN: &str = "must be a whole number of bytes from 0 to 2147483647";
 
-    let size =
-        krabka_units::parse::non_negative_byte_size(value).map_err(|error| error.to_string())?;
+    let size = parse::non_negative_byte_size(value).map_err(|error| error.to_string())?;
     let bytes = size.bytes_u64();
     if ByteSize::from_bytes(bytes) != size || bytes > KAFKA_INT_MAX {
         return Err(DOMAIN.to_owned());
@@ -211,11 +211,7 @@ fn parse_kafka_int_byte_size(value: &str) -> Result<ByteSize, String> {
     Ok(size)
 }
 
-fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
-    let value =
-        krabka_units::parse::positive_byte_size(value).map_err(|error| error.to_string())?;
-    ClientFrameMax::try_from(value).map(ClientFrameMax::size)
-}
+krabka_macros::frame_max_parser!(parse_client_frame_max);
 
 #[cfg(test)]
 mod tests {

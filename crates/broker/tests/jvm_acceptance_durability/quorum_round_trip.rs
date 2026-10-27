@@ -8,13 +8,13 @@
 
 use {
     crate::{
+        durability_cluster,
         jvm_acceptance::{KAFKA_IMAGE, create_plain_console_topic_at, docker_run_kafka_tool},
-        support::{
-            ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_stdin_output,
-            start_jvm_cluster,
-        },
+        support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
     },
     assert2::assert,
+    std::time::Duration,
+    tokio::time,
 };
 
 // Three-node quorum: produce on one node, consume on another, then kill
@@ -35,12 +35,10 @@ use {
 async fn three_node_jvm_round_trip() {
     const TOPIC: &str = "krabka-quorum-itest";
 
-    init_jvm_tracing("krabka_broker=debug,info");
-
     let client_ports = [9192u16, 9292, 9392];
     let controller_ports = [9193u16, 9293, 9393];
 
-    let mut cluster = start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
+    let mut cluster = durability_cluster(client_ports, controller_ports, |_| {}).await;
 
     let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
     let bootstrap_2 = format!("host.docker.internal:{}", client_ports[1]);
@@ -116,7 +114,7 @@ async fn three_node_jvm_round_trip() {
     // after the leader was killed. There is no "controller leader changed"
     // awaiter, and a survivor's cached leader value can momentarily read stale,
     // so a fixed settle window is used rather than risk a stale-value wait.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    time::sleep(Duration::from_secs(5)).await;
 
     // 6. Survivor still answers Metadata via kafka-topics --list.
     let survivor_idx = (0..client_ports.len())

@@ -57,13 +57,13 @@ use {
 /// The exception that a request is refused with, as Kafka's
 /// `getErrorResponse` overrides read it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RequestFailure<'a> {
+pub struct RequestFailure<'a> {
     /// `Errors.forException(e).code()`.
-    pub(crate) error_code: i16,
+    pub error_code: i16,
     /// `Errors.message()`: the code's own default message.
-    pub(crate) default_message: &'a str,
+    pub default_message: &'a str,
     /// `Throwable.getMessage()`.
-    pub(crate) exception_message: &'a str,
+    pub exception_message: &'a str,
 }
 
 impl RequestFailure<'_> {
@@ -86,7 +86,7 @@ impl RequestFailure<'_> {
 
 /// What [`error_response_body`] answers: the encoded response body, or `None`
 /// where Kafka's `getErrorResponse` builds no response.
-pub(crate) type ErrorAnswer = Result<Option<Bytes>, BrokerError>;
+pub type ErrorAnswer = Result<Option<Bytes>, BrokerError>;
 
 /// Decodes the request body of `api_key` at `version`, and encodes the
 /// response body that Kafka's `getErrorResponse` builds for it from
@@ -96,7 +96,7 @@ pub(crate) type ErrorAnswer = Result<Option<Bytes>, BrokerError>;
 ///
 /// Fails when `body` does not decode at `version`, when Kafka 4.3.1 does not
 /// parse `api_key`, or when the response does not encode.
-pub(crate) fn error_response_body(
+pub fn error_response_body(
     api_key: ApiKeyCode,
     version: ApiVersion,
     body: &[u8],

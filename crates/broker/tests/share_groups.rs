@@ -7,6 +7,7 @@
 //! exercises the real wire path. Version negotiation goes through
 //! `ApiVersions`, and both share RPCs have MIN=MAX=1, so the client negotiates
 //! v1.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

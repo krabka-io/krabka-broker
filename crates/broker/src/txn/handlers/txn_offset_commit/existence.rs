@@ -108,7 +108,7 @@ mod tests {
         check!(
             unknown
                 == HashSet::from([TopicPartition {
-                    topic: "a".to_string(),
+                    topic: "a".to_owned(),
                     partition: PartitionIndex(5),
                 }])
         );
@@ -121,7 +121,7 @@ mod tests {
         check!(
             unknown
                 == HashSet::from([TopicPartition {
-                    topic: "missing".to_string(),
+                    topic: "missing".to_owned(),
                     partition: PartitionIndex(0),
                 }])
         );
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn denied_topic_is_excluded_from_the_existence_check() {
         let image = MetadataImage::new(Uuid::from_u128(1));
-        let denied = HashSet::from(["missing".to_string()]);
+        let denied = HashSet::from(["missing".to_owned()]);
         let unknown = unknown_partitions(&[topic("missing", &[0])], &denied, &image);
         check!(unknown.is_empty());
     }

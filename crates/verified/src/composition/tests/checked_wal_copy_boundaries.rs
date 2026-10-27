@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection, std::collections::HashSet};
 
 fn check_two_durable_followers(reported: &[i64], watermarks: FetchWatermarks) {
     assert!(
@@ -56,7 +56,7 @@ fn malformed_wal_copy_sources_are_rejected(source: [WalCopyBatch; 1]) {
 proptest! {
     #[test]
     fn installed_wal_fetch_support_matches_identity_and_sorted_offset_oracles(
-        votes in proptest::collection::vec((0u64..16, any::<i64>()), 0..12),
+        votes in collection::vec((0u64..16, any::<i64>()), 0..12),
         configured in 0usize..12,
         matching_count in any::<bool>(),
         end in 0i64..=i64::MAX,
@@ -68,7 +68,7 @@ proptest! {
         let (voters, reported): (Vec<_>, Vec<_>) = votes.into_iter().unzip();
         let local = voters.first().copied().unwrap_or(0);
         let expected = if matching_count { voters.len() } else { configured };
-        let distinct: std::collections::HashSet<_> = voters.iter().copied().collect();
+        let distinct: HashSet<_> = voters.iter().copied().collect();
         let current = current.min(end);
         let w = FetchWatermarks { log_start: start.min(end), log_end: end, hw: 0, lso, deliverable };
         let result = installed_wal_quorum_bounds_fetch(&voters, &reported, local, expected, current, w);
@@ -82,7 +82,7 @@ proptest! {
                 .map(|(node, offset)| (node, offset.min(end)))
                 .filter(|(_, offset)| *offset >= limit).collect();
             assert!(supporters == expected_support);
-            let support_nodes: std::collections::HashSet<_> = supporters.iter().map(|(node, _)| *node).collect();
+            let support_nodes: HashSet<_> = supporters.iter().map(|(node, _)| *node).collect();
             assert!(support_nodes.len() == supporters.len());
             if hw > current && limit > w.log_start { assert!(support_nodes.len() >= voters.len() / 2 + 1); }
         }

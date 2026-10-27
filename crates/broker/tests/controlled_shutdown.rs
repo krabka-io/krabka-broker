@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` (see
-// elect_leaders.rs / acl_handlers.rs preamble).
+#![cfg(test)]
 
 //! `BrokerHandle::controlled_shutdown` integration test.
 //!
@@ -19,9 +18,10 @@ use {
         topics::{CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor},
     },
     assert2::assert,
-    krabka_broker::BrokerHandle,
+    krabka_broker::{BrokerHandle, config::NodeRole},
     krabka_metadata::{MetadataRecord, NodeId as MetadataNodeId, PartitionRecord},
     std::{net::SocketAddr, time::Duration},
+    tokio::time,
 };
 
 mod kafka_wire;
@@ -44,7 +44,7 @@ async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i3
 struct ForcedLeadershipSetup<'a> {
     #[default("drain-me")]
     topic: &'a str,
-    #[default(crate::support::topics::TopicPartitionCount(4))]
+    #[default(TopicPartitionCount(4))]
     partitions: TopicPartitionCount,
     #[default(krabka_metadata::NodeId(1))]
     leader: krabka_metadata::NodeId,
@@ -60,8 +60,7 @@ struct ForcedLeadershipSetup<'a> {
 async fn force_leadership_for_test(
     leader_handle: &BrokerHandle,
     #[builder(default = "drain-me")] topic: &'_ str,
-    #[builder(into, default = crate :: support :: topics :: TopicPartitionCount (4))]
-    partitions: TopicPartitionCount,
+    #[builder(into, default = TopicPartitionCount(4))] partitions: TopicPartitionCount,
     #[builder(into, default = krabka_metadata :: NodeId (1))] leader: krabka_metadata::NodeId,
     #[builder(default = vec ! [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2) , krabka_metadata :: NodeId (3)])]
     replicas: Vec<MetadataNodeId>,
@@ -83,7 +82,7 @@ async fn force_leadership_for_test(
             continue;
         };
         let record = MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition: p,
             leader: krabka_metadata::NodeId(target),
             replicas: replicas.clone(),
@@ -139,7 +138,7 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
     // which cannot be drained. Targeting a follower keeps the test
     // focused on the controllable wire path.
     let raft_leader_idx = {
-        let leader = cluster[0].0.wait_until_controller_leader().await;
+        let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
         cluster
             .iter()
             .position(|(_, cfg, _)| cfg.node_id == leader)
@@ -154,7 +153,7 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
 
     // Create topic on the cluster leader's listen addr.
     let addr = cluster[raft_leader_idx].1.listen_addr;
-    let topic: &str = "drain-me";
+    let topic = "drain-me";
     let partitions: i32 = 4;
     create_topic(addr, CreateTopicSetup {
         topic,
@@ -253,13 +252,13 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
 async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.roles = vec![krabka_broker::config::NodeRole::Controller];
+    config.roles = vec![NodeRole::Controller];
     let controller = krabka_broker::Broker::start(config)
         .await
         .expect("controller-only start");
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
-    let stopped = tokio::time::timeout(
+    let stopped = time::timeout(
         Duration::from_secs(20),
         controller.controlled_shutdown(Duration::from_secs(10)),
     )

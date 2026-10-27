@@ -68,7 +68,10 @@ krabka_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
-use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+use {
+    crate::{config_keys, test_support::start_broker_with_authorizer_no_audit as start_broker},
+    krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic,
+};
 
 async fn drive(
     broker: &Broker,
@@ -82,7 +85,7 @@ async fn drive(
 
 #[derive(Default)]
 struct PartitionRowsCaseSetup {
-    topics: Vec<krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic>,
+    topics: Vec<CreatePartitionsTopic>,
     mutation: PartitionMutation,
     expected: Vec<CreatePartitionsTopicResult>,
 }
@@ -92,9 +95,7 @@ struct PartitionRowsCaseSetup {
 async fn check_topic_rows(
     broker: &Broker,
     ctx: Option<&RequestContext<'_>>,
-    #[builder(default)] topics: Vec<
-        krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic,
-    >,
+    #[builder(default)] topics: Vec<CreatePartitionsTopic>,
     #[builder(default)] mutation: PartitionMutation,
     #[builder(default)] expected: Vec<CreatePartitionsTopicResult>,
 ) {
@@ -249,7 +250,7 @@ async fn handle_rejects_an_unplaceable_new_diskless_partition() {
             krabka_metadata::TopicConfigRecord {
                 topic: "diskless-grow".into(),
                 overrides: maplit::btreemap! {
-                    crate::config_keys::DISKLESS.to_string() => "true".to_string()
+                    config_keys::DISKLESS.to_owned() => "true".to_owned()
                 },
             },
         )])
@@ -802,8 +803,8 @@ async fn concurrent_growth_revalidates_partition_count_before_append() {
     let h = peer();
     let ctx = test_context(&p, &h);
     let req = request(vec![topic_req().call()], PartitionMutation::Apply);
-    let (first, second) = tokio::join!(drive(&broker, &req, &ctx), drive(&broker, &req, &ctx));
-    let mut got = [first, second];
+    let mut got: [_; 2] =
+        tokio::join!(drive(&broker, &req, &ctx), drive(&broker, &req, &ctx)).into();
     got.sort_unstable_by_key(|response| response.results[0].error_code);
     let expected = [
         expected_response(vec![expected_result("t", codes::NONE, None)]),

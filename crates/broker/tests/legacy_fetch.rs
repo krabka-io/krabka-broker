@@ -7,6 +7,7 @@
 //!   - zstd-compressed batches, which the broker re-compresses as snappy.
 //!   - control batches, which the broker drops from the down-converted
 //!     response.
+#![cfg(test)]
 
 mod kafka_wire;
 mod support;

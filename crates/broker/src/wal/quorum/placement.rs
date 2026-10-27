@@ -1,11 +1,14 @@
 //! Voter placement helpers for diskless WAL quorums.
 
-use krabka_metadata::{BrokerRegistrationRecord, NodeId};
+use {
+    krabka_metadata::{BrokerRegistrationRecord, NodeId},
+    krabka_verified::wal,
+};
 
 /// Selects the WAL voters from distinct configured racks. An incomplete
 /// result makes the caller fail closed instead of weakening the AZ-loss
 /// durability guarantee.
-pub(crate) fn select_voters(
+pub fn select_voters(
     brokers: impl IntoIterator<Item = BrokerRegistrationRecord>,
     local_node: NodeId,
     voters: usize,
@@ -19,7 +22,7 @@ pub(crate) fn select_voters(
 }
 
 /// Select voters from broker/rack pairs already sorted by node id.
-pub(crate) fn select_voters_from_sorted_racks(
+pub fn select_voters_from_sorted_racks(
     brokers: &[(NodeId, Option<String>)],
     local_node: NodeId,
     voters: usize,
@@ -45,11 +48,12 @@ pub(crate) fn select_voters_from_sorted_racks(
             });
         candidates.push((
             node_id.0,
-            u64::try_from(rack_id).expect("rack index fits u64"),
+            // A rack index counts distinct racks, far below `u64::MAX`.
+            u64::try_from(rack_id).unwrap_or(u64::MAX),
         ));
     }
 
-    krabka_verified::wal::select_wal_voters(&candidates, local_node.0, voters)
+    wal::select_wal_voters(&candidates, local_node.0, voters)
         .into_iter()
         .map(|(node, _)| NodeId(node))
         .collect()
@@ -110,7 +114,7 @@ mod tests {
     fn broker(id: u64, rack: Option<&str>) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
             host: format!("broker-{id}"),
-            rack: rack.map(str::to_string),
+            rack: rack.map(str::to_owned),
             endpoints: vec![BrokerEndpoint {
                 name: "INTERNAL".into(),
                 host: format!("broker-{id}"),

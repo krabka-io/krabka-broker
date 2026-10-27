@@ -29,13 +29,13 @@ const KEY_ISOLATION_LEVEL: &str = "share.isolation.level";
 /// Kafka's `GroupConfig.SHARE_RENEW_ACKNOWLEDGE_ENABLE_CONFIG`.
 const KEY_RENEW_ACKNOWLEDGE_ENABLE: &str = "share.renew.acknowledge.enable";
 /// Kafka's `GroupConfig.ERRORS_DEADLETTERQUEUE_TOPIC_NAME_CONFIG`.
-pub(crate) const KEY_DLQ_TOPIC_NAME: &str = "errors.deadletterqueue.topic.name";
+pub const KEY_DLQ_TOPIC_NAME: &str = "errors.deadletterqueue.topic.name";
 /// Kafka's `GroupConfig.ERRORS_DEADLETTERQUEUE_COPY_RECORD_ENABLE_CONFIG`.
-pub(crate) const KEY_DLQ_COPY_RECORD_ENABLE: &str = "errors.deadletterqueue.copy.record.enable";
+pub const KEY_DLQ_COPY_RECORD_ENABLE: &str = "errors.deadletterqueue.copy.record.enable";
 
 /// The resolved share settings of one group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GroupShareSettings {
+pub struct GroupShareSettings {
     /// How long an acquired record stays locked to its member.
     pub(crate) record_lock_duration: Duration,
     /// The delivery count at which a record is archived.
@@ -69,10 +69,16 @@ impl GroupShareSettings {
     #[must_use]
     pub(crate) fn resolve(image: &MetadataImage, group: &str, defaults: &ShareGroupConfig) -> Self {
         let overrides = image.group_config(group);
-        let value = |key: &str| overrides.and_then(|configs| configs.get(key));
+        let value = |key: &str| {
+            let configs = overrides?;
+            configs.get(key)
+        };
         // Kafka parses each of the three as an `INT`, and a value that does not
         // parse is ignored.
-        let int = |key: &str| value(key).and_then(|text| text.trim().parse::<i32>().ok());
+        let int = |key: &str| {
+            let text = value(key)?;
+            text.trim().parse::<i32>().ok()
+        };
         Self {
             record_lock_duration: int(KEY_RECORD_LOCK_DURATION_MS).map_or(
                 defaults.record_lock_duration,

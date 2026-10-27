@@ -17,7 +17,7 @@ mod fetch;
 mod log;
 mod promotion;
 
-pub(crate) use self::promotion::hydrate_on_promotion;
+pub use self::promotion::hydrate_on_promotion;
 use {
     self::{
         connection::{connect_with_backoff, sleep_or_cancel},
@@ -34,7 +34,7 @@ use {
     crate::{codes, replicator::ReplicationConnectionConfig},
 };
 
-pub(crate) struct Config {
+pub struct Config {
     pub(crate) node_id: NodeId,
     pub(crate) topic: String,
     pub(crate) shard: ShardId,
@@ -49,7 +49,7 @@ pub(crate) struct Config {
     pub(crate) connection: ReplicationConnectionConfig,
 }
 
-pub(crate) async fn run(config: Config) {
+pub async fn run(config: Config) {
     info!(
         topic = %config.topic,
         partition = config.shard.partition.0,
@@ -187,11 +187,16 @@ mod tests {
         bytes::Bytes,
         krabka_ids::{Offset, PartitionIndex},
         krabka_log::Log,
-        krabka_protocol::records::{Record, RecordBatch},
+        krabka_protocol::{
+            owned::fetch_response::PartitionData,
+            records::{Record, RecordBatch},
+        },
         std::{
             path::Path,
             sync::{Arc, Mutex},
+            time::Duration,
         },
+        tokio::time,
     };
 
     fn test_config(root: &Path, shutdown: CancellationToken) -> Config {
@@ -235,7 +240,7 @@ mod tests {
         registry: &Arc<WalShardRegistry>,
         shard: ShardId,
         follower: &FollowerLog,
-    ) -> krabka_protocol::owned::fetch_response::PartitionData {
+    ) -> PartitionData {
         let req = fetch_request(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             NodeId(2),
@@ -259,13 +264,13 @@ mod tests {
         let mut task = tokio::spawn(run(config));
 
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(20), &mut task)
+            time::timeout(Duration::from_millis(20), &mut task)
                 .await
                 .is_err()
         );
         shutdown.cancel();
         assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            time::timeout(Duration::from_secs(1), task)
                 .await
                 .unwrap()
                 .is_ok()
@@ -298,7 +303,7 @@ mod tests {
             super::super::QuorumWalStore::for_distributed_partition(
                 uuid::Uuid::from_u128(42),
                 PartitionIndex(0),
-                source.clone(),
+                Arc::clone(&source),
                 None,
                 3,
             )
@@ -365,7 +370,7 @@ mod tests {
         assert2::assert!((store.engine().durable_watermark()) == (leo));
     }
 
-    fn divergent_follower(dir: &std::path::Path, epoch: i32, tail: &'static [u8]) -> FollowerLog {
+    fn divergent_follower(dir: &Path, epoch: i32, tail: &'static [u8]) -> FollowerLog {
         let mut log = Log::open(dir, LogConfig::default()).unwrap();
         log.append_at(&mut batch(0, b"shared"), Offset(0)).unwrap();
         log.append_at(&mut batch(epoch, tail), Offset(1)).unwrap();

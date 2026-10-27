@@ -80,8 +80,9 @@ use {
         sync::{Arc, Mutex},
     },
     tokio::{
+        io,
         net::{TcpListener, TcpStream},
-        task::JoinHandle,
+        task::{self, JoinHandle},
     },
     tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
@@ -246,7 +247,7 @@ async fn accept_loop(listener: TcpListener, state: Arc<State>) {
                     // relay for the rest of the test. Yield so that an error
                     // that does repeat cannot become a hot spin.
                     tracing::debug!(%error, "relay accept failed");
-                    tokio::task::yield_now().await;
+                    task::yield_now().await;
                     continue;
                 }
             },
@@ -282,7 +283,7 @@ async fn forward(mut inbound: TcpStream, upstream: SocketAddr, link: Cancellatio
         // connection down mid-copy. The token is a child of the relay's
         // shutdown token, so this branch also fires on shutdown.
         () = link.cancelled() => {}
-        copied = tokio::io::copy_bidirectional(&mut inbound, &mut outbound) => {
+        copied = io::copy_bidirectional(&mut inbound, &mut outbound) => {
             if let Err(error) = copied {
                 tracing::debug!(%error, "relay copy ended");
             }

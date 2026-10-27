@@ -14,14 +14,13 @@ use {
 };
 
 fn pending_epoch(state: &BTreeMap<String, GroupEntry>, group: &str) -> Option<i64> {
-    state
-        .get(group)
-        .and_then(|entry| entry.pending.as_ref().map(|pending| pending.epoch))
+    let entry = state.get(group)?;
+    entry.pending.as_ref().map(|pending| pending.epoch)
 }
 
 /// One decoded `__barrier_state` record. A `None` value is a tombstone.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum StateRecord {
+pub enum StateRecord {
     /// A group definition. A tombstone deletes the group.
     Group {
         group: String,
@@ -47,7 +46,7 @@ pub(crate) enum StateRecord {
 ///
 /// A group tombstone removes the whole entry. An injection-start tombstone or
 /// a cut tombstone removes only what it names.
-pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: StateRecord) {
+pub fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: StateRecord) {
     match record {
         StateRecord::Group { group, value } => {
             let action = barrier_recovery_fold_action(
@@ -57,15 +56,16 @@ pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: Sta
                 None,
                 false,
             );
-            match action {
-                BarrierRecoveryFoldAction::DefineGroup => {
-                    state.entry(group).or_default().definition =
-                        value.expect("the verified action requires a group value");
+            match (action, value) {
+                (BarrierRecoveryFoldAction::DefineGroup, Some(definition)) => {
+                    state.entry(group).or_default().definition = definition;
                 }
-                BarrierRecoveryFoldAction::RemoveGroup => {
+                (BarrierRecoveryFoldAction::RemoveGroup, _) => {
                     state.remove(&group);
                 }
-                _ => unreachable!("the group record kind selects a group action"),
+                _ => unreachable!(
+                    "the group record kind selects a group action, with a value it needs"
+                ),
             }
         }
         StateRecord::InjectionStart {
@@ -84,20 +84,20 @@ pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: Sta
                 pending_epoch,
                 epoch_already_consumed,
             );
-            match action {
-                BarrierRecoveryFoldAction::SetPending => {
-                    state.entry(group).or_default().pending = Some(PendingInjection {
-                        epoch,
-                        start: value.expect("the verified action requires an injection value"),
-                    });
+            match (action, value) {
+                (BarrierRecoveryFoldAction::SetPending, Some(start)) => {
+                    state.entry(group).or_default().pending =
+                        Some(PendingInjection { epoch, start });
                 }
-                BarrierRecoveryFoldAction::ClearPending => {
+                (BarrierRecoveryFoldAction::ClearPending, _) => {
                     if let Some(entry) = state.get_mut(&group) {
                         entry.pending = None;
                     }
                 }
-                BarrierRecoveryFoldAction::KeepPending => {}
-                _ => unreachable!("the injection record kind selects an injection action"),
+                (BarrierRecoveryFoldAction::KeepPending, _) => {}
+                _ => unreachable!(
+                    "the injection record kind selects an injection action, with a value it needs"
+                ),
             }
         }
         StateRecord::Cut {
@@ -113,23 +113,22 @@ pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: Sta
                 pending_epoch,
                 false,
             );
-            match action {
-                BarrierRecoveryFoldAction::UpsertCut { retire_pending } => {
+            match (action, value) {
+                (BarrierRecoveryFoldAction::UpsertCut { retire_pending }, Some(cut)) => {
                     let entry = state.entry(group).or_default();
-                    entry.cuts.insert(
-                        epoch,
-                        value.expect("the verified action requires a cut value"),
-                    );
+                    entry.cuts.insert(epoch, cut);
                     if retire_pending {
                         entry.pending = None;
                     }
                 }
-                BarrierRecoveryFoldAction::RemoveCut => {
+                (BarrierRecoveryFoldAction::RemoveCut, _) => {
                     if let Some(entry) = state.get_mut(&group) {
                         entry.cuts.remove(&epoch);
                     }
                 }
-                _ => unreachable!("the cut record kind selects a cut action"),
+                _ => {
+                    unreachable!("the cut record kind selects a cut action, with a value it needs")
+                }
             }
         }
     }

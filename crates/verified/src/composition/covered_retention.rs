@@ -78,10 +78,7 @@ pub(super) fn remote_coverage_bounds_local_retention(
     size_debt: Option<u64>,
     active_size: u64,
 ) -> CoveredRetention {
-    let anchor = match local.len() {
-        0 => 0,
-        _ => local[0].0,
-    };
+    let anchor = local.first().map_or(0, |first| first.0);
     proof_assert!(anchor@ == if local@.len() == 0 { 0 } else { local@[0].0@ });
     let covered = remote_covered_through(remote, anchor);
     let mut facts: Vec<LocalRetentionSegment> = Vec::new();
@@ -92,10 +89,13 @@ pub(super) fn remote_coverage_bounds_local_retention(
         && facts@[j].blocked == match covered { None => true, Some(through) => local@[j].1@ > through@ })]
     #[variant(local@.len() - i@)]
     while i < local.len() {
+        let Some(&(_, end, size, expired)) = local.get(i) else {
+            break;
+        };
         facts.push(LocalRetentionSegment {
-            blocked: !matches!(covered, Some(through) if local[i].1 <= through),
-            expired: local[i].3,
-            size: local[i].2,
+            blocked: !matches!(covered, Some(through) if end <= through),
+            expired,
+            size,
         });
         i += 1;
     }
@@ -126,7 +126,7 @@ pub(super) fn remote_coverage_bounds_local_retention(
     let last = if count == 0 {
         None
     } else {
-        Some(local[count - 1].1)
+        local.get(count - 1).map(|segment| segment.1)
     };
     let target = retention_delete_target(last);
     (covered, facts, count, target)

@@ -1,4 +1,5 @@
 //! What `#[derive(RuntimeOverlay)]` copies onto its target.
+#![cfg(test)]
 
 use {assert2::assert, krabka_macros::RuntimeOverlay};
 

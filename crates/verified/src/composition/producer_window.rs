@@ -66,7 +66,7 @@ pub(super) fn rebuilt_data_window_bounds_retry(
     request: (i16, i32, i32, bool),
 ) -> RebuiltRetry {
     let count = rows.len();
-    if count == 0 {
+    let Some(last_row) = rows.last() else {
         return (
             0,
             producer_decision(
@@ -80,13 +80,16 @@ pub(super) fn rebuilt_data_window_bounds_retry(
             ),
             None,
         );
-    }
-    let epoch = rows[count - 1].producer_epoch;
+    };
+    let epoch = last_row.producer_epoch;
     let mut first = count;
     #[invariant(first@ <= count@ && count@ - first@ <= 5)]
     #[invariant(forall<j: Int> first@ <= j && j < count@ ==> rows@[j].producer_epoch == epoch)]
     #[variant(first)]
-    while first > 0 && count - first < 5 && rows[first - 1].producer_epoch == epoch {
+    while first > 0
+        && count - first < 5
+        && matches!(rows.get(first - 1), Some(row) if row.producer_epoch == epoch)
+    {
         first -= 1;
     }
     proof_assert!(first@ < count@);
@@ -96,7 +99,10 @@ pub(super) fn rebuilt_data_window_bounds_retry(
     #[invariant(forall<j: Int> 0 <= j && j < kept@.len() ==> kept@[j] == rows@[first@ + j])]
     #[variant(count@ - i@)]
     while i < count {
-        kept.push(rows[i]);
+        let Some(&row) = rows.get(i) else {
+            break;
+        };
+        kept.push(row);
         i += 1;
     }
     let (decision, coordinates) = replayed_window_preserves_first_retry_coordinates(

@@ -10,8 +10,8 @@ impl BrokerMetrics {
     /// values stay bounded.
     pub fn record_client_software(&self, name: &str, version: &str) {
         let lbl = ClientSoftwareLabel {
-            software_name: name.to_string(),
-            software_version: version.to_string(),
+            software_name: name.to_owned(),
+            software_version: version.to_owned(),
         };
         self.client_software_versions.get_or_create(&lbl).inc();
     }
@@ -25,7 +25,7 @@ impl BrokerMetrics {
     /// to keep cardinality bounded.
     pub fn record_authentication(&self, mechanism: &str, success: bool) {
         let lbl = SaslMechanismLabel {
-            mechanism: mechanism.to_string(),
+            mechanism: mechanism.to_owned(),
         };
         if success {
             self.successful_authentication.get_or_create(&lbl).inc();
@@ -42,8 +42,8 @@ impl BrokerMetrics {
     /// `kafka.authorizer.logger` Denied Operation line.
     pub fn record_authorization_denied(&self, operation: &str, resource_type: &str) {
         let lbl = AuthorizationDeniedLabel {
-            operation: operation.to_string(),
-            resource_type: resource_type.to_string(),
+            operation: operation.to_owned(),
+            resource_type: resource_type.to_owned(),
         };
         self.authorization_denied.get_or_create(&lbl).inc();
     }
@@ -57,13 +57,13 @@ mod tests {
     fn record_authentication_splits_success_and_failure_per_mechanism() {
         let m = BrokerMetrics::new();
         let plain = SaslMechanismLabel {
-            mechanism: "PLAIN".to_string(),
+            mechanism: "PLAIN".to_owned(),
         };
         let scram = SaslMechanismLabel {
-            mechanism: "SCRAM-SHA-256".to_string(),
+            mechanism: "SCRAM-SHA-256".to_owned(),
         };
         let unknown = SaslMechanismLabel {
-            mechanism: "Unknown".to_string(),
+            mechanism: "Unknown".to_owned(),
         };
         m.record_authentication("PLAIN", true);
         m.record_authentication("PLAIN", true);
@@ -95,12 +95,12 @@ mod tests {
     fn record_authorization_denied_counts_per_operation_and_resource_type() {
         let m = BrokerMetrics::new();
         let write_topic = AuthorizationDeniedLabel {
-            operation: "Write".to_string(),
-            resource_type: "Topic".to_string(),
+            operation: "Write".to_owned(),
+            resource_type: "Topic".to_owned(),
         };
         let read_group = AuthorizationDeniedLabel {
-            operation: "Read".to_string(),
-            resource_type: "Group".to_string(),
+            operation: "Read".to_owned(),
+            resource_type: "Group".to_owned(),
         };
 
         m.record_authorization_denied("Write", "Topic");
@@ -117,16 +117,16 @@ mod tests {
     fn record_client_software_accumulates_per_name_version() {
         let m = BrokerMetrics::new();
         let krabka_100 = ClientSoftwareLabel {
-            software_name: "krabka".to_string(),
-            software_version: "1.0.0".to_string(),
+            software_name: "krabka".to_owned(),
+            software_version: "1.0.0".to_owned(),
         };
         let krabka_101 = ClientSoftwareLabel {
-            software_name: "krabka".to_string(),
-            software_version: "1.0.1".to_string(),
+            software_name: "krabka".to_owned(),
+            software_version: "1.0.1".to_owned(),
         };
         let other = ClientSoftwareLabel {
-            software_name: "other-lib".to_string(),
-            software_version: "1.0.0".to_string(),
+            software_name: "other-lib".to_owned(),
+            software_version: "1.0.0".to_owned(),
         };
 
         m.record_client_software("krabka", "1.0.0");

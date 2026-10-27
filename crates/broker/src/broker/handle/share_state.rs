@@ -137,11 +137,14 @@ mod tests {
             share_coordinator::{
                 coordinator::test_support::{image_with_topic, share_write},
                 handlers::test_support::lead_share_state_partitions,
+                persistence::StateBatch,
             },
             share_partition::state::AcquisitionState,
             test_support::{start_broker_with, tolerate_starved_heartbeats},
         },
         assert2::check,
+        std::time::{Duration, Instant},
+        tokio::{net::TcpListener, time},
     };
 
     #[tokio::test]
@@ -193,14 +196,12 @@ mod tests {
                 share_group,
                 share_topic_id,
                 share_partition,
-                share_write((11, 2), (95, 7), vec![
-                    crate::share_coordinator::persistence::StateBatch {
-                        first_offset: krabka_log::Offset(95),
-                        last_offset: krabka_log::Offset(99),
-                        delivery_state: 0,
-                        delivery_count: 1,
-                    },
-                ]),
+                share_write((11, 2), (95, 7), vec![StateBatch {
+                    first_offset: krabka_log::Offset(95),
+                    last_offset: krabka_log::Offset(99),
+                    delivery_state: 0,
+                    delivery_count: 1,
+                }]),
             )
             .await
             .expect("write share state summary");
@@ -211,16 +212,16 @@ mod tests {
                 == Some((11, 2, 95, 7))
         );
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            time::timeout(
+                Duration::from_secs(1),
                 handle.wait_until_share_spso(share_group, share_topic_id, share_partition, 95),
             )
             .await
             .is_ok()
         );
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            time::timeout(
+                Duration::from_secs(1),
                 handle.wait_until_share_delivery_complete(
                     share_group,
                     share_topic_id,
@@ -243,8 +244,8 @@ mod tests {
             AcquisitionState::new(krabka_log::Offset(0)),
         );
         assert2::assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(75),
+            time::timeout(
+                Duration::from_millis(75),
                 handle.wait_until_share_acquired_count(acquired_group, acquired_topic_id, 0, 1),
             )
             .await
@@ -257,28 +258,29 @@ mod tests {
                 "member-1",
                 3,
                 krabka_log::Offset(i64::MAX),
-                std::time::Instant::now(),
-                std::time::Duration::from_secs(30),
+                Instant::now(),
+                Duration::from_secs(30),
                 i16::MAX,
             );
+            drop(state);
             assert2::assert!(!acquired.is_empty());
         }
         assert2::assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            time::timeout(
+                Duration::from_secs(1),
                 handle.wait_until_share_acquired_count(acquired_group, acquired_topic_id, 0, 1),
             )
             .await
             .is_ok()
         );
 
-        let closed_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let closed_listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind closed learner port");
         let closed_addr = closed_listener.local_addr().expect("closed learner addr");
         drop(closed_listener);
-        let add_learner = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+        let add_learner = time::timeout(
+            Duration::from_secs(10),
             handle.add_learner(krabka_raft::NodeId(handle.node_id() + 10), closed_addr),
         )
         .await

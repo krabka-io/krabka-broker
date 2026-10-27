@@ -11,6 +11,8 @@ use {
         boot, connect, create_topic, describe, heartbeat, rejoin, topic_id,
     },
     assert2::assert,
+    std::{ops::Range, time::Duration},
+    tokio::time,
 };
 
 /// Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET`: the share state
@@ -35,7 +37,7 @@ async fn initialize_share_partitions(
     );
     let member_id = response.member_id.unwrap();
     // Retry the lifecycle hook until every partition has a summary.
-    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let result = time::timeout(Duration::from_secs(30), async {
         loop {
             let mut request = heartbeat(group, &member_id, response.member_epoch);
             request.subscribed_topic_names = Some(vec![topic.into()]);
@@ -185,7 +187,7 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
         joined.error_code
     );
     let member_id = joined.member_id.clone().unwrap();
-    let initialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let initialized = time::timeout(Duration::from_secs(30), async {
         loop {
             let mut hb = heartbeat("g-delete", &member_id, joined.member_epoch);
             hb.subscribed_topic_names = Some(vec!["t-delete".into()]);
@@ -257,11 +259,11 @@ async fn heartbeat_until(
     group: &str,
     members: &[MemberSubscription<'_>],
     topic: uuid::Uuid,
-    partitions: std::ops::Range<i32>,
+    partitions: Range<i32>,
     present: bool,
 ) {
     let mut epochs: Vec<i32> = members.iter().map(|member| member.epoch).collect();
-    let reached = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let reached = time::timeout(Duration::from_secs(30), async {
         loop {
             for (member, epoch) in members.iter().zip(epochs.iter_mut()) {
                 let mut hb = heartbeat(group, member.member_id, *epoch);

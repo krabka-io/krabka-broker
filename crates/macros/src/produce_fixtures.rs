@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn single_partition_produce(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn single_partition_produce(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
             #[derive(Clone, Copy)]

@@ -25,7 +25,7 @@ use {
 /// `UNKNOWN_SERVER_ERROR`, which is what Kafka's `Errors.forException` gives
 /// for the `IllegalStateException` that `SharePartition` raises then.
 #[must_use]
-pub(crate) fn persister_error_code(error: &BrokerError) -> i16 {
+pub fn persister_error_code(error: &BrokerError) -> i16 {
     let BrokerError::SharePartitionState { code, .. } = error else {
         return codes::UNKNOWN_SERVER_ERROR;
     };
@@ -44,7 +44,7 @@ pub(crate) fn persister_error_code(error: &BrokerError) -> i16 {
 /// broker. Kafka's `SharePartitionManager.fencedSharePartitionHandler` removes
 /// the partition from its cache for these errors.
 #[must_use]
-pub(crate) fn fences_the_partition(code: i16) -> bool {
+pub fn fences_the_partition(code: i16) -> bool {
     matches!(
         code,
         codes::NOT_LEADER_OR_FOLLOWER

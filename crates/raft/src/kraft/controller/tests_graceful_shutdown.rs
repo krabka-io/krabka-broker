@@ -13,6 +13,7 @@ use {
     assert2::check,
     krabka_units::prelude::secs,
     std::time::{Duration as StdDuration, Instant as StdInstant},
+    tokio::{sync::mpsc::UnboundedReceiver, time},
 };
 
 /// How a test stops the leader.
@@ -29,7 +30,7 @@ enum Stop {
 
 /// Every `EndQuorumEpoch` the controller has sent so far, decoded, by peer.
 fn end_quorum_epochs(
-    sends: &mut tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
+    sends: &mut UnboundedReceiver<CapturedPeerSend>,
 ) -> Vec<(NodeId, Option<wire::PeerRequest>)> {
     let mut ends = Vec::new();
     while let Ok(send) = sends.try_recv() {
@@ -79,7 +80,7 @@ async fn a_stopping_leader(stop: Stop, resigns: bool, waits_out_the_window: bool
         .await
         .expect("the resigned engine is still running");
     }
-    tokio::time::timeout(window + StdDuration::from_secs(10), stopped)
+    time::timeout(window + StdDuration::from_secs(10), stopped)
         .await
         .expect("the engine stops")
         .expect("the stop task");

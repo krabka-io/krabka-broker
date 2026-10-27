@@ -191,7 +191,7 @@ async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as
 
     // Do not stop the controller leader: it holds the only replica of an
     // internal partition, which a controlled shutdown cannot move.
-    let controller = cluster[0].0.wait_until_controller_leader().await;
+    let controller = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let controller_idx = cluster
         .iter()
         .position(|(_, config, _)| config.node_id == controller)

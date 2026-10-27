@@ -62,7 +62,7 @@ pub(super) fn whole_request_error(
         // this at its schema default, `true`, whatever the request asked.
         allow_replication_factor_change: true,
         error_code: code,
-        error_message: Some(msg.to_string()),
+        error_message: Some(msg.to_owned()),
         responses,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     }

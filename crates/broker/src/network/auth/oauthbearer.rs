@@ -14,8 +14,12 @@ use {
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
-    krabka_units::{Time, convert::TimeExt as _},
-    std::sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    krabka_units::{Time, convert::TimeExt},
+    krabka_verified::oauth,
+    std::{
+        mem,
+        sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    },
 };
 
 /// SASL/OAUTHBEARER `SaslAuthenticate` handler (KIP-255 / RFC 7628).
@@ -105,7 +109,7 @@ async fn handle_authenticate_oauthbearer_inner(
             exchange: SaslExchange::OAuthBearerFailed { error_json },
             ..
         } if req.auth_bytes[..] == [CONTROL_A] => {
-            let failure = oauthbearer_failure(std::mem::take(error_json));
+            let failure = oauthbearer_failure(mem::take(error_json));
             return fail_exchange(auth, failure);
         }
         // Any other reply after the challenge is a fresh client initial
@@ -212,7 +216,7 @@ fn oauth_session_decision(
         } else {
             krabka_verified::OAuthSessionCap::Disabled
         },
-        cap_ms: max_session_lifetime.map_or(0, krabka_units::convert::TimeExt::millis_i64),
+        cap_ms: max_session_lifetime.map_or(0, TimeExt::millis_i64),
         authentication: if reauthentication {
             krabka_verified::OAuthAuthenticationKind::Reauthentication
         } else {
@@ -381,7 +385,7 @@ async fn validate_bearer(
         facts.generation_after = generation.load(Ordering::Acquire);
         facts
     });
-    if !krabka_verified::oauth::oauth_validation_admission(now_ms, completed_ms, completed_cache) {
+    if !oauth::oauth_validation_admission(now_ms, completed_ms, completed_cache) {
         return Err(BearerRejection::invalid_token(
             "validation snapshot is stale or clock moved backwards",
         ));

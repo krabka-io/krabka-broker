@@ -5,13 +5,14 @@
 use {
     super::subscription_blob,
     crate::{
+        codes,
         coordinator::unified::{
             ClientIdentity,
             actor::{
                 ClassicView, CommitFence, CommitRequest, DescribeMember, DescribeView,
                 GroupActorHandle, GroupActorMessage, JoinResult, LeaveResult, SyncResult,
             },
-            classic_state::OffsetEntry,
+            classic_state::{GroupState, OffsetEntry},
             group::GroupOffsets,
             regex_resolver::no_topic_regex_resolver,
         },
@@ -23,23 +24,27 @@ use {
             consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
             consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
             heartbeat_request::HeartbeatRequest,
-            join_group_request::JoinGroupRequest,
-            leave_group_request::LeaveGroupRequest,
+            join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+            leave_group_request::{LeaveGroupRequest, MemberIdentity},
             leave_group_response::MemberResponse,
             sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
         },
         primitives::uuid::Uuid,
     },
     std::collections::HashMap,
+    tokio::sync::{
+        oneshot,
+        oneshot::{Receiver, Sender},
+    },
 };
 
 /// Sends a request without awaiting its reply, so tests can retain the exact
 /// receive point when a reply parks behind another actor action.
 pub async fn begin<T>(
     handle: &GroupActorHandle,
-    request: impl FnOnce(tokio::sync::oneshot::Sender<T>) -> GroupActorMessage,
-) -> tokio::sync::oneshot::Receiver<T> {
-    let (reply, response) = tokio::sync::oneshot::channel();
+    request: impl FnOnce(Sender<T>) -> GroupActorMessage,
+) -> Receiver<T> {
+    let (reply, response) = oneshot::channel();
     handle.tx.send(request(reply)).await.unwrap();
     response
 }
@@ -79,12 +84,10 @@ pub async fn classic_leave_member(handle: &GroupActorHandle, member_id: &str) ->
         handle,
         LeaveGroupRequest {
             group_id: "g".into(),
-            members: vec![
-                krabka_protocol::owned::leave_group_request::MemberIdentity {
-                    member_id: member_id.into(),
-                    ..Default::default()
-                },
-            ],
+            members: vec![MemberIdentity {
+                member_id: member_id.into(),
+                ..Default::default()
+            }],
             ..Default::default()
         },
         3,
@@ -93,27 +96,25 @@ pub async fn classic_leave_member(handle: &GroupActorHandle, member_id: &str) ->
 }
 
 pub fn check_successful_classic_leave(result: &LeaveResult) {
-    assert2::check!(result.error_code == crate::codes::NONE);
-    assert2::check!(result.members[0].error_code == crate::codes::NONE);
+    assert2::check!(result.error_code == codes::NONE);
+    assert2::check!(result.members[0].error_code == codes::NONE);
 }
 
 pub fn classic_join_message(
     member_id: &str,
     topic: &str,
-    reply: tokio::sync::oneshot::Sender<JoinResult>,
+    reply: Sender<JoinResult>,
 ) -> GroupActorMessage {
     GroupActorMessage::ClassicJoin {
         req: JoinGroupRequest {
             group_id: "g".into(),
             member_id: member_id.into(),
             protocol_type: "consumer".into(),
-            protocols: vec![
-                krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                    name: "range".into(),
-                    metadata: subscription_blob(&[topic]),
-                    ..Default::default()
-                },
-            ],
+            protocols: vec![JoinGroupRequestProtocol {
+                name: "range".into(),
+                metadata: subscription_blob(&[topic]),
+                ..Default::default()
+            }],
             session_timeout_ms: 30_000,
             rebalance_timeout_ms: 60_000,
             ..Default::default()
@@ -137,7 +138,7 @@ pub async fn classic_join(handle: &GroupActorHandle, member_id: &str, topic: &st
 pub async fn begin_classic_sync(
     handle: &GroupActorHandle,
     req: SyncGroupRequest,
-) -> tokio::sync::oneshot::Receiver<SyncResult> {
+) -> Receiver<SyncResult> {
     begin(handle, |reply| GroupActorMessage::ClassicSync {
         req,
         reply,
@@ -304,7 +305,7 @@ pub async fn consumer_heartbeat_owning(
 /// Reads the live `ClassicInspect` view. Only a classic-kind group
 /// replies.
 pub fn check_stable_classic_member(view: &ClassicView, member_id: &str) {
-    assert2::check!(view.state == crate::coordinator::unified::classic_state::GroupState::Stable);
+    assert2::check!(view.state == GroupState::Stable);
     assert2::check!(view.members.len() == 1);
     assert2::check!(view.members[0].member_id == member_id);
 }
@@ -373,7 +374,7 @@ pub async fn fetch_offsets(handle: &GroupActorHandle) -> GroupOffsets {
 
 pub async fn update_committed_offset(handle: &GroupActorHandle, offset: Offset, leader_epoch: i32) {
     ask(&handle.tx, |reply| GroupActorMessage::UpdateCommitted {
-        entries: vec![(("t".to_string(), 0), OffsetEntry {
+        entries: vec![(("t".to_owned(), 0), OffsetEntry {
             offset,
             leader_epoch,
             metadata: String::new(),

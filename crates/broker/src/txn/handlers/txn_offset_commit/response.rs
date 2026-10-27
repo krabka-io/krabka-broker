@@ -17,6 +17,7 @@ use {
             TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
         },
     },
+    std::collections::HashSet,
 };
 
 /// The response to a request whose topic sweep is done: the sweep's rows
@@ -32,8 +33,8 @@ pub(super) fn build_response(
     req: &TxnOffsetCommitRequest,
     code: i16,
     topic_ids: bool,
-    denied_topics: &std::collections::HashSet<String>,
-    unknown_rows: &std::collections::HashSet<TopicPartition>,
+    denied_topics: &HashSet<String>,
+    unknown_rows: &HashSet<TopicPartition>,
 ) -> TxnOffsetCommitResponse {
     let sweep_code = |topic: &TxnOffsetCommitRequestTopic, partition: i32| {
         if topic_ids && topic.name.is_empty() {
@@ -108,12 +109,16 @@ impl ResponseBuilder {
     /// `Builder.addPartition`: the row goes to the response topic of
     /// `topic`'s key, which is created at the end when there is none.
     fn add(&mut self, topic: &TxnOffsetCommitRequestTopic, partition: i32, code: i16) {
-        let wanted = response_topic(topic);
-        let at = self.position(&wanted).unwrap_or_else(|| {
+        let mut wanted = response_topic(topic);
+        if let Some(held) = self
+            .position(&wanted)
+            .and_then(|at| self.topics.get_mut(at))
+        {
+            held.partitions.push(row(partition, code));
+        } else {
+            wanted.partitions.push(row(partition, code));
             self.topics.push(wanted);
-            self.topics.len() - 1
-        });
-        self.topics[at].partitions.push(row(partition, code));
+        }
     }
 
     /// `Builder.merge`: the coordinator's topics replace an empty response,
@@ -125,8 +130,8 @@ impl ResponseBuilder {
             return;
         }
         for topic in coordinator {
-            match self.position(&topic) {
-                Some(at) => self.topics[at].partitions.extend(topic.partitions),
+            match self.position(&topic).and_then(|at| self.topics.get_mut(at)) {
+                Some(held) => held.partitions.extend(topic.partitions),
                 None => self.topics.push(topic),
             }
         }
@@ -349,12 +354,12 @@ mod tests {
                 topics: case.topics,
                 ..request()
             };
-            let denied: HashSet<String> = case.denied.iter().map(|&t| t.to_string()).collect();
+            let denied: HashSet<String> = case.denied.iter().map(|&t| t.to_owned()).collect();
             let unknown: HashSet<TopicPartition> = case
                 .unknown
                 .iter()
                 .map(|&UnknownRow { topic, partition }| TopicPartition {
-                    topic: topic.to_string(),
+                    topic: topic.to_owned(),
                     partition: PartitionIndex(partition),
                 })
                 .collect();

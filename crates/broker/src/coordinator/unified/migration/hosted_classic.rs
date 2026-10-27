@@ -92,10 +92,7 @@ fn validate_classic_member<'a>(
 /// 3. the member waits on partitions that their previous owners released.
 ///
 /// Otherwise it answers `NONE`. It writes nothing.
-pub(crate) fn serve_classic_heartbeat(
-    state: &mut ConsumerState,
-    request: &HeartbeatRequest,
-) -> i16 {
+pub fn serve_classic_heartbeat(state: &mut ConsumerState, request: &HeartbeatRequest) -> i16 {
     let (member_id, rejoin) = match validate_classic_member(
         state,
         &request.member_id,
@@ -134,7 +131,7 @@ pub(crate) fn serve_classic_heartbeat(
 /// member's assigned partitions (`prepareAssignment`) as a
 /// `ConsumerProtocolAssignment` blob, at the version of the metadata of the
 /// member's first protocol. The sync writes nothing and changes nothing.
-pub(crate) fn serve_classic_sync(
+pub fn serve_classic_sync(
     state: &ConsumerState,
     request: &SyncGroupRequest,
     image: &ReconcileInput,
@@ -177,9 +174,13 @@ pub(crate) fn serve_classic_sync(
     else {
         return refused(codes::UNKNOWN_SERVER_ERROR);
     };
+    let Some(assignment) = consumer_assignment_blob(&member.assigned_partitions, image, version)
+    else {
+        return refused(codes::UNKNOWN_SERVER_ERROR);
+    };
     SyncResult {
         error_code: codes::NONE,
-        assignment: consumer_assignment_blob(&member.assigned_partitions, image, version),
+        assignment,
         protocol_type: request.protocol_type.clone(),
         protocol_name: request.protocol_name.clone(),
     }
@@ -188,7 +189,7 @@ pub(crate) fn serve_classic_sync(
 /// Kafka's `ConsumerGroup.supportsClassicProtocols` for a group with members:
 /// the protocol type is `consumer`, and one of `protocols` is supported by
 /// every member that uses the classic protocol.
-pub(crate) fn supports_classic_protocols(
+pub fn supports_classic_protocols(
     state: &ConsumerState,
     protocol_type: &str,
     protocols: &HashSet<&str>,
@@ -215,7 +216,7 @@ pub(crate) fn supports_classic_protocols(
 
 /// A classic `JoinGroup` for a member of a consumer group, as Kafka's
 /// `classicGroupJoinToConsumerGroup` builds its `updatedMember` from it.
-pub(crate) struct ClassicMemberRegistration {
+pub struct ClassicMemberRegistration {
     pub member_id: String,
     pub subscription_topics: HashSet<String>,
     /// The rack of the member's `ConsumerProtocolSubscription`, if any.
@@ -240,10 +241,7 @@ pub(crate) struct ClassicMemberRegistration {
 /// keeps the stored one (`maybeUpdate*`). The topic names,
 /// client and classic metadata are replaced. A new member starts at epoch 0,
 /// as Kafka's `getOrMaybeCreateMember` creates it.
-pub(crate) fn upsert_classic_member(
-    state: &mut ConsumerState,
-    registration: ClassicMemberRegistration,
-) {
+pub fn upsert_classic_member(state: &mut ConsumerState, registration: ClassicMemberRegistration) {
     let ClassicMemberRegistration {
         member_id,
         subscription_topics,
@@ -258,8 +256,14 @@ pub(crate) fn upsert_classic_member(
     let existing = state.members.get(&member_id);
     let member = MemberState {
         member_id: member_id.clone(),
-        instance_id: instance_id.or_else(|| existing.and_then(|m| m.instance_id.clone())),
-        rack_id: rack_id.or_else(|| existing.and_then(|m| m.rack_id.clone())),
+        instance_id: instance_id.or_else(|| {
+            let m = existing?;
+            m.instance_id.clone()
+        }),
+        rack_id: rack_id.or_else(|| {
+            let m = existing?;
+            m.rack_id.clone()
+        }),
         client_id,
         client_host,
         subscribed_topic_names: subscription_topics,
@@ -295,7 +299,7 @@ pub(crate) fn upsert_classic_member(
 /// first protocol. The client sends both back in `SyncGroup`, and the
 /// generation in `Heartbeat` and `OffsetCommit`, whose fence compares it with
 /// the member epoch.
-pub(crate) fn build_hosted_classic_join_result(member: &MemberState) -> JoinResult {
+pub fn build_hosted_classic_join_result(member: &MemberState) -> JoinResult {
     JoinResult {
         error_code: codes::NONE,
         generation_id: member.member_epoch,
@@ -330,7 +334,7 @@ mod tests {
             rack_id: None,
             client_id: "c".into(),
             client_host: "/127.0.0.1".into(),
-            subscribed_topic_names: ["t".to_string()].into(),
+            subscribed_topic_names: ["t".to_owned()].into(),
             subscribed_topic_regex: None,
             server_assignor: None,
             rebalance_timeout: Duration::from_secs(60),
@@ -405,7 +409,8 @@ mod tests {
             want: SyncResult,
         }
 
-        let assigned_v1 = consumer_assignment_blob(&[(TOPIC, vec![0])].into(), &image(), 1);
+        let assigned_v1 =
+            consumer_assignment_blob(&[(TOPIC, vec![0])].into(), &image(), 1).unwrap();
         let behind = |mut m: MemberState, state| {
             m.member_epoch = TARGET_EPOCH - 1;
             m.assignment_state = state;
@@ -558,7 +563,8 @@ mod tests {
                         &[(TOPIC, vec![0])].into(),
                         &image(),
                         version,
-                    ),
+                    )
+                    .unwrap(),
                     protocol_type: Some("consumer".into()),
                     protocol_name: Some("range".into()),
                 },

@@ -1,7 +1,8 @@
 //! Per-item gating preserves trait declarations, methods, imports, exports and bodies.
-
+#![cfg(test)]
 #[krabka_macros::sendfile_cfg]
 use std::os::fd::AsFd as _;
+use std::{env, fs::File, hint};
 
 trait Sink {
     #[krabka_macros::sendfile_cfg]
@@ -25,8 +26,9 @@ impl Sink for Stream {
 
 #[krabka_macros::sendfile_cfg]
 mod platform {
+    use std::fs::File;
     /// A file-backed operation remains visible through its gated re-export.
-    pub(crate) fn file_value(file: &std::fs::File) -> i32 {
+    pub fn file_value(file: &File) -> i32 {
         use {
             super::{Sink as _, Stream},
             std::os::fd::AsFd as _,
@@ -48,13 +50,13 @@ fn excluded_item() -> UnknownPlatformType { unavailable_operation() }
 #[test]
 fn portable_items_remain_available() {
     let stream = Stream;
-    std::hint::black_box(&stream as &dyn Sink);
+    hint::black_box(&stream as &dyn Sink);
 }
 
 #[krabka_macros::sendfile_cfg]
 #[test]
 fn supported_platforms_keep_methods_imports_and_exports() {
-    let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+    let file = File::open(env::current_exe().unwrap()).unwrap();
     let _fd = file.as_fd();
     assert2::assert!(file_value(&file) == 5);
     assert2::assert!(Stream.writable_value(0) == 0);

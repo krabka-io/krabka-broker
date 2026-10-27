@@ -30,9 +30,12 @@ use {
         support::{fixture_cache_dir, init_jvm_tracing, manifest_dir},
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, SslPrincipalMapper, config::ListenerSpec},
+    krabka_broker::{
+        Broker, BrokerConfig, SslPrincipalMapper, authorizer::SimpleAclAuthorizer,
+        config::ListenerSpec,
+    },
     krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig},
-    std::process::Command,
+    std::{fs, net::SocketAddr, path::PathBuf, process::Command, sync::Arc},
 };
 
 /// The Subject DN of `tests/fixtures/security/dev_client_cert.pem`, as
@@ -46,7 +49,7 @@ const CLIENT_DN: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
 const MAPPED_PRINCIPAL: &str = r"test-client\";
 
 /// Path of one file under `tests/fixtures/security/`.
-fn fixture(name: &str) -> std::path::PathBuf {
+fn fixture(name: &str) -> PathBuf {
     manifest_dir()
         .join("tests")
         .join("fixtures")
@@ -62,18 +65,18 @@ fn fixture(name: &str) -> std::path::PathBuf {
 /// toolchain, and the result is chmod `0644` so the image's non-root user can
 /// read it. Java reads a PKCS#12 keystore directly, so no `keytool`
 /// conversion follows.
-fn prepare_client_keystore() -> std::path::PathBuf {
+fn prepare_client_keystore() -> PathBuf {
     let cache_dir = fixture_cache_dir("krabka-jvm-mtls-keystore", &[
         "dev_client_cert.pem",
         "dev_client_key.pem",
     ]);
-    std::fs::create_dir_all(&cache_dir).expect("mkdir keystore cache");
+    fs::create_dir_all(&cache_dir).expect("mkdir keystore cache");
     let keystore_path = cache_dir.join("client.p12");
     if keystore_path.exists() {
         return keystore_path;
     }
     for name in ["dev_client_cert.pem", "dev_client_key.pem"] {
-        std::fs::copy(fixture(name), cache_dir.join(name)).expect("stage client fixture");
+        fs::copy(fixture(name), cache_dir.join(name)).expect("stage client fixture");
     }
     let inner = "set -e; \
          openssl pkcs12 -export -name client \
@@ -117,7 +120,7 @@ struct StartedBroker {
 async fn start_mtls_broker() -> StartedBroker {
     init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
+    let listen_addr: SocketAddr = broker0_listen().parse().expect("allocated addr");
     let tls = TlsConfig {
         cert_chain_path: fixture("dev_cert.pem"),
         private_key_path: fixture("dev_key.pem"),
@@ -129,26 +132,24 @@ async fn start_mtls_broker() -> StartedBroker {
         .expect("KIP-371 rules parse");
     let mut config = BrokerConfig {
         listeners: vec![ListenerSpec {
-            name: "SSL".to_string(),
+            name: "SSL".to_owned(),
             bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
+            advertised: broker0_advertised().to_owned(),
             protocol: ListenerProtocol::Ssl,
             tls_config: Some(tls.clone()),
             sasl_mechanisms: None,
             principal_mapper,
         }],
-        inter_broker_listener_name: "SSL".to_string(),
+        inter_broker_listener_name: "SSL".to_owned(),
         tls_config: Some(tls),
-        super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_string()},
+        super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_owned()},
         ..host_broker_config(dir.path(), "allocated addr")
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this
     // super user reaches only the controller listener.
-    config.super_users.insert("ANONYMOUS".to_string());
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        config.super_users.clone(),
-    ));
+    config.super_users.insert("ANONYMOUS".to_owned());
+    config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
     let handle = Broker::start(config).await.expect("start mtls broker");
     StartedBroker {
         broker: handle,

@@ -17,14 +17,13 @@ use {
 };
 
 /// Kafka's `remote.log.manager.copy.max.bytes.per.second`.
-pub(crate) const COPY_MAX_BYTES_PER_SECOND: &str = "remote.log.manager.copy.max.bytes.per.second";
+pub const COPY_MAX_BYTES_PER_SECOND: &str = "remote.log.manager.copy.max.bytes.per.second";
 
 /// Kafka's `remote.log.manager.fetch.max.bytes.per.second`.
-pub(crate) const FETCH_MAX_BYTES_PER_SECOND: &str = "remote.log.manager.fetch.max.bytes.per.second";
+pub const FETCH_MAX_BYTES_PER_SECOND: &str = "remote.log.manager.fetch.max.bytes.per.second";
 
 /// Kafka's `remote.log.index.file.cache.total.size.bytes`.
-pub(crate) const INDEX_CACHE_TOTAL_SIZE_BYTES: &str =
-    "remote.log.index.file.cache.total.size.bytes";
+pub const INDEX_CACHE_TOTAL_SIZE_BYTES: &str = "remote.log.index.file.cache.total.size.bytes";
 
 /// The value of the positive `Long` broker key `key` for `node`: its own
 /// dynamic value, else the cluster default, else `fallback`. A value that
@@ -38,7 +37,7 @@ fn positive_long(image: &MetadataImage, node: NodeId, key: &str, fallback: i64) 
 }
 
 /// What [`apply_image`] changes besides the quotas.
-pub(crate) struct DynamicRemoteLogTargets<'a> {
+pub struct DynamicRemoteLogTargets<'a> {
     pub(crate) quotas: &'a RemoteLogQuotas,
     /// The reader's index cache, and the size it has when no dynamic config
     /// sets one: the static `remote.log.index.file.cache.total.size.bytes`.
@@ -48,11 +47,7 @@ pub(crate) struct DynamicRemoteLogTargets<'a> {
 /// Kafka's `DynamicRemoteLogConfig.reconfigure` for the three keys a running
 /// `RemoteLogManager` applies: each one that resolves to a value other than
 /// the one in force is applied, and logged as Kafka logs it.
-pub(crate) fn apply_image(
-    image: &MetadataImage,
-    node: NodeId,
-    targets: &DynamicRemoteLogTargets<'_>,
-) {
+pub fn apply_image(image: &MetadataImage, node: NodeId, targets: &DynamicRemoteLogTargets<'_>) {
     let copy = positive_long(
         image,
         node,
@@ -100,14 +95,14 @@ pub(crate) fn apply_image(
 }
 
 /// The index cache [`run`] resizes, and its static size.
-pub(crate) struct WatchedIndexCache {
+pub struct WatchedIndexCache {
     pub(crate) cache: Arc<RemoteIndexCache>,
     pub(crate) static_size: u64,
 }
 
 /// Applies every metadata image to `quotas` and `index_cache` until
 /// `shutdown`. See [`apply_image`].
-pub(crate) async fn run(
+pub async fn run(
     images: watch::Receiver<Arc<MetadataImage>>,
     node: NodeId,
     quotas: Arc<RemoteLogQuotas>,

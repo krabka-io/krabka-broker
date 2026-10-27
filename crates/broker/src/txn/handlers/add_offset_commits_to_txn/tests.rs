@@ -1,8 +1,11 @@
 use {
     super::*,
     crate::{
-        partition::Partition, partition_registry::PartitionRegistry,
-        producer_id_manager::ProducerIdManager, test_support::open_partition, txn::bootstrap,
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
+        test_support::open_partition,
+        txn::{bootstrap, two_pc::should_abort_idle_txn},
     },
     assert2::{assert, check},
     std::{path::Path, sync::Arc},
@@ -20,7 +23,7 @@ fn producer(id: i64, epoch: i16) -> ProducerIdentity {
 
 fn offsets_partition(index: i32) -> TopicPartition {
     TopicPartition {
-        topic: OFFSETS_TOPIC.to_string(),
+        topic: OFFSETS_TOPIC.to_owned(),
         partition: PartitionIndex(index),
     }
 }
@@ -57,7 +60,7 @@ fn the_decision_follows_kafka_order() {
         (
             "a pending transition comes first",
             {
-                let mut pending = staged.clone();
+                let mut pending = staged;
                 pending.producer_id = ProducerId(99);
                 pending
             },
@@ -391,12 +394,7 @@ async fn the_reaper_does_not_abort_a_transaction_that_add_offsets_just_opened() 
     let stored = coordinator.get(TID).expect("entry").lock().await.clone();
     let now = now_millis();
     check!(
-        !crate::txn::two_pc::should_abort_idle_txn(
-            stored.state,
-            stored.txn_timeout_ms,
-            stored.start_ms,
-            now
-        ),
+        !should_abort_idle_txn(stored.state, stored.txn_timeout_ms, stored.start_ms, now),
         "start_ms={} now={now}",
         stored.start_ms
     );

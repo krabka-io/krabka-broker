@@ -15,6 +15,7 @@ use {
     assert2::assert,
     krabka_ids::LeaderEpoch,
     krabka_log::{Log, LogConfig},
+    krabka_protocol::records::{RecordBatch, TimestampType},
     krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
         RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager,
@@ -22,8 +23,14 @@ use {
     },
     krabka_units::convert::ByteSizeExt as _,
     std::{
+        collections::BTreeMap,
         fmt::Write as _,
-        sync::{Arc, Mutex},
+        fs,
+        path::{Path, PathBuf},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     },
     uuid::Uuid,
 };
@@ -90,9 +97,9 @@ pub struct PopulatedReader {
     pub log: Log,
 }
 
-fn write_test_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+fn write_test_file(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, bytes).unwrap();
+    fs::write(&path, bytes).unwrap();
     path
 }
 
@@ -102,7 +109,7 @@ pub type LogFetches = Arc<Mutex<Vec<(u32, Option<u32>, usize)>>>;
 /// A [`CountingRsm`] and the counter of the index objects it downloaded.
 pub struct CountedRsm {
     pub rsm: Arc<CountingRsm>,
-    pub index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+    pub index_fetches: Arc<AtomicUsize>,
     pub log_fetches: LogFetches,
 }
 
@@ -114,14 +121,14 @@ pub struct CountedRsm {
 /// the tier.
 pub struct CountingRsm {
     inner: Arc<dyn RemoteStorageManager>,
-    index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+    index_fetches: Arc<AtomicUsize>,
     log_fetches: LogFetches,
 }
 
 impl CountingRsm {
     pub fn counting(inner: Arc<dyn RemoteStorageManager>) -> CountedRsm {
-        let index_fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let log_fetches = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let index_fetches = Arc::new(AtomicUsize::new(0));
+        let log_fetches = Arc::new(Mutex::new(Vec::new()));
         CountedRsm {
             rsm: Arc::new(Self {
                 inner,
@@ -135,9 +142,7 @@ impl CountingRsm {
 }
 
 /// Rebuilds `reader` over a counting RSM, retaining its metadata view.
-pub fn counted_reader(
-    reader: &RemoteReader,
-) -> (RemoteReader, Arc<std::sync::atomic::AtomicUsize>) {
+pub fn counted_reader(reader: &RemoteReader) -> (RemoteReader, Arc<AtomicUsize>) {
     let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
     (
         RemoteReader::new(counted.rsm, Arc::clone(&reader.rlmm)),
@@ -175,8 +180,7 @@ impl RemoteStorageManager for CountingRsm {
         metadata: &RemoteLogSegmentMetadata,
         index_type: krabka_remote_storage::IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
-        self.index_fetches
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.index_fetches.fetch_add(1, Ordering::Relaxed);
         self.inner.fetch_index(metadata, index_type)
     }
 
@@ -200,7 +204,7 @@ pub struct ReaderDirs {
 pub struct CachingReader {
     pub reader: RemoteReader,
     pub dirs: ReaderDirs,
-    pub index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+    pub index_fetches: Arc<AtomicUsize>,
 }
 
 /// The `sparse_remote_segment_reader` fixture, with the production index cache
@@ -213,7 +217,7 @@ pub fn caching_sparse_remote_segment_reader() -> CachingReader {
     let CountedRsm {
         rsm: counting,
         index_fetches,
-        log_fetches: _,
+        ..
     } = CountingRsm::counting(Arc::clone(&reader.rsm));
     let log_dir = tempfile::tempdir().unwrap();
     let cache = krabka_remote_storage::RemoteIndexCache::new(
@@ -254,10 +258,10 @@ fn sparse_reader_with_max_timestamp(max_timestamp_ms: i64) -> ReaderWithDir {
 /// The sparse fixture as stored on a `LogAppendTime` topic: producer time
 /// remains in record deltas, while the batch maximum is the reader's time.
 pub fn append_time_remote_segment_reader() -> ReaderWithDir {
-    let stamped = |mut batch: krabka_protocol::records::RecordBatch| {
+    let stamped = |mut batch: RecordBatch| {
         batch.attributes = batch
             .attributes
-            .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
+            .with_timestamp_type(TimestampType::LogAppendTime);
         batch
     };
     remote_segment_reader(
@@ -278,7 +282,7 @@ pub fn sparse_fixture_second_batch_len() -> usize { sparse_fixture_batch_bytes()
 /// The two batches of the sparse fixture, as its segment stores them: offsets
 /// 10 to 13, then 14 to 16.
 pub fn sparse_fixture_batch_bytes() -> [bytes::Bytes; 2] {
-    let encode = |batch: krabka_protocol::records::RecordBatch| {
+    let encode = |batch: RecordBatch| {
         let mut buf = bytes::BytesMut::new();
         batch.encode(&mut buf).unwrap();
         buf.freeze()
@@ -309,7 +313,7 @@ pub fn unordered_timestamps_remote_segment_reader() -> ReaderWithDir {
 pub fn compressed_remote_segment_reader(second_value_len: usize) -> ReaderWithDir {
     use krabka_compression::CompressionType;
 
-    let compressed = |mut batch: krabka_protocol::records::RecordBatch| {
+    let compressed = |mut batch: RecordBatch| {
         batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
         batch
     };
@@ -333,8 +337,8 @@ pub fn compressed_remote_segment_reader(second_value_len: usize) -> ReaderWithDi
 /// batch's last offset and start position, and the time index holds each
 /// running maximum with the last offset of the batch that set it.
 fn remote_segment_reader(
-    first: &krabka_protocol::records::RecordBatch,
-    second: &krabka_protocol::records::RecordBatch,
+    first: &RecordBatch,
+    second: &RecordBatch,
     max_timestamp_ms: i64,
 ) -> ReaderWithDir {
     let source_dir = tempfile::tempdir().unwrap();
@@ -428,8 +432,8 @@ pub fn sparse_remote_segment_reader() -> ReaderWithDir { sparse_reader_with_max_
 /// carries the unknown max timestamp `-1` instead of its largest record
 /// timestamp.
 pub struct TierSegment {
-    pub batches: Vec<krabka_protocol::records::RecordBatch>,
-    pub epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+    pub batches: Vec<RecordBatch>,
+    pub epochs: BTreeMap<LeaderEpoch, i64>,
     pub unknown_max_timestamp: bool,
 }
 
@@ -585,10 +589,7 @@ pub fn divergent_tier_reader() -> ReaderWithDir {
 /// `InmemoryRemoteLogMetadataManager`. It returns the constructed reader
 /// and the log. The caller keeps the log alive so that the on-disk files
 /// outlive the call.
-pub fn populated_reader(
-    log_dir: &std::path::Path,
-    remote_dir: &std::path::Path,
-) -> PopulatedReader {
+pub fn populated_reader(log_dir: &Path, remote_dir: &Path) -> PopulatedReader {
     let log = populated_log(log_dir, SEGMENT_BYTES);
     PopulatedReader {
         reader: copy_log_to_reader(&log, remote_dir),
@@ -600,7 +601,7 @@ pub fn populated_reader(
 /// batch per segment.
 const SEGMENT_BYTES: u32 = 256;
 
-fn populated_log(log_dir: &std::path::Path, segment_bytes: u32) -> Log {
+fn populated_log(log_dir: &Path, segment_bytes: u32) -> Log {
     let mut log = Log::open(log_dir, LogConfig {
         segment_size: krabka_units::bytes(segment_bytes),
         ..LogConfig::default()
@@ -620,7 +621,7 @@ fn populated_log(log_dir: &std::path::Path, segment_bytes: u32) -> Log {
     log
 }
 
-fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
+fn copy_log_to_reader(log: &Log, remote_dir: &Path) -> RemoteReader {
     let exports = log.tierable_segments();
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
@@ -681,8 +682,8 @@ fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
 /// then carries it to the remote tier. It returns the reader, the log, and
 /// the written `(start_offset, last_offset, producer_id)`.
 pub fn populated_reader_with_abort(
-    log_dir: &std::path::Path,
-    remote_dir: &std::path::Path,
+    log_dir: &Path,
+    remote_dir: &Path,
 ) -> (RemoteReader, Log, (i64, i64, i64)) {
     reader_with_abort_in_segments_of(log_dir, remote_dir, SEGMENT_BYTES)
 }
@@ -691,8 +692,8 @@ pub fn populated_reader_with_abort(
 /// `segment_bytes` long, so a test can ask for segments that hold several
 /// batches.
 pub fn reader_with_abort_in_segments_of(
-    log_dir: &std::path::Path,
-    remote_dir: &std::path::Path,
+    log_dir: &Path,
+    remote_dir: &Path,
     segment_bytes: u32,
 ) -> (RemoteReader, Log, (i64, i64, i64)) {
     let log = populated_log(log_dir, segment_bytes);
@@ -710,7 +711,7 @@ pub fn reader_with_abort_in_segments_of(
     txn_bytes.extend_from_slice(&abort.1.to_be_bytes()); // last_offset
     txn_bytes.extend_from_slice(&(abort.1 + 1).to_be_bytes()); // last_stable_offset
     let txn_path = first.log_path.with_extension("txnindex");
-    std::fs::write(&txn_path, &txn_bytes).unwrap();
+    fs::write(&txn_path, &txn_bytes).unwrap();
 
     // Re-derive exports so the first one now carries the txnindex path.
     let exports = log.tierable_segments();

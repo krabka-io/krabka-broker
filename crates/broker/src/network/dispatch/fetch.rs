@@ -2,6 +2,8 @@
 //! per-connection principal and returns the response as an ordered write plan
 //! rather than one contiguous buffer, so that records regions stay zero-copy.
 
+#[krabka_macros::sendfile_cfg]
+use crate::network::fetch_writer::resolve_records_sendfile;
 use {
     super::{AfterResponse, Reply, response::encode_response, session::principal_or_anonymous},
     crate::{
@@ -176,7 +178,7 @@ async fn handle_fetch_frame_from_parsed(
                     version,
                     parsed.correlation_id,
                     parsed.body_flexible,
-                    crate::network::fetch_writer::resolve_records_sendfile,
+                    resolve_records_sendfile,
                 )
                 .map(|operations| FetchPlan {
                     operations,

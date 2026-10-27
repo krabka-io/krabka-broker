@@ -26,15 +26,16 @@ use {
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
     },
+    std::sync::Arc,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ConsumerGroupHeartbeatRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<ConsumerGroupHeartbeatResponse, BrokerError> {
-    let coordinator = broker.group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.group_coordinator);
     // Read the offset BEFORE the image, not after: if a record commits in
     // between, `image` may reflect it while `metadata_offset` does not. The
     // regex resolution the actor may make from `image` is stamped with
@@ -92,10 +93,10 @@ pub(crate) async fn handle(
     // compile is rejected by the actor's own
     // `check_subscribed_topic_regex` with `INVALID_REGULAR_EXPRESSION`
     // before any member state changes.
-    let regex_resolver = std::sync::Arc::new(ImageTopicRegexResolver::new(
+    let regex_resolver = Arc::new(ImageTopicRegexResolver::new(
         image,
         metadata_offset,
-        broker.config.authorizer.clone(),
+        Arc::clone(&broker.config.authorizer),
         ctx.principal.clone(),
         *ctx.peer,
     ));
@@ -151,7 +152,7 @@ fn validate_request(
     let invalid = |message: &str| {
         Box::new(ConsumerGroupHeartbeatResponse::error(
             codes::INVALID_REQUEST,
-            Some(message.to_string()),
+            Some(message.to_owned()),
         ))
     };
     // `Utils.throwIfEmptyString`: a present value that trims to nothing.
@@ -248,11 +249,12 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{MetadataImage, MetadataRecord},
-        krabka_protocol::Decode,
-        std::sync::Arc,
+        krabka_protocol::{Decode, owned::consumer_group_heartbeat_request},
+        std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration},
+        tokio::time,
     };
 
-    const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
+    const VERSION: i16 = consumer_group_heartbeat_request::MAX_VERSION;
 
     fn request(group_id: &str) -> ConsumerGroupHeartbeatRequest {
         subscription_request(group_id, "member-a", 0)
@@ -430,7 +432,7 @@ mod tests {
                 1,
                 ConsumerGroupHeartbeatRequest {
                     member_epoch: -3,
-                    ..steady.clone()
+                    ..steady
                 },
                 invalid("MemberEpoch is invalid."),
             ),
@@ -439,7 +441,7 @@ mod tests {
                 1,
                 ConsumerGroupHeartbeatRequest {
                     server_assignor: Some("sticky".into()),
-                    ..join.clone()
+                    ..join
                 },
                 Some(ConsumerGroupHeartbeatResponse {
                     error_code: codes::UNSUPPORTED_ASSIGNOR,
@@ -490,12 +492,7 @@ mod tests {
             client ["consumer-client"];
         };
 
-        assert!(!group_read_denied(
-            &crate::authorizer::AllowAllAuthorizer,
-            &image,
-            &ctx,
-            "g"
-        ));
+        assert!(!group_read_denied(&AllowAllAuthorizer, &image, &ctx, "g"));
     }
 
     async fn check_denied_group_response(broker: &Broker, expected: KafkaErrorCode) {
@@ -576,7 +573,7 @@ mod tests {
 
         let member_id = view.members[0].member_id.clone();
         let member_epoch = view.members[0].member_epoch;
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 2], 9093));
+        let peer = SocketAddr::from(([127, 0, 0, 2], 9093));
         let ctx = request_context(&principal, &peer, "consumer-client-b");
         let req = subscription_request("identity-group", &member_id, member_epoch);
 
@@ -804,13 +801,13 @@ mod tests {
         .await
         .expect("ConsumerGroupHeartbeat handler");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
-        let assigned: std::collections::HashSet<uuid::Uuid> = resp
+        let assigned: HashSet<uuid::Uuid> = resp
             .assignment
             .into_iter()
             .flat_map(|a| a.topic_partitions)
             .map(|tp| uuid::Uuid::from_bytes(tp.topic_id.0))
             .collect();
-        assert!(assigned == std::collections::HashSet::from([allowed_id]));
+        assert!(assigned == HashSet::from([allowed_id]));
 
         broker_handle.shutdown().await;
     }
@@ -825,7 +822,7 @@ mod tests {
         broker: Arc<Broker>,
         member_id: &'static str,
         member_epoch: i32,
-        assigned: std::collections::HashSet<uuid::Uuid>,
+        assigned: HashSet<uuid::Uuid>,
     }
 
     impl RegexMember {
@@ -834,7 +831,7 @@ mod tests {
                 broker,
                 member_id,
                 member_epoch: 0,
-                assigned: std::collections::HashSet::new(),
+                assigned: HashSet::new(),
             }
         }
 
@@ -870,14 +867,13 @@ mod tests {
         /// Heartbeats without a pattern until the member holds exactly
         /// `expected`, or fails after ten seconds.
         async fn heartbeat_until_holding(&mut self, expected: &[uuid::Uuid]) {
-            let expected: std::collections::HashSet<uuid::Uuid> =
-                expected.iter().copied().collect();
+            let expected: HashSet<uuid::Uuid> = expected.iter().copied().collect();
             for _ in 0..200 {
                 self.heartbeat(None).await;
                 if self.assigned == expected {
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                time::sleep(Duration::from_millis(50)).await;
             }
             panic!(
                 "member {} holds {:?} and never held {expected:?}",
@@ -948,7 +944,7 @@ mod tests {
             dir: directory,
         } = broker_with_described_topics(topics).await;
         let broker = handle.broker_arc_for_test();
-        let mut member = RegexMember::new(broker.clone(), "m1");
+        let mut member = RegexMember::new(Arc::clone(&broker), "m1");
         member.heartbeat(Some("^orders-.*")).await;
         JoinedRegexMember {
             handle,

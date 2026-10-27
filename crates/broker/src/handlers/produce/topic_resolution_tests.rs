@@ -33,8 +33,11 @@ const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 /// A name that no topic in these tests has.
 const UNKNOWN_NAME: &str = "no-such-topic";
 
-use crate::handlers::test_support::{
-    TopicCaseOutcome, TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+use crate::{
+    handlers::test_support::{
+        TopicCaseOutcome, TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+    },
+    test_support::repeated_records_batch,
 };
 
 type Outcome = TopicCaseOutcome<ProduceResponse>;
@@ -48,7 +51,7 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
 /// One v2 batch with one record. A leader of a fresh topic appends it at
 /// offset 0.
 fn one_record_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch().call()])
+    RecordsPayload::V2(vec![repeated_records_batch().call()])
 }
 
 /// The partition row that Kafka's `PartitionResponse(error)` constructor
@@ -115,7 +118,7 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> CaseOu
         acks: 1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
-            name: name.to_string(),
+            name: name.to_owned(),
             topic_id,
             partition_data: vec![PartitionProduceData {
                 index: 0,
@@ -156,7 +159,7 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> CaseOu
             name: if id_only {
                 String::new()
             } else {
-                name.to_string()
+                name.to_owned()
             },
             topic_id: if id_only { topic_id } else { WireUuid::ZERO },
             partition_responses: vec![partition],

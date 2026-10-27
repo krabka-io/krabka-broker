@@ -14,11 +14,12 @@ use {
             wire::{decode_response_frame, read_frame, request_frame, write_frame},
         },
     },
-    krabka_broker::Broker,
+    krabka_broker::{Broker, config::InterBrokerCredentials, network::client::InterBrokerClient},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
+    krabka_units::{ByteSize, convert::ByteSizeExt},
     std::{io, net::SocketAddr},
 };
 
@@ -33,10 +34,10 @@ use {
 async fn inter_broker_client_authenticates_via_plain() {
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("broker".to_string(), admin_plain_password());
+        .insert("broker".to_owned(), admin_plain_password());
 
-    run_inter_broker_auth_test(cfg, krabka_broker::config::InterBrokerCredentials::Plain {
-        username: "broker".to_string(),
+    run_inter_broker_auth_test(cfg, InterBrokerCredentials::Plain {
+        username: "broker".to_owned(),
         password: admin_plain_password(),
     })
     .await
@@ -45,11 +46,11 @@ async fn inter_broker_client_authenticates_via_plain() {
 
 pub async fn run_inter_broker_auth_test(
     cfg: krabka_broker::BrokerConfig,
-    credentials: krabka_broker::config::InterBrokerCredentials,
+    credentials: InterBrokerCredentials,
 ) -> Result<(), io::Error> {
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
-    let client = krabka_broker::network::client::InterBrokerClient::new(None, Some(credentials));
+    let client = InterBrokerClient::new(None, Some(credentials));
     let result = drive_inter_broker_client_then_apiversions(&client, addr).await;
     handle.shutdown().await;
     result
@@ -62,7 +63,7 @@ pub async fn run_inter_broker_auth_test(
 /// `SaslPlaintext`, so a GSSAPI SPN resolves to `kafka/localhost`. It then
 /// asserts that the post-auth stream works.
 pub async fn drive_inter_broker_client_then_apiversions(
-    client: &krabka_broker::network::client::InterBrokerClient,
+    client: &InterBrokerClient,
     addr: SocketAddr,
 ) -> Result<(), io::Error> {
     let options = krabka_client_core::ConnectionOptions {
@@ -91,11 +92,9 @@ pub async fn drive_inter_broker_client_then_apiversions(
         .correlation(99)
         .client_id("krabka-t16-test")
         .body(&av_body)
-        .maybe_capacity(Some(
-            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
-                u64::try_from(16 + av_body.len()).expect("frame capacity fits u64"),
-            ),
-        ))
+        .maybe_capacity(Some(<ByteSize as ByteSizeExt>::from_bytes(
+            u64::try_from(16 + av_body.len()).expect("frame capacity fits u64"),
+        )))
         .call();
 
     write_frame(&mut stream, &frame, None).await?;

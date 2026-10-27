@@ -124,14 +124,12 @@ impl Model for StretchModel {
             // 1. A witness serves no client, so it never leads a partition.
             Property::always(
                 "leader_never_witness",
-                |model: &StretchModel, state: &StretchState| {
-                    !model.witnesses.contains(&state.leader)
-                },
+                |model: &Self, state: &StretchState| !model.witnesses.contains(&state.leader),
             ),
             // 2. The headline claim: one site loss keeps `acks=all` writable.
             Property::always(
                 "single_site_loss_keeps_acks_all_writable",
-                |model: &StretchModel, state: &StretchState| {
+                |model: &Self, state: &StretchState| {
                     if !model.single_site_loss_holds(state) {
                         return true;
                     }
@@ -141,25 +139,24 @@ impl Model for StretchModel {
                 },
             ),
             // 3. A leader change always carries a greater epoch.
-            Property::always(
-                "one_leader_per_epoch",
-                |_: &StretchModel, state: &StretchState| !state.epoch_reused,
-            ),
+            Property::always("one_leader_per_epoch", |_: &Self, state: &StretchState| {
+                !state.epoch_reused
+            }),
             // 4. A minority of the voters never commits a write.
             Property::always(
                 "minority_never_commits",
-                |_: &StretchModel, state: &StretchState| !state.commit_in_minority,
+                |_: &Self, state: &StretchState| !state.commit_in_minority,
             ),
             // 5. The preferred site keeps leadership while it can take it.
             Property::always(
                 "preferred_site_keeps_leadership",
-                |_: &StretchModel, state: &StretchState| !state.preferred_pinning_broken,
+                |_: &Self, state: &StretchState| !state.preferred_pinning_broken,
             ),
             // The witness is what keeps `acks=all` writable after a site loss,
             // so an election that skipped it must still leave it in the ISR.
             Property::sometimes(
                 "witness_stays_in_isr_after_failover",
-                |model: &StretchModel, state: &StretchState| {
+                |model: &Self, state: &StretchState| {
                     state.leader_epoch > 0
                         && state.isr.iter().any(|node| model.witnesses.contains(node))
                 },
@@ -168,25 +165,25 @@ impl Model for StretchModel {
             // claim is reachable with a whole site lost.
             Property::sometimes(
                 "single_site_loss_precondition_is_reachable",
-                |model: &StretchModel, state: &StretchState| {
+                |model: &Self, state: &StretchState| {
                     impaired(state) == 1 && model.single_site_loss_holds(state)
                 },
             ),
             Property::sometimes(
                 "one_site_loss_still_commits",
-                |_: &StretchModel, state: &StretchState| {
+                |_: &Self, state: &StretchState| {
                     impaired(state) == 1 && state.last_write == Some(WriteOutcome::Committed)
                 },
             ),
             Property::sometimes(
                 "two_site_loss_rejects_the_write",
-                |_: &StretchModel, state: &StretchState| {
+                |_: &Self, state: &StretchState| {
                     impaired(state) == 2 && state.last_write == Some(WriteOutcome::Rejected)
                 },
             ),
             Property::sometimes(
                 "preferred_election_returns_leadership",
-                |model: &StretchModel, state: &StretchState| {
+                |model: &Self, state: &StretchState| {
                     impaired(state) == 0
                         && state.leader_epoch > 0
                         && model.site_of(state.leader) == model.preferred_site

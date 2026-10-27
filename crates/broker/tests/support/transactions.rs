@@ -1,9 +1,14 @@
 //! Transaction requests with explicit producer identity and deadlines.
 
-use krabka_protocol::owned::{
-    end_txn_request::EndTxnRequest,
-    init_producer_id_request::InitProducerIdRequest,
-    txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
+use krabka_protocol::{
+    owned::{
+        end_txn_request::EndTxnRequest,
+        init_producer_id_request::InitProducerIdRequest,
+        init_producer_id_response::InitProducerIdResponse,
+        txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
+        write_txn_markers_request::WritableTxnMarker,
+    },
+    primitives::uuid::Uuid,
 };
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
@@ -74,7 +79,7 @@ pub fn txn_offset_partition(
 
 pub fn txn_offset_topic(
     name: impl Into<String>,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     partitions: Vec<TxnOffsetCommitRequestPartition>,
 ) -> TxnOffsetCommitRequestTopic {
     TxnOffsetCommitRequestTopic {
@@ -91,7 +96,7 @@ pub fn txn_offset_topic(
 /// Panics if the `InitProducerId` request fails.
 pub async fn claim_idempotent_producer(
     client: &krabka_client_core::Client,
-) -> krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse {
+) -> InitProducerIdResponse {
     client
         .send(InitProducerIdRequest {
             transactional_id: None,
@@ -102,11 +107,8 @@ pub async fn claim_idempotent_producer(
 }
 
 /// A marker topic with the caller's exact ordered partition list.
-pub fn marker_topic(
-    name: String,
-    partition_indexes: Vec<i32>,
-) -> krabka_protocol::owned::write_txn_markers_request::WritableTxnMarkerTopic {
-    krabka_protocol::owned::write_txn_markers_request::WritableTxnMarkerTopic {
+pub fn marker_topic(name: String, partition_indexes: Vec<i32>) -> WritableTxnMarkerTopic {
+    WritableTxnMarkerTopic {
         name,
         partition_indexes,
         ..Default::default()
@@ -181,7 +183,7 @@ pub fn transaction_marker(
     #[builder(into, default)] coordinator_epoch: CoordinatorEpoch,
     #[builder(into, default)] transaction_version: TransactionVersion,
     #[builder(default)] topics: Vec<WritableTxnMarkerTopic>,
-) -> krabka_protocol::owned::write_txn_markers_request::WritableTxnMarker {
+) -> WritableTxnMarker {
     let setup = TransactionMarkerSetup {
         producer,
         outcome,
@@ -196,7 +198,7 @@ pub fn transaction_marker(
         transaction_version,
         topics,
     } = setup;
-    krabka_protocol::owned::write_txn_markers_request::WritableTxnMarker {
+    WritableTxnMarker {
         producer_id: producer.id.0,
         producer_epoch: producer.epoch.0,
         transaction_result: outcome == TransactionOutcome::Commit,

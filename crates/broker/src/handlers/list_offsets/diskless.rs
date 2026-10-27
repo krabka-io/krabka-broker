@@ -26,7 +26,14 @@ pub(super) async fn diskless_earliest_candidate(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::diskless::wal_index::WalFlushRecord, assert2::assert, std::sync::Arc};
+    use {
+        super::*,
+        crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry},
+        assert2::assert,
+        object_store::memory::InMemory,
+        std::sync::Arc,
+        tokio::sync::Mutex,
+    };
 
     #[tokio::test]
     async fn diskless_earliest_uses_object_floor_but_leaves_local_floor_visible() {
@@ -35,7 +42,7 @@ mod tests {
         cache.apply(&WalFlushRecord {
             object_key: "o".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![crate::diskless::wal_index::WalIndexEntry {
+            entries: vec![WalIndexEntry {
                 topic_id,
                 partition: 0,
                 first_offset: 0,
@@ -45,10 +52,8 @@ mod tests {
                 max_timestamp_ms: 0,
             }],
         });
-        let handle = DisklessReadHandle::new(
-            Arc::new(tokio::sync::Mutex::new(cache)),
-            Arc::new(object_store::memory::InMemory::new()),
-        );
+        let handle =
+            DisklessReadHandle::new(Arc::new(Mutex::new(cache)), Arc::new(InMemory::new()));
 
         let earliest = diskless_earliest_candidate(Some(&handle), Some(topic_id), 0).await;
         assert!(earliest == Some(0));

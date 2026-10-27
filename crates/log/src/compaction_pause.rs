@@ -5,10 +5,10 @@ use {
     crate::io::{IoTarget, LogIo},
     std::{
         fs::File,
-        io::Write as _,
+        io::{self, Write as _},
         sync::{
             Arc, Mutex, PoisonError,
-            mpsc::{Receiver, Sender, channel},
+            mpsc::{Receiver, RecvError, SendError, Sender, channel},
         },
     },
 };
@@ -48,25 +48,24 @@ pub fn compaction_pause() -> (Arc<CompactionPause>, CompactionPauseControl) {
 impl CompactionPauseControl {
     /// Block until a build is held inside its first write.
     ///
-    /// # Panics
-    /// Panics if the pause was dropped without holding a build.
-    pub fn wait_until_paused(&self) {
+    /// # Errors
+    /// Returns [`RecvError`] if the pause was dropped without holding a build.
+    pub fn wait_until_paused(&self) -> Result<(), RecvError> {
         self.paused
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .recv()
-            .expect("a build reaches its first compaction write");
     }
 
     /// Let the held build go on.
     ///
-    /// # Panics
-    /// Panics if the pause was dropped.
-    pub fn resume(&self) { self.resume.send(()).expect("the pause is installed"); }
+    /// # Errors
+    /// Returns [`SendError`] if the pause was dropped.
+    pub fn resume(&self) -> Result<(), SendError<()>> { self.resume.send(()) }
 }
 
 impl LogIo for CompactionPause {
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
         let first = if target == IoTarget::CompactionSwap {
             self.paused
                 .lock()

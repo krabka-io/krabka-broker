@@ -16,7 +16,7 @@ use {
 
 /// A running tiered-storage broker, the directory that backs it and the
 /// config it started from.
-pub(crate) struct TieredBroker {
+pub struct TieredBroker {
     pub(crate) broker: krabka_broker::BrokerHandle,
     pub(crate) dir: tempfile::TempDir,
     pub(crate) config: krabka_broker::BrokerConfig,
@@ -34,10 +34,10 @@ pub(crate) struct TieredBroker {
 /// Returns the broker handle, the temp dir, and the `BrokerConfig` so the
 /// caller can reuse it for a restart. The caller must keep the temp dir
 /// alive.
-pub(crate) fn start_host_broker_with_minio_tier(
+pub fn start_host_broker_with_minio_tier(
     s3: krabka_remote_storage::S3Config,
     rlmm: krabka_broker::RlmmKind,
-) -> impl std::future::Future<Output = TieredBroker> {
+) -> impl Future<Output = TieredBroker> {
     init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig {

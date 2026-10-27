@@ -31,7 +31,7 @@ use {
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
     prost::Message as _,
     std::{sync::Arc, time::Duration},
-    tokio::net::TcpStream,
+    tokio::{net::TcpStream, task::JoinHandle, time},
     tokio_util::codec::Framed,
 };
 
@@ -59,7 +59,7 @@ async fn round_trip<Req: krabka_protocol::Encode, Resp: for<'de> Decode<'de>>(
         .call()
         .freeze();
     framed.send(frame).await.expect("send request");
-    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+    let response = time::timeout(CLIENT_TIMEOUT, framed.next())
         .await
         .expect("the response must beat the client timeout")
         .expect("a response frame")
@@ -70,9 +70,7 @@ async fn round_trip<Req: krabka_protocol::Encode, Resp: for<'de> Decode<'de>>(
 
 /// Opens a connection, takes a subscription and pushes one gauge on it, as a
 /// Java client's first telemetry cycle does.
-async fn connect_and_push(
-    broker: &Arc<Broker>,
-) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
+async fn connect_and_push(broker: &Arc<Broker>) -> (JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     let (server, mut framed) = plaintext_loop(Arc::clone(broker)).await;
     let subscription: GetTelemetrySubscriptionsResponse = round_trip(
         &mut framed,
@@ -101,7 +99,7 @@ async fn connect_and_push(
 
 /// Drops the client end and waits for the serve loop to finish its teardown,
 /// which is where the broker releases the connection's client instance.
-async fn close(server: tokio::task::JoinHandle<()>, framed: Framed<TcpStream, KafkaCodec>) {
+async fn close(server: JoinHandle<()>, framed: Framed<TcpStream, KafkaCodec>) {
     drop(framed);
     server.await.expect("serve loop joins on client EOF");
 }

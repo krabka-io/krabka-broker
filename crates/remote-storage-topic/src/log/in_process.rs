@@ -24,7 +24,7 @@ use {
     },
     std::{
         collections::HashMap,
-        sync::{Arc, Mutex, atomic::AtomicU64},
+        sync::{Arc, Mutex, MutexGuard, PoisonError, atomic::AtomicU64},
     },
     tokio::sync::{broadcast, mpsc},
 };
@@ -90,8 +90,10 @@ impl InProcessMetadataEventLog {
     /// Panics when `partition_count <= 0`.
     #[must_use]
     pub fn new(partition_count: i32) -> Arc<Self> {
-        assert2::assert!(partition_count > 0, "partition_count must be positive");
-        let cap = usize::try_from(partition_count).expect("partition_count fits in usize");
+        assert2::assert!(
+            let Some(cap) = usize::try_from(partition_count).ok().filter(|&cap| cap > 0),
+            "partition_count must be positive"
+        );
         let (tx, _rx) = broadcast::channel(1024);
         Arc::new(Self {
             inner: Arc::new(InProcessInner {
@@ -104,25 +106,39 @@ impl InProcessMetadataEventLog {
         })
     }
 
+    /// The records of every partition, whether or not a thread panicked
+    /// while it held the lock.
+    fn log(&self) -> MutexGuard<'_, Vec<Vec<MetadataEventRecord>>> {
+        self.inner
+            .log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn append(
         &self,
         partition: i32,
         key: Option<Bytes>,
         event: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
+        let out_of_range = || MetadataLogError::PartitionOutOfRange {
+            partition,
+            count: self.inner.partition_count,
+        };
         if partition < 0 || partition >= self.inner.partition_count {
-            return Err(MetadataLogError::PartitionOutOfRange {
-                partition,
-                count: self.inner.partition_count,
-            });
+            return Err(out_of_range());
         }
+        let idx = usize::try_from(partition).map_err(|_| out_of_range())?;
         // Hold the partition lock across the broadcast.send so that any
         // concurrent subscribe() observes either the appended record in
         // its snapshot or as a forwarded broadcast — never both.
-        let mut guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
-        let idx = usize::try_from(partition).expect("partition non-negative");
-        let log_for_p = &mut guard[idx];
-        let offset = i64::try_from(log_for_p.len()).expect("offset fits in i64");
+        let mut guard = self.log();
+        let log_for_p = guard.get_mut(idx).ok_or_else(out_of_range)?;
+        let offset = i64::try_from(log_for_p.len()).map_err(|_| {
+            MetadataLogError::Other(format!(
+                "partition {partition} has more than i64::MAX records"
+            ))
+        })?;
         let tombstone = event.is_none();
         let record = MetadataEventRecord {
             partition,
@@ -136,6 +152,7 @@ impl InProcessMetadataEventLog {
         // is fine — the record is still durable in the in-memory log
         // and any later subscriber's snapshot will see it.
         let _ = self.inner.tx.send(record);
+        drop(guard);
         Ok(offset)
     }
 }
@@ -165,7 +182,7 @@ impl MetadataEventLog for InProcessMetadataEventLog {
 
         // Bracket snapshot + broadcast subscribe under the log lock so each
         // published record is seen exactly once (snapshot xor live).
-        let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
+        let guard = self.log();
         let rx = self.inner.tx.subscribe();
 
         // Initial assigned set: partition -> next live offset (= current
@@ -177,16 +194,15 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             let Ok(idx) = usize::try_from(ps.partition) else {
                 continue;
             };
-            if idx >= guard.len() {
+            let Some(records) = guard.get(idx) else {
                 continue;
-            }
-            let records = &guard[idx];
+            };
             let begin = usize::try_from(ps.start_offset.max(0)).unwrap_or(usize::MAX);
             for record in records.iter().skip(begin) {
                 snapshot.push(record.clone());
             }
             assigned.insert(ps.partition, PartitionCursor {
-                next: i64::try_from(records.len()).expect("len fits in i64"),
+                next: i64::try_from(records.len()).unwrap_or(i64::MAX),
                 // Initially-assigned: backlog rides the chained
                 // snapshot stream, so live records can go direct.
                 via_inject: false,
@@ -202,7 +218,7 @@ impl MetadataEventLog for InProcessMetadataEventLog {
         self.inner
             .subscriptions
             .lock()
-            .expect("metadata-log subscriptions mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(sub_id, Arc::clone(&state));
         drop(guard);
 
@@ -224,11 +240,14 @@ impl MetadataEventLog for InProcessMetadataEventLog {
     }
 
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
-        Ok(guard
+        self.log()
             .iter()
-            .map(|v| i64::try_from(v.len()).expect("hwm fits in i64"))
-            .collect())
+            .map(|v| {
+                i64::try_from(v.len()).map_err(|_| {
+                    MetadataLogError::Other("a partition has more than i64::MAX records".into())
+                })
+            })
+            .collect()
     }
 
     async fn visit_range(
@@ -244,21 +263,25 @@ impl MetadataEventLog for InProcessMetadataEventLog {
         };
         let idx = usize::try_from(partition).map_err(|_| out_of_range())?;
         // Copy the range out, so `visit` never runs under the log lock.
-        let range: Vec<MetadataEventRecord> = {
-            let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
-            let records = guard.get(idx).ok_or_else(out_of_range)?;
-            let high_water_mark = i64::try_from(records.len()).expect("hwm fits in i64");
-            if end > high_water_mark {
-                return Err(MetadataLogError::Other(format!(
-                    "partition {partition} ends at {high_water_mark}, before {end}"
-                )));
-            }
-            records
+        let copied = self.log().get(idx).map(|records| {
+            let range: Vec<MetadataEventRecord> = records
                 .iter()
                 .filter(|record| start <= record.offset && record.offset < end)
                 .cloned()
-                .collect()
-        };
+                .collect();
+            (records.len(), range)
+        });
+        let (len, range) = copied.ok_or_else(out_of_range)?;
+        let high_water_mark = i64::try_from(len).map_err(|_| {
+            MetadataLogError::Other(format!(
+                "partition {partition} has more than i64::MAX records"
+            ))
+        })?;
+        if end > high_water_mark {
+            return Err(MetadataLogError::Other(format!(
+                "partition {partition} ends at {high_water_mark}, before {end}"
+            )));
+        }
         range.into_iter().try_for_each(visit)
     }
 }
@@ -269,6 +292,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         futures_util::StreamExt,
+        tokio::time,
     };
 
     #[tokio::test]
@@ -435,7 +459,7 @@ mod tests {
                 assert!(log.publish(0, payload).await.unwrap() == offset);
             }
 
-            tokio::time::timeout(Duration::from_secs(3), async {
+            time::timeout(Duration::from_secs(3), async {
                 for expected in 0..count {
                     let record = stream.next().await.expect("retained record is replayed");
                     assert!(record.offset == expected);

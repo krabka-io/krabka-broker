@@ -37,6 +37,7 @@
 //!
 //! Gated `#[ignore = "requires Docker"]`; the Bazel `docker` lane runs it with
 //! `--ignored --test-threads=1`.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -49,11 +50,12 @@ use {
     assert2::assert,
     jvm_acceptance::broker0_advertised,
     std::{
-        io::{Read as _, Write as _},
+        io::{self, Error, ErrorKind, Read as _, Write as _},
         net::TcpStream,
         process::Command,
         time::Duration,
     },
+    tokio::{time, time::Instant},
 };
 
 /// The Apache Kafka image the worker runs from. Its tarball is the whole
@@ -189,7 +191,7 @@ impl ConnectWorker {
     /// created and replayed all three internal topics and completed the
     /// herder's first rebalance.
     async fn wait_for_rest(&self) {
-        let deadline = tokio::time::Instant::now() + REST_BUDGET;
+        let deadline = Instant::now() + REST_BUDGET;
         loop {
             if let Ok(response) = http(&self.rest, "GET", "/connectors", None)
                 && response.status == 200
@@ -197,7 +199,7 @@ impl ConnectWorker {
                 return;
             }
             assert!(
-                tokio::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the Connect worker never served its REST API within {REST_BUDGET:?}; \
                  worker logs:\n{}",
                 self.logs(),
@@ -205,7 +207,7 @@ impl ConnectWorker {
             // intentional: a worker's readiness is a JVM-internal state with no
             // krabka-side awaiter -- polling its own REST API is the only
             // observation there is.
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            time::sleep(Duration::from_secs(2)).await;
         }
     }
 
@@ -232,7 +234,7 @@ impl ConnectWorker {
     /// A `FAILED` state ends the wait immediately: the task's own trace is in
     /// the status body, and waiting out the budget would only bury it.
     async fn wait_until_running(&self, name: &str, tasks: usize) {
-        let deadline = tokio::time::Instant::now() + RUNNING_BUDGET;
+        let deadline = Instant::now() + RUNNING_BUDGET;
         let path = format!("/connectors/{name}/status");
         loop {
             let body = match http(&self.rest, "GET", &path, None) {
@@ -249,20 +251,20 @@ impl ConnectWorker {
                 return;
             }
             assert!(
-                tokio::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the {name} connector and its {tasks} task(s) did not reach RUNNING within \
                  {RUNNING_BUDGET:?}; last status: {body}\nworker logs:\n{}",
                 self.logs(),
             );
             // intentional: connector and task state is herder-local, reached
             // through a rebalance the broker does not report on.
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            time::sleep(Duration::from_secs(2)).await;
         }
     }
 
     /// Block until the sink file holds exactly the source file's lines.
     async fn wait_for_round_trip(&self) {
-        let deadline = tokio::time::Instant::now() + ROUND_TRIP_BUDGET;
+        let deadline = Instant::now() + ROUND_TRIP_BUDGET;
         loop {
             let sink: Vec<String> = self
                 .read_file(SINK_FILE)
@@ -276,7 +278,7 @@ impl ConnectWorker {
                 return;
             }
             assert!(
-                tokio::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the FileStream sink file never matched the source file within \
                  {ROUND_TRIP_BUDGET:?}; sink held {sink:?}, source holds {LINES:?}\n\
                  worker logs:\n{}",
@@ -284,7 +286,7 @@ impl ConnectWorker {
             );
             // intentional: the sink writes on its own flush interval, which is
             // connector state and not anything krabka can be awaited on.
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            time::sleep(Duration::from_secs(2)).await;
         }
     }
 }
@@ -303,7 +305,7 @@ struct RestResponse {
 /// everything up to EOF and neither `Content-Length` nor chunked framing has
 /// to be parsed. Timeouts are set on both directions so a wedged worker fails
 /// the surrounding wait rather than blocking the test forever.
-fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> std::io::Result<RestResponse> {
+fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> io::Result<RestResponse> {
     let mut stream = TcpStream::connect(addr)?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -329,8 +331,8 @@ fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> std::io::Re
         .nth(1)
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            Error::new(
+                ErrorKind::InvalidData,
                 format!("no HTTP status line in the response: {text}"),
             )
         })?;

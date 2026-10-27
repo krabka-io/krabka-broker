@@ -9,6 +9,7 @@
 use {
     super::writer::AuditWriter,
     crate::sink::{AuditError, AuditRecord},
+    tracing::field::Empty,
 };
 
 impl AuditWriter {
@@ -73,7 +74,7 @@ impl AuditWriter {
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(replayed = tracing::field::Empty, total = tracing::field::Empty)
+        fields(replayed = Empty, total = Empty)
     )]
     pub(super) async fn try_replay(&mut self) -> Result<(), AuditError> {
         let Some(spool) = &mut self.spool else {
@@ -148,13 +149,14 @@ mod tests {
                     test_signer,
                 },
             },
-            spool::Spool,
+            spool::{FILE_HEADER_LEN, Spool},
             stats::AuditStats,
             test_support::TestSigner,
         },
         assert2::check,
         krabka_units::prelude::{ByteSizeExt as _, TimeExt as _, bytes},
-        std::sync::Arc,
+        std::{fs, path::Path, sync::Arc},
+        tokio::{task, task::JoinHandle},
     };
 
     struct FailingSpoolFixture {
@@ -162,7 +164,7 @@ mod tests {
         stats: Arc<AuditStats>,
         sink: Arc<FailableSink>,
         log: Arc<AuditLog>,
-        handle: tokio::task::JoinHandle<()>,
+        handle: JoinHandle<()>,
         _public_key: Option<Vec<u8>>,
         // Close every task and shared state before deleting its spool directory.
         _directory: tempfile::TempDir,
@@ -197,7 +199,7 @@ mod tests {
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(directory.path(), cap).unwrap();
         let ClockedParams { mut params, clock } =
-            params_with_clock(sink.clone(), spool, stats.clone());
+            params_with_clock(Arc::<FailableSink>::clone(&sink), spool, Arc::clone(&stats));
         params.signer = signer;
         params.checkpoint_every_n = checkpoint_every_n.unwrap_or(0);
         FailingSpoolFixture {
@@ -213,7 +215,7 @@ mod tests {
 
     struct RunningWriter {
         log: Arc<AuditLog>,
-        handle: tokio::task::JoinHandle<()>,
+        handle: JoinHandle<()>,
     }
 
     fn fail_closed_writer(sink: Arc<FailableSink>, spool: Spool) -> RunningWriter {
@@ -233,16 +235,14 @@ mod tests {
         record
     }
 
-    fn check_spool_within_capacity(directory: &std::path::Path, capacity: krabka_units::ByteSize) {
+    fn check_spool_within_capacity(directory: &Path, capacity: krabka_units::ByteSize) {
         check!(
-            std::fs::metadata(directory.join("audit.spool"))
-                .unwrap()
-                .len()
-                <= capacity.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
+            fs::metadata(directory.join("audit.spool")).unwrap().len()
+                <= capacity.bytes_u64() + u64::try_from(FILE_HEADER_LEN).unwrap()
         );
     }
 
-    fn record_size(directory: &std::path::Path, record: &AuditRecord) -> krabka_units::ByteSize {
+    fn record_size(directory: &Path, record: &AuditRecord) -> krabka_units::ByteSize {
         let mut spool = Spool::open(directory, ROOMY_CAP).unwrap();
         check!(spool.append(record).unwrap());
         spool.size()
@@ -262,7 +262,7 @@ mod tests {
 
     async fn drained_records(
         log: Arc<AuditLog>,
-        handle: tokio::task::JoinHandle<()>,
+        handle: JoinHandle<()>,
         sink: &FailableSink,
         stats: &AuditStats,
         clock: &qubit_clock::ManualMonotonicClock,
@@ -300,7 +300,7 @@ mod tests {
         check!(
             (seqs, fixture.stats.replayed() >= 3, fixture.stats.depth())
                 == (
-                    vec!["0".to_string(), "1".to_string(), "2".to_string()],
+                    vec!["0".to_owned(), "1".to_owned(), "2".to_owned()],
                     true,
                     0
                 )
@@ -313,7 +313,10 @@ mod tests {
         let SinkStats { sink, stats } = healthy_sink_stats(); // healthy
         let (log, rx) = AuditLog::new(16);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let h = spawn_writer(rx, params(sink.clone(), spool, stats.clone()));
+        let h = spawn_writer(
+            rx,
+            params(Arc::<FailableSink>::clone(&sink), spool, Arc::clone(&stats)),
+        );
         emit_lifecycle(&log, &[NodeId(1), NodeId(2)]);
         finish_writer(log, h).await;
         check!((sink.inner.records().len(), stats.spooled(), stats.depth()) == (2, 0, 0));
@@ -325,7 +328,10 @@ mod tests {
         let SinkStats { sink, stats } = healthy_sink_stats();
         let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let handle = spawn_writer(receiver, params(sink.clone(), spool, Arc::clone(&stats)));
+        let handle = spawn_writer(
+            receiver,
+            params(Arc::<FailableSink>::clone(&sink), spool, Arc::clone(&stats)),
+        );
 
         log.emit_required(life(NodeId(1))).await.unwrap();
         finish_writer(log, handle).await;
@@ -373,11 +379,14 @@ mod tests {
         let sink = Arc::new(FailableSink::default());
         sink.set_indeterminate_after(1);
         let (log, receiver) = AuditLog::new(8);
-        let ClockedParams { params, clock } =
-            params_with_clock(sink.clone(), spool, Arc::new(AuditStats::new()));
+        let ClockedParams { params, clock } = params_with_clock(
+            Arc::<FailableSink>::clone(&sink),
+            spool,
+            Arc::new(AuditStats::new()),
+        );
         let handle = spawn_writer(receiver, params);
 
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         clock
             .advance(REPLAY_EVERY.to_std())
             .expect("manual time moves forward");
@@ -447,7 +456,10 @@ mod tests {
         let SinkStats { sink, stats } = failed_sink_stats(); // stay in spool mode (no replay), so drops accumulate
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(dir.path(), one).unwrap();
-        let h = spawn_writer(rx, params(sink.clone(), spool, stats.clone()));
+        let h = spawn_writer(
+            rx,
+            params(Arc::<FailableSink>::clone(&sink), spool, Arc::clone(&stats)),
+        );
         for i in 0..6 {
             log.emit(life(NodeId(i)));
         }
@@ -490,7 +502,8 @@ mod tests {
         let SinkStats { sink, stats } = failed_sink_stats();
         let spool = Spool::open(dir.path(), one).unwrap();
         let (log, receiver) = AuditLog::new_with_mode_and_spool(8, AuditMode::FailOpen, &spool);
-        let ClockedParams { params, clock } = params_with_clock(sink.clone(), spool, stats.clone());
+        let ClockedParams { params, clock } =
+            params_with_clock(Arc::<FailableSink>::clone(&sink), spool, Arc::clone(&stats));
         let handle = spawn_writer(receiver, params);
 
         emit_lifecycle(&log, &[NodeId(0), NodeId(1), NodeId(2)]);
@@ -568,6 +581,6 @@ mod tests {
         finish_writer(fixture.log, fixture.handle).await;
         // all 3 chained records reached the sink exactly once, in seq order
         let seqs = record_sequences(&fixture.sink.inner.records());
-        check!(seqs == vec!["0".to_string(), "1".to_string(), "2".to_string()]);
+        check!(seqs == vec!["0".to_owned(), "1".to_owned(), "2".to_owned()]);
     }
 }

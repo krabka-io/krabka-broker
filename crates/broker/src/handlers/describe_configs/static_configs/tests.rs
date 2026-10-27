@@ -9,6 +9,7 @@ use {
         DescribeConfigsResourceResult, DescribeConfigsSynonym,
     },
     krabka_units::{Time, millis, secs},
+    std::collections::BTreeMap,
 };
 
 /// A request that asks for values alone, the way a plain `--describe` does.
@@ -30,7 +31,7 @@ fn everything(_: &str) -> bool { true }
 /// [`StaticBrokerConfigs`] view points at.
 struct IdleCase {
     idle: Option<Time>,
-    overrides: std::collections::BTreeMap<String, Time>,
+    overrides: BTreeMap<String, Time>,
 }
 
 impl IdleCase {
@@ -57,7 +58,7 @@ fn config_with(idle: Option<Time>, overrides: &[ListenerWindow<'_>]) -> IdleCase
         idle,
         overrides: overrides
             .iter()
-            .map(|listener| (listener.name.to_string(), listener.window))
+            .map(|listener| (listener.name.to_owned(), listener.window))
             .collect(),
     }
 }
@@ -67,8 +68,8 @@ const LONG: i8 = 5;
 
 fn expected(name: &str, value: &str, source: i8) -> DescribeConfigsResourceResult {
     krabka_macros::tagged_wire!(DescribeConfigsResourceResult {
-        name: name.to_string(),
-        value: Some(value.to_string()),
+        name: name.to_owned(),
+        value: Some(value.to_owned()),
         read_only: true,
         config_source: source,
         is_sensitive: false,
@@ -80,8 +81,8 @@ fn expected(name: &str, value: &str, source: i8) -> DescribeConfigsResourceResul
 
 fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
     DescribeConfigsSynonym {
-        name: name.to_string(),
-        value: Some(value.to_string()),
+        name: name.to_owned(),
+        value: Some(value.to_owned()),
         source,
         ..Default::default()
     }
@@ -203,9 +204,9 @@ fn requested_synonyms_carry_the_chain_the_container_reports() {
                 vec![broker_wide_static.clone(), broker_wide_default.clone()],
             ),
             (listener_key, "15000", CONFIG_SOURCE_STATIC_BROKER, vec![
-                listener_static.clone(),
-                broker_wide_static.clone(),
-                broker_wide_default.clone(),
+                listener_static,
+                broker_wide_static,
+                broker_wide_default,
             ]),
         ]),
     ];

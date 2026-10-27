@@ -128,7 +128,7 @@ fn delivery_replication_and_restore_composition_boundaries() {
     }
     assert!(restore_selection_matches_oracle(
         RestoreBatchFrame {
-            timestamp_type: crate::restore::RestoreTimestampType::LogAppendTime,
+            timestamp_type: RestoreTimestampType::LogAppendTime,
             base_timestamp: i64::MAX,
             ..frame
         },

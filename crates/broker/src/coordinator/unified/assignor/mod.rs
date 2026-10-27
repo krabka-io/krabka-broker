@@ -7,7 +7,10 @@ pub mod uniform;
 
 use {
     krabka_protocol::primitives::uuid::Uuid,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        fmt::Debug,
+    },
 };
 pub use {range::RangeAssignor, uniform::UniformAssignor};
 
@@ -57,7 +60,7 @@ pub struct TopicIdPartition {
 
 pub type Assignment = HashMap<String, HashMap<Uuid, Vec<i32>>>;
 
-pub trait Assignor: Send + Sync + std::fmt::Debug {
+pub trait Assignor: Send + Sync + Debug {
     fn name(&self) -> &'static str;
     fn assign(&self, group: &GroupSpec, topics: &TopicMetadata) -> Assignment;
 }

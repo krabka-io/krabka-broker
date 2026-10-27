@@ -115,7 +115,7 @@ impl DpModel {
     fn reserve(&self, committed_next: i64, count: i64) -> Reservation {
         let advance = |count| {
             MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
-                topic: elr::TOPIC.to_string(),
+                topic: elr::TOPIC.to_owned(),
                 partition: elr::PARTITION,
                 count,
             })
@@ -446,7 +446,7 @@ impl Model for DpModel {
                 // which every ISR member holds a record past the HWM, so a
                 // watermark that ignored min ISR would have committed it, but
                 // the ISR is under min ISR and the watermark stayed.
-                Property::sometimes("hwm_held_by_min_isr", |m: &DpModel, s: &DpState| {
+                Property::sometimes("hwm_held_by_min_isr", |m: &Self, s: &DpState| {
                     let leader_log = &s.log[usize::from(s.leader)];
                     has(s.isr, s.leader)
                         && usize::try_from(u32::from(s.isr).count_ones())

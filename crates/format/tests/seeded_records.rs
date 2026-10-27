@@ -10,16 +10,21 @@
 //! consumers of the seed stream wrote: the bootstrap files a controller loads
 //! (`bootstrap.records.bin` and its `bootstrap.json` mirror), and the
 //! offset-zero KIP-630/KIP-853 bootstrap checkpoint a dynamic format writes.
+#![cfg(test)]
 
 use {
     assert2::check,
     clap::Parser as _,
+    krabka_broker::bootstrap,
     krabka_format::MetadataRecord,
     krabka_metadata::{
         KRaftVersionRecord, NodeId, PartitionRecord, TopicRecord, VoterSet, VotersRecord,
     },
     serde_wincode::SerdeCompat,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
     wincode::Deserialize as _,
 };
@@ -41,7 +46,7 @@ fn empty_log_dir(parent: &tempfile::TempDir, name: &str) -> PathBuf { parent.pat
 /// partitions, which is the order the partitions are keyed on.
 fn restored_topic(name: &str, topic_id: u128, partitions: i32) -> Vec<MetadataRecord> {
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
-        name: name.to_string(),
+        name: name.to_owned(),
         topic_id: Uuid::from_u128(topic_id),
         partitions,
         replication_factor: 1,
@@ -59,21 +64,21 @@ fn restored_topic(name: &str, topic_id: u128, partitions: i32) -> Vec<MetadataRe
 /// seeded.
 async fn format(log_dir: &Path, flags: &[&str], extra: Vec<MetadataRecord>) {
     let mut argv = vec![
-        "krabka-format".to_string(),
-        "--log-dir".to_string(),
+        "krabka-format".to_owned(),
+        "--log-dir".to_owned(),
         log_dir.display().to_string(),
-        "--cluster-id".to_string(),
-        CLUSTER_ID.to_string(),
-        "--node-id".to_string(),
-        "1".to_string(),
+        "--cluster-id".to_owned(),
+        CLUSTER_ID.to_owned(),
+        "--node-id".to_owned(),
+        "1".to_owned(),
     ];
-    argv.extend(flags.iter().map(|flag| (*flag).to_string()));
+    argv.extend(flags.iter().map(|flag| (*flag).to_owned()));
     let code = krabka_format::run_from_args_with_records(argv, extra).await;
     check!(code == 0);
 }
 
 fn bootstrap_records(log_dir: &Path) -> Vec<MetadataRecord> {
-    krabka_broker::bootstrap::load_bootstrap_records(log_dir).expect("bootstrap records")
+    bootstrap::load_bootstrap_records(log_dir).expect("bootstrap records")
 }
 
 fn offset_zero_checkpoint(log_dir: &Path) -> PathBuf {
@@ -147,10 +152,9 @@ async fn the_manifest_mirrors_the_seeded_binary_stream() {
     } = formatted_restored_topic(&[]).await;
 
     let records = bootstrap_records(&log_dir);
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(log_dir.join("bootstrap.json")).expect("bootstrap.json"),
-    )
-    .expect("bootstrap.json is json");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(log_dir.join("bootstrap.json")).expect("bootstrap.json"))
+            .expect("bootstrap.json is json");
     let mirrored: Vec<MetadataRecord> = manifest["records_b64"]
         .as_array()
         .expect("records_b64 is an array")
@@ -196,7 +200,7 @@ async fn a_dynamic_format_seeds_the_offset_zero_checkpoint() {
         }),
         other => other,
     }));
-    let written = std::fs::read(offset_zero_checkpoint(&log_dir)).expect("checkpoint");
+    let written = fs::read(offset_zero_checkpoint(&log_dir)).expect("checkpoint");
     check!(krabka_raft::deserialize_metadata_snapshot_image(&written).ok() == Some(expected));
 }
 
@@ -211,16 +215,16 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
     let via_seam = empty_log_dir(&parent, "seam");
     let argv = |log_dir: &Path| {
         vec![
-            "krabka-format".to_string(),
-            "--log-dir".to_string(),
+            "krabka-format".to_owned(),
+            "--log-dir".to_owned(),
             log_dir.display().to_string(),
-            "--cluster-id".to_string(),
-            CLUSTER_ID.to_string(),
-            "--directory-id".to_string(),
-            DIRECTORY_ID.to_string(),
-            "--node-id".to_string(),
-            "1".to_string(),
-            "--no-initial-controllers".to_string(),
+            "--cluster-id".to_owned(),
+            CLUSTER_ID.to_owned(),
+            "--directory-id".to_owned(),
+            DIRECTORY_ID.to_owned(),
+            "--node-id".to_owned(),
+            "1".to_owned(),
+            "--no-initial-controllers".to_owned(),
         ]
     };
 
@@ -239,20 +243,20 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
     check!(meta_from_run.is_some());
     check!(meta_from_run == meta_from_seam);
     for name in ["bootstrap.json", "bootstrap.records.bin"] {
-        let from_run = std::fs::read(via_run.join(name)).expect("run output");
-        let from_seam = std::fs::read(via_seam.join(name)).expect("run_with_records output");
+        let from_run = fs::read(via_run.join(name)).expect("run output");
+        let from_seam = fs::read(via_seam.join(name)).expect("run_with_records output");
         check!(from_run == from_seam, "{name} differs");
     }
-    let run_checkpoint = std::fs::read(offset_zero_checkpoint(&via_run)).expect("run checkpoint");
+    let run_checkpoint = fs::read(offset_zero_checkpoint(&via_run)).expect("run checkpoint");
     let seam_checkpoint =
-        std::fs::read(offset_zero_checkpoint(&via_seam)).expect("run_with_records checkpoint");
+        fs::read(offset_zero_checkpoint(&via_seam)).expect("run_with_records checkpoint");
     check!(run_checkpoint == seam_checkpoint);
 }
 
 /// A formatted directory, its parent, and the records it was seeded with.
 struct FormattedRestoredTopic {
     parent: tempfile::TempDir,
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     extra: Vec<MetadataRecord>,
 }
 

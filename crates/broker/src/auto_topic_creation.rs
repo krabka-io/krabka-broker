@@ -66,7 +66,7 @@ use {
         cmp::Reverse,
         collections::{BTreeMap, BinaryHeap, HashMap},
         sync::{
-            Arc, Mutex, OnceLock, PoisonError, Weak,
+            Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak,
             atomic::{AtomicUsize, Ordering},
         },
     },
@@ -628,6 +628,44 @@ struct ErrorCacheInner {
     next_sequence: u64,
 }
 
+impl ErrorCacheInner {
+    /// The body of [`ExpiringErrorCache::put`], run while the cache lock is held.
+    fn put(&mut self, topic: &str, message: String, ttl_ms: i64, now_ms: i64, capacity: usize) {
+        let inner = self;
+        let expires_at_ms = now_ms.saturating_add(ttl_ms);
+        let sequence = inner.next_sequence;
+        inner.next_sequence += 1;
+        inner.by_topic.insert(topic.to_owned(), ErrorEntry {
+            message,
+            expires_at_ms,
+            sequence,
+        });
+        inner.expiry_queue.push(Reverse(ExpiryEntry {
+            expires_at_ms,
+            sequence,
+            topic: topic.to_owned(),
+        }));
+        while let Some(Reverse(earliest)) = inner.expiry_queue.peek() {
+            if earliest.expires_at_ms > now_ms && inner.by_topic.len() <= capacity {
+                break;
+            }
+            let Some(Reverse(ExpiryEntry {
+                sequence, topic, ..
+            })) = inner.expiry_queue.pop()
+            else {
+                break;
+            };
+            if inner
+                .by_topic
+                .get(&topic)
+                .is_some_and(|entry| entry.sequence == sequence)
+            {
+                inner.by_topic.remove(&topic);
+            }
+        }
+    }
+}
+
 /// When a cached error expires, ordered by expiry time, then by sequence.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExpiryEntry {
@@ -655,7 +693,7 @@ impl ExpiringErrorCache {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, ErrorCacheInner> {
+    fn lock(&self) -> MutexGuard<'_, ErrorCacheInner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -663,38 +701,8 @@ impl ExpiringErrorCache {
     /// the expired entries, and the entries that expire first while the
     /// cache holds more than its capacity.
     fn put(&self, topic: &str, message: String, ttl_ms: i64, now_ms: i64) {
-        let mut inner = self.lock();
-        let expires_at_ms = now_ms.saturating_add(ttl_ms);
-        let sequence = inner.next_sequence;
-        inner.next_sequence += 1;
-        inner.by_topic.insert(topic.to_owned(), ErrorEntry {
-            message,
-            expires_at_ms,
-            sequence,
-        });
-        inner.expiry_queue.push(Reverse(ExpiryEntry {
-            expires_at_ms,
-            sequence,
-            topic: topic.to_owned(),
-        }));
-        while let Some(Reverse(earliest)) = inner.expiry_queue.peek() {
-            if earliest.expires_at_ms > now_ms && inner.by_topic.len() <= self.capacity {
-                break;
-            }
-            let Some(Reverse(ExpiryEntry {
-                sequence, topic, ..
-            })) = inner.expiry_queue.pop()
-            else {
-                break;
-            };
-            if inner
-                .by_topic
-                .get(&topic)
-                .is_some_and(|entry| entry.sequence == sequence)
-            {
-                inner.by_topic.remove(&topic);
-            }
-        }
+        self.lock()
+            .put(topic, message, ttl_ms, now_ms, self.capacity);
     }
 
     /// Whether `topic` has an unexpired entry.

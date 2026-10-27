@@ -23,6 +23,7 @@ use {
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::find_coordinator_response::Coordinator,
     krabka_verified::broker::{FindCoordinatorAdmission, find_coordinator_admission},
+    std::net::SocketAddr,
 };
 
 pub(super) enum KeySlot {
@@ -61,7 +62,7 @@ fn key_admission(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     principal: &krabka_security::Principal,
-    host: &std::net::SocketAddr,
+    host: &SocketAddr,
     api_version: i16,
     key_type: i8,
     key: &str,
@@ -131,13 +132,12 @@ mod tests {
             test_support::{peer, principal},
         },
         assert2::assert,
+        std::collections::HashSet,
     };
 
     const SHARE_KEY: &str = "share-group:AAAAAAAAAAAAAAAAAAAAAA:0";
 
-    fn deny_authorizer() -> SimpleAclAuthorizer {
-        SimpleAclAuthorizer::new(std::collections::HashSet::new())
-    }
+    fn deny_authorizer() -> SimpleAclAuthorizer { SimpleAclAuthorizer::new(HashSet::new()) }
 
     fn anon() -> krabka_security::Principal { principal("ANONYMOUS") }
 

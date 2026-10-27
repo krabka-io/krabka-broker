@@ -8,7 +8,7 @@ use {super::primitives as codec, krabka_ids::PartitionIndex, krabka_log::Offset}
 
 /// Whether an injection reached every partition of its frozen target set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CutStatus {
+pub enum CutStatus {
     /// Every target partition carries the marker.
     Complete,
     /// At least one target partition carries no marker, and it never will.
@@ -42,28 +42,28 @@ impl TryFrom<i8> for CutStatus {
 
 /// One partition of a cut, and the offset its marker took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PartitionOffset {
+pub struct PartitionOffset {
     pub(crate) partition: PartitionIndex,
     pub(crate) offset: Offset,
 }
 
 /// The marker offsets of one topic in a cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TopicOffsets {
+pub struct TopicOffsets {
     pub(crate) topic: String,
     pub(crate) partitions: Vec<PartitionOffset>,
 }
 
 /// A partition that an injection did not reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MissingPartition {
+pub struct MissingPartition {
     pub(crate) topic: String,
     pub(crate) partition: PartitionIndex,
 }
 
 /// The published offsets of one epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CutValue {
+pub struct CutValue {
     pub(crate) triggered_at: i64,
     pub(crate) completed_at: i64,
     pub(crate) status: CutStatus,
@@ -78,7 +78,7 @@ pub(crate) struct CutValue {
 /// # Errors
 /// Returns [`codec::BrokerError::Protocol`] when a topic name is longer than 32767
 /// bytes, which the `i16` length cannot carry.
-pub(crate) fn encode_cut(value: &CutValue) -> Result<Vec<u8>, codec::BrokerError> {
+pub fn encode_cut(value: &CutValue) -> Result<Vec<u8>, codec::BrokerError> {
     let mut out = Vec::new();
     codec::put_i16(&mut out, codec::RECORD_VERSION);
     codec::put_i64(&mut out, value.triggered_at);
@@ -107,7 +107,7 @@ pub(crate) fn encode_cut(value: &CutValue) -> Result<Vec<u8>, codec::BrokerError
 /// Returns a [`codec::ProtocolError`] when the value is truncated, carries a version
 /// other than [`codec::RECORD_VERSION`], names an unknown status, holds a negative
 /// array length, holds a non-UTF-8 topic name, or has trailing bytes.
-pub(crate) fn decode_cut(bytes: &[u8]) -> Result<CutValue, codec::ProtocolError> {
+pub fn decode_cut(bytes: &[u8]) -> Result<CutValue, codec::ProtocolError> {
     let mut cur = bytes;
     codec::expect_version(&mut cur)?;
     let triggered_at = codec::get_i64(&mut cur)?;

@@ -16,7 +16,11 @@ use {
     crate::replicator::{self, FollowedKey},
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
-    std::{collections::BTreeMap, sync::Arc},
+    krabka_protocol::primitives::uuid::Uuid,
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, PoisonError},
+    },
     tracing::warn,
 };
 
@@ -181,9 +185,11 @@ impl ReplicatorSupervisor {
         let held = task
             .followed
             .lock()
-            .expect("followed-partitions mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(followed_key)
-            .cloned()?;
+            .cloned();
+        drop(task);
+        let held = held?;
         (held.topic_id.0 == topic.topic_id.into_bytes()
             && held.leader_node_id == partition.leader
             && held.leader_epoch == partition.leader_epoch)
@@ -209,21 +215,21 @@ impl ReplicatorSupervisor {
             // records a per-batch metric under it; take that copy rather than
             // the one this key carries.
             topic: self.partitions.shared_topic_name(&key.0),
-            topic_id: krabka_protocol::primitives::uuid::Uuid(topic.topic_id.into_bytes()),
+            topic_id: Uuid(topic.topic_id.into_bytes()),
             partition: PartitionIndex(key.1),
             leader_node_id: partition.leader,
             leader_epoch: partition.leader_epoch,
             leader_host,
             leader_port,
-            partitions: self.partitions.clone(),
+            partitions: Arc::clone(&self.partitions),
             log_dirs: self.log_dirs.clone(),
             log_settings: self.log_config.clone(),
             client_id: self.client_id.clone(),
             connection: self.connection_config(),
-            throttle_state: self.throttle_state.clone(),
-            controller: self.controller.clone(),
+            throttle_state: Arc::clone(&self.throttle_state),
+            controller: Arc::clone(&self.controller),
             log_dir_status: self.log_dir_status.clone(),
-            producer_state: self.producer_state.clone(),
+            producer_state: Arc::clone(&self.producer_state),
             metrics: self.metrics.clone(),
             lag: replicator::ReplicaLag::default(),
         }
@@ -254,7 +260,7 @@ mod tests {
             .expect("fetcher")
             .followed
             .lock()
-            .expect("followed-partitions mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .keys()
             .map(|key| (key.topic.to_string(), key.partition.get()))
             .collect()
@@ -330,9 +336,9 @@ mod tests {
                 leader: NodeId(1),
                 fetcher_id: 0
             }) == vec![
-                ("t".to_string(), 0),
-                ("t".to_string(), 1),
-                ("t".to_string(), 2)
+                ("t".to_owned(), 0),
+                ("t".to_owned(), 1),
+                ("t".to_owned(), 2)
             ]
         );
         for task in &supervisor.tasks {
@@ -357,7 +363,7 @@ mod tests {
             .mark_offline(dir.path(), "test: EIO");
         supervisor.reconcile(&img).await;
 
-        assert!((followed_while_online, supervisor.tasks.len()) == (vec![("t".to_string(), 0)], 0));
+        assert!((followed_while_online, supervisor.tasks.len()) == (vec![("t".to_owned(), 0)], 0));
     }
 
     /// Two leaders are two connections, which is the shape Kafka has and the
@@ -388,13 +394,13 @@ mod tests {
             followed_keys(&supervisor, FetcherKey {
                 leader: NodeId(1),
                 fetcher_id: 0
-            }) == vec![("t".to_string(), 0)]
+            }) == vec![("t".to_owned(), 0)]
         );
         check!(
             followed_keys(&supervisor, FetcherKey {
                 leader: NodeId(3),
                 fetcher_id: 0
-            }) == vec![("t".to_string(), 1)]
+            }) == vec![("t".to_owned(), 1)]
         );
         for task in &supervisor.tasks {
             task.shutdown.cancel();
@@ -433,7 +439,7 @@ mod tests {
             .flat_map(|task| {
                 task.followed
                     .lock()
-                    .expect("followed-partitions mutex poisoned")
+                    .unwrap_or_else(PoisonError::into_inner)
                     .keys()
                     .map(|key| key.partition.get())
                     .collect::<Vec<_>>()
@@ -470,7 +476,7 @@ mod tests {
             followed_keys(&supervisor, FetcherKey {
                 leader: NodeId(1),
                 fetcher_id: 0
-            }) == vec![("t".to_string(), 0)]
+            }) == vec![("t".to_owned(), 0)]
         );
         check!(!token.is_cancelled());
         token.cancel();
@@ -618,10 +624,7 @@ mod tests {
                 fetcher_id: 0,
             })
             .expect("fetcher");
-        let followed = task
-            .followed
-            .lock()
-            .expect("followed-partitions mutex poisoned");
+        let followed = task.followed.lock().unwrap_or_else(PoisonError::into_inner);
         let config = followed
             .get(&FollowedKey {
                 topic: supervisor.partitions.shared_topic_name("t"),

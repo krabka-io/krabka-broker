@@ -31,6 +31,7 @@
 //!
 //! The binary root carries only the module tree: [`static_quorum_harness`]
 //! boots the topology, and each of the other two children holds one scenario.
+#![cfg(test)]
 
 mod support;
 

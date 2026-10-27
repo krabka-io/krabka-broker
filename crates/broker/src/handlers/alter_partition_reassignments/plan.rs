@@ -31,7 +31,7 @@ use {
 
 /// Per-row rejection: a Kafka wire error code and a readable message.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RowError {
+pub struct RowError {
     pub(super) code: i16,
     pub(super) message: String,
 }
@@ -60,7 +60,7 @@ struct PlanMode {
 ///   - `Ok(Some(PartitionRecord))`: submit this record
 ///   - `Ok(None)`: do nothing, because the row changes nothing
 ///   - `Err(RowError)`: reject this row with its wire code and message
-pub(crate) fn process_one_partition(
+pub fn process_one_partition(
     image: &MetadataImage,
     topic: &str,
     partition: i32,
@@ -374,8 +374,8 @@ fn build(
     let bump_leader_epoch =
         leader != pr.leader || !pr.replicas.iter().all(|n| change.replicas.contains(n));
     let (partition_epoch, leader_epoch) =
-        next_partition_change(pr.partition_epoch, pr.leader_epoch, bump_leader_epoch).ok_or(
-            RowError {
+        next_partition_change(pr.partition_epoch, pr.leader_epoch, bump_leader_epoch).ok_or_else(
+            || RowError {
                 code: INVALID_REQUEST,
                 message: "partition metadata epoch is exhausted".into(),
             },
@@ -832,12 +832,8 @@ mod tests {
             if matches!(unclean, UncleanElection::Allowed) {
                 image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                     topic: "foo".into(),
-                    overrides: [(
-                        UNCLEAN_LEADER_ELECTION_ENABLE.to_string(),
-                        "true".to_string(),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    overrides: [(UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(), "true".to_owned())]
+                        .into(),
                 }));
             }
             let planned = process_one_partition(&image, "foo", 0, None, true, true);
@@ -1013,7 +1009,7 @@ mod tests {
             error
                 == RowError {
                     code: INVALID_REPLICATION_FACTOR,
-                    message: "The replication factor is changed from 3 to 2".to_string()
+                    message: "The replication factor is changed from 3 to 2".to_owned()
                 }
         );
     }

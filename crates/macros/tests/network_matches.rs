@@ -1,4 +1,5 @@
 //! Match generators retain Rust arm bodies instead of rebuilding them from parsed expressions.
+#![cfg(test)]
 
 enum RecordsPayload {
     Raw(Vec<u8>),

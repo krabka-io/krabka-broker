@@ -34,11 +34,14 @@
 //! fails closed. When it cannot satisfy the site guarantee, it returns an
 //! empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
 
-use krabka_raft::NodeId;
+use {
+    krabka_raft::NodeId,
+    std::{collections::hash_map::RandomState, iter},
+};
 
 /// One broker as the placement code sees it.
 #[derive(Debug, Clone)]
-pub(crate) struct SiteBrokerView {
+pub struct SiteBrokerView {
     /// The node id of the broker.
     pub node_id: NodeId,
     /// The broker's configured rack, which is its site. `None` means the
@@ -59,7 +62,7 @@ krabka_macros::splitmix64_step!(placement_random_step);
 /// Kafka's controller builds its placer with `new Random()`. A test passes
 /// [`PlacementRng::seeded`] and gets the same placement on every run.
 #[derive(Debug, Clone)]
-pub(crate) struct PlacementRng(u64);
+pub struct PlacementRng(u64);
 
 impl PlacementRng {
     /// A generator that repeats one sequence for one `seed`.
@@ -68,7 +71,7 @@ impl PlacementRng {
     /// A generator seeded from the hash randomness of the process.
     pub(crate) fn from_entropy() -> Self {
         use std::hash::BuildHasher;
-        Self::seeded(std::collections::hash_map::RandomState::new().hash_one(0_u8))
+        Self::seeded(RandomState::new().hash_one(0_u8))
     }
 
     fn next_u64(&mut self) -> u64 { placement_random_step(&mut self.0) }
@@ -128,14 +131,14 @@ impl SiteTable {
                 }
             };
             let known = names.iter().position(|candidate| *candidate == name);
-            let site = if let Some(site) = known {
-                site
-            } else {
+            let site = known.unwrap_or_else(|| {
                 names.push(name);
                 sites.push(Vec::new());
                 sites.len() - 1
-            };
-            sites[site].push(index);
+            });
+            if let Some(members) = sites.get_mut(site) {
+                members.push(index);
+            }
             site_of.push(Some(site));
         }
         let broker_start = sites.iter().map(|site| rng.below(site.len())).collect();
@@ -185,7 +188,7 @@ impl SiteTable {
 /// - The sites do not hold enough brokers for one partition. A broker that
 ///   declared no site is not placeable, because the code cannot show that it
 ///   is in a different site from another such broker.
-pub(crate) fn stretch_replicas(
+pub fn stretch_replicas(
     brokers: &[SiteBrokerView],
     num_partitions: i32,
     replication_factor: i16,
@@ -264,7 +267,7 @@ impl BrokerList {
         if self.index >= len {
             return None;
         }
-        let broker = self.brokers[(self.index + self.offset) % len];
+        let broker = *self.brokers.get((self.index + self.offset) % len)?;
         self.index += 1;
         Some(broker)
     }
@@ -299,24 +302,24 @@ fn striped_replicas(
     let mut unfenced = BrokerList::new(ids(false), rng);
     let unfenced_count = unfenced.brokers.len();
     let mut epoch = 0;
-    (0..partitions)
-        .map(|_| {
-            if epoch == unfenced_count && unfenced_count > 1 {
-                rng.shuffle(&mut fenced.brokers);
-                rng.shuffle(&mut unfenced.brokers);
-                epoch = 0;
-            }
-            let current = epoch;
-            epoch += 1;
-            let leader = unfenced.next_broker(current);
-            let others = std::iter::from_fn(|| {
-                unfenced
-                    .next_broker(current)
-                    .or_else(|| fenced.next_broker(current))
-            });
-            leader.into_iter().chain(others).take(replicas).collect()
-        })
-        .collect()
+    iter::repeat_with(|| {
+        if epoch == unfenced_count && unfenced_count > 1 {
+            rng.shuffle(&mut fenced.brokers);
+            rng.shuffle(&mut unfenced.brokers);
+            epoch = 0;
+        }
+        let current = epoch;
+        epoch += 1;
+        let leader = unfenced.next_broker(current);
+        let others = iter::from_fn(|| {
+            unfenced
+                .next_broker(current)
+                .or_else(|| fenced.next_broker(current))
+        });
+        leader.into_iter().chain(others).take(replicas).collect()
+    })
+    .take(partitions)
+    .collect()
 }
 
 /// The brokers that can take `replicas[0]`.
@@ -341,8 +344,10 @@ fn leader_candidates(
         .enumerate()
         .filter(|(_, broker)| !broker.is_witness && !broker.fenced)
     {
-        if let Some(site) = table.site_of[broker] {
-            per_site[site].push(Placed { site, broker });
+        if let Some(Some(site)) = table.site_of.get(broker).copied()
+            && let Some(members) = per_site.get_mut(site)
+        {
+            members.push(Placed { site, broker });
         }
     }
     let deepest = per_site.iter().map(Vec::len).max().unwrap_or(0);
@@ -356,7 +361,11 @@ fn leader_candidates(
     let in_preferred = candidates
         .iter()
         .copied()
-        .filter(|placed| sorted[placed.broker].site.as_deref() == Some(preferred))
+        .filter(|placed| {
+            sorted
+                .get(placed.broker)
+                .is_some_and(|broker| broker.site.as_deref() == Some(preferred))
+        })
         .collect::<Vec<_>>();
     if in_preferred.is_empty() {
         candidates
@@ -381,21 +390,19 @@ fn partition_replicas(
     }
     // The leader rotates with the partition index, so the partitions of a
     // topic do not all lead on one broker of the preferred site.
-    let leader = leaders[partition % leaders.len()];
+    let leader = *leaders.get(partition % leaders.len())?;
     let mut chosen = vec![leader];
     let mut load = vec![0_usize; table.sites.len()];
-    load[leader.site] += 1;
+    *load.get_mut(leader.site)? += 1;
     while chosen.len() < replicas_per_partition {
         let follower = next_follower(sorted, table, &load, &chosen, partition)?;
-        load[follower.site] += 1;
+        *load.get_mut(follower.site)? += 1;
         chosen.push(follower);
     }
-    Some(
-        chosen
-            .into_iter()
-            .map(|placed| sorted[placed.broker].node_id)
-            .collect(),
-    )
+    chosen
+        .into_iter()
+        .map(|placed| sorted.get(placed.broker).map(|broker| broker.node_id))
+        .collect()
 }
 
 /// The next replica of a partition, from the site that holds the fewest
@@ -415,10 +422,11 @@ fn next_follower(
     (0..site_count)
         .map(|step| (table.site_start + partition + step) % site_count)
         .filter_map(|site| {
-            free_broker(sorted, table, site, partition, chosen)
-                .map(|broker| Placed { site, broker })
+            let broker = free_broker(sorted, table, site, partition, chosen)?;
+            Some((*load.get(site)?, Placed { site, broker }))
         })
-        .min_by_key(|placed| load[placed.site])
+        .min_by_key(|(site_load, _)| *site_load)
+        .map(|(_, placed)| placed)
 }
 
 /// The first broker of `site` that this partition does not use yet, an
@@ -432,13 +440,15 @@ fn free_broker(
     partition: usize,
     chosen: &[Placed],
 ) -> Option<usize> {
-    let brokers = &table.sites[site];
-    let start = table.broker_start[site] + partition;
+    let brokers = table.sites.get(site)?;
+    let start = table.broker_start.get(site)? + partition;
     let scan = |fenced: bool| {
         (0..brokers.len())
-            .map(|step| brokers[(start + step) % brokers.len()])
+            .filter_map(|step| brokers.get((start + step) % brokers.len()).copied())
             .find(|broker| {
-                sorted[*broker].fenced == fenced
+                sorted
+                    .get(*broker)
+                    .is_some_and(|view| view.fenced == fenced)
                     && !chosen.iter().any(|placed| placed.broker == *broker)
             })
     };
@@ -451,10 +461,7 @@ fn free_broker(
 ///
 /// Kafka checks the unfenced count first, so an empty or all-fenced cluster
 /// reads "All brokers are currently fenced" whatever the replication factor.
-pub(crate) fn placement_failure_reason(
-    replication_factor: i16,
-    brokers: &[SiteBrokerView],
-) -> String {
+pub fn placement_failure_reason(replication_factor: i16, brokers: &[SiteBrokerView]) -> String {
     if brokers.iter().all(|broker| broker.fenced) {
         "All brokers are currently fenced, or have all their log directories cordoned.".to_owned()
     } else {

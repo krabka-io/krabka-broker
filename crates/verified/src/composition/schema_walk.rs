@@ -115,7 +115,9 @@ pub(super) fn framed_schema_walk_admission(
         ==> decoded_id(fields@[j], enabled.0, enabled.1, rows@[j].1))]
     #[variant(fields@.len() - i@)]
     while i < fields.len() {
-        let field = &fields[i];
+        let Some(field) = fields.get(i) else {
+            break;
+        };
         let action = schema_field_action(enabled.0, enabled.1, field.role, field.present);
         let mut id = None;
         let mut accepted = true;
@@ -126,13 +128,12 @@ pub(super) fn framed_schema_walk_admission(
                     id = schema_frame_id(magic, a, b, c, d);
                 }
                 accepted = id.is_some()
-                    && match field.failure {
-                        None => field.checked,
-                        Some(failure) => matches!(
+                    && field.failure.map_or(field.checked, |failure| {
+                        matches!(
                             schema_failure_decision(fail_open, failure),
                             SchemaFailureDecision::AllowUnvalidated
-                        ),
-                    };
+                        )
+                    });
             }
             if accepted {
                 admitted += 1;

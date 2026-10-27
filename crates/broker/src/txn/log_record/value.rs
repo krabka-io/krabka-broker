@@ -80,7 +80,7 @@ fn group_partitions(partitions: &HashSet<TopicPartition>) -> Vec<TopicGroup<'_>>
 /// (KAFKA-20357). Kafka 4.3.1 defines tags 0 to 3 only, keeps the last epoch in
 /// memory and reloads it as `NO_PRODUCER_EPOCH`, so without the tag a v1 record
 /// carries exactly the tags 4.3.1 writes.
-pub(crate) fn encode_value(entry: &TxnEntry, txnv: TxnVersion, last_epoch_tag: bool) -> Vec<u8> {
+pub fn encode_value(entry: &TxnEntry, txnv: TxnVersion, last_epoch_tag: bool) -> Vec<u8> {
     let flexible = txnv.flexible_records();
     let version: i16 = i16::from(flexible);
     let mut buf = BytesMut::new();
@@ -178,7 +178,7 @@ fn i16_to_bytes(v: i16) -> Bytes {
 /// [`encode_value`] writes it. Without it the tag is skipped as an unknown
 /// one and the last epoch reloads as `-1`, as Kafka 4.3.1's
 /// `TransactionLog.read` passes `NO_PRODUCER_EPOCH`.
-pub(crate) fn decode_value(
+pub fn decode_value(
     bytes: &[u8],
     transactional_id: String,
     last_epoch_tag: bool,
@@ -349,12 +349,10 @@ mod tests {
         check!(entry.next_producer_epoch == -1);
         check!(entry.last_update_ms == SAMPLE_TS);
         check!(entry.start_ms == SAMPLE_TS);
-        let expected: HashSet<TopicPartition> = [TopicPartition {
+        let expected = HashSet::from([TopicPartition {
             topic: "txtest".into(),
             partition: PartitionIndex(0),
-        }]
-        .into_iter()
-        .collect();
+        }]);
         check!(entry.partitions == expected);
     }
 

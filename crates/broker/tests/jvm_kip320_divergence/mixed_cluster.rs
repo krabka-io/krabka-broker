@@ -16,11 +16,14 @@ use {
     },
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     std::{
+        fs,
         net::SocketAddr,
+        path::Path,
         process::Command,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -70,7 +73,7 @@ impl MixedCluster {
             // registration; the 2-min bound + bool-on-timeout return (surfacing
             // "JVM never joined") can't be replaced by a 30s panic-on-timeout
             // awaiter.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            time::sleep(Duration::from_millis(500)).await;
         }
     }
 
@@ -86,7 +89,7 @@ impl MixedCluster {
 /// static `KRaft` quorum) and a data-plane broker. Mirrors
 /// `jvm_static_quorum_spike.rs::krabka_controller_config` plus a bound data
 /// listener.
-fn krabka_mixed_config(log_dir: &std::path::Path, setup: JvmStaticVoterSetup) -> BrokerConfig {
+fn krabka_mixed_config(log_dir: &Path, setup: JvmStaticVoterSetup) -> BrokerConfig {
     let mut cfg = support::jvm_static_voter_config()
         .log_dir(log_dir)
         .broker(setup.broker)
@@ -116,7 +119,7 @@ fn krabka_mixed_config(log_dir: &std::path::Path, setup: JvmStaticVoterSetup) ->
 /// the release the oldest node runs, as a Kafka operator mixing in a 4.0 node
 /// would. The formatter runs in process because a Bazel test sandbox has no
 /// Cargo working tree to spawn it from.
-async fn format_at_kafka_4_0(log_dir: &std::path::Path, cluster_id: &str, node: &BrokerConfig) {
+async fn format_at_kafka_4_0(log_dir: &Path, cluster_id: &str, node: &BrokerConfig) {
     support::format_jvm_voter(log_dir, cluster_id, node).await;
 }
 
@@ -211,7 +214,7 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
     );
     let propdir = TempDir::new().unwrap();
     let proppath = propdir.path().join("server.properties");
-    std::fs::write(&proppath, props).unwrap();
+    fs::write(&proppath, props).unwrap();
     // The Apache Kafka image runs as a non-root uid. `tempfile` creates its
     // directory as 0700, so a bind-mounted file below it is otherwise present
     // but unreadable on native Linux (the CI runner included).
@@ -251,8 +254,8 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 
     // Wait for the Krabka voters to elect a shared leader (event-driven: each
     // awaiter resolves once that voter observes a non-zero controller leader).
-    c1.wait_until_controller_leader().await;
-    c2.wait_until_controller_leader().await;
+    c1.wait_until_controller_leader().await.unwrap();
+    c2.wait_until_controller_leader().await.unwrap();
 
     let bootstrap_all = format!(
         "{}:{},{}:{},{}:{}",
@@ -266,7 +269,7 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 
     MixedCluster {
         krabka: vec![(c1, dir1), (c2, dir2)],
-        jvm_container: container.to_string(),
+        jvm_container: container.to_owned(),
         _propdir: propdir,
         bootstrap_all,
     }
@@ -305,7 +308,7 @@ pub fn single_leader_record(
         partition_epoch_delta,
     };
     krabka_metadata::PartitionRecord {
-        topic: setup.topic.to_string(),
+        topic: setup.topic.to_owned(),
         partition: 0,
         leader: setup.leader,
         replicas: previous.replicas.clone(),
@@ -391,7 +394,7 @@ pub async fn prepare_divergence(
     create_and_wait_for_isr(&bootstrap, topic, required, isr_context).await;
     produce_committed_prefix(&bootstrap, topic, prefix, count);
     // Intentional: allow the external JVM producer/follower to settle; no broker image or metric expresses this.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let leo = prefix_log_end(&cluster.krabka[0].0, topic, expected, label);
     (container, cluster, bootstrap, leo)
 }

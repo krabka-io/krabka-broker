@@ -1,16 +1,4 @@
-// rustc 1.95 clippy ICEs on this file in two places:
-//
-// 1. `clippy::pedantic` lints — same upstream annotate-snippets bug as
-//    `tests/acl_handlers.rs` and `tests/admin_handlers.rs`.
-// 2. `clippy::unwrap_in_result` — the `UnwrappableVariablesVisitor` in
-//    `clippy_lints::unwrap` ICEs on the `.expect()` calls inside `round_trip`
-//    (which returns `Result`) because the computed span has start > end.
-//
-// Both are suppressed locally; the rest of the workspace still enforces the
-// full lint gate.
-// `clippy::unnecessary_unwrap` fires on the `l1.unwrap()` inside `if l1.is_some()`
-// and its span computation ICEs in annotate-snippets on Rust 1.95.
-// `clippy::too_many_lines` fires on the auto-rebalance integration test body.
+#![cfg(test)]
 
 //! Broker-side integration tests for the operator-triggered `ElectLeaders` RPC.
 //!

@@ -7,7 +7,7 @@ use {
     },
     moxy::{
         ast::{Parse, ParseError, Parser, Path, Token},
-        token::{Ident, Spanner, TokenStream},
+        token::{Ident, Span, Spanner, TokenStream},
     },
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream},
 };
@@ -53,7 +53,7 @@ fn offset_rows(input: &TokenStream) -> Result<Vec<OffsetRow>, ParseError> {
     Ok(rows)
 }
 
-pub(crate) fn offset_fetch_rows(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn offset_fetch_rows(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let rows = offset_rows(input)?;
     Ok(moxy::template! {
         @for row in rows {
@@ -81,7 +81,7 @@ pub(crate) fn offset_fetch_rows(input: &TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn share_group_denial(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn share_group_denial(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let target: Path = moxy::parse!({ input })?;
     Ok(moxy::template! {
         {{ target }} {
@@ -124,13 +124,11 @@ fn acknowledgement_template(target: &Path) -> TokenStream {
     }
 }
 
-pub(crate) fn acknowledgement_batches(
-    input: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn acknowledgement_batches(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let target = acknowledgement_target(&input.clone().into())?;
     let expression = native_groups(input)
         .last()
-        .expect("validated batch expression");
+        .ok_or_else(|| ParseError::new(Span::call_site(), "expected a batch expression"))?;
     Ok(splice(
         acknowledgement_template(&target).into(),
         &[SpliceValue {
@@ -187,9 +185,7 @@ fn controller_template(route: &ControllerRoute) -> TokenStream {
     }
 }
 
-pub(crate) fn controller_request(
-    input: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn controller_request(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let route = controller_route(&input.into())?;
     Ok(controller_template(&route).into())
 }

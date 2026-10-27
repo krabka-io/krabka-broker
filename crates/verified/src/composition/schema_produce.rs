@@ -78,10 +78,11 @@ pub(super) fn schema_checked_produce_frontier(
         == if j % 2 == 0 { SchemaFieldRole::Key } else { SchemaFieldRole::Value })]
     #[variant(fields@.len() - i@)]
     while i < fields.len() {
+        let field = fields.get(i)?;
         let matches = if i.is_multiple_of(2) {
-            matches!(fields[i].role, SchemaFieldRole::Key)
+            matches!(field.role, SchemaFieldRole::Key)
         } else {
-            matches!(fields[i].role, SchemaFieldRole::Value)
+            matches!(field.role, SchemaFieldRole::Value)
         };
         if !matches {
             return None;

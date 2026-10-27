@@ -144,7 +144,7 @@ fn target_of(s: &ReassignState) -> Vec<NodeId> {
 /// `reassign_one`. `directories` does not affect the safety properties.
 fn pr_of(s: &ReassignState) -> PartitionRecord {
     PartitionRecord {
-        topic: "t".to_string(),
+        topic: "t".to_owned(),
         partition: 0,
         leader: s.leader,
         replicas: s.replicas.clone(),
@@ -356,7 +356,7 @@ impl Model for ReassignModel {
             }),
             // Config-conditional so it is not vacuously unsatisfiable in the
             // basic config (where no handoff happens).
-            Property::sometimes("can_handoff", |m: &ReassignModel, s: &ReassignState| {
+            Property::sometimes("can_handoff", |m: &Self, s: &ReassignState| {
                 !m.removing.contains(&m.leader) || s.leader != m.leader
             }),
             Property::sometimes("can_wait", |_, s: &ReassignState| {

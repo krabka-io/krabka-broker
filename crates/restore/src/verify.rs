@@ -96,7 +96,7 @@ pub struct VerifiedSegment {
 /// Kafka's default `segment.bytes` is 1 GiB, and an operator can raise it, so
 /// this cap is a generous multiple of that default rather than the exact
 /// configured value, which this offline tool never sees.
-pub(super) const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Guard for the sparse `.index` and `.timeindex` sidecars. An entry lands
 /// only every `index.interval.bytes` (4 KiB by default), so even a segment at
@@ -269,7 +269,7 @@ fn require_artifact<'a>(
 /// Fetch a whole object, refusing it before buffering any bytes if it exceeds
 /// `max_bytes`. [`ObjectOps::get_capped`] binds its read to backend metadata
 /// when available and enforces the limit while streaming the response.
-pub(super) async fn fetch_capped(
+pub async fn fetch_capped(
     ops: &dyn ObjectOps,
     key: &Path,
     max_bytes: u64,

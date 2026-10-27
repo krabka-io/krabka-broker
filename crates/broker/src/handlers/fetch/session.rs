@@ -16,6 +16,7 @@ use {
         owned::fetch_response::{AbortedTransaction, FetchableTopicResponse},
         primitives::uuid::Uuid as WireUuid,
     },
+    std::{collections, collections::hash_map::DefaultHasher},
 };
 
 /// What a fetch owes the session cache once its response is final.
@@ -66,7 +67,7 @@ pub(super) fn prepare_fetch_session(
             partitions,
             ..
         } => {
-            let cached: std::collections::HashMap<FetchSessionKey, CachedPartitionState> =
+            let cached: collections::HashMap<FetchSessionKey, CachedPartitionState> =
                 partitions.iter().cloned().collect();
             SessionCommit::Incremental {
                 session_id: *session_id,
@@ -230,8 +231,8 @@ fn snapshot_response_state(
 /// therefore matches on either half, id first, exactly as the session diff
 /// does when it merges a request row into the cached set.
 struct CachedIndex<'cache> {
-    by_id: std::collections::HashMap<PartitionById, CachedEntry<'cache>>,
-    by_name: std::collections::HashMap<PartitionByNameRef<'cache>, CachedEntry<'cache>>,
+    by_id: collections::HashMap<PartitionById, CachedEntry<'cache>>,
+    by_name: collections::HashMap<PartitionByNameRef<'cache>, CachedEntry<'cache>>,
 }
 
 type PartitionById = FetchPartitionKey<WireUuid>;
@@ -246,12 +247,10 @@ struct CachedEntry<'cache> {
 }
 
 impl<'cache> CachedIndex<'cache> {
-    fn of(
-        cached: &'cache std::collections::HashMap<FetchSessionKey, CachedPartitionState>,
-    ) -> Self {
+    fn of(cached: &'cache collections::HashMap<FetchSessionKey, CachedPartitionState>) -> Self {
         let mut index = Self {
-            by_id: std::collections::HashMap::new(),
-            by_name: std::collections::HashMap::new(),
+            by_id: collections::HashMap::new(),
+            by_name: collections::HashMap::new(),
         };
         for (key, state) in cached {
             if key.topic_id != WireUuid::ZERO {
@@ -309,7 +308,7 @@ impl<'cache> CachedIndex<'cache> {
 /// session's read order.
 fn filter_incremental_response(
     responses: &mut Vec<FetchableTopicResponse>,
-    cached: &std::collections::HashMap<FetchSessionKey, CachedPartitionState>,
+    cached: &collections::HashMap<FetchSessionKey, CachedPartitionState>,
 ) -> Vec<SentPartition> {
     let index = CachedIndex::of(cached);
     let mut sent: Vec<SentPartition> = Vec::new();
@@ -380,7 +379,7 @@ fn filter_incremental_response(
 /// the sequence is therefore enough.
 fn hash_aborted_transactions(list: Option<&Vec<AbortedTransaction>>) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     match list {
         None => 0_u8.hash(&mut h),
         Some(v) => {
@@ -409,6 +408,7 @@ mod tests {
             owned::fetch_response::{EpochEndOffset, PartitionData},
             records::RecordsPayload,
         },
+        std::collections::HashMap,
     };
 
     fn cached_entry(
@@ -478,7 +478,7 @@ mod tests {
         watermark: i64,
         response_watermark: i64,
     ) -> FilteredSingleTopic {
-        let cached = [cached_entry(name, id, 0, watermark)].into_iter().collect();
+        let cached = HashMap::from([cached_entry(name, id, 0, watermark)]);
         let mut responses = vec![topic_response("orders", 7, response_watermark)];
         let sent = filter_incremental_response(&mut responses, &cached);
         FilteredSingleTopic { responses, sent }
@@ -546,8 +546,7 @@ mod tests {
             topic_id: WireUuid([9; 16]),
             partition: 0,
         };
-        let cached: std::collections::HashMap<_, _> =
-            [(key.clone(), state.clone())].into_iter().collect();
+        let cached = HashMap::from([(key.clone(), state.clone())]);
         let topic = FetchableTopicResponse {
             topic: String::new(),
             topic_id: WireUuid([9; 16]),
@@ -578,7 +577,7 @@ mod tests {
     )]
     fn a_row_with_records_is_sent_and_marked(records: Option<Bytes>, expected: Option<bool>) {
         let (key, state) = cached_entry("", 7, 0, 42);
-        let cached = [(key.clone(), state)].into_iter().collect();
+        let cached = HashMap::from([(key.clone(), state)]);
         let mut responses = vec![FetchableTopicResponse {
             partitions: vec![PartitionData {
                 records: records.map(RecordsPayload::Legacy),
@@ -611,10 +610,9 @@ mod tests {
     /// must not answer for `b` out of `a`'s cached state.
     #[test]
     fn two_nameless_cached_topics_are_told_apart_by_id() {
-        let cached: std::collections::HashMap<_, _> =
-            [cached_entry("", 1, 0, 10), cached_entry("", 2, 0, 20)]
-                .into_iter()
-                .collect();
+        let cached: HashMap<_, _> = [cached_entry("", 1, 0, 10), cached_entry("", 2, 0, 20)]
+            .into_iter()
+            .collect();
         let mut responses = vec![topic_response("a", 1, 10), topic_response("b", 2, 99)];
 
         let sent = filter_incremental_response(&mut responses, &cached);

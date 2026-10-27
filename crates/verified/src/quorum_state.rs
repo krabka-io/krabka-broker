@@ -82,8 +82,10 @@ pub enum QuorumStateLoadDecision {
 }
 
 /// Admit only schema v0 or v1 records with a nonnegative term, the exact vote
-/// sentinel, and valid version-specific fields. Schema v1's no-vote sentinel
-/// must carry the nil directory sentinel written by the encoder.
+/// sentinel, and valid version-specific fields.
+///
+/// Schema v1's no-vote sentinel must carry the nil directory sentinel written
+/// by the encoder.
 #[ensures((result == QuorumStateLoadDecision::Reject) == (
     (data_version@ != 0 && data_version@ != 1)
         || leader_epoch@ < 0

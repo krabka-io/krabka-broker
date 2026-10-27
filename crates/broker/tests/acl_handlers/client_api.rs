@@ -9,7 +9,10 @@ pub use crate::kafka_wire::{drive_produce_as_plain, single_record_produce_reques
 use {
     crate::{
         FETCH_VERSION, INIT_PRODUCER_ID_VERSION, JOIN_GROUP_VERSION, METADATA_VERSION,
-        support::classic::{ClassicTimeouts, classic_join_request, join_protocol},
+        support::{
+            classic::{ClassicTimeouts, classic_join_request, join_protocol},
+            wire::ApiRequestSetup,
+        },
     },
     krabka_protocol::owned::{
         fetch_request::FetchRequest, fetch_response::FetchResponse,
@@ -23,7 +26,7 @@ use {
 krabka_macros::wire_test_driver!(plain pub drive_fetch_as_plain {
     request: FetchRequest,
     response: FetchResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(1),
         version: krabka_ids::ApiVersion(FETCH_VERSION),
     },
@@ -33,7 +36,7 @@ krabka_macros::wire_test_driver!(plain pub drive_fetch_as_plain {
 krabka_macros::wire_test_driver!(plain pub drive_metadata_as_plain {
     request: MetadataRequest,
     response: MetadataResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(3),
         version: krabka_ids::ApiVersion(METADATA_VERSION),
     },
@@ -43,7 +46,7 @@ krabka_macros::wire_test_driver!(plain pub drive_metadata_as_plain {
 krabka_macros::wire_test_driver!(plain pub drive_join_group_as_plain {
     request: JoinGroupRequest,
     response: JoinGroupResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(11),
         version: krabka_ids::ApiVersion(JOIN_GROUP_VERSION),
     },
@@ -53,7 +56,7 @@ krabka_macros::wire_test_driver!(plain pub drive_join_group_as_plain {
 krabka_macros::wire_test_driver!(plain pub drive_init_producer_id_as_plain {
     request: InitProducerIdRequest,
     response: InitProducerIdResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(22),
         version: krabka_ids::ApiVersion(INIT_PRODUCER_ID_VERSION),
     },
@@ -68,16 +71,13 @@ pub fn join_group_request(group_id: &str) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
         ..classic_join_request()
-            .group_id(group_id.to_string())
+            .group_id(group_id.to_owned())
             .timeouts(ClassicTimeouts {
                 rebalance: krabka_units::millis(60_000),
                 ..Default::default()
             })
-            .protocol_type("consumer".to_string())
-            .protocols(vec![join_protocol(
-                "range".to_string(),
-                bytes::Bytes::new(),
-            )])
+            .protocol_type("consumer".to_owned())
+            .protocols(vec![join_protocol("range".to_owned(), bytes::Bytes::new())])
             .call()
     }
 }

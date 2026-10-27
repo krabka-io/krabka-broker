@@ -91,7 +91,7 @@ fn exporter(input: &TokenStream) -> Result<Path, ParseError> {
     Ok(path.path.clone())
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let exporter = exporter(&input.clone().into())?;
     let body: NativeTokenStream = moxy::template! {
         let builder = {{ exporter }}::builder();

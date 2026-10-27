@@ -18,7 +18,8 @@ use {
     krabka_protocol::owned::delete_share_group_offsets_request::{
         DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
     },
-    std::time::Duration,
+    std::time::{Duration, Instant},
+    tokio::time,
 };
 
 fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
@@ -139,7 +140,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
                 break;
             }
             // real-time wait (not a progress poll): settle between re-checks asserting the deleted topic stays absent (absence, not a positive poll)
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
         assert!(
             absent,
@@ -151,7 +152,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         // before shutdown, so the restart below sees the rewritten seed.
         // This is a persist-flush, not a state-guessing settle: we already know
         // the in-memory state is correct.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
         broker.shutdown().await;
     }
 
@@ -162,7 +163,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         // it), so the describe with no topic list must STILL
         // enumerate zero initialized partitions. Poll a window to let the
         // coordinator finish replaying state, asserting absence throughout.
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             let g = describe_all_offsets(&client, "g1").await;
             let parts: Vec<i32> = initialized_partitions(&g, "t");
@@ -170,11 +171,11 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
                 parts.is_empty(),
                 "deleted topic must remain un-initialized after restart (v14 rewrite), got {parts:?}"
             );
-            if std::time::Instant::now() >= deadline {
+            if Instant::now() >= deadline {
                 break;
             }
             // real-time wait (not a progress poll): settle between re-checks asserting the deleted topic stays absent throughout the window (liveness, not a positive poll)
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            time::sleep(Duration::from_millis(200)).await;
         }
     }
 }

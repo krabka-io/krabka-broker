@@ -16,7 +16,7 @@ use {
     },
     krabka_metadata::MetadataImage,
     krabka_units::prelude::ByteSize,
-    std::sync::Arc,
+    std::{sync::Arc, time::SystemTime},
     tokio::sync::{oneshot, watch},
 };
 
@@ -44,7 +44,7 @@ impl KraftController {
     /// create-time stamped on every batch the leader appends. `Engine::now`
     /// is monotonic from this process's own start, and a snapshot header
     /// timestamp has to mean the same instant on every node that reads it.
-    pub(crate) fn wall_clock_ms() -> i64 { krabka_log::epoch_ms(std::time::SystemTime::now()) }
+    pub(crate) fn wall_clock_ms() -> i64 { krabka_log::epoch_ms(SystemTime::now()) }
 
     /// The node id this controller runs as.
     #[must_use]

@@ -16,7 +16,7 @@ use {
         broker::{Broker, BrokerHandle},
         error::BrokerError,
         handlers::{
-            RequestContext as HandlerRequestContext, acl_test_support as acl_fixtures,
+            RequestContext as HandlerRequestContext, acl_test_support as acl_fixtures, acl_wire,
             context::RequestContext, find_coordinator::handle as find_coordinator_handle,
         },
         test_support::{
@@ -27,21 +27,30 @@ use {
             coordinator::TxnCoordinator,
             handlers::end_txn::handle as end_txn_handle,
             state::{TxnEntry, TxnState},
-            version::TxnVersion,
+            version::{TxnVersion, resolve_txn_version},
         },
     },
     assert2::assert,
     krabka_metadata::{
         AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+        transaction_version,
+    },
+    krabka_protocol::owned::{
+        end_txn_request::EndTxnRequest,
+        end_txn_response::{self, EndTxnResponse},
+        find_coordinator_request::FindCoordinatorRequest,
+        find_coordinator_response::{self, FindCoordinatorResponse},
+        init_producer_id_response,
     },
     krabka_units::secs,
     std::{collections::HashSet, sync::Arc},
+    tokio::sync::Mutex,
 };
 
 /// Persist the held transaction as ongoing after releasing its entry lock.
 async fn persist_ongoing(
     coordinator: &TxnCoordinator,
-    cell: &Arc<tokio::sync::Mutex<TxnEntry>>,
+    cell: &Arc<Mutex<TxnEntry>>,
     expectation: &str,
 ) -> ProducerIdentity {
     let (producer_id, producer_epoch, snapshot) = {
@@ -66,19 +75,15 @@ async fn wait_for_transaction_version_2(broker_handle: &BrokerHandle) {
     wait_for_controller_leader(&broker_handle.broker_arc_for_test()).await;
     broker_handle
         .wait_for_image(|image| {
-            image.finalized_feature(
-                krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE,
-            ) == Some(krabka_metadata::transaction_version::TRANSACTION_VERSION_MAX)
+            image.finalized_feature(transaction_version::TRANSACTION_VERSION_FEATURE)
+                == Some(transaction_version::TRANSACTION_VERSION_MAX)
         })
         .await;
     let image = broker_handle
         .broker_arc_for_test()
         .controller
         .current_image();
-    assert!(
-        crate::txn::version::resolve_txn_version(&image)
-            == crate::txn::version::TxnVersion::Verified
-    );
+    assert!(resolve_txn_version(&image) == TxnVersion::Verified);
 }
 
 async fn wait_for_transaction_v2_coordinator(handle: &BrokerHandle) {
@@ -89,11 +94,11 @@ async fn wait_for_transaction_v2_coordinator(handle: &BrokerHandle) {
 /// The timeout table of Kafka's `validateTransactionTimeoutMs`, checked
 /// against a live broker whose `transaction.max.timeout.ms` is 8 s.
 async fn check_timeout_answers(
-    broker: &std::sync::Arc<Broker>,
+    broker: &Arc<Broker>,
     context: &HandlerRequestContext<'_>,
     tids: [&str; 4],
 ) {
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     for (tid, requested_ms, enable_2pc, expected) in [
         (tids[0], 500, false, Ok(500)),
         (
@@ -106,7 +111,7 @@ async fn check_timeout_answers(
         (tids[3], 0, false, Err(codes::INVALID_TRANSACTION_TIMEOUT)),
     ] {
         let request = InitProducerIdRequest {
-            transactional_id: Some(tid.to_string()),
+            transactional_id: Some(tid.to_owned()),
             transaction_timeout_ms: requested_ms,
             enable2_pc: enable_2pc,
             ..Default::default()
@@ -171,11 +176,11 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     };
     let tids = ["txn-small", "txn-above-max", "txn-2pc", "txn-zero"];
 
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     wait_for_transaction_v2_coordinator(&broker_handle).await;
 
-    let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
-    let find_request = krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+    let find_version = find_coordinator_response::MAX_VERSION;
+    let find_request = FindCoordinatorRequest {
         key_type: 1,
         coordinator_keys: tids.iter().map(ToString::to_string).collect(),
         ..Default::default()
@@ -211,7 +216,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     .await;
 
     let recovery_request = InitProducerIdRequest {
-        transactional_id: Some(tids[2].to_string()),
+        transactional_id: Some(tids[2].to_owned()),
         transaction_timeout_ms: 500,
         enable2_pc: true,
         keep_prepared_txn: true,
@@ -235,9 +240,9 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     assert!(second_recovery_response.ongoing_txn_producer_id == ongoing_pid.get());
     assert!(second_recovery_response.ongoing_txn_producer_epoch == ongoing_epoch);
 
-    let end_version = krabka_protocol::owned::end_txn_response::MAX_VERSION;
-    let fenced_end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
-        transactional_id: tids[2].to_string(),
+    let end_version = end_txn_response::MAX_VERSION;
+    let fenced_end_request = EndTxnRequest {
+        transactional_id: tids[2].to_owned(),
         producer_id: recovery_response.producer_id,
         producer_epoch: recovery_response.producer_epoch,
         committed: true,
@@ -250,17 +255,15 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     // `EndTxn` v2 and above.
     assert!(
         fenced_end_response
-            == krabka_macros::unthrottled_wire!(
-                krabka_protocol::owned::end_txn_response::EndTxnResponse {
-                    error_code: codes::PRODUCER_FENCED,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                }
-            )
+            == krabka_macros::unthrottled_wire!(EndTxnResponse {
+                error_code: codes::PRODUCER_FENCED,
+                producer_id: -1,
+                producer_epoch: -1,
+            })
     );
 
-    let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
-        transactional_id: tids[2].to_string(),
+    let end_request = EndTxnRequest {
+        transactional_id: tids[2].to_owned(),
         producer_id: second_recovery_response.producer_id,
         producer_epoch: second_recovery_response.producer_epoch,
         committed: true,
@@ -271,13 +274,11 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
         .expect("complete recovered transaction");
     assert!(
         end_response
-            == krabka_macros::unthrottled_wire!(
-                krabka_protocol::owned::end_txn_response::EndTxnResponse {
-                    error_code: codes::NONE,
-                    producer_id: second_recovery_response.producer_id,
-                    producer_epoch: second_recovery_response.producer_epoch + 1,
-                }
-            )
+            == krabka_macros::unthrottled_wire!(EndTxnResponse {
+                error_code: codes::NONE,
+                producer_id: second_recovery_response.producer_id,
+                producer_epoch: second_recovery_response.producer_epoch + 1,
+            })
     );
 
     let retry_response = end_txn_handle(&broker, end_request, end_version, &context)
@@ -292,6 +293,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     assert!(completed.state == TxnState::CompleteCommit);
     assert!(completed.next_producer_id.is_none());
     assert!(completed.next_producer_epoch == -1);
+    drop(completed);
     broker_handle.shutdown().await;
 }
 
@@ -355,10 +357,10 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
             user ["admin"];
             client ["txn-client"];
         };
-        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = init_producer_id_response::MAX_VERSION;
         // No FindCoordinator ran, so this broker coordinates nothing.
         let request = InitProducerIdRequest {
-            transactional_id: Some("txn-tv2".to_string()),
+            transactional_id: Some("txn-tv2".to_owned()),
             transaction_timeout_ms: 500,
             enable2_pc: enable_2pc,
             keep_prepared_txn,
@@ -395,9 +397,9 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
         .expect("find transaction coordinator");
     assert!(response.coordinators[0].error_code == codes::NONE);
 
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     let request = InitProducerIdRequest {
-        transactional_id: Some(tid.to_string()),
+        transactional_id: Some(tid.to_owned()),
         transaction_timeout_ms: 500,
         ..Default::default()
     };
@@ -421,7 +423,7 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     .await;
 
     let recovery_request = InitProducerIdRequest {
-        transactional_id: Some(tid.to_string()),
+        transactional_id: Some(tid.to_owned()),
         transaction_timeout_ms: 500,
         keep_prepared_txn: true,
         ..Default::default()
@@ -452,7 +454,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
         user ["admin"];
         client ["txn-client"];
     };
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     // No FindCoordinator ran, so `__transaction_state` does not exist and this
     // broker coordinates nothing.
     let tid = "txn-no-coordinator";
@@ -471,7 +473,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
     ];
     for (name, requested_ms, expected) in answers {
         let request = InitProducerIdRequest {
-            transactional_id: Some(tid.to_string()),
+            transactional_id: Some(tid.to_owned()),
             transaction_timeout_ms: requested_ms,
             ..Default::default()
         };
@@ -509,7 +511,7 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
         client ["txn-client"];
     };
     let tid = "txn-half-identity";
-    let max = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let max = init_producer_id_response::MAX_VERSION;
     let found = find_transaction_coordinator(&broker, &context, tid)
         .await
         .expect("find the transaction coordinator");
@@ -518,7 +520,7 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     let created = init_producer_id_handle(
         &broker,
         InitProducerIdRequest {
-            transactional_id: Some(tid.to_string()),
+            transactional_id: Some(tid.to_owned()),
             transaction_timeout_ms: 60_000,
             producer_id: -1,
             producer_epoch: -1,
@@ -588,7 +590,7 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     let mut actual = Vec::new();
     for (name, version, transactional_id, (producer_id, producer_epoch), code) in cases {
         let request = InitProducerIdRequest {
-            transactional_id: transactional_id.map(str::to_string),
+            transactional_id: transactional_id.map(str::to_owned),
             transaction_timeout_ms: 60_000,
             producer_id,
             producer_epoch,
@@ -653,7 +655,7 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
             acls: vec![acl(
                 PermissionType::Allow,
                 ResourceType::Cluster,
-                crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                acl_wire::CLUSTER_RESOURCE_NAME,
                 PatternType::Literal,
                 AclOperation::IdempotentWrite,
             )],
@@ -755,9 +757,9 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
             user ["alice"];
             client ["idempotent-client"];
         };
-        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = init_producer_id_response::MAX_VERSION;
         let request = InitProducerIdRequest {
-            transactional_id: case.transactional_id.map(ToString::to_string),
+            transactional_id: case.transactional_id.map(str::to_owned),
             transaction_timeout_ms: 60_000,
             ..Default::default()
         };
@@ -869,9 +871,9 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             case.label
         );
 
-        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = init_producer_id_response::MAX_VERSION;
         let request = InitProducerIdRequest {
-            transactional_id: Some(case.tid.to_string()),
+            transactional_id: Some(case.tid.to_owned()),
             transaction_timeout_ms: 500,
             enable2_pc: case.enable_2pc,
             keep_prepared_txn: case.keep_prepared_txn,
@@ -946,14 +948,14 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
         .await
         .expect("seed exhausted producer ID space");
 
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     let cases = [
         ("idempotent producer", None),
         ("new transactional id", Some(tid)),
     ];
     for (name, transactional_id) in cases {
         let request = InitProducerIdRequest {
-            transactional_id: transactional_id.map(ToString::to_string),
+            transactional_id: transactional_id.map(str::to_owned),
             transaction_timeout_ms: 5_000,
             producer_id: -1,
             producer_epoch: -1,
@@ -981,16 +983,15 @@ async fn find_transaction_coordinator(
     broker: &Broker,
     context: &RequestContext<'_>,
     tid: &str,
-) -> Result<krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse, BrokerError>
-{
+) -> Result<FindCoordinatorResponse, BrokerError> {
     find_coordinator_handle(
         broker,
-        krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+        FindCoordinatorRequest {
             key_type: 1,
             coordinator_keys: vec![tid.to_owned()],
             ..Default::default()
         },
-        krabka_protocol::owned::find_coordinator_response::MAX_VERSION,
+        find_coordinator_response::MAX_VERSION,
         context,
     )
     .await

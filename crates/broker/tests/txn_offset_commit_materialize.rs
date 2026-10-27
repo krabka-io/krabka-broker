@@ -20,6 +20,7 @@
 //! txn coordinator and the group coordinator. The test runs
 //! `InitProducerId → AddOffsetsToTxn → TxnOffsetCommit → EndTxn`, then reads
 //! back with `OffsetFetch`.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -34,6 +35,7 @@ use {
     },
     assert2::assert,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 mod support;
@@ -163,7 +165,7 @@ async fn begin_and_commit_offsets(
         // intentional: NOT_COORDINATOR clears once the elected leader installs
         // the txn coordinator locally — coordinator-local state, not in the
         // metadata image and with no awaiter/metric; bounded RPC-response poll.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     };
 
     // AddOffsetsToTxn registers __consumer_offsets in the txn's partition set,

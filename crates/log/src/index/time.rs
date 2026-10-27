@@ -3,7 +3,12 @@
 //! `TimeIndex.maybeAppend` keeps them, and the offset is the last offset of the
 //! batch that set the timestamp.
 
-use super::prelude::*;
+use {
+    super::prelude::*,
+    krabka_verified::log_index::time_index_scan_start,
+    std::{mem, sync::Arc},
+    tracing::field,
+};
 
 /// 12 bytes per entry: timestamp as i64 BE and `relative_offset` as u32 BE.
 pub const TIME_ENTRY_SIZE: usize = 12;
@@ -15,7 +20,7 @@ const NO_TIMESTAMP: i64 = -1;
 /// On-disk byte layout of one time-index entry.
 type TimeEntryRaw = super::IndexEntryRaw<I64<BigEndian>>;
 
-const _: [(); TIME_ENTRY_SIZE] = [(); std::mem::size_of::<TimeEntryRaw>()];
+const _: [(); TIME_ENTRY_SIZE] = [(); mem::size_of::<TimeEntryRaw>()];
 
 /// One entry of a [`TimeIndex`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +40,7 @@ pub struct TimeIndexEntry {
 #[sparse_index(kind = "time")]
 pub struct TimeIndex {
     file: File,
-    io: std::sync::Arc<dyn LogIo>,
+    io: Arc<dyn LogIo>,
     entries: Vec<IndexEntry<i64, u32>>,
 }
 
@@ -57,7 +62,7 @@ impl TimeIndex {
     pub fn append(&mut self, timestamp: i64, relative_offset: u32) -> Result<(), LogError> {
         let raw = TimeEntryRaw {
             key: I64::new(timestamp),
-            coordinate: zerocopy::byteorder::U32::new(relative_offset),
+            coordinate: U32::new(relative_offset),
         };
         super::append_index(
             &mut self.file,
@@ -74,10 +79,10 @@ impl TimeIndex {
     /// Equal running maxima cannot advance the start without skipping ties.
     #[must_use]
     pub(crate) fn scan_start(&self, target_timestamp: i64) -> u32 {
-        krabka_verified::log_index::time_index_scan_start(&self.entries, target_timestamp)
+        time_index_scan_start(&self.entries, target_timestamp)
     }
 
-    #[tracing::instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
+    #[tracing::instrument(level = "debug", skip(self), fields(entries = field::Empty), err)]
     pub fn truncate_by_relative_offset(&mut self, max_rel_exclusive: u32) -> Result<(), LogError> {
         super::truncate_index(
             &mut self.file,
@@ -110,6 +115,7 @@ mod time_tests {
             test_support::TempPath,
         },
         assert2::check,
+        std::{fs, fs::OpenOptions, io},
     };
 
     krabka_macros::index_seed_helpers!(TimeIndex, i64);
@@ -126,12 +132,12 @@ mod time_tests {
         for i in 0..5u32 {
             idx.append(1_000 + i64::from(i), i * 10).unwrap();
         }
-        check!(std::fs::metadata(&path).unwrap().len() == (5 * TIME_ENTRY_SIZE) as u64);
+        check!(fs::metadata(&path).unwrap().len() == (5 * TIME_ENTRY_SIZE) as u64);
 
         // Relative offsets are 0, 10, 20, 30, 40. Exclusive at 20: two survive.
         idx.truncate_by_relative_offset(20).unwrap();
         check!(
-            std::fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
+            fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
             "file should hold exactly the two surviving entries"
         );
 
@@ -139,12 +145,12 @@ mod time_tests {
         let mut idx = TimeIndex::open(&path).unwrap();
         idx.truncate_by_relative_offset(9_999).unwrap();
         check!(
-            std::fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
+            fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
             "a bound past the end drops nothing"
         );
         idx.truncate_by_relative_offset(0).unwrap();
         check!(
-            std::fs::metadata(&path).unwrap().len() == 0,
+            fs::metadata(&path).unwrap().len() == 0,
             "a bound of zero drops everything"
         );
     }
@@ -268,11 +274,8 @@ mod time_tests {
                 coordinate: 100,
             },
         ]);
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap();
-        std::io::Write::write_all(&mut f, &[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        io::Write::write_all(&mut f, &[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
         f.sync_data().unwrap();
         drop(f);
 

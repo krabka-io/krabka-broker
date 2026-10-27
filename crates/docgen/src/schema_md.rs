@@ -189,14 +189,10 @@ fn effective_schema<'a>(root: &'a Value, field: &'a Value) -> &'a Value {
             continue;
         }
         let next = ["anyOf", "allOf", "oneOf"].into_iter().find_map(|key| {
-            current
-                .get(key)
-                .and_then(Value::as_array)
-                .and_then(|branches| {
-                    branches
-                        .iter()
-                        .find(|branch| branch.get("type").and_then(Value::as_str) != Some("null"))
-                })
+            let branches = current.get(key).and_then(Value::as_array)?;
+            branches
+                .iter()
+                .find(|branch| branch.get("type").and_then(Value::as_str) != Some("null"))
         });
         let Some(next) = next else {
             return current;
@@ -251,7 +247,7 @@ fn primitive_type(field: &Value) -> Option<String> {
             .iter()
             .filter_map(Value::as_str)
             .find(|t| *t != "null")
-            .map(ToString::to_string),
+            .map(str::to_owned),
         _ => None,
     }
 }
@@ -260,20 +256,19 @@ fn type_label(root: &Value, field: &Value) -> String { type_label_at(root, field
 
 fn type_label_at(root: &Value, field: &Value, depth: usize) -> String {
     if depth >= MAX_DEPTH {
-        return "any".to_string();
+        return "any".to_owned();
     }
     // Follow Option<T>/$ref wrappers before inspecting the type.
     let field = effective_schema(root, field);
     match primitive_type(field).as_deref() {
         Some("array") => {
-            let item = field.get("items").map_or_else(
-                || "any".to_string(),
-                |it| type_label_at(root, it, depth + 1),
-            );
+            let item = field
+                .get("items")
+                .map_or_else(|| "any".to_owned(), |it| type_label_at(root, it, depth + 1));
             format!("array<{item}>")
         }
-        Some(t) => t.to_string(),
-        None => "object".to_string(),
+        Some(t) => t.to_owned(),
+        None => "object".to_owned(),
     }
 }
 

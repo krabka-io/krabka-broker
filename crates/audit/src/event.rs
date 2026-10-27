@@ -86,12 +86,12 @@ impl AuditEventClass {
     #[must_use]
     pub fn tag(self) -> u8 {
         match self {
-            AuditEventClass::Authentication => 0,
-            AuditEventClass::Authorization => 1,
-            AuditEventClass::ApiActivity => 2,
-            AuditEventClass::ApplicationLifecycle => 3,
-            AuditEventClass::Checkpoint => 4,
-            AuditEventClass::RecordsLost => 5,
+            Self::Authentication => 0,
+            Self::Authorization => 1,
+            Self::ApiActivity => 2,
+            Self::ApplicationLifecycle => 3,
+            Self::Checkpoint => 4,
+            Self::RecordsLost => 5,
         }
     }
 
@@ -99,12 +99,12 @@ impl AuditEventClass {
     #[must_use]
     pub fn from_tag(tag: u8) -> Option<Self> {
         match tag {
-            0 => Some(AuditEventClass::Authentication),
-            1 => Some(AuditEventClass::Authorization),
-            2 => Some(AuditEventClass::ApiActivity),
-            3 => Some(AuditEventClass::ApplicationLifecycle),
-            4 => Some(AuditEventClass::Checkpoint),
-            5 => Some(AuditEventClass::RecordsLost),
+            0 => Some(Self::Authentication),
+            1 => Some(Self::Authorization),
+            2 => Some(Self::ApiActivity),
+            3 => Some(Self::ApplicationLifecycle),
+            4 => Some(Self::Checkpoint),
+            5 => Some(Self::RecordsLost),
             _ => None,
         }
     }
@@ -201,12 +201,12 @@ impl AuditEvent {
     #[must_use]
     pub fn class(&self) -> AuditEventClass {
         match self {
-            AuditEvent::Authentication { .. } => AuditEventClass::Authentication,
-            AuditEvent::AuthorizationDenied { .. } => AuditEventClass::Authorization,
-            AuditEvent::AdminOperation { .. } | AuditEvent::PrivilegedAction { .. } => {
+            Self::Authentication { .. } => AuditEventClass::Authentication,
+            Self::AuthorizationDenied { .. } => AuditEventClass::Authorization,
+            Self::AdminOperation { .. } | Self::PrivilegedAction { .. } => {
                 AuditEventClass::ApiActivity
             }
-            AuditEvent::Lifecycle { .. } => AuditEventClass::ApplicationLifecycle,
+            Self::Lifecycle { .. } => AuditEventClass::ApplicationLifecycle,
         }
     }
 }

@@ -9,11 +9,12 @@ use {
         metrics::{BarrierGroupLabel, BrokerMetrics},
     },
     krabka_units::{Time, convert::TimeExt as _},
+    std::sync::Arc,
 };
 
 /// What one finished injection reported.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct InjectionReport {
+pub struct InjectionReport {
     /// The epoch the injection consumed.
     pub(crate) epoch: i64,
     /// Whether every target partition carries the marker.
@@ -31,7 +32,7 @@ pub(crate) struct InjectionReport {
 /// It holds a [`BrokerMetrics`](crate::metrics::BrokerMetrics), which clones
 /// cheaply, so the coordinator can own one without borrowing from the broker.
 #[derive(Clone)]
-pub(crate) struct BrokerBarrierMetrics {
+pub struct BrokerBarrierMetrics {
     metrics: BrokerMetrics,
 }
 
@@ -88,7 +89,7 @@ impl BrokerBarrierMetrics {
     pub(crate) fn marker_written(&self, topic: &str) {
         self.metrics.count_topic(
             &self.metrics.barrier_markers_written_total,
-            std::sync::Arc::from(topic),
+            Arc::from(topic),
             1,
         );
     }

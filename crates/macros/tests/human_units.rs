@@ -1,5 +1,6 @@
 //! What `#[human_units]` gives a config struct: human strings in and out
 //! through serde, and a JSON Schema that names each field's unit.
+#![cfg(test)]
 
 use {
     assert2::assert,

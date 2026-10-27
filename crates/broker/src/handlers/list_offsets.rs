@@ -65,7 +65,7 @@ mod remote;
 mod resolve;
 mod response;
 mod sentinels;
-pub(crate) mod timestamp;
+pub mod timestamp;
 mod v0;
 
 #[cfg(test)]
@@ -87,6 +87,7 @@ use {
         codes,
         handlers::{RequestContext, acl_denied},
     },
+    std::{collections::HashMap, sync::Arc},
 };
 
 /// A topic entry of a request: its name and the partition indexes it names.
@@ -123,8 +124,7 @@ struct NamedPartition<'a> {
 fn duplicate_partition_keys<'a, P: IntoIterator<Item = i32>>(
     topics: impl Iterator<Item = TopicPartitions<'a, P>> + Clone,
 ) -> HashSet<PartitionRow> {
-    let mut counts: std::collections::HashMap<NamedPartition<'_>, usize> =
-        std::collections::HashMap::new();
+    let mut counts: HashMap<NamedPartition<'_>, usize> = HashMap::new();
     for TopicPartitions { name, partitions } in topics.clone() {
         for partition in partitions {
             *counts
@@ -135,7 +135,10 @@ fn duplicate_partition_keys<'a, P: IntoIterator<Item = i32>>(
     let mut duplicates = HashSet::new();
     for (topic_index, TopicPartitions { name, partitions }) in topics.enumerate() {
         for partition in partitions {
-            if counts[&NamedPartition { name, partition }] > 1 {
+            if counts
+                .get(&NamedPartition { name, partition })
+                .is_some_and(|&count| count > 1)
+            {
                 duplicates.insert(PartitionRow {
                     topic_index,
                     partition,
@@ -183,7 +186,7 @@ fn partition_topics_by_describe<T>(
     DescribeSplit { authorized, denied }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -193,7 +196,7 @@ pub(crate) async fn handle(
         return v0::handle(broker, req_bytes, ctx).await;
     }
 
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
     {
         let req = ListOffsetsRequest::decode(&mut &*req_bytes, version)?;
         // `isolation_level` decodes only from v2 up; v1 leaves it at 0, which

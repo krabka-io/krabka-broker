@@ -4,9 +4,12 @@
 
 use {
     super::*,
-    crate::txn::{
-        coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
-        state::TopicPartition,
+    crate::{
+        codes,
+        txn::{
+            coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
+            state::TopicPartition,
+        },
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
@@ -243,11 +246,13 @@ async fn replaced_entry_handle_is_rejected_as_stale() {
     let current = entry().call();
     let tid = current.transactional_id.clone();
     let stale = Arc::new(Mutex::new(current.clone()));
-    coordinator.state.insert(tid.clone(), stale.clone());
+    coordinator.state.insert(tid.clone(), Arc::clone(&stale));
     assert!(handle_is_current(&coordinator, &tid, &stale));
 
     let replacement = Arc::new(Mutex::new(current));
-    coordinator.state.insert(tid.clone(), replacement.clone());
+    coordinator
+        .state
+        .insert(tid.clone(), Arc::clone(&replacement));
     assert!(!handle_is_current(&coordinator, &tid, &stale));
     assert!(handle_is_current(&coordinator, &tid, &replacement));
 }
@@ -467,7 +472,7 @@ async fn a_timed_out_transaction_aborts_at_the_fenced_epoch_at_every_transaction
             .register_partitions(TID, PID, HELD_EPOCH, vec![orders], txnv, 4)
             .await;
         check!(
-            zombie == crate::codes::PRODUCER_FENCED,
+            zombie == codes::PRODUCER_FENCED,
             "{txnv:?}: the timed-out producer is fenced"
         );
     }

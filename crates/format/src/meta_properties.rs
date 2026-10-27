@@ -34,6 +34,7 @@ use {
         collections::HashMap,
         fs,
         io::{self, Write as _},
+        mem,
         path::Path,
         time::{SystemTime, UNIX_EPOCH},
     },
@@ -256,7 +257,7 @@ impl MetaProperties {
 }
 
 #[bon::builder]
-pub(crate) fn node_id_mismatch_message(stored: i32, previous: i32, path: &Path) -> String {
+pub fn node_id_mismatch_message(stored: i32, previous: i32, path: &Path) -> String {
     format!(
         "Stored node id {stored} doesn't match previous node id {previous} in {}. If you \
          moved your data, make sure your configured node id matches. If you intend \
@@ -398,7 +399,7 @@ fn logical_lines(input: &[u8]) -> Vec<Vec<u8>> {
             preceding_backslash = false;
             skip_lf = byte == b'\r';
         } else {
-            lines.push(std::mem::take(&mut line));
+            lines.push(mem::take(&mut line));
             skip_white_space = true;
         }
     }
@@ -451,9 +452,10 @@ fn split_entry(line: &[u8]) -> RawEntry<'_> {
         }
         value_start += 1;
     }
+    // Both scans stop inside `line`, so neither bound passes its end.
     RawEntry {
-        key: &line[..key_len],
-        value: &line[value_start..],
+        key: line.get(..key_len).unwrap_or(line),
+        value: line.get(value_start..).unwrap_or_default(),
     }
 }
 
@@ -501,13 +503,19 @@ fn unescape(raw: &[u8]) -> Result<String, MetaPropertiesError> {
 /// before 1970 is written as 1970, which no clock that formats a directory
 /// reads.
 fn java_date(now: SystemTime) -> String {
-    let format = time::format_description::parse_borrowed::<2>(
-        "[weekday repr:short] [month repr:short] [day] [hour]:[minute]:[second] UTC [year]",
+    let date = OffsetDateTime::from(now.max(UNIX_EPOCH));
+    // `EEE` and `MMM`: the first three letters of the English name.
+    let short = |name: String| name.chars().take(3).collect::<String>();
+    format!(
+        "{} {} {:02} {:02}:{:02}:{:02} UTC {}",
+        short(date.weekday().to_string()),
+        short(date.month().to_string()),
+        date.day(),
+        date.hour(),
+        date.minute(),
+        date.second(),
+        date.year(),
     )
-    .expect("the Date.toString description is well formed");
-    OffsetDateTime::from(now.max(UNIX_EPOCH))
-        .format(&format)
-        .expect("a UTC date after 1970 has every component the description names")
 }
 
 #[cfg(test)]

@@ -16,7 +16,11 @@ use {
         RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
         RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
     },
-    std::sync::Arc,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{task, time},
     uuid::Uuid,
 };
 
@@ -27,7 +31,8 @@ krabka_macros::remote_metadata_missing!(check_missing_partition, krabka_remote_s
 #[tokio::test(flavor = "multi_thread")]
 async fn epoch_lists_follow_assignment_and_readiness_for_cached_segments() {
     let log = HwmFlakyLog::new(4);
-    let SeededManager { manager, partition } = seeded_manager(log.clone()).await;
+    let SeededManager { manager, partition } =
+        seeded_manager(Arc::<HwmFlakyLog>::clone(&log)).await;
     manager.reconcile_assignment(&[partition]).await;
     wait_ready(&manager, &tp()).await;
     let expected = manager
@@ -115,8 +120,8 @@ async fn two_brokers_split_metadata_partitions() {
     let topic_id = Uuid::from_u128(0xFEED);
     let tp_a = TopicIdPartition::new(topic_id, "orders", 0);
     let tp_b = TopicIdPartition::new(topic_id, "orders", 1);
-    let mp_a = metadata_partition_for(&tp_a, n);
-    let mp_b = metadata_partition_for(&tp_b, n);
+    let mp_a = metadata_partition_for(&tp_a, n).unwrap();
+    let mp_b = metadata_partition_for(&tp_b, n).unwrap();
     assert!(
         mp_a != mp_b,
         "test needs the two partitions in distinct buckets"
@@ -127,14 +132,14 @@ async fn two_brokers_split_metadata_partitions() {
     // Seed one finished segment for each user-partition via a transient
     // writer (consumes all partitions, no assignment gating).
     for (tp, id) in [(tp_a.clone(), 100u128), (tp_b.clone(), 200)] {
-        let w = start_manager_all(log.clone()).await;
+        let w = start_manager_all(Arc::clone(&log)).await;
         let started = synthetic_started_segment(
             RemoteLogSegmentId::new(tp.clone(), Uuid::from_u128(id)),
             0,
             99,
             100,
         );
-        let w2 = w.clone();
+        let w2 = Arc::clone(&w);
         on_blocking(move || w2.add_remote_log_segment_metadata(started).unwrap()).await;
         let upd = RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: RemoteLogSegmentId::new(tp, Uuid::from_u128(id)),
@@ -143,13 +148,13 @@ async fn two_brokers_split_metadata_partitions() {
             state: RemoteLogSegmentState::CopySegmentFinished,
             broker_id: 1,
         };
-        let w2 = w.clone();
+        let w2 = Arc::clone(&w);
         on_blocking(move || w2.update_remote_log_segment_metadata(upd).unwrap()).await;
         w.shutdown();
     }
 
     // Broker A consumes mp_a only; Broker B consumes mp_b only.
-    let a = start_manager(log.clone());
+    let a = start_manager(Arc::clone(&log));
     let b = start_manager(log);
     a.reconcile_assignment(&[mp_a]).await;
     b.reconcile_assignment(&[mp_b]).await;
@@ -165,7 +170,7 @@ async fn two_brokers_split_metadata_partitions() {
     );
 
     // Poll until each is caught up and serves its own partition.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let a_own = a.remote_log_segment_metadata(&tp_a, LeaderEpoch(0), 42);
         let b_own = b.remote_log_segment_metadata(&tp_b, LeaderEpoch(0), 42);
@@ -173,10 +178,10 @@ async fn two_brokers_split_metadata_partitions() {
             break;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "managers did not catch up: a={a_own:?} b={b_own:?}"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
     // Cross reads (partition the broker does NOT consume) are a genuine
@@ -251,7 +256,7 @@ async fn reassignment_remove_then_readd_applies_no_duplicates() {
 #[tokio::test(flavor = "multi_thread")]
 async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
     let flaky = HwmFlakyLog::new(4);
-    let log: Arc<dyn MetadataEventLog> = flaky.clone();
+    let log: Arc<dyn MetadataEventLog> = Arc::<HwmFlakyLog>::clone(&flaky);
 
     let SeededManager {
         manager: m,
@@ -271,8 +276,8 @@ async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
     // Give the pump ample time to drain the backlog. Even fully caught
     // up, the read must stay NotReady because the real HWM is unknown —
     // it must NEVER collapse to Ok(None).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
-    while std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < deadline {
         match m.remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42) {
             Err(RemoteStorageError::NotReady { partition }) => assert!(partition == mp),
             other => panic!("HWM-unknown partition must read NotReady, got {other:?}"),
@@ -282,7 +287,7 @@ async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
             Err(RemoteStorageError::NotReady { partition }) => assert!(partition == mp),
             other => panic!("HWM-unknown partition list must be NotReady, got {other:?}"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
 
     // Recover: HWM fetch now succeeds. A subsequent reconcile (which the

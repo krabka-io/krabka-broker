@@ -14,8 +14,15 @@ use {
     krabka_ids::{LeaderEpoch, Offset, PartitionIndex},
     krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::records::RecordBatch,
-    std::{sync::Arc, time::Duration},
-    tokio::sync::{oneshot, watch},
+    std::{
+        fmt::Debug,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{
+        sync::{oneshot, watch},
+        time::sleep,
+    },
 };
 
 #[cfg(test)]
@@ -33,7 +40,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const UNBOUNDED_WAIT_WINDOW: Duration = Duration::from_hours(1);
 
 #[async_trait]
-pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
+pub trait OffsetsLog: Send + Sync + Debug {
     /// Append `batch` to the `__consumer_offsets` partition of `group_id`, and
     /// return once it is in this broker's log, with the write's commit still
     /// to come.
@@ -158,7 +165,9 @@ impl OffsetsLog for ProductionOffsetsLog {
         group_id: &str,
         batch: RecordBatch,
     ) -> Result<PendingWrite, BrokerError> {
-        let partition_id = partition_for_group(&self.controller.current_image(), group_id);
+        // `-1` is Kafka's no-partition sentinel: the group maps to none.
+        let partition_id = partition_for_group(&self.controller.current_image(), group_id)
+            .ok_or_else(|| uncommitted(-1, codes::COORDINATOR_NOT_AVAILABLE))?;
         let append = append_as_leader(
             (&self.partitions, &*self.controller, self.node_id),
             partition_id,
@@ -171,7 +180,7 @@ impl OffsetsLog for ProductionOffsetsLog {
             end_offset: append.end_offset.0,
             leader_epoch: append.term.epoch.get(),
             committed: Box::pin(append.committed_whenever()),
-            deadline: Box::pin(tokio::time::sleep(WRITE_TIMEOUT)),
+            deadline: Box::pin(sleep(WRITE_TIMEOUT)),
         })
     }
 }
@@ -369,7 +378,7 @@ async fn await_committed(
     partition
         .await_committed_while(
             end_offset,
-            std::time::Instant::now() + timeout,
+            Instant::now() + timeout,
             Some(images),
             |_, image| image.is_some_and(|image| term.holds_in(image)),
         )
@@ -403,8 +412,14 @@ pub mod fake {
     use {
         super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, PendingWrite, async_trait},
         crate::coordinator::unified::persistence_next_gen::NextGenKey,
-        krabka_protocol::records::RecordBatch,
-        std::sync::{Arc, PoisonError},
+        krabka_protocol::records::{Record, RecordBatch},
+        std::{
+            sync,
+            sync::{
+                Arc, PoisonError,
+                atomic::{AtomicBool, Ordering},
+            },
+        },
         tokio::sync::{Mutex, Notify},
     };
 
@@ -418,9 +433,9 @@ pub mod fake {
     #[derive(Debug, Default)]
     pub struct InMemoryOffsetsLog {
         pub appended: Mutex<Vec<RecordBatch>>,
-        pub fail_next: std::sync::atomic::AtomicBool,
+        pub fail_next: AtomicBool,
         /// The error the next append fails with, ahead of `fail_next`.
-        pub fail_next_with: std::sync::Mutex<Option<BrokerError>>,
+        pub fail_next_with: sync::Mutex<Option<BrokerError>>,
         /// The simulated high watermark, which every append moves past itself
         /// unless a test holds it back.
         commit_gate: Arc<CommitGate>,
@@ -431,7 +446,7 @@ pub mod fake {
     /// after it.
     #[derive(Debug, Default)]
     struct CommitGate {
-        state: std::sync::Mutex<GateState>,
+        state: sync::Mutex<GateState>,
         changed: Notify,
     }
 
@@ -481,10 +496,7 @@ pub mod fake {
             if let Some(error) = failure {
                 return Err(error);
             }
-            if self
-                .fail_next
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
+            if self.fail_next.swap(false, Ordering::SeqCst) {
                 return Err(BrokerError::PartitionWriterDied {
                     topic: OFFSETS_TOPIC.into(),
                     partition: 0,
@@ -542,23 +554,22 @@ pub mod fake {
         }
 
         /// Refuse the next append with the selected error, or the default failure.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the failure mutex is poisoned.
         pub fn fail_next_append(&self, failure: Option<BrokerError>) {
             match failure {
-                Some(error) => *self.fail_next_with.lock().expect("not poisoned") = Some(error),
-                None => self
-                    .fail_next
-                    .store(true, std::sync::atomic::Ordering::SeqCst),
+                Some(error) => {
+                    *self
+                        .fail_next_with
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(error);
+                }
+                None => self.fail_next.store(true, Ordering::SeqCst),
             }
         }
 
         pub async fn batches(&self) -> Vec<RecordBatch> { self.appended.lock().await.clone() }
 
         /// Snapshot the records grouped by their original append batch.
-        pub async fn record_batches(&self) -> Vec<Vec<krabka_protocol::records::Record>> {
+        pub async fn record_batches(&self) -> Vec<Vec<Record>> {
             self.batches()
                 .await
                 .into_iter()

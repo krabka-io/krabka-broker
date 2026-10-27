@@ -9,6 +9,7 @@ use {
         handlers::{RequestContext, denied_topics, requested_topic_name},
     },
     krabka_metadata::{AclOperation, ResourceType},
+    std::collections::HashSet,
 };
 
 /// Kafka's `produceRequest.transactionalId != null && authorize(WRITE,
@@ -60,7 +61,7 @@ pub(super) fn authorize_produce_topics(
     image: &krabka_metadata::MetadataImage,
     context: &RequestContext<'_>,
     request: &ProduceFramed,
-) -> std::collections::HashSet<String> {
+) -> HashSet<String> {
     let topic_names: Vec<String> = request
         .topic_data
         .iter()

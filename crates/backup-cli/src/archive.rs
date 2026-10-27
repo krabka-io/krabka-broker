@@ -143,10 +143,10 @@ mod tests {
         bytes::Bytes,
         krabka_object_store::{ObjectStoreClient, ObjectStoreError, fault::FaultInjectingStore},
         object_store::{ObjectStoreExt as _, PutPayload, path::Path},
-        std::sync::Arc,
+        std::{fs, path, sync::Arc},
     };
 
-    fn local_args(root: &std::path::Path) -> ArchiveArgs {
+    fn local_args(root: &path::Path) -> ArchiveArgs {
         ArchiveArgs {
             local: Some(root.to_path_buf()),
             ..ArchiveArgs::default()
@@ -290,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn an_absolute_read_rejects_an_oversized_object_before_fetching_it() {
         let root = tempfile::tempdir().expect("archive root");
-        std::fs::write(root.path().join("wal.ckwl"), b"oversized").expect("write object");
+        fs::write(root.path().join("wal.ckwl"), b"oversized").expect("write object");
         let archive = Archive::open(&local_args(root.path())).expect("open the archive");
 
         let error = archive

@@ -4,13 +4,19 @@ use {
     crate::support::standalone_broker,
     krabka_client_admin::CreateTopicSpec,
     krabka_ids::PartitionIndex as ElectionPartitionIndex,
-    krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
+    krabka_protocol::owned::{
+        describe_producers_request::{DescribeProducersRequest, TopicRequest},
+        elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
+        elect_leaders_response::ElectLeadersResponse,
+        unregister_controller_response,
+    },
+    std::{collections::BTreeMap, slice},
 };
 
 #[bon::builder]
 pub fn unregister_controller_answers(
     controller_id: i32,
-) -> Vec<krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse> {
+) -> Vec<unregister_controller_response::UnregisterControllerResponse> {
     use {
         krabka_broker::codes::CONTROLLER_ID_NOT_REGISTERED,
         krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse,
@@ -36,16 +42,13 @@ pub fn topic_spec(name: impl Into<String>, partitions: i32, replicas: i32) -> Cr
         name: name.into(),
         partitions,
         replicas,
-        configs: std::collections::BTreeMap::default(),
-        replica_assignments: std::collections::BTreeMap::default(),
+        configs: BTreeMap::default(),
+        replica_assignments: BTreeMap::default(),
     }
 }
 
 /// Partition error rows for the first election result naming the requested topic.
-pub fn election_partition_errors(
-    response: krabka_protocol::owned::elect_leaders_response::ElectLeadersResponse,
-    topic: &str,
-) -> Vec<(i32, i16)> {
+pub fn election_partition_errors(response: ElectLeadersResponse, topic: &str) -> Vec<(i32, i16)> {
     response
         .replica_election_results
         .into_iter()
@@ -71,7 +74,7 @@ pub async fn standalone_admin() -> (
 ) {
     let (dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
-    let admin = krabka_client_admin::AdminClient::connect(std::slice::from_ref(&bootstrap))
+    let admin = krabka_client_admin::AdminClient::connect(slice::from_ref(&bootstrap))
         .await
         .unwrap();
     (dir, broker, bootstrap, admin)
@@ -81,15 +84,13 @@ pub async fn standalone_admin() -> (
 pub fn describe_producers_request(
     name: String,
     partition_indexes: Vec<i32>,
-) -> krabka_protocol::owned::describe_producers_request::DescribeProducersRequest {
-    krabka_protocol::owned::describe_producers_request::DescribeProducersRequest {
-        topics: vec![
-            krabka_protocol::owned::describe_producers_request::TopicRequest {
-                name,
-                partition_indexes,
-                ..Default::default()
-            },
-        ],
+) -> DescribeProducersRequest {
+    DescribeProducersRequest {
+        topics: vec![TopicRequest {
+            name,
+            partition_indexes,
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
@@ -112,7 +113,7 @@ impl ElectionKind {
 
 #[derive(krabka_macros::FieldDefaults)]
 pub struct ElectionSetup {
-    #[default("orders".to_string())]
+    #[default("orders".to_owned())]
     pub topic: String,
     #[default(vec![krabka_ids::PartitionIndex(0)])]
     pub partitions: Vec<ElectionPartitionIndex>,
@@ -122,12 +123,12 @@ pub struct ElectionSetup {
 /// The named-partition `ElectLeaders` fixture, with its original thirty-second timeout.
 #[bon::builder]
 pub fn election_request(
-    #[builder(default = "orders" . to_string ())] topic: String,
+    #[builder(default = "orders".to_owned())] topic: String,
     #[builder(default = vec ! [krabka_ids :: PartitionIndex (0)])] partitions: Vec<
         ElectionPartitionIndex,
     >,
     #[builder(default)] kind: ElectionKind,
-) -> krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest {
+) -> ElectLeadersRequest {
     let setup = ElectionSetup {
         topic,
         partitions,

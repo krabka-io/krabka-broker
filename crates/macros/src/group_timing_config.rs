@@ -15,7 +15,7 @@ struct TimingKeys {
     assignment: Tokens,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let keys = item.parse_meta::<TimingKeys>("group_timing")?.ok_or_else(|| {
         ParseError::new(
             item.ident.span(),

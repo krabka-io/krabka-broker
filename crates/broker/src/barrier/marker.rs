@@ -29,7 +29,7 @@
 
 pub use krabka_log::BarrierMarker;
 #[cfg(test)]
-pub(crate) use krabka_log::parse_barrier_marker;
+pub use krabka_log::parse_barrier_marker;
 use {
     crate::{coordinator::unified::persistence::put_string, error::BrokerError},
     bytes::Bytes,
@@ -56,7 +56,7 @@ const VALUE_VERSION: i16 = 0;
 /// # Errors
 /// Returns [`BrokerError::Protocol`] when the group name is longer than 32767
 /// bytes, which the `i16` length cannot carry.
-pub(crate) fn build_barrier_batch(
+pub fn build_barrier_batch(
     marker: &BarrierMarker,
     base_offset: Offset,
     leader_epoch: i32,

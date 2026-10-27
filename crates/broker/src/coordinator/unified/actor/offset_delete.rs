@@ -17,7 +17,7 @@ use {
         coordinator::unified::{
             classic_state::{ClassicGroup as ClassicState, GroupState as ClassicGroupState},
             consumer_state::GroupState as ConsumerState,
-            group::CoordinatorGroup,
+            group::{CoordinatorGroup, GroupKind},
             offsets_log::OffsetsLog,
         },
     },
@@ -53,13 +53,10 @@ impl SubscribedTopics {
 
 /// Kafka's `validateOffsetDelete` followed by the group's subscribed topics.
 pub(super) fn offset_delete_guard(group: &CoordinatorGroup) -> Result<SubscribedTopics, ErrorCode> {
-    if let Some(state) = group.as_classic() {
-        classic_guard(state)
-    } else if let Some(state) = group.as_consumer() {
+    match &group.kind {
+        GroupKind::Classic(state) => classic_guard(state),
         // `ConsumerGroup.validateOffsetDelete` accepts every state.
-        Ok(consumer_subscribed_topics(state))
-    } else {
-        Err(codes::GROUP_ID_NOT_FOUND)
+        GroupKind::Consumer(state) => Ok(consumer_subscribed_topics(state)),
     }
 }
 
@@ -183,10 +180,11 @@ mod tests {
         },
         assert2::check,
         bytes::Bytes,
+        std::time::Duration,
     };
 
     fn named(topics: &[&str]) -> SubscribedTopics {
-        SubscribedTopics::Named(topics.iter().map(|s| (*s).to_string()).collect())
+        SubscribedTopics::Named(topics.iter().map(|s| (*s).to_owned()).collect())
     }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -228,8 +226,8 @@ mod tests {
                 id.clone(),
                 "client",
                 "host",
-                std::time::Duration::from_secs(30),
-                std::time::Duration::from_mins(1),
+                Duration::from_secs(30),
+                Duration::from_mins(1),
                 vec![("range".into(), blob.clone())],
             );
             g.members.insert(id, m);
@@ -310,7 +308,7 @@ mod tests {
     fn consumer_group_subscribes_to_names_and_resolved_regex() {
         let mut g = ConsumerState::new("g");
         let mut by_name = member("m1");
-        by_name.subscribed_topic_names = HashSet::from(["orders".to_string()]);
+        by_name.subscribed_topic_names = HashSet::from(["orders".to_owned()]);
         let mut by_regex = member("m2");
         by_regex.subscribed_topic_regex = Some("pay.*".into());
         g.add_or_update_member(by_name);
@@ -319,7 +317,7 @@ mod tests {
         check!(consumer_subscribed_topics(&g) == SubscribedTopics::All);
 
         g.set_resolved_regex("pay.*".into(), ResolvedRegularExpression {
-            topics: ["payments".to_string()].into(),
+            topics: ["payments".to_owned()].into(),
             version: 1,
             timestamp_ms: 1,
         });

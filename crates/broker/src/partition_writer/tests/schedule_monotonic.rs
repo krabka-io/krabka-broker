@@ -16,7 +16,9 @@ use {
     },
     assert2::check,
     krabka_log::{LogConfig, Offset},
+    std::path::Path,
     tempfile::tempdir,
+    tokio::task::JoinHandle,
 };
 
 /// A scheduled, monotonic log.
@@ -33,12 +35,12 @@ fn monotonic_config() -> LogConfig {
 /// Every argument but the log is the default the other writer-loop tests use;
 /// nothing in this file reads a watermark, a notification or a producer state.
 fn spawn_writer(
-    dir: &std::path::Path,
+    dir: &Path,
     log: &Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
-) -> tokio::task::JoinHandle<()> {
-    spawn_test_writer(dir, log.clone(), rx, WriterOptions {
-        topic: "scheduled".to_string(),
+) -> JoinHandle<()> {
+    spawn_test_writer(dir, Arc::clone(log), rx, WriterOptions {
+        topic: "scheduled".to_owned(),
         ..Default::default()
     })
 }
@@ -60,10 +62,10 @@ struct QueuedScenario {
     tx: mpsc::Sender<WriterMessage>,
     later: ProduceAck,
     earlier: ProduceAck,
-    writer: tokio::task::JoinHandle<()>,
+    writer: JoinHandle<()>,
 }
 
-async fn queued_scenario_writer(dir: &std::path::Path, log: &Arc<Mutex<Log>>) -> QueuedScenario {
+async fn queued_scenario_writer(dir: &Path, log: &Arc<Mutex<Log>>) -> QueuedScenario {
     let (tx, rx) = mpsc::channel(2);
     let DescendingAcks { later, earlier } = queued_descending_batches(&tx).await;
     let writer = spawn_writer(dir, log, rx);

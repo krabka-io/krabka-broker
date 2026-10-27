@@ -2,7 +2,7 @@
 
 #![allow(unused_imports)] // Each suite uses a different subset of this prelude.
 
-pub(crate) use {
+pub use {
     assert2::{assert, check},
     bytes::{BufMut, Bytes, BytesMut},
     krabka_broker::{

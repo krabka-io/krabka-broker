@@ -15,31 +15,35 @@ use {
     assert2::assert,
     futures_util::{SinkExt as _, StreamExt as _},
     krabka_security::ListenerProtocol,
-    std::time::Duration,
-    tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream},
+    std::{io::ErrorKind, sync::Arc, time::Duration},
+    tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream, duplex},
+        net::TcpStream,
+        task, time,
+    },
 };
 
 impl SendfileSink for DuplexStream {
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { None }
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream> { None }
 
     fn is_sendfile_capable(&self) -> bool { false }
 }
 
 #[tokio::test(start_paused = true)]
 async fn stalled_write_expires() {
-    let (stream, _reader) = tokio::io::duplex(1);
+    let (stream, _reader) = duplex(1);
     let mut writer = WriteIdle::new(stream, IdleTimer::new(Some(Duration::from_millis(100))));
     let error = writer
         .write_all(&[1, 2])
         .await
         .expect_err("full sink must expire");
-    assert!(error.kind() == std::io::ErrorKind::TimedOut);
+    assert!(error.kind() == ErrorKind::TimedOut);
 }
 
 #[tokio::test(start_paused = true)]
 async fn successful_writes_rearm_the_window_instead_of_limiting_total_duration() {
-    let (stream, mut reader) = tokio::io::duplex(1);
+    let (stream, mut reader) = duplex(1);
     let task = tokio::spawn(async move {
         WriteIdle::new(stream, IdleTimer::new(Some(Duration::from_millis(100))))
             .write_all(&[1, 2, 3, 4, 5])
@@ -47,7 +51,7 @@ async fn successful_writes_rearm_the_window_instead_of_limiting_total_duration()
     });
     let mut received = Vec::new();
     for _ in 0..5 {
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        time::sleep(Duration::from_millis(60)).await;
         received.push(reader.read_u8().await.expect("ongoing write"));
     }
     task.await
@@ -58,10 +62,10 @@ async fn successful_writes_rearm_the_window_instead_of_limiting_total_duration()
 
 #[tokio::test(start_paused = true)]
 async fn disabled_idle_window_leaves_a_stalled_write_pending() {
-    let (stream, _reader) = tokio::io::duplex(1);
+    let (stream, _reader) = duplex(1);
     let mut writer = WriteIdle::new(stream, IdleTimer::new(None));
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), writer.write_all(&[1, 2]))
+        time::timeout(Duration::from_secs(1), writer.write_all(&[1, 2]))
             .await
             .is_err()
     );
@@ -96,7 +100,7 @@ async fn stalled_sendfile_obeys_the_same_idle_window() {
         len: bytes.len(),
     };
     let mut stream = WriteIdle::new(server, IdleTimer::new(Some(Duration::from_millis(50))));
-    let error = tokio::time::timeout(
+    let error = time::timeout(
         Duration::from_secs(2),
         write_fetch_plan(
             &mut stream,
@@ -110,7 +114,7 @@ async fn stalled_sendfile_obeys_the_same_idle_window() {
     let BrokerError::Io(error) = error else {
         panic!("expected I/O timeout")
     };
-    assert!(error.kind() == std::io::ErrorKind::TimedOut);
+    assert!(error.kind() == ErrorKind::TimedOut);
 }
 
 #[tokio::test]
@@ -126,7 +130,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    let (stream, mut client) = tokio::io::duplex(1);
+    let (stream, mut client) = duplex(1);
     let spec = ListenerSpec {
         name: "PLAINTEXT".into(),
         bind_addr: "127.0.0.1:9092".parse().expect("address"),
@@ -137,7 +141,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
         principal_mapper: SslPrincipalMapper::default(),
     };
     let task = tokio::spawn(serve_connection_stream(
-        broker.clone(),
+        Arc::clone(&broker),
         stream,
         spec,
         "127.0.0.1:1234".parse().expect("peer"),
@@ -149,14 +153,14 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
         .await
         .expect("prefix");
     client.write_all(&request).await.expect("request");
-    tokio::time::timeout(Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         while broker.queued_requests_sem.available_permits() != 0 {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
     .expect("response holds capacity while client does not read");
-    tokio::time::timeout(Duration::from_secs(2), task)
+    time::timeout(Duration::from_secs(2), task)
         .await
         .expect("write timeout closes connection")
         .expect("serve task");
@@ -173,7 +177,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
 
     let (healthy_task, mut healthy) = plaintext_loop(broker).await;
     healthy.send(request).await.expect("healthy request");
-    tokio::time::timeout(Duration::from_secs(2), healthy.next())
+    time::timeout(Duration::from_secs(2), healthy.next())
         .await
         .expect("healthy response arrives")
         .expect("response")

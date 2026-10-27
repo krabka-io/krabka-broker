@@ -1,35 +1,42 @@
 //! Batch shapes and measurement controls shared by the leader and follower benchmarks.
 
-pub(crate) struct BoundedResource<T> {
+mod first_error;
+
+pub use first_error::{BenchError, FirstError};
+
+pub struct BoundedResource<T> {
     value: T,
     written: usize,
     budget: usize,
-    factory: fn() -> T,
+    factory: fn() -> Result<T, BenchError>,
 }
 
 #[bon::builder]
-pub(crate) fn bounded_resource<T>(budget: usize, factory: fn() -> T) -> BoundedResource<T> {
-    BoundedResource {
-        value: factory(),
+pub fn bounded_resource<T>(
+    budget: usize,
+    factory: fn() -> Result<T, BenchError>,
+) -> Result<BoundedResource<T>, BenchError> {
+    Ok(BoundedResource {
+        value: factory()?,
         written: 0,
         budget,
         factory,
-    }
+    })
 }
 
 impl<T> BoundedResource<T> {
     /// Replace the resource when the next write would exceed its byte budget.
-    pub(crate) fn rotate_if_full(&mut self, incoming: usize) -> &mut T {
+    pub fn rotate_if_full(&mut self, incoming: usize) -> Result<&mut T, BenchError> {
         if self.written + incoming > self.budget {
-            self.value = (self.factory)();
+            self.value = (self.factory)()?;
             self.written = 0;
         }
         self.written += incoming;
-        &mut self.value
+        Ok(&mut self.value)
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_mut(&mut self) -> &mut T { &mut self.value }
+    pub fn get_mut(&mut self) -> &mut T { &mut self.value }
 }
 
 /// One batch shape a benchmark sweeps: its report label, record count and

@@ -19,13 +19,14 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver for Produce with explicit on-wire client_id
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) async fn await_authorized_produce(
+pub async fn await_authorized_produce(
     addr: SocketAddr,
     password: &[u8],
     client_id: &str,
@@ -41,7 +42,7 @@ pub(crate) async fn await_authorized_produce(
             })
             .produce_client_id(client_id)
             .records(ZeroFilledRecordsSetup {
-                topic: ("tuple-quota-topic").to_string(),
+                topic: ("tuple-quota-topic").to_owned(),
                 count: ProduceRecordCount(4),
                 ..Default::default()
             })
@@ -59,6 +60,6 @@ pub(crate) async fn await_authorized_produce(
             Instant::now() <= deadline,
             "ACL still not applied after 15s"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }

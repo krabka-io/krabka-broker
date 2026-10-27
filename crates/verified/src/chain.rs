@@ -55,15 +55,16 @@ pub fn select_chain_tip(candidates: &[(i64, u64, bool)]) -> Option<usize> {
     })]
     #[variant(candidates@.len() - i@)]
     while i < candidates.len() {
-        if candidates[i].2 {
+        if let Some(&(candidate_time, candidate_seq, true)) = candidates.get(i) {
             match best {
                 None => best = Some(i),
                 Some(current) => {
-                    let newer = candidates[i].0 > candidates[current].0
-                        || (candidates[i].0 == candidates[current].0
-                            && candidates[i].1 > candidates[current].1);
-                    if newer {
-                        best = Some(i);
+                    if let Some(&(current_time, current_seq, _)) = candidates.get(current) {
+                        let newer = candidate_time > current_time
+                            || (candidate_time == current_time && candidate_seq > current_seq);
+                        if newer {
+                            best = Some(i);
+                        }
                     }
                 }
             }

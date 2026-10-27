@@ -34,6 +34,7 @@
 //! freeze signing layout as well as this one, so it belongs with the freeze
 //! suite. The transaction admission path is gated by the freeze and not by
 //! break-glass, so it belongs there too.
+#![cfg(test)]
 
 mod support;
 

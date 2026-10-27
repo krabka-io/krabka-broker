@@ -37,7 +37,15 @@ use {
             codec::{KafkaCodec, is_invalid_receive},
         },
     },
-    tokio::io::{AsyncRead, AsyncWrite},
+    std::{
+        net::SocketAddr,
+        sync::{Arc, LazyLock},
+        time::Duration,
+    },
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        time::{self, Instant},
+    },
     tokio_util::codec::Framed,
 };
 
@@ -48,9 +56,9 @@ use {
 /// `Vec` for each Produce or Fetch. That fallback covers SASL pre-auth, where
 /// `auth.principal()` is `None`. `Principal` carries a `Vec<String>`, so it
 /// cannot be a `const`; `LazyLock` builds it once on first use.
-static ANONYMOUS_PRINCIPAL: std::sync::LazyLock<krabka_security::Principal> =
-    std::sync::LazyLock::new(|| krabka_security::Principal {
-        name: "ANONYMOUS".to_string(),
+static ANONYMOUS_PRINCIPAL: LazyLock<krabka_security::Principal> =
+    LazyLock::new(|| krabka_security::Principal {
+        name: "ANONYMOUS".to_owned(),
         auth_method: krabka_security::AuthMethod::Anonymous,
         groups: vec![],
     });
@@ -75,13 +83,18 @@ pub(super) fn initial_connection_auth(
     is_sasl_listener: bool,
     mtls_principal: Option<krabka_security::Principal>,
     audit_log: &krabka_audit::AuditLog,
-    peer: &std::net::SocketAddr,
+    peer: &SocketAddr,
 ) -> ConnectionAuth {
     if is_sasl_listener {
         return ConnectionAuth::Anonymous;
     }
-    let principal = match mtls_principal {
-        Some(principal) => {
+    let principal = mtls_principal.map_or_else(
+        || krabka_security::Principal {
+            name: "ANONYMOUS".to_owned(),
+            auth_method: krabka_security::AuthMethod::Anonymous,
+            groups: vec![],
+        },
+        |principal| {
             super::sasl::emit_authentication(
                 audit_log,
                 peer,
@@ -91,13 +104,8 @@ pub(super) fn initial_connection_auth(
                 None,
             );
             principal
-        }
-        None => krabka_security::Principal {
-            name: "ANONYMOUS".to_string(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
         },
-    };
+    );
     ConnectionAuth::Authenticated {
         principal,
         mechanism: krabka_security::SaslMechanism::Plain,
@@ -153,10 +161,10 @@ impl RequestLimits {
 /// `sasl.server.max.receive.size` fails its authentication, which is counted
 /// and audited, and closes only after `failed_authentication_delay`.
 pub(super) struct FrameWaitPolicy {
-    pub(super) peer: std::net::SocketAddr,
+    pub(super) peer: SocketAddr,
     pub(super) metrics: BrokerMetrics,
-    pub(super) audit_log: std::sync::Arc<krabka_audit::AuditLog>,
-    pub(super) failed_authentication_delay: std::time::Duration,
+    pub(super) audit_log: Arc<krabka_audit::AuditLog>,
+    pub(super) failed_authentication_delay: Duration,
 }
 
 impl FrameWaitPolicy {
@@ -204,7 +212,7 @@ pub(super) struct FrameSizeLimit<'a> {
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, KafkaCodec>,
     auth: &ConnectionAuth,
-    mute_until: Option<tokio::time::Instant>,
+    mute_until: Option<Instant>,
     clock: &mut IdleClock,
     policy: &FrameWaitPolicy,
     FrameSizeLimit { maximum, budget }: FrameSizeLimit<'_>,
@@ -218,7 +226,7 @@ where
         Some(mute_until) => tokio::select! {
             biased;
             () = clock.expired() => Err(ReceiveError::Idle),
-            () = tokio::time::sleep_until(mute_until) => Ok(()),
+            () = time::sleep_until(mute_until) => Ok(()),
         },
         None => Ok(()),
     };
@@ -252,7 +260,7 @@ where
                     "invalid receive size",
                 );
                 if !policy.failed_authentication_delay.is_zero() {
-                    tokio::time::sleep(policy.failed_authentication_delay).await;
+                    time::sleep(policy.failed_authentication_delay).await;
                 }
             }
             None
@@ -268,7 +276,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::network::test_support::assert_authentication_event, assert2::assert};
+    use {
+        super::*, crate::network::test_support::assert_authentication_event, assert2::assert,
+        std::net::SocketAddr,
+    };
 
     /// The mTLS binding is the one authentication with no SASL frame behind
     /// it, so `initial_connection_auth` is the only place that can record it.
@@ -276,9 +287,9 @@ mod tests {
     /// nothing.
     #[test]
     fn initial_connection_auth_audits_the_mtls_binding_only() {
-        let peer: std::net::SocketAddr = "192.0.2.7:9093".parse().expect("peer addr");
+        let peer: SocketAddr = "192.0.2.7:9093".parse().expect("peer addr");
         let cert_dn = krabka_security::Principal {
-            name: "CN=test-client,OU=integration,O=krabka".to_string(),
+            name: "CN=test-client,OU=integration,O=krabka".to_owned(),
             auth_method: krabka_security::AuthMethod::MTls,
             groups: vec![],
         };

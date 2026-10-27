@@ -28,7 +28,12 @@ use {
         sasl_handshake_response::SaslHandshakeResponse,
     },
     krabka_security::SaslMechanism,
-    std::{io, net::SocketAddr},
+    std::{
+        io,
+        net::SocketAddr,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    },
     tokio::net::TcpStream,
 };
 
@@ -51,8 +56,8 @@ pub fn oauthbearer_initial(token: &str) -> bytes::Bytes {
 
 pub fn now_unix_secs() -> i64 {
     i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_secs(),
     )
@@ -62,9 +67,9 @@ pub fn now_unix_secs() -> i64 {
 /// Start a single `SASL_PLAINTEXT` broker that enables only OAUTHBEARER, with
 /// the given validator.
 pub fn start_oauthbearer_broker(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     validator: krabka_security::OAuthBearerValidator,
-) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
+) -> impl Future<Output = krabka_broker::BrokerHandle> {
     start_oauthbearer_broker_with_cap(log_dir, validator, None)
 }
 
@@ -76,10 +81,10 @@ pub fn start_oauthbearer_broker(
 /// deadline to the same value. `None` leaves the session ending at the
 /// token's own `exp`.
 pub fn start_oauthbearer_broker_with_cap(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     validator: krabka_security::OAuthBearerValidator,
     max_reauth: Option<krabka_units::Time>,
-) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
+) -> impl Future<Output = krabka_broker::BrokerHandle> {
     let mut cfg =
         sasl_plaintext_mechanisms(log_dir.to_path_buf(), vec![SaslMechanism::OAuthBearer]);
     cfg.oauthbearer_validator = validator;
@@ -110,7 +115,7 @@ pub async fn oauthbearer_handshake(
     decode_named::<ApiVersionsResponse>(&av, 0, "ApiVersions")?;
 
     let sh_req = SaslHandshakeRequest {
-        mechanism: "OAUTHBEARER".to_string(),
+        mechanism: "OAUTHBEARER".to_owned(),
         ..Default::default()
     };
     let sh_body = encode_named(&sh_req, 1, "SaslHandshake")?;
@@ -223,7 +228,7 @@ pub async fn drive_sasl_oauthbearer_session_open(
 /// the rendered error text to tell 34 from 58.
 pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Result<(), io::Error> {
     let handshake_request = SaslHandshakeRequest {
-        mechanism: "OAUTHBEARER".to_string(),
+        mechanism: "OAUTHBEARER".to_owned(),
         ..Default::default()
     };
     let handshake_body = encode_named(&handshake_request, 1, "SaslHandshake")?;

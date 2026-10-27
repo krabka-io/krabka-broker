@@ -9,6 +9,7 @@ use {
     crate::error::RestoreError,
     krabka_ids::{LeaderEpoch, Offset},
     object_store::path::Path,
+    std::str,
 };
 
 /// Build the [`RestoreError::TruncatedSegment`] a malformed
@@ -48,7 +49,7 @@ pub(super) fn parse_leader_epoch_checkpoint(
     segment_base: Offset,
     segment_end: Offset,
 ) -> Result<Vec<LeaderEpochStart>, RestoreError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| checkpoint_error(key, 0, 0, 0))?;
+    let text = str::from_utf8(bytes).map_err(|_| checkpoint_error(key, 0, 0, 0))?;
     let mut lines = text.split('\n');
     let mut position: u64 = 0;
 

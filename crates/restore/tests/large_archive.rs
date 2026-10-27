@@ -10,17 +10,28 @@
 //! million objects without ever holding them, which no on-disk fixture could
 //! do, and reads the process's own peak resident set to show the scan did not
 //! grow with the listing.
+#![cfg(test)]
 
 use {
     assert2::check,
-    futures_util::stream::StreamExt as _,
+    futures_util::{
+        stream,
+        stream::{BoxStream, StreamExt as _},
+    },
     krabka_ids::Offset,
     krabka_remote_storage::{TopicIdPartition, kafka_uuid},
     krabka_restore::{
         ArchiveInventory, ArchiveObject, ArchiveStore, Cli, PartitionInventory, RestoreArgs,
         SegmentInventory, UNRECOGNIZED_SAMPLE_LIMIT, UnrecognizedKeys, inventory,
     },
-    object_store::{ObjectMeta, path::Path},
+    object_store::{Error as StoreError, ObjectMeta, path::Path},
+    std::{
+        fmt,
+        fmt::{Display, Formatter},
+        fs,
+        sync::Arc,
+        time,
+    },
     uuid::Uuid,
 };
 
@@ -145,9 +156,16 @@ fn expected_inventory() -> ArchiveInventory {
 #[derive(Debug)]
 struct GeneratedListing;
 
-impl std::fmt::Display for GeneratedListing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GeneratedListing")
+impl Display for GeneratedListing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { write!(f, "GeneratedListing") }
+}
+
+/// What every operation but a listing answers: the scan under test only
+/// lists.
+fn only_lists(operation: &str) -> StoreError {
+    StoreError::NotImplemented {
+        operation: operation.to_owned(),
+        implementer: GeneratedListing.to_string(),
     }
 }
 
@@ -159,7 +177,7 @@ impl object_store::ObjectStore for GeneratedListing {
         _payload: object_store::PutPayload,
         _opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
-        unimplemented!("the scan under test only lists")
+        Err(only_lists("put_opts"))
     }
 
     async fn put_multipart_opts(
@@ -167,7 +185,7 @@ impl object_store::ObjectStore for GeneratedListing {
         _location: &Path,
         _opts: object_store::PutMultipartOptions,
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        unimplemented!("the scan under test only lists")
+        Err(only_lists("put_multipart_opts"))
     }
 
     async fn get_opts(
@@ -175,22 +193,19 @@ impl object_store::ObjectStore for GeneratedListing {
         _location: &Path,
         _options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
-        unimplemented!("the scan under test only lists")
+        Err(only_lists("get_opts"))
     }
 
     fn delete_stream(
         &self,
-        _locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
-        unimplemented!("the scan under test only lists")
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations.map(|_| Err(only_lists("delete_stream"))).boxed()
     }
 
-    fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned();
-        futures_util::stream::iter(keys())
+        stream::iter(keys())
             .filter_map(move |location| {
                 let matched = prefix
                     .as_ref()
@@ -202,7 +217,7 @@ impl object_store::ObjectStore for GeneratedListing {
                             // The epoch, reached through `SystemTime` so the
                             // test names no chrono type: nothing in the scan
                             // reads a modification time.
-                            last_modified: std::time::SystemTime::UNIX_EPOCH.into(),
+                            last_modified: time::SystemTime::UNIX_EPOCH.into(),
                             size: OBJECT_SIZE,
                             e_tag: None,
                             version: None,
@@ -217,7 +232,7 @@ impl object_store::ObjectStore for GeneratedListing {
         &self,
         _prefix: Option<&Path>,
     ) -> object_store::Result<object_store::ListResult> {
-        unimplemented!("the scan under test only lists")
+        Err(only_lists("list_with_delimiter"))
     }
 
     async fn copy_opts(
@@ -226,7 +241,7 @@ impl object_store::ObjectStore for GeneratedListing {
         _to: &Path,
         _options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
-        unimplemented!("the scan under test only lists")
+        Err(only_lists("copy_opts"))
     }
 }
 
@@ -254,7 +269,7 @@ fn scan_args() -> RestoreArgs {
 /// listing gets wrong. It is Linux-only; elsewhere the correctness half of the
 /// test still runs.
 fn peak_rss_kib() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let status = fs::read_to_string("/proc/self/status").ok()?;
     status
         .lines()
         .find_map(|line| line.strip_prefix("VmHWM:"))
@@ -270,7 +285,7 @@ const PEAK_GROWTH_LIMIT_KIB: u64 = 16 * 1024;
 
 #[tokio::test]
 async fn a_million_object_listing_is_scanned_without_being_held() {
-    let store = ArchiveStore::with_store(std::sync::Arc::new(GeneratedListing), None);
+    let store = ArchiveStore::with_store(Arc::new(GeneratedListing), None);
     let args = scan_args();
 
     let before = peak_rss_kib();

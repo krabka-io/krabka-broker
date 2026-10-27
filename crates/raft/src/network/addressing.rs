@@ -29,7 +29,7 @@ pub(super) fn controller_addr(voters: &VoterSet, id: NodeId) -> Option<String> {
 /// so this reads those constants rather than restating them. A peer send
 /// negotiates down from it when the peer advertises less (`negotiation`), so
 /// the version on the header and the version in the bytes cannot drift apart.
-pub(crate) fn api_version_for(key: ApiKey) -> ApiVersion {
+pub fn api_version_for(key: ApiKey) -> ApiVersion {
     ApiVersion(PeerApi::from_api_key(key.get()).map_or(0, PeerApi::version))
 }
 
@@ -65,7 +65,7 @@ mod tests {
             .call()]);
 
         assert2::assert!(
-            controller_addr(&voters, NodeId(7)) == Some("controller-host:9093".to_string())
+            controller_addr(&voters, NodeId(7)) == Some("controller-host:9093".to_owned())
         );
         assert2::assert!(controller_addr(&voters, NodeId(8)) == None);
     }
@@ -80,7 +80,7 @@ mod tests {
             }])
             .call()]);
 
-        assert2::assert!(controller_addr(&voters, NodeId(7)) == Some("only-host:9094".to_string()));
+        assert2::assert!(controller_addr(&voters, NodeId(7)) == Some("only-host:9094".to_owned()));
     }
 
     #[yare::parameterized(

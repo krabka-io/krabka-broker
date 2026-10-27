@@ -6,7 +6,7 @@ use {
     super::*,
     crate::coordinator::unified::{
         actor::{seed::apply_seed, test_support::StaticMetadata},
-        persistence_next_gen::RegularExpressionValue,
+        persistence_next_gen::{GroupMetadataValue, RegularExpressionValue},
         reconciler::ReconcileInput,
         regex_resolver::FixedRegexResolver,
     },
@@ -162,12 +162,10 @@ fn a_member_that_joins_with_a_regex_gets_the_resolved_topics_at_its_next_heartbe
         joined.result
             == PendingRecords {
                 resolved_regexes: vec![("a.*".to_owned(), Some(resolved(&["a1", "a2"])))],
-                group_metadata: Some(
-                    crate::coordinator::unified::persistence_next_gen::GroupMetadataValue {
-                        epoch: 2,
-                        metadata_hash: state.metadata_hash(),
-                    }
-                ),
+                group_metadata: Some(GroupMetadataValue {
+                    epoch: 2,
+                    metadata_hash: state.metadata_hash(),
+                }),
                 ..PendingRecords::default()
             }
     );
@@ -309,7 +307,7 @@ fn a_failover_keeps_the_topics_of_a_regex_without_a_heartbeat_that_carries_the_p
         metadata_hash: 0,
         target_epoch: 5,
         assignment_timestamp_ms: 0,
-        members: [("m1".to_string(), MemberMetadataValue {
+        members: [("m1".to_owned(), MemberMetadataValue {
             instance_id: None,
             rack_id: None,
             client_id: "client".into(),
@@ -321,11 +319,11 @@ fn a_failover_keeps_the_topics_of_a_regex_without_a_heartbeat_that_carries_the_p
             classic: None,
         })]
         .into(),
-        target_per_member: [("m1".to_string(), TargetAssignmentMemberValue {
+        target_per_member: [("m1".to_owned(), TargetAssignmentMemberValue {
             topic_partitions: both.clone(),
         })]
         .into(),
-        current_per_member: [("m1".to_string(), CurrentMemberAssignmentValue {
+        current_per_member: [("m1".to_owned(), CurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
             state: MemberAssignmentState::Stable,
@@ -340,7 +338,7 @@ fn a_failover_keeps_the_topics_of_a_regex_without_a_heartbeat_that_carries_the_p
             partitions_pending_revocation: vec![],
         })]
         .into(),
-        resolved_regexes: [("a.*".to_string(), RegularExpressionValue {
+        resolved_regexes: [("a.*".to_owned(), RegularExpressionValue {
             topics: vec!["a1".into(), "a2".into()],
             version: 100,
             timestamp_ms: RegexResolution::TEST_NOW_MS,

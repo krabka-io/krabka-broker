@@ -27,7 +27,10 @@ use {
         path::PathBuf,
         sync::{Arc, Mutex},
     },
-    tokio::sync::{Notify, mpsc},
+    tokio::{
+        sync,
+        sync::{Notify, mpsc, oneshot},
+    },
 };
 
 /// The first queued produce job and the most jobs one group may drain.
@@ -48,7 +51,7 @@ pub(super) struct ProduceStorage<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct ProduceSignals<'a> {
     pub(super) append_notify: &'a Arc<Notify>,
-    pub(super) replica_state: &'a Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(super) replica_state: &'a Arc<sync::Mutex<ReplicaState>>,
     pub(super) hw_advance_notify: &'a Arc<Notify>,
 }
 
@@ -105,14 +108,14 @@ pub(super) async fn append_group(
 pub(super) struct AppendedGroup {
     topic: String,
     partition: PartitionIndex,
-    acks: Vec<tokio::sync::oneshot::Sender<Result<AppendedBatch, BrokerError>>>,
+    acks: Vec<oneshot::Sender<Result<AppendedBatch, BrokerError>>>,
     results: Vec<Result<AppendedBatch, BrokerError>>,
     leo: Offset,
     control_entries: Vec<ProducerSnapshotEntry>,
     log_dir: Arc<ArcSwap<PathBuf>>,
     log_dir_status: LogDirRegistry,
     producer_state: Arc<ProducerState>,
-    replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    replica_state: Arc<sync::Mutex<ReplicaState>>,
     append_notify: Arc<Notify>,
     hw_advance_notify: Arc<Notify>,
     wal: Option<SharedWal>,
@@ -180,7 +183,16 @@ pub(super) async fn append_jobs(
             }
             return None;
         };
-        let count = datas.iter().map(ProduceData::record_count).sum();
+        let Ok(count) = u32::try_from(datas.iter().map(ProduceData::record_count).sum::<i64>())
+        else {
+            for ack in acks {
+                let _ = ack.send(Err(storage_failure_error(
+                    "diskless append record count out of range",
+                    "record count out of range",
+                )));
+            }
+            return None;
+        };
         match sequencer
             .assign(identity.topic, identity.partition, count)
             .await
@@ -296,11 +308,11 @@ pub(super) async fn finish_group(group: AppendedGroup) {
         // The diskless path keeps its ack ahead of durability on purpose: the
         // ack only promises an assigned offset, and a caller that needs the
         // write durable awaits a separate `SyncDurable` command explicitly.
-        let advanced = if let Some(advanced) = leader_hw_advanced {
-            advanced
-        } else {
-            let wal = wal.expect("any_ok && wal.is_none() is false, so wal is Some");
-            match wal.sync_durable(leo).await {
+        let advanced = match (leader_hw_advanced, wal) {
+            (Some(advanced), _) => advanced,
+            // `leader_hw_advanced` is `Some` for any partition without a WAL.
+            (None, None) => false,
+            (None, Some(wal)) => match wal.sync_durable(leo).await {
                 Ok(durable) => {
                     let mut state = replica_state.lock().await;
                     let previous = state.hw;
@@ -310,7 +322,7 @@ pub(super) async fn finish_group(group: AppendedGroup) {
                     flag_storage_failure(&error, &log_dir, &log_dir_status);
                     false
                 }
-            }
+            },
         };
         if advanced {
             hw_advance_notify.notify_waiters();

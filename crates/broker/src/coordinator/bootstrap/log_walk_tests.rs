@@ -10,10 +10,11 @@ use {
         unified::actor::test_support::rpc,
     },
     assert2::check,
-    krabka_protocol::records::RecordBatch,
+    krabka_protocol::records::{Record, RecordBatch},
+    std::collections::{HashMap, HashSet},
 };
 
-fn append_record(log: &mut krabka_log::Log, record: krabka_protocol::records::Record) {
+fn append_record(log: &mut krabka_log::Log, record: Record) {
     let mut batch = RecordBatch {
         records: vec![record],
         ..RecordBatch::default()
@@ -70,9 +71,9 @@ async fn replay_records_walks_all_batches() {
     // All three commits present — the second batch is only reached when the
     // cursor arithmetic `base_offset + last_offset_delta + 1` is exact.
     check!(committed.len() == 3);
-    check!(committed[&("t".to_string(), 0)].offset == 100);
-    check!(committed[&("t".to_string(), 1)].offset == 101);
-    check!(committed[&("t".to_string(), 2)].offset == 202);
+    check!(committed[&("t".to_owned(), 0)].offset == 100);
+    check!(committed[&("t".to_owned(), 1)].offset == 101);
+    check!(committed[&("t".to_owned(), 2)].offset == 202);
 }
 
 #[test]
@@ -117,9 +118,9 @@ fn replay_applies_only_committed_transactional_offsets() {
     let replayed = replay_records(&log, &coordinator).unwrap();
     let committed = replayed.committed.get("g").expect("committed transaction");
     check!(committed.len() == 1);
-    check!(committed[&("t".to_string(), 0)].offset == 111);
-    check!(!committed.contains_key(&("t".to_string(), 1)));
-    check!(!committed.contains_key(&("t".to_string(), 2)));
+    check!(committed[&("t".to_owned(), 0)].offset == 111);
+    check!(!committed.contains_key(&("t".to_owned(), 1)));
+    check!(!committed.contains_key(&("t".to_owned(), 2)));
 }
 
 /// KIP-447 across a coordinator reload. A transaction whose offset commits the
@@ -152,7 +153,8 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
                     expire_timestamp_ms: None,
                     topic_id: None,
                 }
-                .encode_value(),
+                .encode_value()
+                .unwrap(),
             ),
             ..Default::default()
         }],
@@ -166,7 +168,7 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
         replayed.pending_txn["g"][&7]
             == super::replay::PendingTxnKeys {
                 written_at: 0,
-                keys: std::collections::HashSet::from([("t".to_string(), 4)]),
+                keys: HashSet::from([("t".to_owned(), 4)]),
             }
     );
 
@@ -176,7 +178,7 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
     let handle = coordinator.find("g").expect("seeded classic actor");
     let offsets = rpc::fetch_offsets(&handle).await;
     check!(offsets.committed.is_empty());
-    check!(offsets.pending_txn == std::collections::HashSet::from([("t".to_string(), 4)]));
+    check!(offsets.pending_txn == HashSet::from([("t".to_owned(), 4)]));
 }
 
 /// A group can have more producers with open transactions than its actor's
@@ -210,17 +212,17 @@ async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
     // does for a classic one.
     coordinator
         .seeds
-        .insert("g".to_string(), GroupSeed::default());
+        .insert("g".to_owned(), GroupSeed::default());
 
     let mut by_producer: HashMap<i64, PendingTxnKeys> = HashMap::new();
     for producer_id in 0..PRODUCERS {
         by_producer.insert(producer_id, PendingTxnKeys {
             written_at: producer_id,
-            keys: HashSet::from([("t".to_string(), i32::try_from(producer_id).unwrap())]),
+            keys: HashSet::from([("t".to_owned(), i32::try_from(producer_id).unwrap())]),
         });
     }
     let replayed = Replayed {
-        pending_txn: HashMap::from([("g".to_string(), by_producer)]),
+        pending_txn: HashMap::from([("g".to_owned(), by_producer)]),
         ..Replayed::default()
     };
 
@@ -229,7 +231,7 @@ async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
     let handle = coordinator.find("g").expect("seeded consumer actor");
     let offsets = rpc::fetch_offsets(&handle).await;
     let expected: HashSet<(String, i32)> = (0..PRODUCERS)
-        .map(|producer_id| ("t".to_string(), i32::try_from(producer_id).unwrap()))
+        .map(|producer_id| ("t".to_owned(), i32::try_from(producer_id).unwrap()))
         .collect();
     check!(offsets.pending_txn == expected);
 }
@@ -278,8 +280,8 @@ fn replay_honours_offset_and_group_tombstones() {
 
     let replayed = replay_records(&log, &coordinator).unwrap();
     let committed = replayed.committed.get("g").expect("group g");
-    check!(!committed.contains_key(&("t".to_string(), 0)));
-    check!(committed[&("t".to_string(), 1)].offset == 101);
+    check!(!committed.contains_key(&("t".to_owned(), 0)));
+    check!(committed[&("t".to_owned(), 1)].offset == 101);
     // The memberless snapshot records when the group emptied, which is where
     // the offset-retention sweep measures from after a restart.
     check!(replayed.empty_since.get("g") == Some(&777));
@@ -295,7 +297,7 @@ fn replay_honours_offset_and_group_tombstones() {
     let replayed = replay_records(&log, &coordinator).unwrap();
     check!(!replayed.classic.contains_key("g"));
     check!(!replayed.empty_since.contains_key("g"));
-    check!(replayed.committed["g"][&("t".to_string(), 1)].offset == 101);
+    check!(replayed.committed["g"][&("t".to_owned(), 1)].offset == 101);
 }
 
 /// A group the retention sweep reaped in full — every offset tombstoned and
@@ -362,7 +364,7 @@ async fn replay_keeps_the_committed_topic_id() {
     let record = |partition: i32, delta: i32, entry: &OffsetEntry| Record {
         offset_delta: delta,
         key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
-        value: Some(OffsetCommitValue::from(entry).encode_value()),
+        value: Some(OffsetCommitValue::from(entry).encode_value().unwrap()),
         ..Default::default()
     };
 
@@ -383,9 +385,9 @@ async fn replay_keeps_the_committed_topic_id() {
 
     check!(
         replayed.committed.get("g")
-            == Some(&std::collections::HashMap::from([
-                (("t".to_string(), 0), entry(10, None, Some(topic_id))),
-                (("t".to_string(), 1), entry(11, Some(9_000), None)),
+            == Some(&HashMap::from([
+                (("t".to_owned(), 0), entry(10, None, Some(topic_id))),
+                (("t".to_owned(), 1), entry(11, Some(9_000), None)),
             ]))
     );
 }

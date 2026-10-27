@@ -23,13 +23,14 @@ use {
     crate::metrics::{BrokerMetrics, QuotaType},
     krabka_units::{Time, convert::TimeExt as _, minutes},
     std::sync::Arc,
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::debug,
 };
 
 /// How long a bucket may go untouched before the sweep drops it. Kafka's
 /// `ClientQuotaManager.InactiveSensorExpirationTimeSeconds`.
-pub(crate) const INACTIVE_EXPIRATION: Time = minutes(60);
+pub const INACTIVE_EXPIRATION: Time = minutes(60);
 
 /// How often the sweep runs.
 ///
@@ -39,12 +40,8 @@ pub(crate) const INACTIVE_EXPIRATION: Time = minutes(60);
 const SWEEP_INTERVAL: Time = minutes(1);
 
 /// Drops inactive quota buckets and their metric series until cancelled.
-pub(crate) async fn run(
-    buckets: Arc<QuotaBuckets>,
-    metrics: BrokerMetrics,
-    shutdown: CancellationToken,
-) {
-    let mut tick = tokio::time::interval(SWEEP_INTERVAL.to_std());
+pub async fn run(buckets: Arc<QuotaBuckets>, metrics: BrokerMetrics, shutdown: CancellationToken) {
+    let mut tick = time::interval(SWEEP_INTERVAL.to_std());
     loop {
         tokio::select! {
             _ = tick.tick() => {}

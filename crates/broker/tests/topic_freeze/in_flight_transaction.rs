@@ -23,6 +23,7 @@ use {
         owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     },
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// The `read_committed` end of one partition.
@@ -76,7 +77,7 @@ async fn wait_for_stable_offset(client: &Client, topic: &str, want: i64) {
             Instant::now() < deadline,
             "stable offset for {topic} never reached {want}; last={offset}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -105,58 +106,61 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
     let frozen = create_topic(&p.broker, &p.client, "orders").await;
     let control = create_topic(&p.broker, &p.client, CONTROL).await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap)
-        .transactional_id("cutover-tid")
-        .build()
-        .await
-        .expect("producer build");
-    producer
-        .init_transactions()
-        .await
-        .expect("init_transactions");
-    let txn = producer
-        .begin_transaction()
-        .await
-        .expect("begin_transaction");
-    producer
-        .send(
-            producer_record()
-                .value(Some(Bytes::from_static(b"in-flight")))
-                .call(),
-        )
-        .await
-        .expect("the in-flight record is acknowledged");
-    p.broker
-        .wait_until_local_log_end_offset("orders", 0, 1)
-        .await;
-    // The transaction is open, so `read_committed` cannot see past its first
-    // record yet.
-    check!(stable_offset(&p.client, "orders").await == 0);
+    {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap)
+            .transactional_id("cutover-tid")
+            .build()
+            .await
+            .expect("producer build");
+        producer
+            .init_transactions()
+            .await
+            .expect("init_transactions");
+        let txn = producer
+            .begin_transaction()
+            .await
+            .expect("begin_transaction");
+        producer
+            .send(
+                producer_record()
+                    .value(Some(Bytes::from_static(b"in-flight")))
+                    .call(),
+            )
+            .await
+            .expect("the in-flight record is acknowledged");
+        p.broker
+            .wait_until_local_log_end_offset("orders", 0, 1)
+            .await;
+        // The transaction is open, so `read_committed` cannot see past its first
+        // record yet.
+        check!(stable_offset(&p.client, "orders").await == 0);
 
-    let (pat, reason) = (PATTERN_TYPE_LITERAL, "cutover");
-    freeze_scope(&p.client, pat, "orders", reason).await;
+        let (pat, reason) = (PATTERN_TYPE_LITERAL, "cutover");
+        freeze_scope(&p.client, pat, "orders", reason).await;
 
-    // The freeze is live while the transaction is open: a new plain write is
-    // refused, and it does not move the log.
-    check!(
-        produce_outcome(&p.broker, &p.client, "orders", frozen).await
-            == refused("literal", "orders", "cutover", 1)
-    );
+        // The freeze is live while the transaction is open: a new plain write is
+        // refused, and it does not move the log.
+        check!(
+            produce_outcome(&p.broker, &p.client, "orders", frozen).await
+                == refused("literal", "orders", "cutover", 1)
+        );
 
-    txn.commit()
-        .await
-        .expect("a transaction that enlisted before the freeze still commits");
+        txn.commit()
+            .await
+            .expect("a transaction that enlisted before the freeze still commits");
 
-    // The marker was appended, so the log grew by one and `read_committed`
-    // reached the end of it. A freeze that refused the marker would leave both
-    // of these at their pre-commit values forever.
-    p.broker
-        .wait_until_local_log_end_offset("orders", 0, 2)
-        .await;
-    wait_for_stable_offset(&p.client, "orders", 2).await;
+        // The marker was appended, so the log grew by one and `read_committed`
+        // reached the end of it. A freeze that refused the marker would leave both
+        // of these at their pre-commit values forever.
+        p.broker
+            .wait_until_local_log_end_offset("orders", 0, 2)
+            .await;
+        wait_for_stable_offset(&p.client, "orders", 2).await;
 
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
-    producer.close().await.expect("producer close");
+        check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+        producer.close().await
+    }
+    .expect("producer close");
     p.broker.shutdown().await;
 }

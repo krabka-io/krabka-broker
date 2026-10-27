@@ -11,7 +11,7 @@ use {
     super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back},
     crate::codes::{INVALID_RECORD_STATE, INVALID_REQUEST},
     krabka_log::Offset,
-    std::{iter::Peekable, ops::Range, time::Instant},
+    std::{iter::Peekable, mem, ops::Range, time::Instant},
 };
 
 /// One per-offset operation in a mixed acknowledgement batch.
@@ -59,7 +59,7 @@ impl AcquisitionState {
             first,
             last,
             actions.len(),
-            |live| actions[live].iter().copied(),
+            |live| actions.iter().skip(live.start).take(live.len()).copied(),
             max_attempts,
         )
     }
@@ -99,7 +99,7 @@ impl AcquisitionState {
             return Err(INVALID_REQUEST);
         }
 
-        let old_batches = std::mem::take(&mut self.batches);
+        let old_batches = mem::take(&mut self.batches);
         let mut batches = Vec::with_capacity(old_batches.len());
         let mut archive = super::dlq::ArchiveSink {
             dlq_enabled: self.dlq_enabled,
@@ -123,7 +123,16 @@ impl AcquisitionState {
             let mut offset = batch.first_offset.max(bounds.first);
             let batch_last = batch.last_offset.min(bounds.last);
             while offset <= batch_last {
-                let (action, same) = action_run.expect("the acquired range has validated actions");
+                // The action count matches the range, checked above, so a
+                // run is left for every offset. Without one, the rest of the
+                // batch stays as it is.
+                let Some((action, same)) = action_run else {
+                    let mut rest = batch.clone();
+                    rest.first_offset = offset;
+                    rest.last_offset = batch_last;
+                    batches.push(rest);
+                    break;
+                };
                 let run_last = Offset(
                     offset
                         .0
@@ -156,8 +165,9 @@ impl AcquisitionState {
                     AckAction::Renew { deadline } => run.lock_deadline = Some(deadline),
                 }
                 batches.push(run);
-                let consumed = usize::try_from(run_last.0 - offset.0 + 1)
-                    .expect("the action run length fits usize");
+                // `run_last` is at most `same - 1` past `offset`.
+                let consumed =
+                    usize::try_from(run_last.0 - offset.0 + 1).map_or(same, |run| run.min(same));
                 action_run = if consumed == same {
                     next_action_run(&mut actions)
                 } else {

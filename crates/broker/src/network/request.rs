@@ -6,11 +6,13 @@ use {
         handlers::{ApiKeyCode, ApiVersion, CorrelationId},
     },
     bytes::Buf,
-    krabka_protocol::primitives::string_bytes_borrowed::get_nullable_string_borrowed,
+    krabka_protocol::{
+        primitives::string_bytes_borrowed::get_nullable_string_borrowed, tagged_fields,
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ParsedRequest<'a> {
+pub struct ParsedRequest<'a> {
     pub api_key: ApiKeyCode,
     pub api_version: ApiVersion,
     pub correlation_id: CorrelationId,
@@ -19,10 +21,7 @@ pub(crate) struct ParsedRequest<'a> {
     pub client_id: Option<&'a str>,
 }
 
-pub(crate) fn parse_request<F>(
-    frame: &[u8],
-    flexible_for: F,
-) -> Result<ParsedRequest<'_>, BrokerError>
+pub fn parse_request<F>(frame: &[u8], flexible_for: F) -> Result<ParsedRequest<'_>, BrokerError>
 where
     F: Fn(ApiKeyCode, ApiVersion) -> bool,
 {
@@ -39,7 +38,7 @@ where
     let client_id = get_nullable_string_borrowed(&mut cur)?;
 
     if body_flexible {
-        krabka_protocol::tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
+        tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
     }
 
     Ok(ParsedRequest {
@@ -52,11 +51,11 @@ where
     })
 }
 
-pub(crate) fn peek_api_key(frame: &[u8]) -> Result<ApiKeyCode, BrokerError> {
-    if frame.len() < 2 {
-        return Err(protocol_invalid("request frame < 2 bytes"));
+pub fn peek_api_key(frame: &[u8]) -> Result<ApiKeyCode, BrokerError> {
+    match frame {
+        [high, low, ..] => Ok(i16::from_be_bytes([*high, *low])),
+        _ => Err(protocol_invalid("request frame < 2 bytes")),
     }
-    Ok(i16::from_be_bytes([frame[0], frame[1]]))
 }
 
 fn protocol_invalid(message: &'static str) -> BrokerError {

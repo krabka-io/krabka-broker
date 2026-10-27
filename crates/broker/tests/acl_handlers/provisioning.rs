@@ -160,10 +160,10 @@ async fn delete_acls_removes_matching() {
     let delete_req = DeleteAclsRequest {
         filters: vec![DeleteAclsFilter {
             resource_type_filter: RESOURCE_TYPE_TOPIC,
-            resource_name_filter: Some("foo".to_string()),
+            resource_name_filter: Some("foo".to_owned()),
             pattern_type_filter: PATTERN_TYPE_LITERAL,
-            principal_filter: Some("User:alice".to_string()),
-            host_filter: Some("*".to_string()),
+            principal_filter: Some("User:alice".to_owned()),
+            host_filter: Some("*".to_owned()),
             operation: OPERATION_READ,
             permission_type: PERMISSION_ALLOW,
             ..Default::default()
@@ -227,7 +227,7 @@ async fn delete_acls_removes_matching() {
     assert!(
         surviving[0]
             == SurvivingBinding {
-                resource_name: "bar".to_string(),
+                resource_name: "bar".to_owned(),
                 operation: OPERATION_WRITE,
                 permission_type: PERMISSION_ALLOW,
             },

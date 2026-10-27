@@ -1,4 +1,5 @@
 //! Both native headers consume the same exhaustive mutation inventory.
+#![cfg(test)]
 
 #[derive(Clone, Copy)]
 enum Kind {

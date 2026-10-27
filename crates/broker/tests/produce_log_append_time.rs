@@ -25,6 +25,7 @@
 //! That is an assertion on the value, not on how long the test took: a
 //! hardcoded constant, a producer timestamp echoed back, and the `-1` sentinel
 //! all fail it.
+#![cfg(test)]
 
 use {
     crate::support::{

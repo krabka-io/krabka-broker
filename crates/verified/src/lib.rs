@@ -28,7 +28,10 @@ pub mod broker;
 pub mod chain;
 pub mod checkpoint;
 pub mod compaction;
-#[cfg(any(creusot, test))]
+// Split so that clippy's test exemptions see the theorems as test code.
+#[cfg(test)]
+mod composition;
+#[cfg(all(creusot, not(test)))]
 mod composition;
 pub mod consensus;
 pub mod delegation_token;

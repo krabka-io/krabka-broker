@@ -63,7 +63,7 @@ fn shutdown_message(meta: &TokenStream, item: &TokenStream) -> Result<LitStr, Pa
     Ok(LitStr::new(&options.shutdown_message, metadata.span()))
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

@@ -20,6 +20,7 @@ use {
     krabka_protocol::owned::delete_acls_response::{
         DeleteAclsFilterResult, DeleteAclsMatchingAcl, DeleteAclsResponse,
     },
+    std::fmt,
 };
 
 /// The echo of one ACL a filter removed.
@@ -63,7 +64,7 @@ pub(super) fn delete_acls_response(
     }
 }
 
-pub(super) fn apply_submit_error<E: std::fmt::Display>(
+pub(super) fn apply_submit_error<E: fmt::Display>(
     filter_results: &mut [DeleteAclsFilterResult],
     err: E,
 ) {

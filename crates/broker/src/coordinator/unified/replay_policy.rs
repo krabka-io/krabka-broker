@@ -18,15 +18,15 @@ use crate::error::BrokerError;
 
 /// Kafka's `ConsumerGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`, which the
 /// tombstone of a member's current assignment leaves on the member.
-pub(crate) const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
+pub const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
 /// The assignment epoch that the tombstone of the target assignment metadata
 /// leaves on a group, and that the group tombstone requires.
-pub(crate) const DELETED_ASSIGNMENT_EPOCH: i32 = -1;
+pub const DELETED_ASSIGNMENT_EPOCH: i32 = -1;
 
 /// The type of a group that replays records of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ModernGroupType {
+pub enum ModernGroupType {
     Consumer,
     Share,
     Streams,
@@ -34,7 +34,7 @@ pub(crate) enum ModernGroupType {
 
 /// A group that the replay already holds under the id of a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ExistingGroup {
+pub enum ExistingGroup {
     /// A classic group. It is simple when it has no protocol type and no
     /// member: Kafka's `ClassicGroup.isSimpleGroup`.
     Classic {
@@ -45,7 +45,7 @@ pub(crate) enum ExistingGroup {
 
 /// The outcome of Kafka's `getOrMaybeCreatePersisted*Group`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum GroupLookup {
+pub enum GroupLookup {
     /// No group, and the record does not create one: Kafka's
     /// `GroupIdNotFoundException`, which the replay of a tombstone catches.
     Absent,
@@ -66,7 +66,7 @@ fn illegal_state(message: String) -> BrokerError { BrokerError::Startup(message)
 ///
 /// Returns Kafka's `IllegalStateException` message when the id belongs to a
 /// group of another type that the wanted type does not replace.
-pub(crate) fn persisted_group(
+pub fn persisted_group(
     group_id: &str,
     wanted: ModernGroupType,
     existing: Option<ExistingGroup>,
@@ -90,7 +90,7 @@ pub(crate) fn persisted_group(
 }
 
 /// Look up a persisted group and initialize its seed when Kafka creates it.
-pub(crate) fn persisted_group_with_create(
+pub fn persisted_group_with_create(
     group_id: &str,
     wanted: ModernGroupType,
     existing: Option<ExistingGroup>,
@@ -127,7 +127,7 @@ fn current_assignment_record(group: ModernGroupType) -> &'static str {
 ///
 /// Returns Kafka's `IllegalStateException` message when the member has
 /// another epoch or still has a target assignment.
-pub(crate) fn member_tombstone(
+pub fn member_tombstone(
     group: ModernGroupType,
     member_id: &str,
     member_epoch: Option<i32>,
@@ -175,7 +175,7 @@ pub(crate) fn member_tombstone(
 ///
 /// Returns Kafka's `IllegalStateException` message when `targets` members
 /// still have one.
-pub(crate) fn target_metadata_tombstone(group_id: &str, targets: usize) -> Result<(), BrokerError> {
+pub fn target_metadata_tombstone(group_id: &str, targets: usize) -> Result<(), BrokerError> {
     if targets == 0 {
         Ok(())
     } else {
@@ -193,7 +193,7 @@ pub(crate) fn target_metadata_tombstone(group_id: &str, targets: usize) -> Resul
 /// # Errors
 ///
 /// Returns that exception's message.
-pub(crate) fn target_metadata(
+pub fn target_metadata(
     assignment_epoch: i32,
     assignment_timestamp_ms: i64,
 ) -> Result<(), BrokerError> {
@@ -218,7 +218,7 @@ pub(crate) fn target_metadata(
 ///
 /// Returns Kafka's `IllegalStateException` message for the first check that
 /// fails.
-pub(crate) fn group_tombstone(
+pub fn group_tombstone(
     group: ModernGroupType,
     group_id: &str,
     members: usize,

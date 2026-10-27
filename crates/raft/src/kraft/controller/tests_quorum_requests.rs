@@ -26,6 +26,7 @@ use {
             vote_response::{self as vote_resp, VoteResponse},
         },
         primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
     },
 };
 
@@ -750,8 +751,7 @@ fn fetch_snapshot_answer(
         };
         partition.size = size;
         partition.position = position;
-        partition.unaligned_records =
-            krabka_protocol::records::RecordsPayload::Raw(bytes::Bytes::from_static(bytes));
+        partition.unaligned_records = RecordsPayload::Raw(bytes::Bytes::from_static(bytes));
     }
     FetchSnapshotResponse {
         topics: vec![fs_resp::TopicSnapshot {

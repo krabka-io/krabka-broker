@@ -13,11 +13,13 @@
 //! leader. The fix wraps the forward in a KIP-590 `Envelope` carrying the
 //! caller's own principal, so the leader authorizes and answers under the
 //! identity that actually asked.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{
+        listeners,
         quorum::{follower_config, two_node_leader},
         sasl_client, shutdown_cluster, start_n_node_with,
     },
@@ -28,6 +30,7 @@ use {
     },
     krabka_metadata::AclOperation,
     krabka_security::{ListenerProtocol, SaslMechanism},
+    std::sync::Arc,
 };
 
 const ALICE: &str = "alice";
@@ -75,7 +78,7 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
         // Replace the default plaintext data listener with SASL/PLAIN, bound
         // to the same address `start_n_node_with` already reserved, so alice
         // authenticates as herself rather than as `ANONYMOUS`.
-        cfg.listeners = vec![crate::support::listeners::listener(
+        cfg.listeners = vec![listeners::listener(
             "SASL_PLAINTEXT",
             cfg.listen_addr,
             ListenerProtocol::SaslPlaintext,
@@ -84,7 +87,7 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
         cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         cfg.plain_credentials
             .insert(ALICE.to_owned(), ALICE_PASSWORD.to_owned());
-        cfg.authorizer = std::sync::Arc::new(ClusterActionForEveryoneDescribeForAlice);
+        cfg.authorizer = Arc::new(ClusterActionForEveryoneDescribeForAlice);
     })
     .await
     .expect("2-node cluster");

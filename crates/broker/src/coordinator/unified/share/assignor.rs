@@ -68,15 +68,6 @@ impl ShareGroupAssignor {
             .iter()
             .map(|m| m.subscribed_topic_ids.iter().map(|t| t.0).collect())
             .collect();
-        let old: Vec<MemberAssignment> = members
-            .iter()
-            .map(|m| {
-                m.assigned_partitions
-                    .iter()
-                    .map(|(t, parts)| (t.0, parts.iter().copied().collect()))
-                    .collect()
-            })
-            .collect();
         let target_partitions = |topic: TopicKey| -> Vec<i32> {
             let count = topics
                 .partitions_per_topic
@@ -94,9 +85,14 @@ impl ShareGroupAssignor {
         // assignable; that cannot happen in Kafka, where a topic never shrinks
         // and an initialized partition stays initialized, but here it would
         // hand out a partition the image no longer holds.
-        let old: Vec<MemberAssignment> = old
-            .into_iter()
-            .map(|mut assignment| {
+        let old: Vec<MemberAssignment> = members
+            .iter()
+            .map(|m| {
+                let mut assignment: MemberAssignment = m
+                    .assigned_partitions
+                    .iter()
+                    .map(|(t, parts)| (t.0, parts.iter().copied().collect()))
+                    .collect();
                 for (topic, parts) in &mut assignment {
                     let targets = target_partitions(*topic);
                     parts.retain(|p| targets.contains(p));
@@ -105,7 +101,11 @@ impl ShareGroupAssignor {
             })
             .collect();
         let assignments = match group.subscription_type {
-            SubscriptionType::Homogeneous => homogeneous(&subscriptions[0], old, target_partitions),
+            SubscriptionType::Homogeneous => {
+                subscriptions.first().map_or_else(Vec::new, |subscribed| {
+                    homogeneous(subscribed, old, target_partitions)
+                })
+            }
             SubscriptionType::Heterogeneous => {
                 heterogeneous(&subscriptions, old, target_partitions)
             }
@@ -146,13 +146,14 @@ fn desired_count(index: usize, members: usize, sharing: usize, partitions: usize
 /// The next member after `cursor` in `set`, which is Java's
 /// `Iterator.next` over a set that the loop removes from as it goes.
 fn next_after(set: &BTreeSet<usize>, cursor: Option<usize>) -> Option<usize> {
-    match cursor {
-        None => set.iter().next().copied(),
-        Some(c) => set
-            .range((Bound::Excluded(c), Bound::Unbounded))
-            .next()
-            .copied(),
-    }
+    cursor.map_or_else(
+        || set.iter().next().copied(),
+        |c| {
+            set.range((Bound::Excluded(c), Bound::Unbounded))
+                .next()
+                .copied()
+        },
+    )
 }
 
 /// The next unfilled member for `assignRemainingPartitions`: the one after
@@ -228,7 +229,11 @@ fn homogeneous(
     let mut by_member: Vec<BTreeSet<TopicPartition>> = vec![BTreeSet::new(); member_count];
     let mut unfilled: BTreeSet<usize> = BTreeSet::new();
     let mut overfilled: BTreeSet<usize> = BTreeSet::new();
-    for (member, member_assignment) in assignment.iter_mut().enumerate() {
+    for (member, (member_assignment, (held, &want))) in assignment
+        .iter_mut()
+        .zip(by_member.iter_mut().zip(&desired))
+        .enumerate()
+    {
         member_assignment.retain(|topic, _| subscribed.contains(topic));
         for (&topic, parts) in member_assignment.iter() {
             for &p in parts {
@@ -237,24 +242,31 @@ fn homogeneous(
                     partition: p,
                 };
                 by_partition.entry(tp).or_default().insert(member);
-                by_member[member].insert(tp);
+                held.insert(tp);
             }
         }
-        let count = by_member[member].len();
-        if count < desired[member] {
+        let count = held.len();
+        if count < want {
             unfilled.insert(member);
-        } else if count > desired[member] {
+        } else if count > want {
             overfilled.insert(member);
         }
     }
 
     // revokeOverfilledMembers.
     for &member in &overfilled {
-        while by_member[member].len() > desired[member] {
-            let Some(tp) = by_member[member].pop_first() else {
+        let (Some(held), Some(&want), Some(member_assignment)) = (
+            by_member.get_mut(member),
+            desired.get(member),
+            assignment.get_mut(member),
+        ) else {
+            continue;
+        };
+        while held.len() > want {
+            let Some(tp) = held.pop_first() else {
                 break;
             };
-            remove_partition(&mut assignment[member], tp);
+            remove_partition(member_assignment, tp);
             if let Some(holders) = by_partition.get_mut(&tp) {
                 holders.remove(&member);
             }
@@ -265,9 +277,15 @@ fn homogeneous(
     revoke_overshared_partitions(
         &mut by_partition,
         sharing,
-        |member, tp| remove_partition(&mut assignment[member], tp),
         |member, tp| {
-            by_member[member].remove(&tp);
+            assignment
+                .get_mut(member)
+                .is_some_and(|member_assignment| remove_partition(member_assignment, tp))
+        },
+        |member, tp| {
+            if let Some(held) = by_member.get_mut(member) {
+                held.remove(&tp);
+            }
             unfilled.insert(member);
         },
     );
@@ -277,12 +295,17 @@ fn homogeneous(
         by_partition.entry(tp).or_default();
     }
     assign_remaining(&by_partition, sharing, &mut unfilled, |member, tp| {
-        assignment[member]
-            .entry(tp.topic)
-            .or_default()
-            .insert(tp.partition);
-        by_member[member].insert(tp);
-        by_member[member].len() >= desired[member]
+        if let Some(member_assignment) = assignment.get_mut(member) {
+            member_assignment
+                .entry(tp.topic)
+                .or_default()
+                .insert(tp.partition);
+        }
+        let Some(held) = by_member.get_mut(member) else {
+            return true;
+        };
+        held.insert(tp);
+        desired.get(member).is_none_or(|&want| held.len() >= want)
     });
     assignment
 }
@@ -306,14 +329,21 @@ fn heterogeneous(
     }
     for &topic in &subscribed {
         let targets = target_partitions(topic);
-        let subscribers: Vec<usize> = (0..member_count)
-            .filter(|&m| subscriptions[m].contains(&topic))
+        let subscribers: Vec<usize> = subscriptions
+            .iter()
+            .take(member_count)
+            .enumerate()
+            .filter(|(_, subscription)| subscription.contains(&topic))
+            .map(|(member, _)| member)
             .collect();
         let sharing = desired_sharing(subscribers.len(), targets.len());
         let mut desired = vec![0; member_count];
         for (i, &member) in subscribers.iter().enumerate() {
-            desired[member] = desired_count(i, subscribers.len(), sharing, targets.len());
+            if let Some(want) = desired.get_mut(member) {
+                *want = desired_count(i, subscribers.len(), sharing, targets.len());
+            }
         }
+        let desired_of = |member: usize| desired.get(member).copied().unwrap_or(0);
 
         // revokeUnassignablePartitions.
         let mut by_partition: BTreeMap<i32, BTreeSet<usize>> = BTreeMap::new();
@@ -327,17 +357,19 @@ fn heterogeneous(
 
         // revokeOverfilledMembers.
         for (&member, held) in &mut by_member {
-            while held.len() > desired[member] {
+            while held.len() > desired_of(member) {
                 let Some(p) = held.pop_first() else {
                     break;
                 };
                 if let Some(holders) = by_partition.get_mut(&p) {
                     holders.remove(&member);
                 }
-                remove_partition(&mut assignment[member], TopicPartition {
-                    topic,
-                    partition: p,
-                });
+                if let Some(member_assignment) = assignment.get_mut(member) {
+                    remove_partition(member_assignment, TopicPartition {
+                        topic,
+                        partition: p,
+                    });
+                }
             }
         }
 
@@ -346,7 +378,9 @@ fn heterogeneous(
             &mut by_partition,
             sharing,
             |member, partition| {
-                remove_partition(&mut assignment[member], TopicPartition { topic, partition })
+                assignment.get_mut(member).is_some_and(|member_assignment| {
+                    remove_partition(member_assignment, TopicPartition { topic, partition })
+                })
             },
             |member, partition| {
                 if let Some(held) = by_member.get_mut(&member) {
@@ -366,12 +400,14 @@ fn heterogeneous(
         let mut unfilled: BTreeSet<usize> = subscribers
             .iter()
             .copied()
-            .filter(|&m| held(&by_member, m) < desired[m])
+            .filter(|&m| held(&by_member, m) < desired_of(m))
             .collect();
         assign_remaining(&by_partition, sharing, &mut unfilled, |member, p| {
-            assignment[member].entry(topic).or_default().insert(p);
+            if let Some(member_assignment) = assignment.get_mut(member) {
+                member_assignment.entry(topic).or_default().insert(p);
+            }
             by_member.entry(member).or_default().insert(p);
-            held(&by_member, member) >= desired[member]
+            held(&by_member, member) >= desired_of(member)
         });
     }
     assignment

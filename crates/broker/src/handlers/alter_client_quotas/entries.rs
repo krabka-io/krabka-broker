@@ -77,7 +77,7 @@ struct QuotaChange<'a> {
 const INT_MAX: f64 = 2_147_483_647.0;
 /// `Long.MAX_VALUE` as Java widens it to a double (2^63), the bound of a
 /// `LONG` quota.
-const LONG_MAX: f64 = 9_223_372_036_854_775_808.0;
+const LONG_MAX: f64 = 9.223_372_036_854_776e18;
 
 /// Quota entity type: authenticated user principal (KIP-257).
 const ENTITY_TYPE_USER: &str = "user";
@@ -87,25 +87,25 @@ const ENTITY_TYPE_CLIENT_ID: &str = "client-id";
 const ENTITY_TYPE_IP: &str = "ip";
 
 /// The wire `(code, message)` pair of a rejected entity.
-pub(crate) type EntityError = (i16, String);
+pub type EntityError = (i16, String);
 
 /// The outcome of one `AlterClientQuotas` request.
 #[derive(Debug, PartialEq)]
-pub(crate) struct Alteration {
+pub struct Alteration {
     /// One result per distinct entity, in the order each entity first
     /// appears. Kafka keys its result map by entity, so a repeated entity
     /// answers one row.
-    pub(crate) results: Vec<(EntityKey, Result<(), EntityError>)>,
+    pub results: Vec<(EntityKey, Result<(), EntityError>)>,
     /// The records to write. They are empty for a request that changes
     /// nothing.
-    pub(crate) records: Vec<MetadataRecord>,
+    pub records: Vec<MetadataRecord>,
 }
 
 /// The entity an entry names, sorted by entity type.
 ///
 /// Kafka's `AlterClientQuotasRequest.entries` builds a map from type to
 /// name, so an entry that repeats a type keeps its last name.
-pub(crate) fn entry_entity(entry: &EntryData) -> EntityKey {
+pub fn entry_entity(entry: &EntryData) -> EntityKey {
     let mut by_type: BTreeMap<&str, Option<&str>> = BTreeMap::new();
     for e in &entry.entity {
         by_type.insert(e.entity_type.as_str(), e.entity_name.as_deref());
@@ -138,7 +138,7 @@ fn invalid(message: String) -> EntityError { (INVALID_REQUEST, message) }
 /// record only for a key that is set, and a set writes one only for a value
 /// that changes. `ip_is_valid` answers Kafka's `InetAddress.getByName` check
 /// for a named `ip` entity.
-pub(crate) fn alter_client_quotas(
+pub fn alter_client_quotas(
     entries: &[EntryData],
     current: &HashMap<EntityKey, BTreeMap<String, f64>>,
     ip_is_valid: &dyn Fn(&str) -> bool,
@@ -178,9 +178,10 @@ pub(crate) fn alter_client_quotas(
                 &mut records,
             )
         };
-        match slot {
-            Some(index) => results[index].1 = outcome,
-            None => results.push((entity, outcome)),
+        if let Some(entry) = slot.and_then(|index| results.get_mut(index)) {
+            entry.1 = outcome;
+        } else {
+            results.push((entity, outcome));
         }
     }
     Alteration { results, records }
@@ -320,6 +321,7 @@ mod tests {
             EntityPart, QuotaOp, entry, op, op_remove, part,
         },
         assert2::check,
+        std::net::IpAddr,
     };
 
     type Entity = Vec<EntityPart<'static>>;
@@ -364,9 +366,7 @@ mod tests {
 
     /// Resolves IP literals and the name `localhost`, as the handler's
     /// resolver would.
-    fn resolver(name: &str) -> bool {
-        name.parse::<std::net::IpAddr>().is_ok() || name == "localhost"
-    }
+    fn resolver(name: &str) -> bool { name.parse::<IpAddr>().is_ok() || name == "localhost" }
 
     /// A case name, the request entries, and the whole expected outcome.
     struct CaseRow {

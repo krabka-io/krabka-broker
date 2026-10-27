@@ -1,4 +1,5 @@
 //! Opening a sealed segment through the public API.
+#![cfg(test)]
 
 use {
     assert2::assert,

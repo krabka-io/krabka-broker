@@ -133,7 +133,7 @@ pub(super) async fn check_objects(
             digests_match,
         },
     }) {
-        WormObjectSetDecision::Empty => Some("manifest names no segment objects".to_string()),
+        WormObjectSetDecision::Empty => Some("manifest names no segment objects".to_owned()),
         WormObjectSetDecision::DuplicateKey => Some(format!(
             "object `{}` is named more than once by the manifest",
             first_duplicate.unwrap_or_default()
@@ -171,7 +171,7 @@ async fn object_digest(
 ) -> Result<Sha256Digest, WormError> {
     let path = Path::from(key);
     let options = GetOptions {
-        version: version.map(ToString::to_string),
+        version: version.map(str::to_owned),
         ..GetOptions::default()
     };
     let fetch = store
@@ -319,7 +319,7 @@ mod tests {
         let key = format!("{PREFIX}/gone.log");
         let entry = put_entry(&ops, ".log", &key, b"body").await;
         let missing = ObjectEntry {
-            version_id: Some("v-never-written".to_string()),
+            version_id: Some("v-never-written".to_owned()),
             ..entry
         };
 

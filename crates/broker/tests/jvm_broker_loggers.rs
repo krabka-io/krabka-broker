@@ -25,12 +25,14 @@
 //! 4. `--alter --delete-config` puts it back and `--describe` confirms.
 //!
 //! Gated `#[ignore]` (requires Docker); run with `--ignored`.
+#![cfg(test)]
 
 mod support;
 
 use {
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId},
+    std::{path::Path, process::Output, sync::OnceLock},
 };
 
 // Kafka 4.3.1 is the compatibility oracle: it is the released tool whose
@@ -51,7 +53,7 @@ const LOGGER: &str = "krabka_broker";
 /// Ports are allocated rather than fixed so this suite can run beside the
 /// other container suites instead of contending for 9092.
 fn listeners() -> &'static support::JvmListeners {
-    static LISTENERS: std::sync::OnceLock<support::JvmListeners> = std::sync::OnceLock::new();
+    static LISTENERS: OnceLock<support::JvmListeners> = OnceLock::new();
     LISTENERS.get_or_init(support::JvmListeners::allocate)
 }
 
@@ -84,7 +86,7 @@ async fn start_broker() -> StartedBroker {
     config.heartbeat_interval = krabka_units::millis(3_000);
     config.heartbeat_timeout = krabka_units::millis(9_000);
     let handle = Broker::start(config).await.expect("start broker");
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     StartedBroker {
         broker: handle,
@@ -101,7 +103,7 @@ async fn start_broker() -> StartedBroker {
 /// indistinguishable from a real routing failure. Widening the budget is what
 /// keeps a real failure legible; a request that is actually refused still
 /// fails at once.
-fn command_config() -> &'static std::path::Path { support::jvm_admin_config() }
+fn command_config() -> &'static Path { support::jvm_admin_config() }
 
 /// Run `kafka-configs.sh --entity-type broker-loggers --entity-name 1 <args>`
 /// in a throwaway container, returning the output without asserting on the
@@ -110,7 +112,7 @@ fn command_config() -> &'static std::path::Path { support::jvm_admin_config() }
 /// The wait runs on the blocking pool: a CLI container takes tens of seconds,
 /// and blocking a runtime worker for that long starves the broker's own
 /// heartbeat.
-async fn kafka_configs(args: &[&str]) -> std::process::Output {
+async fn kafka_configs(args: &[&str]) -> Output {
     let mount = format!("{}:/krabka-config", command_config().display());
     let node = NODE_ID.to_string();
     let mut full = support::jvm_admin_args()
@@ -134,7 +136,7 @@ async fn kafka_configs(args: &[&str]) -> std::process::Output {
     out
 }
 
-fn combined(output: &std::process::Output) -> String { support::combined_output(output) }
+fn combined(output: &Output) -> String { support::combined_output(output) }
 
 /// The whole `broker-loggers` operator loop, driven by the real 4.3.1 tool.
 ///

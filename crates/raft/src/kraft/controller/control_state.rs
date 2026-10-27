@@ -10,30 +10,31 @@ use {
         voter_wire::{from_wire, record, to_wire},
     },
     krabka_ids::Offset,
-    krabka_metadata::{KRaftVersionRecord, MetadataRecord, VoterSet, VotersRecord},
+    krabka_metadata::{
+        KRaftVersionRecord, MetadataRecord, VoterSet, VotersRecord,
+        voters::{KRaftVersionRange, Voter},
+    },
     krabka_protocol::{
         owned::voters_record::VotersRecord as WireVotersRecord,
         records::{RecordBatch, metadata::control::ControlRecord},
     },
-    std::collections::BTreeMap,
+    krabka_verified::raft,
+    std::collections::{BTreeMap, BTreeSet},
     uuid::Uuid,
 };
 
 fn history_value_before<T>(history: &BTreeMap<i64, T>, frontier: i64) -> Option<&T> {
     let offsets: Vec<i64> = history.keys().copied().collect();
-    let prefix_len = krabka_verified::raft::control_history_frontier(&offsets, frontier);
-    if prefix_len == 0 {
-        None
-    } else {
-        history.get(&offsets[prefix_len - 1])
-    }
+    let prefix_len = raft::control_history_frontier(&offsets, frontier);
+    let last = offsets.get(prefix_len.checked_sub(1)?)?;
+    history.get(last)
 }
 
 fn truncate_history<T>(history: &mut BTreeMap<i64, T>, frontier: i64) {
     let offsets: Vec<i64> = history.keys().copied().collect();
-    let prefix_len = krabka_verified::raft::control_history_frontier(&offsets, frontier);
-    if prefix_len < offsets.len() {
-        drop(history.split_off(&offsets[prefix_len]));
+    let prefix_len = raft::control_history_frontier(&offsets, frontier);
+    if let Some(first_dropped) = offsets.get(prefix_len) {
+        drop(history.split_off(first_dropped));
     }
 }
 
@@ -103,7 +104,7 @@ impl KraftControlState {
     }
 }
 
-pub fn voter_supports_version(voter: &krabka_metadata::voters::Voter, version: u16) -> bool {
+pub fn voter_supports_version(voter: &Voter, version: u16) -> bool {
     voter.kraft_version.min <= version && version <= voter.kraft_version.max
 }
 
@@ -123,7 +124,7 @@ pub fn voter_set_to_wire(voters: &VoterSet) -> WireVotersRecord {
 }
 
 pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftError> {
-    let mut voter_ids = std::collections::BTreeSet::new();
+    let mut voter_ids = BTreeSet::new();
     let voter_ids_unique = record
         .voters
         .iter()
@@ -157,7 +158,7 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
         .map(|voter| {
             let directory_id = Uuid::from_bytes(voter.voter_directory_id.0);
             let directory_id_exact = directory_id.as_bytes() == &voter.voter_directory_id.0;
-            let mut endpoint_names = std::collections::BTreeSet::new();
+            let mut endpoint_names = BTreeSet::new();
             let endpoints_valid = voter.endpoints.iter().all(|endpoint| {
                 !endpoint.name.is_empty()
                     && !endpoint.host.is_empty()
@@ -194,17 +195,20 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
                 }
                 krabka_verified::VoterWireDecision::Accept => {}
             }
-            let id = u64::try_from(voter.voter_id)
-                .expect("voter wire admission proves the voter id is nonnegative");
+            let id = u64::try_from(voter.voter_id).map_err(|_| {
+                RaftError::InvalidVoterUpdate("voter id must be nonnegative".into())
+            })?;
+            let invalid_range =
+                |_| RaftError::InvalidVoterUpdate("invalid kraft.version range in VotersRecord".into());
             let min = u16::try_from(voter.k_raft_version_feature.min_supported_version)
-                .expect("voter wire admission proves the minimum version is nonnegative");
+                .map_err(invalid_range)?;
             let max = u16::try_from(voter.k_raft_version_feature.max_supported_version)
-                .expect("voter wire admission proves the maximum version is nonnegative");
+                .map_err(invalid_range)?;
             Ok(from_wire(
                 voter,
                 NodeId(id),
                 directory_id,
-                krabka_metadata::voters::KRaftVersionRange { min, max },
+                KRaftVersionRange { min, max },
             ))
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
@@ -213,9 +217,11 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
 
 /// The image records one committed control batch carries, in log order: each
 /// KIP-853 `KRaftVersionRecord` as a `V1KRaftVersion` and each `VotersRecord`
-/// as a `V1Voters`. The KIP-595 `LeaderChange` marker and the snapshot
-/// framing records change no image, so they yield nothing, and so does a batch
-/// that is not a control batch.
+/// as a `V1Voters`.
+///
+/// The KIP-595 `LeaderChange` marker and the snapshot framing records change no
+/// image, so they yield nothing, and so does a batch that is not a control
+/// batch.
 ///
 /// A controller folds these into its image when it commits them. A broker-only
 /// observer reads only committed records, and folds them in as it reads them,
@@ -261,19 +267,22 @@ pub fn control_batch_image_records(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        krabka_metadata::voters::{KRaftVersionRange, Voter, VoterEndpoint},
+    };
 
-    fn versioned_voter() -> krabka_metadata::voters::Voter {
-        let ep = krabka_metadata::voters::VoterEndpoint {
+    fn versioned_voter() -> Voter {
+        let ep = VoterEndpoint {
             name: "CONTROLLER".into(),
             host: "127.0.0.1".into(),
             port: 9092,
         };
-        krabka_metadata::voters::Voter {
+        Voter {
             id: NodeId(1),
             directory_id: uuid::Uuid::nil(),
             endpoints: vec![ep],
-            kraft_version: krabka_metadata::voters::KRaftVersionRange { min: 2, max: 4 },
+            kraft_version: KRaftVersionRange { min: 2, max: 4 },
         }
     }
 

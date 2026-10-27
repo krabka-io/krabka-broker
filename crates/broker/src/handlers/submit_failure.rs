@@ -14,7 +14,7 @@ use {crate::codes, krabka_raft::RaftError};
 ///
 /// Every other failure answers `otherwise`, the code that the handler uses for
 /// a failed submit.
-pub(crate) fn submit_failure_code(error: &RaftError, otherwise: i16) -> i16 {
+pub fn submit_failure_code(error: &RaftError, otherwise: i16) -> i16 {
     match error {
         RaftError::UncommittedTail => codes::NOT_CONTROLLER,
         _ => otherwise,

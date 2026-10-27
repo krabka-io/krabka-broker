@@ -5,7 +5,7 @@ use {
     bytes::{Bytes, BytesMut},
 };
 
-pub(crate) fn encode_value<W>(write: W) -> Bytes
+pub fn encode_value<W>(write: W) -> Bytes
 where
     W: FnOnce(&mut BytesMut),
 {
@@ -15,7 +15,7 @@ where
     framed.freeze()
 }
 
-pub(crate) fn decode_value<T, R>(
+pub fn decode_value<T, R>(
     mut framed: &[u8],
     unknown_version: &'static str,
     read: R,
@@ -35,11 +35,11 @@ where
     }
 }
 
-pub(crate) mod coordinator {
-    pub(crate) mod unified {
-        pub(crate) mod persistence {
-            pub(crate) mod flex {
-                pub(crate) use crate::framing::{decode_value, encode_value};
+pub mod coordinator {
+    pub mod unified {
+        pub mod persistence {
+            pub mod flex {
+                pub use crate::framing::{decode_value, encode_value};
             }
         }
     }

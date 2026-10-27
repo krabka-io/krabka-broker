@@ -15,14 +15,15 @@ use {
         MetadataRecord,
     },
     krabka_units::minutes,
+    std::slice,
     uuid::Uuid,
 };
 
-pub(crate) const CREATED_MS: i64 = 1_770_000_000_000;
-pub(crate) const EXPIRES_MS: i64 = 1_770_000_180_000;
-pub(crate) const NOW_MS: i64 = 1_770_000_060_000;
+pub const CREATED_MS: i64 = 1_770_000_000_000;
+pub const EXPIRES_MS: i64 = 1_770_000_180_000;
+pub const NOW_MS: i64 = 1_770_000_060_000;
 
-pub(crate) fn config() -> BreakGlassConfig {
+pub fn config() -> BreakGlassConfig {
     BreakGlassConfig {
         approvers: ["User:alice", "User:bob", "User:carol"]
             .map(str::to_owned)
@@ -34,7 +35,7 @@ pub(crate) fn config() -> BreakGlassConfig {
     }
 }
 
-pub(crate) fn approval(principal: &str) -> BreakGlassApproval {
+pub fn approval(principal: &str) -> BreakGlassApproval {
     BreakGlassApproval {
         principal: principal.to_owned(),
         approved_at_ms: CREATED_MS + 1_000,
@@ -43,7 +44,7 @@ pub(crate) fn approval(principal: &str) -> BreakGlassApproval {
     }
 }
 
-pub(crate) fn signed_approval(principal: &str, key_id: &str) -> BreakGlassApproval {
+pub fn signed_approval(principal: &str, key_id: &str) -> BreakGlassApproval {
     BreakGlassApproval {
         key_id: key_id.to_owned(),
         signature: vec![7; 64],
@@ -51,11 +52,7 @@ pub(crate) fn signed_approval(principal: &str, key_id: &str) -> BreakGlassApprov
     }
 }
 
-pub(crate) fn proposal(
-    id: u128,
-    action: BreakGlassAction,
-    target: &str,
-) -> BreakGlassProposalRecord {
+pub fn proposal(id: u128, action: BreakGlassAction, target: &str) -> BreakGlassProposalRecord {
     BreakGlassProposalRecord {
         proposal_id: Uuid::from_u128(id),
         action,
@@ -71,8 +68,7 @@ pub(crate) fn proposal(
 }
 
 /// The id [`approved_proposal`] gives its proposal.
-pub(crate) const APPROVED_PROPOSAL_ID: Uuid =
-    Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+pub const APPROVED_PROPOSAL_ID: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 
 /// A proposal for `action` on `target` that two people approved, and that has
 /// not expired against the wall clock a gated handler reads.
@@ -82,10 +78,7 @@ pub(crate) const APPROVED_PROPOSAL_ID: Uuid =
 /// that passes a fixed `now_ms` of its own still finds it usable, because the
 /// gate reads only the expiry and the expiry lies ten minutes past the wall
 /// clock.
-pub(crate) fn approved_proposal(
-    action: BreakGlassAction,
-    target: &str,
-) -> BreakGlassProposalRecord {
+pub fn approved_proposal(action: BreakGlassAction, target: &str) -> BreakGlassProposalRecord {
     let now = now_ms();
     BreakGlassProposalRecord {
         proposal_id: APPROVED_PROPOSAL_ID,
@@ -101,7 +94,7 @@ pub(crate) fn approved_proposal(
     }
 }
 
-pub(crate) fn image_of(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
+pub fn image_of(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::nil());
     for proposal in proposals {
         image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
@@ -117,7 +110,7 @@ fn consumed_record(record: &MetadataRecord) -> &BreakGlassProposalRecord {
 #[test]
 fn an_approved_proposal_comes_back_stamped_consumed() {
     let approved = proposal(1, BreakGlassAction::DeleteTopic, "doomed");
-    let image = image_of(std::slice::from_ref(&approved));
+    let image = image_of(slice::from_ref(&approved));
 
     let record = authorize(
         &image,

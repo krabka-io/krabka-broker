@@ -87,7 +87,7 @@ pub(super) async fn start_coordinators(
     // `unstable.api.versions.enable` unlocks; 4.3.1 has none of them.
     share_coordinator_config.trunk_rules = matches!(
         config.features.unstable_api_versions,
-        crate::api_catalog::UnstableApiVersions::Enabled
+        UnstableApiVersions::Enabled
     );
     let share_coordinator = Arc::new(ShareCoordinator::new(
         config.node_id,
@@ -121,7 +121,7 @@ pub(super) async fn start_coordinators(
         Arc::clone(&share_persister),
         Arc::new((*config.share_group).clone()),
         config.share_session_cache_max_when_unlimited,
-        dead_letters.clone(),
+        Arc::<DlqWriter>::clone(&dead_letters),
     );
     share_partition_leaders.spawn_lock_sweeper();
     share_partition_leaders.spawn_share_version_watcher();

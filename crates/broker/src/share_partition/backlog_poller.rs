@@ -18,8 +18,10 @@ use {
         owned::{
             fetch_request::{FetchPartition, FetchRequest, FetchTopic},
             fetch_response::FetchResponse,
+            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+            list_offsets_response::ListOffsetsResponse,
         },
-        primitives::uuid::Uuid as WireUuid,
+        primitives::uuid::Uuid as ProtocolUuid,
     },
     krabka_security::ListenerProtocol,
     std::{
@@ -27,14 +29,15 @@ use {
         sync::Arc,
         time::Duration,
     },
+    tokio::{time, time::MissedTickBehavior},
     tokio_util::sync::CancellationToken,
 };
 
-pub(crate) fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
+pub fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
     krabka_verified::effective_share_backlog(hwm, spso, log_start)
 }
 
-pub(crate) struct BacklogPoller {
+pub struct BacklogPoller {
     pub node_id: NodeId,
     pub coordinator: Arc<GroupCoordinator>,
     pub metadata: Arc<dyn MetadataSource>,
@@ -51,8 +54,8 @@ pub(crate) struct BacklogPoller {
 impl BacklogPoller {
     pub(crate) fn spawn(self) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut interval = time::interval(self.period);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut last = HashMap::new();
             loop {
                 tokio::select! {
@@ -115,7 +118,7 @@ impl BacklogPoller {
                 for partition in partitions {
                     let spso = self
                         .persister
-                        .read_summary(&group_id, topic_id, partition)
+                        .read_state_summary(&group_id, topic_id, partition)
                         .await
                         .map_err(|error| error.to_string())?
                         .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
@@ -184,30 +187,25 @@ impl BacklogPoller {
             .topic(topic)
             .ok_or_else(|| format!("missing topic metadata for {topic}"))?
             .topic_id;
-        let latest = krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
+        let latest = ListOffsetsRequest {
             replica_id: -1,
             isolation_level: 1,
-            topics: vec![
-                krabka_protocol::owned::list_offsets_request::ListOffsetsTopic {
-                    name: topic.to_owned(),
-                    partitions: vec![
-                        krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
-                            partition_index: partition,
-                            current_leader_epoch: partition_metadata.leader_epoch.0,
-                            timestamp: -1,
-                            ..Default::default()
-                        },
-                    ],
+            topics: vec![ListOffsetsTopic {
+                name: topic.to_owned(),
+                partitions: vec![ListOffsetsPartition {
+                    partition_index: partition,
+                    current_leader_epoch: partition_metadata.leader_epoch.0,
+                    timestamp: -1,
                     ..Default::default()
-                },
-            ],
+                }],
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let latest_response: krabka_protocol::owned::list_offsets_response::ListOffsetsResponse =
-            connection
-                .send(latest)
-                .await
-                .map_err(|error| error.to_string())?;
+        let latest_response: ListOffsetsResponse = connection
+            .send(latest)
+            .await
+            .map_err(|error| error.to_string())?;
         let fetch_offset = latest_fetch_offset(&latest_response, topic, partition)?;
         let request = FetchRequest {
             replica_id: -1,
@@ -217,7 +215,7 @@ impl BacklogPoller {
             isolation_level: 1,
             topics: vec![FetchTopic {
                 topic: topic.to_owned(),
-                topic_id: WireUuid(*topic_id.as_bytes()),
+                topic_id: ProtocolUuid(*topic_id.as_bytes()),
                 partitions: vec![FetchPartition {
                     partition,
                     current_leader_epoch: partition_metadata.leader_epoch.0,
@@ -237,12 +235,17 @@ impl BacklogPoller {
             .await
             .map_err(|error| error.to_string())?;
         connection.close();
-        fetch_offsets(&response, topic, WireUuid(*topic_id.as_bytes()), partition)
+        fetch_offsets(
+            &response,
+            topic,
+            ProtocolUuid(*topic_id.as_bytes()),
+            partition,
+        )
     }
 }
 
 fn latest_fetch_offset(
-    response: &krabka_protocol::owned::list_offsets_response::ListOffsetsResponse,
+    response: &ListOffsetsResponse,
     topic: &str,
     partition: i32,
 ) -> Result<i64, String> {
@@ -261,9 +264,8 @@ fn latest_fetch_offset(
 }
 
 fn owns_group(image: &krabka_metadata::MetadataImage, node_id: NodeId, group_id: &str) -> bool {
-    let partition = partitioner::partition_for_group(image, group_id);
-    image
-        .partition(OFFSETS_TOPIC, partition)
+    partitioner::partition_for_group(image, group_id)
+        .and_then(|partition| image.partition(OFFSETS_TOPIC, partition))
         .is_some_and(|record| record.leader == node_id)
 }
 
@@ -277,7 +279,7 @@ struct PartitionOffsets {
 fn fetch_offsets(
     response: &FetchResponse,
     topic: &str,
-    topic_id: WireUuid,
+    topic_id: ProtocolUuid,
     partition: i32,
 ) -> Result<PartitionOffsets, String> {
     if response.error_code != codes::NONE {
@@ -375,7 +377,7 @@ mod tests {
                     ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
                 },
             },
-            primitives::uuid::Uuid as WireUuid,
+            primitives::uuid::Uuid as ProtocolUuid,
         },
         std::collections::HashMap,
     };
@@ -411,7 +413,7 @@ mod tests {
     fn group_for_partition(partition: i32) -> String {
         (0..100)
             .map(|i| format!("group-{i}"))
-            .find(|group| partitioner::partition_for_group_with_count(group, 2) == partition)
+            .find(|group| partitioner::partition_for_group_with_count(group, 2) == Some(partition))
             .expect("both offsets partitions receive a group")
     }
 
@@ -438,7 +440,7 @@ mod tests {
 
     #[test]
     fn remote_offsets_are_the_fetch_high_watermark_not_log_end() {
-        let topic_id = WireUuid([9; 16]);
+        let topic_id = ProtocolUuid([9; 16]);
         let response = FetchResponse {
             responses: vec![FetchableTopicResponse {
                 topic_id,

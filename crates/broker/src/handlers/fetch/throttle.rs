@@ -15,11 +15,13 @@ use {
     },
     krabka_protocol::{
         Encode as _,
+        kafka_3_6_2::owned::fetch_response,
         owned::fetch_response::{FetchResponse, FetchableTopicResponse},
         records::RecordsPayload,
     },
     krabka_units::{Time, convert::TimeExt},
     num_traits::ToPrimitive as _,
+    std::{sync::Arc, time::Duration},
 };
 
 pub(super) fn throttle_follower_responses(
@@ -157,11 +159,11 @@ pub(super) fn consumer_quota_window_bytes(
 
 /// The byte-rate charge a consumer fetch made, in bytes, which a throttled
 /// fetch gives back.
-pub(crate) struct ConsumerCharge(Option<ChargedBucket>);
+pub struct ConsumerCharge(Option<ChargedBucket>);
 
 /// The bucket a consumer fetch drew from and the bytes it drew.
 struct ChargedBucket {
-    bucket: std::sync::Arc<TokenBucket>,
+    bucket: Arc<TokenBucket>,
     bytes: u64,
 }
 
@@ -169,7 +171,7 @@ impl ConsumerCharge {
     /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
     /// no records, so the bytes it was charged come off the quota. The whole
     /// charge comes back, the debt it left included.
-    pub(crate) fn refund(self) {
+    pub fn refund(self) {
         if let Some(ChargedBucket { bucket, bytes }) = self.0 {
             bucket.refund(bytes);
         }
@@ -183,12 +185,12 @@ impl ConsumerCharge {
 /// `KafkaApis.processShareFetchResponse` with `shareFetchContext.responseSize`.
 /// Returns the throttle the `api_key` response reports, and the byte-rate
 /// charge to give back when that throttle is above zero.
-pub(crate) fn apply_consumer_fetch_quota(
+pub fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &RequestContext<'_>,
     api_key: ApiKeyCode,
-    handler_time: std::time::Duration,
+    handler_time: Duration,
     response_bytes: u64,
 ) -> (i32, ConsumerCharge) {
     let ConsumerQuotaOutcome {
@@ -222,8 +224,7 @@ pub(crate) fn apply_consumer_fetch_quota(
 /// to the consumer byte rate: four bytes and the encoded `version` body.
 pub(super) fn fetch_response_size(response: &FetchResponse, version: i16) -> u64 {
     let size = if version < 4 {
-        let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =
-            response.clone().into();
+        let legacy: fetch_response::FetchResponse = response.clone().into();
         legacy.encoded_len(version)
     } else {
         response.encoded_len(version)
@@ -275,7 +276,7 @@ fn consume_consumer_quota(
     let bucket = buckets.get_or_create("consumer_byte_rate", &entity_key, rate);
     let debt = bucket.record(bytes);
     let charge = ConsumerCharge(Some(ChargedBucket {
-        bucket: std::sync::Arc::clone(&bucket),
+        bucket: Arc::clone(&bucket),
         bytes,
     }));
     let Some(overage) = debt_tokens(debt) else {
@@ -308,7 +309,9 @@ mod tests {
             throttle::{LEADER_THROTTLED_REPLICAS_KEY, TokenBucket},
         },
         assert2::{assert, check},
+        krabka_protocol::owned::fetch_response::FetchResponse,
         krabka_units::{Time, convert::TimeExt, millis, secs},
+        std::{sync::Arc, time::Duration},
     };
 
     /// Kafka's `FetchResponse.sizeOf`, which `FetchContext.getResponseSize`
@@ -324,7 +327,7 @@ mod tests {
         v12 = { 12, 16 },
     )]
     fn an_empty_fetch_response_is_charged_kafkas_size(version: i16, size: u64) {
-        let response = krabka_protocol::owned::fetch_response::FetchResponse::default();
+        let response = FetchResponse::default();
         assert2::assert!(fetch_response_size(&response, version) == size);
     }
 
@@ -429,9 +432,7 @@ mod tests {
         }
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: [(LEADER_THROTTLED_REPLICAS_KEY.to_owned(), list.to_owned())]
-                .into_iter()
-                .collect(),
+            overrides: [(LEADER_THROTTLED_REPLICAS_KEY.to_owned(), list.to_owned())].into(),
         }));
         image
     }
@@ -582,11 +583,12 @@ mod tests {
     #[test]
     fn an_oversized_batch_replicates_and_its_overshoot_is_paid_back() {
         let clock = qubit_clock::ManualMonotonicClock::new_shared();
-        let bucket = TokenBucket::with_clock(clock.clone());
+        let bucket =
+            TokenBucket::with_clock(Arc::<qubit_clock::ManualMonotonicClock>::clone(&clock));
         bucket.set_byte_rate(krabka_units::bytes_per_sec(500));
         let fetch_after = |millis| {
             clock
-                .advance(std::time::Duration::from_millis(millis))
+                .advance(Duration::from_millis(millis))
                 .expect("manual time moves forward");
             throttle_leader_fetch(&bucket, "*", &[unsynced(800)])
         };
@@ -636,13 +638,14 @@ mod tests {
     #[test]
     fn an_in_sync_burst_is_forgotten_after_the_replication_window() {
         let clock = qubit_clock::ManualMonotonicClock::new_shared();
-        let bucket = TokenBucket::with_clock(clock.clone());
+        let bucket =
+            TokenBucket::with_clock(Arc::<qubit_clock::ManualMonotonicClock>::clone(&clock));
         bucket.set_byte_rate(krabka_units::bytes_per_sec(1_000));
 
         throttle_leader_fetch(&bucket, "*", &[synced(100_000)]);
         let during = throttle_leader_fetch(&bucket, "*", &[unsynced(600)]);
         clock
-            .advance(std::time::Duration::from_secs(12))
+            .advance(Duration::from_secs(12))
             .expect("manual time moves forward");
         let after = throttle_leader_fetch(&bucket, "*", &[unsynced(600)]);
 

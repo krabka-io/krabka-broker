@@ -18,15 +18,15 @@ const ACK_RENEW: i8 = 4;
 
 /// How an acknowledgement request treats the acknowledge type `Renew`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Renewal {
+pub struct Renewal {
     /// The request set `IsRenewAck`.
-    pub(crate) requested: bool,
+    pub requested: bool,
     /// The group allows renewals: `share.renew.acknowledge.enable`, as
     /// [`GroupShareSettings`](crate::share_partition::group_settings::GroupShareSettings)
     /// resolves it.
-    pub(crate) enabled: bool,
+    pub enabled: bool,
     /// The new lock length of a renewed record.
-    pub(crate) lock_duration: Duration,
+    pub lock_duration: Duration,
 }
 
 /// The highest acknowledge type of a request version without `Renew`:
@@ -41,7 +41,7 @@ const MAX_ACK_TYPE: i8 = 3;
 /// of it, has no acknowledge type, has more than one type but not one per
 /// offset, has a type outside `[0, 3]` (`[0, 4]` when the version supports
 /// `Renew`), or has the type `Renew` in a request without `IsRenewAck`.
-pub(crate) fn acknowledgement_batches_are_valid<'a>(
+pub fn acknowledgement_batches_are_valid<'a>(
     batches: impl IntoIterator<Item = (i64, i64, &'a [i8])>,
     supports_renew: bool,
     is_renew_ack: bool,
@@ -72,13 +72,13 @@ pub(crate) fn acknowledgement_batches_are_valid<'a>(
 
 /// What one member's acknowledgements apply with.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AckApplication<'a> {
-    pub(crate) member: &'a str,
-    pub(crate) now: Instant,
-    pub(crate) renewal: Renewal,
+pub struct AckApplication<'a> {
+    pub member: &'a str,
+    pub now: Instant,
+    pub renewal: Renewal,
     /// The group's delivery count limit: a released record at the limit is
     /// archived.
-    pub(crate) max_attempts: i16,
+    pub max_attempts: i16,
 }
 
 /// Kafka's `SharePartition.acknowledge`: applies the acknowledgement batches
@@ -96,7 +96,7 @@ pub(crate) struct AckApplication<'a> {
 /// held before the first batch, so nothing of a failed acknowledgement stays
 /// or is persisted, as `rollbackOrProcessStateUpdates` does. It returns that
 /// batch's error code, or `NONE`.
-pub(crate) fn apply_acknowledgements<'b>(
+pub fn apply_acknowledgements<'b>(
     st: &mut AcquisitionState,
     application: &AckApplication<'_>,
     batches: impl IntoIterator<Item = (i64, i64, &'b [i8])>,
@@ -132,9 +132,11 @@ fn apply_ack_runs(
 ) -> Result<(), i16> {
     let mut run_first = first;
     for run in types.chunk_by(|left, right| left == right) {
-        let run_last =
-            run_first + i64::try_from(run.len() - 1).expect("validated run length fits i64");
-        apply(state, run_first, run_last, run[0])?;
+        let Some((&ack_type, rest)) = run.split_first() else {
+            continue;
+        };
+        let run_last = run_first + i64::try_from(rest.len()).map_err(|_| codes::INVALID_REQUEST)?;
+        apply(state, run_first, run_last, ack_type)?;
         run_first = run_last.saturating_add(1);
     }
     Ok(())
@@ -206,8 +208,10 @@ fn apply_one_ack(
     if range_len != Some(types.len()) {
         return Err(codes::INVALID_REQUEST);
     }
-    if types.iter().all(|ack_type| *ack_type == types[0]) {
-        return apply(st, first, last, types[0]);
+    if let [head, rest @ ..] = types
+        && rest.iter().all(|ack_type| ack_type == head)
+    {
+        return apply(st, first, last, *head);
     }
     let valid_actions = types.iter().all(|ack_type| {
         AckType::from_i8(*ack_type).is_some()
@@ -222,25 +226,24 @@ fn apply_one_ack(
     let deadline = now + renewal.lock_duration;
     // The factory receives only the owned live suffix. Slice the request before
     // mapping, so skipped prefix actions need no conversion or storage.
-    let result = st.acknowledge_mixed_with(
-        member,
-        Offset(first),
-        Offset(last),
-        types.len(),
-        |live| {
-            types[live].iter().map(|ack_type| {
-                if *ack_type == ACK_RENEW {
-                    AckAction::Renew { deadline }
-                } else {
-                    AckAction::Disposition(
-                        AckType::from_i8(*ack_type)
-                            .expect("all acknowledgement actions were validated"),
-                    )
-                }
-            })
-        },
-        max_attempts,
-    );
+    let result =
+        st.acknowledge_mixed_with(
+            member,
+            Offset(first),
+            Offset(last),
+            types.len(),
+            |live| {
+                types.iter().skip(live.start).take(live.len()).map(
+                    |ack_type| match AckType::from_i8(*ack_type) {
+                        Some(ack) if *ack_type != ACK_RENEW => AckAction::Disposition(ack),
+                        // `valid_actions` admitted every other entry only as
+                        // `ACK_RENEW`.
+                        _ => AckAction::Renew { deadline },
+                    },
+                )
+            },
+            max_attempts,
+        );
     if result == Err(codes::INVALID_RECORD_STATE) {
         // An earlier Accept run can advance the SPSO over settled islands,
         // making later runs valid even when the initial range is not all
@@ -654,7 +657,7 @@ mod tests {
                 state.acquire("member", 10, Offset(i64::MAX), now, lock, LIMIT);
             }
         }
-        if let Setup::HalfAccepted = setup {
+        if matches!(setup, Setup::HalfAccepted) {
             state
                 .acknowledge("member", Offset(0), Offset(4), AckType::Accept, LIMIT)
                 .expect("accept the first half");

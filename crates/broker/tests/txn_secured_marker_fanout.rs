@@ -28,12 +28,14 @@
 //!
 //! Windows-gated like the other multi-node transactional tests, because
 //! openraft and tokio scheduling race on the hosted Windows runner.
+#![cfg(test)]
 
 use {
     crate::support::{
         acl::use_simple_acl_authorizer,
         controller_voters,
         discovery::named_topic_metadata,
+        listeners,
         produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
         shutdown_cluster,
@@ -67,10 +69,12 @@ use {
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
     std::{
+        collections::BTreeSet,
         net::SocketAddr,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::{task, time},
 };
 
 mod support;
@@ -95,7 +99,7 @@ const TOPIC: &str = "t";
 /// listener is bound, so a `:0` would register port 0 and break the
 /// inter-broker dial.
 fn sasl_listener(addr: SocketAddr) -> Vec<ListenerSpec> {
-    vec![crate::support::listeners::listener(
+    vec![listeners::listener(
         IB_LISTENER,
         addr,
         ListenerProtocol::SaslPlaintext,
@@ -108,13 +112,13 @@ fn apply_sasl(cfg: &mut BrokerConfig, addr: SocketAddr) {
     cfg.listen_addr = addr;
     cfg.advertised_listener = addr.to_string();
     cfg.listeners = sasl_listener(addr);
-    cfg.inter_broker_listener_name = IB_LISTENER.to_string();
+    cfg.inter_broker_listener_name = IB_LISTENER.to_owned();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert(USER.to_string(), PASS.to_string());
+        .insert(USER.to_owned(), PASS.to_owned());
     cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: USER.to_string(),
-        password: PASS.to_string(),
+        username: USER.to_owned(),
+        password: PASS.to_owned(),
     });
 }
 
@@ -125,8 +129,8 @@ fn client_security(PlainLogin { username, password }: PlainLogin<'_>) -> ClientS
         protocol: ListenerProtocol::SaslPlaintext,
         tls: None,
         sasl: Some(SaslCredentials::Plain {
-            username: username.to_string(),
-            password: password.to_string(),
+            username: username.to_owned(),
+            password: password.to_owned(),
         }),
         sasl_host: None,
     }
@@ -135,7 +139,7 @@ fn client_security(PlainLogin { username, password }: PlainLogin<'_>) -> ClientS
 /// Open a client to `addr` that authenticates as `credentials`.
 async fn sasl_client_as(addr: &str, credentials: PlainLogin<'_>) -> Client {
     Client::builder()
-        .bootstrap(addr.to_string())
+        .bootstrap(addr.to_owned())
         .client_id("krabka-txn-fanout-test")
         .security(client_security(credentials))
         .build()
@@ -249,7 +253,7 @@ async fn start_two_sasl_with_retry(
                 // intentional: backoff before re-booting the whole cluster after
                 // a failed boot attempt (lets stray raft timings settle) — not a
                 // wait on any observable krabka broker/image/metric state.
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
@@ -276,7 +280,7 @@ async fn create_two_partition_topic(admin: &Client, topic: &str) -> CreateTopics
         }
         // intentional: the client has no awaiter for a controller election;
         // back off before asking again, as Kafka's admin client does.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -329,7 +333,7 @@ async fn partition_leaders(
         })
         .await;
     let resp = client
-        .send(named_topic_metadata(topic.to_string()))
+        .send(named_topic_metadata(topic.to_owned()))
         .await
         .expect("metadata");
     let topic = resp
@@ -393,7 +397,7 @@ async fn find_coordinator(client: &Client, transactional_id: &str) -> Coordinato
             Instant::now() <= deadline,
             "txn coordinator never became available: {fc:?}"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 
@@ -415,8 +419,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     );
 
     let leaders = partition_leaders(&admin, &cluster[0].0, TOPIC).await;
-    let distinct: std::collections::BTreeSet<i32> =
-        leaders.iter().map(|leader| leader.leader_id).collect();
+    let distinct: BTreeSet<i32> = leaders.iter().map(|leader| leader.leader_id).collect();
     assert!(
         distinct.len() == 2,
         "expected partition leadership split across both brokers, got {leaders:?}"
@@ -514,9 +517,9 @@ const CLIENT_LOGIN: PlainLogin<'static> = PlainLogin {
 fn apply_acls(cfg: &mut BrokerConfig) {
     for (user, pass) in [(ADMIN_USER, ADMIN_PASS), (CLIENT_USER, CLIENT_PASS)] {
         cfg.plain_credentials
-            .insert(user.to_string(), pass.to_string());
+            .insert(user.to_owned(), pass.to_owned());
     }
-    cfg.super_users = [ADMIN_USER.to_string(), "ANONYMOUS".to_string()]
+    cfg.super_users = [ADMIN_USER.to_owned(), "ANONYMOUS".to_owned()]
         .into_iter()
         .collect();
     use_simple_acl_authorizer(cfg);
@@ -766,6 +769,6 @@ async fn init_producer(client: &Client, transactional_id: &str) -> InitProducerI
         }
         // intentional: coordinator load has no awaiter reachable from this
         // client; the coordinator answer is the signal.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }

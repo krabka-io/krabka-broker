@@ -18,20 +18,24 @@
 
 use {
     assert2::assert,
-    criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main},
+    criterion::{BatchSize, Criterion, Throughput},
     krabka_broker::{
         share_coordinator::persistence::StateBatch,
         share_partition::state::{AckAction, AckType, AcquisitionState, DS_AVAILABLE},
     },
     krabka_log::Offset,
     std::{
+        error::Error,
         hint::black_box,
         time::{Duration, Instant},
     },
 };
 
+/// Any failure while building or measuring a case; it stops the run.
+type BenchError = Box<dyn Error + Send + Sync>;
+
 const MEMBER: &str = "benchmark-member";
-const SIZES: [usize; 5] = [100, 500, 1_000, 2_000, 4_000];
+const SIZES: [u16; 5] = [100, 500, 1_000, 2_000, 4_000];
 const MAX_ATTEMPTS: i16 = 10_000;
 const LOCK: Duration = Duration::from_secs(30);
 
@@ -64,9 +68,9 @@ impl AckShape {
         }
     }
 
-    fn actions(self, size: usize) -> Vec<AckAction> {
+    fn actions(self, size: u16) -> Vec<AckAction> {
         match self {
-            Self::UniformAccept => vec![AckAction::Disposition(AckType::Accept); size],
+            Self::UniformAccept => vec![AckAction::Disposition(AckType::Accept); usize::from(size)],
             Self::AlternatingReleaseAccept => (0..size)
                 .map(|offset| {
                     AckAction::Disposition(if offset % 2 == 0 {
@@ -80,24 +84,20 @@ impl AckShape {
     }
 }
 
-fn acquired_state(size: usize, shape: WindowShape) -> AcquisitionState {
-    let end = Offset(i64::try_from(size).expect("benchmark sizes fit i64"));
+fn acquired_state(size: u16, shape: WindowShape) -> AcquisitionState {
+    let end = Offset(i64::from(size));
     let mut state = AcquisitionState::new(Offset(0));
     match shape {
         WindowShape::Contiguous => state.materialize(end, i32::MAX),
         WindowShape::Fragmented => {
             let batches = (0..size)
-                .map(|offset| {
-                    let offset = i64::try_from(offset).expect("benchmark sizes fit i64");
-                    StateBatch {
-                        first_offset: Offset(offset),
-                        last_offset: Offset(offset),
-                        delivery_state: DS_AVAILABLE,
-                        // Acquisition increments this to alternating 1/2,
-                        // keeping every neighbouring run distinct.
-                        delivery_count: i16::try_from(offset % 2)
-                            .expect("the fragmented delivery count is zero or one"),
-                    }
+                .map(|offset| StateBatch {
+                    first_offset: Offset(i64::from(offset)),
+                    last_offset: Offset(i64::from(offset)),
+                    delivery_state: DS_AVAILABLE,
+                    // Acquisition increments this to alternating 1/2,
+                    // keeping every neighbouring run distinct.
+                    delivery_count: i16::from(offset % 2 == 1),
                 })
                 .collect::<Vec<_>>();
             state.load_from(Offset(0), 0, 0, &batches);
@@ -106,7 +106,7 @@ fn acquired_state(size: usize, shape: WindowShape) -> AcquisitionState {
 
     let acquired = state.acquire(
         MEMBER,
-        i32::try_from(size).unwrap(),
+        i32::from(size),
         end - 1,
         Instant::now(),
         LOCK,
@@ -116,49 +116,63 @@ fn acquired_state(size: usize, shape: WindowShape) -> AcquisitionState {
         .iter()
         .map(|range| range.last.0 - range.first.0 + 1)
         .sum();
-    assert!(acquired_records == i64::try_from(size).unwrap());
+    assert!(acquired_records == i64::from(size));
     state
 }
 
-fn bench_share_acknowledge(c: &mut Criterion) {
-    let mut group = c.benchmark_group("broker/share_acknowledge");
+fn bench_share_acknowledge(c: &mut Criterion) -> Result<(), BenchError> {
+    // The first error code a measured acknowledgement was refused with.
+    let mut refused: Option<i16> = None;
+    {
+        let mut group = c.benchmark_group("broker/share_acknowledge");
 
-    for size in SIZES {
-        let last = Offset(i64::try_from(size).unwrap() - 1);
-        for window in [WindowShape::Contiguous, WindowShape::Fragmented] {
-            let template = acquired_state(size, window);
-            for ack in [AckShape::UniformAccept, AckShape::AlternatingReleaseAccept] {
-                let actions = ack.actions(size);
-                group.throughput(Throughput::Elements(u64::try_from(size).unwrap()));
-                group.bench_function(format!("{}/{}/{}", window.name(), ack.name(), size), |b| {
-                    b.iter_batched(
-                        || template.clone(),
-                        |mut state| {
-                            state
-                                .acknowledge_mixed(
-                                    MEMBER,
-                                    Offset(0),
-                                    last,
-                                    black_box(&actions),
-                                    MAX_ATTEMPTS,
-                                )
-                                .expect("the benchmark acknowledgement is valid");
-                            let expected_start = match ack {
-                                AckShape::UniformAccept => last + 1,
-                                AckShape::AlternatingReleaseAccept => Offset(0),
-                            };
-                            assert!(state.start_offset == expected_start);
-                            black_box(state);
+        for size in SIZES {
+            let last = Offset(i64::from(size) - 1);
+            for window in [WindowShape::Contiguous, WindowShape::Fragmented] {
+                let template = acquired_state(size, window);
+                for ack in [AckShape::UniformAccept, AckShape::AlternatingReleaseAccept] {
+                    let actions = ack.actions(size);
+                    group.throughput(Throughput::Elements(u64::from(size)));
+                    group.bench_function(
+                        format!("{}/{}/{}", window.name(), ack.name(), size),
+                        |b| {
+                            b.iter_batched(
+                                || template.clone(),
+                                |mut state| {
+                                    let acknowledged = state.acknowledge_mixed(
+                                        MEMBER,
+                                        Offset(0),
+                                        last,
+                                        black_box(&actions),
+                                        MAX_ATTEMPTS,
+                                    );
+                                    match acknowledged {
+                                        Ok(()) => {
+                                            let expected_start = match ack {
+                                                AckShape::UniformAccept => last + 1,
+                                                AckShape::AlternatingReleaseAccept => Offset(0),
+                                            };
+                                            assert!(state.start_offset == expected_start);
+                                        }
+                                        Err(code) => {
+                                            refused.get_or_insert(code);
+                                        }
+                                    }
+                                    black_box(state);
+                                },
+                                BatchSize::SmallInput,
+                            );
                         },
-                        BatchSize::SmallInput,
                     );
-                });
+                }
             }
         }
-    }
 
-    group.finish();
+        group.finish();
+    }
+    refused.map_or(Ok(()), |code| {
+        Err(format!("the benchmark acknowledgement was refused with error code {code}").into())
+    })
 }
 
-criterion_group!(benches, bench_share_acknowledge);
-criterion_main!(benches);
+krabka_macros::bench_main!(bench_share_acknowledge);

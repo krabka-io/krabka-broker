@@ -10,7 +10,7 @@
 //! `compact` call, after resetting it through `/proc/self/clear_refs`. It is
 //! the only test in its binary, so no other test's allocations land in the
 //! window.
-
+#![cfg(test)]
 #![cfg(target_os = "linux")]
 
 use {
@@ -21,7 +21,7 @@ use {
     krabka_log::{CleanupPolicy, CompactionContext, Log, LogConfig},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, mebibytes},
-    std::time::SystemTime,
+    std::{fs, time::SystemTime},
     tempfile::tempdir,
 };
 
@@ -64,7 +64,7 @@ fn compressed_batch(segment: i64) -> RecordBatch {
 /// A `/proc/self/status` memory field, such as `VmRSS` or `VmHWM` (the peak
 /// resident set since the last reset).
 fn status_field(field: &str) -> ByteSize {
-    let status = std::fs::read_to_string("/proc/self/status").expect("read /proc/self/status");
+    let status = fs::read_to_string("/proc/self/status").expect("read /proc/self/status");
     let kib: u64 = status
         .lines()
         .find_map(|line| line.strip_prefix(field)?.strip_prefix(':'))
@@ -75,7 +75,7 @@ fn status_field(field: &str) -> ByteSize {
 }
 
 /// Reset `VmHWM` to the current resident set (`clear_refs` value 5).
-fn reset_peak_resident() { std::fs::write("/proc/self/clear_refs", "5").expect("reset VmHWM"); }
+fn reset_peak_resident() { fs::write("/proc/self/clear_refs", "5").expect("reset VmHWM"); }
 
 /// Every record of the log, as `(offset, key)`, read a few batches at a time.
 fn surviving_keys(log: &Log) -> Vec<(i64, Bytes)> {

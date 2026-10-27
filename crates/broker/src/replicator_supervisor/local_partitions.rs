@@ -19,7 +19,10 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
-    std::{collections::HashSet, sync::Arc},
+    std::{
+        collections::HashSet,
+        sync::{Arc, atomic},
+    },
     tracing::warn,
 };
 
@@ -49,13 +52,8 @@ impl ReplicatorSupervisor {
             let topic_id = image.topic(&key.0).map(|topic| topic.topic_id);
             let promoting_diskless = part.diskless
                 && part_record.leader == self.node_id
-                && (part
-                    .current_leader
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    != self.node_id.0
-                    || part
-                        .current_leader_epoch
-                        .load(std::sync::atomic::Ordering::Acquire)
+                && (part.current_leader.load(atomic::Ordering::Acquire) != self.node_id.0
+                    || part.current_leader_epoch.load(atomic::Ordering::Acquire)
                         != part_record.leader_epoch.0);
             if promoting_diskless {
                 let Some(topic_id) = topic_id else {
@@ -145,10 +143,7 @@ impl ReplicatorSupervisor {
             } else {
                 let losing_leadership = part.diskless
                     && part_record.leader != self.node_id
-                    && part
-                        .current_leader
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        == self.node_id.0;
+                    && part.current_leader.load(atomic::Ordering::Acquire) == self.node_id.0;
                 part.install_replication_target(
                     topic_id,
                     part_record.leader.0,
@@ -222,10 +217,10 @@ impl ReplicatorSupervisor {
                     ),
                     diskless,
                     (
-                        Some(self.hot_tail.clone()),
-                        Some(self.wal_shards.clone()),
+                        Some(Arc::clone(&self.hot_tail)),
+                        Some(Arc::clone(&self.wal_shards)),
                         diskless.then(|| {
-                            Arc::new(ControllerSequencer::new(self.controller.clone()))
+                            Arc::new(ControllerSequencer::new(Arc::clone(&self.controller)))
                                 as Arc<dyn OffsetSequencer>
                         }),
                     ),
@@ -250,8 +245,9 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::MetadataRecord,
+        krabka_protocol::records::{Record, RecordBatch},
         krabka_raft::NodeId,
-        std::sync::atomic::Ordering,
+        std::{path::PathBuf, sync::atomic::Ordering},
         uuid::Uuid,
     };
 
@@ -261,18 +257,14 @@ mod tests {
         let ((_supervisor, _partitions, _reporter, _dir), part) =
             reconciled_partition(&img, "local leader materialized").await;
         assert!(
-            part.current_leader
-                .load(std::sync::atomic::Ordering::Acquire)
-                == 2,
+            part.current_leader.load(Ordering::Acquire) == 2,
             "leader cache updated"
         );
         assert!(
-            part.current_leader_epoch
-                .load(std::sync::atomic::Ordering::Acquire)
-                == 7,
+            part.current_leader_epoch.load(Ordering::Acquire) == 7,
             "leader epoch cache updated"
         );
-        let state = part.replica_state.lock().await;
+        let state = part.replica_state.lock().await.clone();
         assert!(state.isr == [NodeId(1), NodeId(2), NodeId(3)].into_iter().collect());
     }
 
@@ -294,9 +286,9 @@ mod tests {
             let ((supervisor, _partitions, _reporter, _dir), part) =
                 reconciled_partition(&as_follower, "local follower materialized").await;
             for _ in 0..2 {
-                let mut batch = krabka_protocol::records::RecordBatch {
+                let mut batch = RecordBatch {
                     partition_leader_epoch: 3,
-                    records: vec![krabka_protocol::records::Record::default()],
+                    records: vec![Record::default()],
                     ..Default::default()
                 };
                 part.log.lock().unwrap().append(&mut batch).unwrap();
@@ -344,7 +336,7 @@ mod tests {
 
         supervisor.reconcile(&as_leader).await;
 
-        let offline: Vec<std::path::PathBuf> = supervisor
+        let offline: Vec<PathBuf> = supervisor
             .log_dir_status
             .offline()
             .into_iter()
@@ -394,7 +386,7 @@ mod tests {
         let img = three_replica_image(NodeId(1), krabka_metadata::LeaderEpoch(7));
         let ((_supervisor, _partitions, _reporter, _dir), part) =
             reconciled_partition(&img, "local follower materialized").await;
-        let state = part.replica_state.lock().await;
+        let state = part.replica_state.lock().await.clone();
         assert!(state.isr.is_empty());
     }
 
@@ -510,7 +502,7 @@ mod tests {
         assert!(partition.diskless);
         assert!(
             *partition.replication_target.read().await
-                == crate::partition::ReplicationTarget {
+                == ReplicationTarget {
                     topic_id: Some(topic_id),
                     leader_node_id: NodeId(0),
                     leader_epoch: krabka_metadata::LeaderEpoch(0),

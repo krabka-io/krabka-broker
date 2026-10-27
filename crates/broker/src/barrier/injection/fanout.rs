@@ -20,7 +20,7 @@ use {
     krabka_units::{Time, convert::TimeExt as _},
     krabka_verified::{BarrierPlacementDecision, barrier_placement_decision},
     std::{collections::BTreeMap, sync::Arc},
-    tokio::time::Instant,
+    tokio::{time, time::Instant},
     tracing::warn,
 };
 
@@ -32,7 +32,7 @@ fn leader_in(image: &MetadataImage, target: &TargetPartition) -> Option<NodeId> 
 }
 
 /// Everything one marker fan-out needs.
-pub(crate) struct MarkerFanout<'a> {
+pub struct MarkerFanout<'a> {
     pub(crate) node_id: NodeId,
     pub(crate) partitions: &'a PartitionRegistry,
     pub(crate) controller: &'a Arc<dyn MetadataSource>,
@@ -93,7 +93,7 @@ impl MarkerFanout<'_> {
             )
             .to_std()
             .min(deadline - now);
-            tokio::time::sleep(wait).await;
+            time::sleep(wait).await;
             attempt = attempt.saturating_add(1);
         }
         placed

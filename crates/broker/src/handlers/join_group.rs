@@ -25,11 +25,12 @@ use {
         join_group_request::JoinGroupRequest,
         join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
     },
+    std::sync::Arc,
 };
 
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: JoinGroupRequest,
     version: ApiVersion,
@@ -129,10 +130,10 @@ pub(crate) async fn handle(
     // principal's `Describe` decisions. The offset is read before the image,
     // as the `ConsumerGroupHeartbeat` handler reads it.
     let metadata_offset = broker.controller.current_metadata_offset();
-    let regex_resolver = std::sync::Arc::new(ImageTopicRegexResolver::new(
+    let regex_resolver = Arc::new(ImageTopicRegexResolver::new(
         broker.controller.current_image(),
         metadata_offset,
-        broker.config.authorizer.clone(),
+        Arc::clone(&broker.config.authorizer),
         ctx.principal.clone(),
         *ctx.peer,
     ));

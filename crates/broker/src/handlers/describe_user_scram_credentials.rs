@@ -15,6 +15,7 @@ use {
         },
     },
     krabka_security::SaslMechanism,
+    std::collections::{HashMap, HashSet, hash_map::Entry},
 };
 
 /// Kafka's `ScramImage.DESCRIBE_DUPLICATE_USER`; the row message appends the
@@ -27,7 +28,7 @@ const DESCRIBE_DUPLICATE_USER: &str =
 const DESCRIBE_USER_THAT_DOES_NOT_EXIST: &str =
     "Attempt to describe a user credential that does not exist";
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &DescribeUserScramCredentialsRequest,
     _version: i16,
@@ -39,8 +40,7 @@ pub(crate) fn handle(
         return denied_response(req);
     }
 
-    let known_users: std::collections::HashSet<String> =
-        image.scram_credentials_users().into_iter().collect();
+    let known_users: HashSet<String> = image.scram_credentials_users().into_iter().collect();
     let targets = requested_targets(&known_users, req.users.as_deref());
 
     let results = build_results(&image, &known_users, targets);
@@ -87,7 +87,7 @@ fn denied_response(
 
 fn build_results(
     image: &MetadataImage,
-    known_users: &std::collections::HashSet<String>,
+    known_users: &HashSet<String>,
     targets: Vec<DescribeTarget>,
 ) -> Vec<DescribeUserScramCredentialsResult> {
     targets
@@ -142,7 +142,7 @@ struct DescribeTarget {
 }
 
 fn requested_targets(
-    known_users: &std::collections::HashSet<String>,
+    known_users: &HashSet<String>,
     users_filter: Option<&[UserName]>,
 ) -> Vec<DescribeTarget> {
     let Some(filter) = users_filter else {
@@ -153,15 +153,15 @@ fn requested_targets(
     }
 
     let mut requested_users = Vec::new();
-    let mut duplicate_flags = std::collections::HashMap::new();
+    let mut duplicate_flags = HashMap::new();
     for requested_user in filter {
         let user = requested_user.name.clone();
         match duplicate_flags.entry(user.clone()) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 entry.insert(false);
                 requested_users.push(user);
             }
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
+            Entry::Occupied(mut entry) => {
                 entry.insert(true);
             }
         }
@@ -176,7 +176,7 @@ fn requested_targets(
         .collect()
 }
 
-fn all_known_user_targets(known_users: &std::collections::HashSet<String>) -> Vec<DescribeTarget> {
+fn all_known_user_targets(known_users: &HashSet<String>) -> Vec<DescribeTarget> {
     let mut users: Vec<String> = known_users.iter().cloned().collect();
     users.sort();
     users
@@ -212,7 +212,7 @@ mod tests {
 
     krabka_macros::test_authorizer!(ClusterDescribeOnly, req; {
         if req.resource_type == ResourceType::Cluster
-            && req.resource_name == crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME
+            && req.resource_name == acl_wire::CLUSTER_RESOURCE_NAME
             && req.operation == AclOperation::Describe
         {
             return AuthorizationResult::Allow;
@@ -225,8 +225,11 @@ mod tests {
         super::*,
         crate::{
             authorizer::AuthorizationResult,
+            handlers::acl_wire,
             test_support::{DenyAll, start_broker_with_authorizer},
         },
+        krabka_protocol::owned::describe_user_scram_credentials_request,
+        std::collections::HashSet,
     };
 
     /// A SCRAM credential to seed: its user, mechanism and iteration count.
@@ -259,12 +262,9 @@ mod tests {
 
     fn process_targets_for_test(
         image: &MetadataImage,
-        users_filter: Option<
-            &[krabka_protocol::owned::describe_user_scram_credentials_request::UserName],
-        >,
+        users_filter: Option<&[describe_user_scram_credentials_request::UserName]>,
     ) -> DescribeUserScramCredentialsResponse {
-        let known_users: std::collections::HashSet<String> =
-            image.scram_credentials_users().into_iter().collect();
+        let known_users: HashSet<String> = image.scram_credentials_users().into_iter().collect();
         let targets = requested_targets(&known_users, users_filter);
         let results = build_results(image, &known_users, targets);
         DescribeUserScramCredentialsResponse {
@@ -314,7 +314,7 @@ mod tests {
         let resp = run_handle_filter(Some(vec!["alice".into()]), &ALICE_AND_BOB);
         let expected = vec![krabka_macros::tagged_wire!(
             DescribeUserScramCredentialsResult {
-                user: "alice".to_string(),
+                user: "alice".to_owned(),
                 error_code: 0,
                 error_message: None,
                 credential_infos: vec![krabka_macros::tagged_wire!(CredentialInfo {
@@ -331,10 +331,10 @@ mod tests {
         let resp = run_handle_filter(Some(vec!["ghost".into()]), &ALICE_ONLY);
         let expected = vec![krabka_macros::tagged_wire!(
             DescribeUserScramCredentialsResult {
-                user: "ghost".to_string(),
+                user: "ghost".to_owned(),
                 error_code: 91,
                 error_message: Some(
-                    "Attempt to describe a user credential that does not exist: ghost".to_string(),
+                    "Attempt to describe a user credential that does not exist: ghost".to_owned(),
                 ),
                 credential_infos: Vec::new(),
             }

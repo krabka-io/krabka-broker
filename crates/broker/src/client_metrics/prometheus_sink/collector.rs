@@ -15,7 +15,7 @@ use {
     prometheus_client::metrics::{counter::Counter, family::Family, gauge::Gauge},
     std::{
         collections::HashMap,
-        sync::Mutex,
+        sync::{Mutex, PoisonError},
         time::{Duration, Instant},
     },
     uuid::Uuid,
@@ -24,10 +24,10 @@ use {
 /// The default retained-series ceilings. They count the series a scrape
 /// renders, so a histogram counts each of its buckets plus `_sum` and
 /// `_count`. `client_metrics_prom_max_series*` override them.
-pub(crate) const MAX_RETAINED_SERIES: usize = 10_000;
-pub(crate) const MAX_RETAINED_SERIES_PER_PRINCIPAL: usize = 2_500;
-pub(crate) const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
-pub(crate) const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
+pub const MAX_RETAINED_SERIES: usize = 10_000;
+pub const MAX_RETAINED_SERIES_PER_PRINCIPAL: usize = 2_500;
+pub const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
+pub const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
 
 /// Hard ceilings that keep the retained snapshot deterministic even when
 /// clients reconnect with fresh instance ids or rotate their `client_id`.
@@ -38,7 +38,7 @@ pub(crate) const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
 /// and the `client_id` are both the client's to choose, the authenticated
 /// principal is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, bon::Builder)]
-pub(crate) struct SeriesCeilings {
+pub struct SeriesCeilings {
     #[builder(default = MAX_RETAINED_SERIES)]
     pub(crate) total: usize,
     #[builder(default = MAX_RETAINED_SERIES_PER_PRINCIPAL)]
@@ -56,7 +56,7 @@ impl Default for SeriesCeilings {
 /// The broker-registry handles the collector reports its own bookkeeping
 /// into. Every count is in rendered series, the unit the ceilings use.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SeriesStats {
+pub struct SeriesStats {
     pub(crate) accepted: Counter,
     pub(crate) rejected: Family<ClientMetricsRejectionLabel, Counter>,
     pub(crate) evicted: Family<ClientMetricsEvictionLabel, Counter>,
@@ -208,7 +208,7 @@ impl Tally {
 }
 
 #[derive(Debug)]
-pub(crate) struct ClientMetricsCollector {
+pub struct ClientMetricsCollector {
     pub(super) points: Mutex<HashMap<SeriesKey, StoredPoint>>,
     pub(super) ttl: Duration,
     ceilings: SeriesCeilings,
@@ -217,8 +217,6 @@ pub(crate) struct ClientMetricsCollector {
 
 #[bon::bon]
 impl ClientMetricsCollector {
-    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
-
     #[builder]
     pub(crate) fn new(
         ttl: Duration,
@@ -232,6 +230,10 @@ impl ClientMetricsCollector {
             stats,
         }
     }
+}
+
+impl ClientMetricsCollector {
+    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
 
     /// The registry handles this collector reports into.
     pub(crate) fn stats(&self) -> &SeriesStats { &self.stats }
@@ -240,7 +242,7 @@ impl ClientMetricsCollector {
     /// replaces any earlier value, and removes stale points.
     pub(crate) fn ingest(&self, principal: &str, points: &[DataPoint]) {
         let now = Instant::now();
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
+        let mut guard = self.points.lock().unwrap_or_else(PoisonError::into_inner);
         self.evict_stale_locked(&mut guard, now);
         if self.ttl.is_zero() {
             return;
@@ -303,6 +305,7 @@ impl ClientMetricsCollector {
             tally.add(principal, &key, after);
             self.stats.accepted.inc_by(widen(after));
         }
+        drop(guard);
         self.stats.publish_retained(tally.total);
     }
 
@@ -310,7 +313,7 @@ impl ClientMetricsCollector {
     /// evictions. The broker's client-metrics eviction ticker calls it, so a
     /// stale series leaves the store even when no client pushes again.
     pub(crate) fn evict_stale(&self) {
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
+        let mut guard = self.points.lock().unwrap_or_else(PoisonError::into_inner);
         self.evict_stale_locked(&mut guard, Instant::now());
     }
 
@@ -331,7 +334,7 @@ impl ClientMetricsCollector {
     /// instance, preventing reconnect churn from occupying the cache until TTL.
     pub(crate) fn remove_instance(&self, instance: Uuid) {
         let instance = instance.to_string();
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
+        let mut guard = self.points.lock().unwrap_or_else(PoisonError::into_inner);
         let mut evicted = 0;
         guard.retain(|key, stored| {
             let keep = key.client_instance_id != instance;
@@ -340,22 +343,24 @@ impl ClientMetricsCollector {
             }
             keep
         });
+        let retained_now = retained(&guard);
+        drop(guard);
         self.stats.evict(ClientMetricsEviction::Disconnect, evicted);
-        self.stats.publish_retained(retained(&guard));
+        self.stats.publish_retained(retained_now);
     }
 
     /// The series a scrape would render now, stale ones included until the
     /// next eviction.
     #[cfg(test)]
     pub(crate) fn retained_series(&self) -> usize {
-        retained(&self.points.lock().expect("prom sink mutex poisoned"))
+        retained(&self.points.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// The count of points that are not stale. This method also removes the
     /// stale entries in place, counting them as evictions.
     #[cfg(test)]
     pub(crate) fn live_point_count(&self) -> usize {
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
+        let mut guard = self.points.lock().unwrap_or_else(PoisonError::into_inner);
         self.evict_stale_locked(&mut guard, Instant::now());
         guard.len()
     }
@@ -557,6 +562,7 @@ mod tests {
             assert!(
                 matches!(point.value, PointValue::Counter(value) if (value - expected).abs() < f64::EPSILON)
             );
+            drop(guard);
         }
 
         let guard = sink.points.lock().unwrap();
@@ -569,6 +575,7 @@ mod tests {
                 if (*sum - 10.0).abs() < f64::EPSILON
                     && buckets.as_slice() == [(1.0, 3), (f64::MAX, 2)]
         )));
+        drop(guard);
 
         let mut total = PointValue::Histogram {
             count: 2,
@@ -813,7 +820,7 @@ mod tests {
                 thread::spawn(move || {
                     let principal = format!("User:p{}", thread % 4);
                     let instance = |round: u8| {
-                        Uuid::from_u128(u128::from(thread) << 8 | u128::from(round % 7))
+                        Uuid::from_u128((u128::from(thread) << 8) | u128::from(round % 7))
                     };
                     for round in 0..50_u8 {
                         let points = (0..20)

@@ -37,7 +37,7 @@ const LEGACY_ELR_CONFIG: &str = "krabka.elr";
 
 /// One partition's ELR state, in the wire types the response uses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct PartitionElr {
+pub struct PartitionElr {
     /// `DescribeTopicPartitionsResponsePartition.eligible_leader_replicas`.
     pub(crate) eligible_leader_replicas: Vec<i32>,
     /// `DescribeTopicPartitionsResponsePartition.last_known_elr`.
@@ -69,7 +69,7 @@ impl PartitionElr {
 /// A topic with no state parses to an empty map, and every partition then
 /// projects as [`PartitionElr::default`]: two empty lists, never null.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TopicElr(BTreeMap<i32, PartitionElr>);
+pub struct TopicElr(BTreeMap<i32, PartitionElr>);
 
 impl TopicElr {
     /// Read the ELR state `image` holds for `topic`.
@@ -158,7 +158,7 @@ impl TopicElr {
 ///
 /// See [`PartitionElr::is_leaderless`]. The projections that answer for a
 /// partition -- `Metadata` and `DescribeTopicPartitions` -- read it here.
-pub(crate) fn is_leaderless(image: &MetadataImage, partition: &PartitionRecord) -> bool {
+pub fn is_leaderless(image: &MetadataImage, partition: &PartitionRecord) -> bool {
     matches!(
         image.partition_elr(&partition.topic, partition.partition).1,
         [only] if *only == partition.leader
@@ -166,21 +166,21 @@ pub(crate) fn is_leaderless(image: &MetadataImage, partition: &PartitionRecord) 
 }
 
 #[cfg(test)]
-pub(crate) fn test_records(topic: &str, value: &str) -> Vec<krabka_metadata::MetadataRecord> {
+pub fn test_records(topic: &str, value: &str) -> Vec<krabka_metadata::MetadataRecord> {
     TopicElr::parse(value).records(topic)
 }
 
-pub(crate) fn legacy_elr(image: &MetadataImage, topic: &str) -> Option<TopicElr> {
+pub fn legacy_elr(image: &MetadataImage, topic: &str) -> Option<TopicElr> {
     image
         .topic_config(topic)?
         .get(LEGACY_ELR_CONFIG)
         .map(|value| TopicElr::parse(value))
 }
 
-pub(crate) fn without_legacy_elr(
+pub fn without_legacy_elr(
     image: &MetadataImage,
     topic: &str,
-    replacement: Option<&std::collections::BTreeMap<String, String>>,
+    replacement: Option<&BTreeMap<String, String>>,
 ) -> Option<krabka_metadata::MetadataRecord> {
     let mut overrides = replacement
         .cloned()
@@ -207,7 +207,7 @@ pub(super) fn metadata_node_ids(ids: &[i32]) -> Vec<NodeId> {
 /// even if it were published. Dropping it here keeps the published value
 /// readable rather than storing an id the projection would have to invent an
 /// answer for.
-pub(crate) fn wire_node_ids(nodes: impl IntoIterator<Item = NodeId>) -> Vec<i32> {
+pub fn wire_node_ids(nodes: impl IntoIterator<Item = NodeId>) -> Vec<i32> {
     nodes
         .into_iter()
         .filter_map(|node| i32::try_from(node.0).ok())

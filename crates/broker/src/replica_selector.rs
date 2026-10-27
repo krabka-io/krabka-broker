@@ -1,9 +1,11 @@
-//! KIP-392 replica selection. The partition leader runs `select` on every
-//! consumer Fetch that carries a `client.rack` (`rack_id`) and reports the
-//! chosen node id in `FetchResponse.preferred_read_replica`. Returning `-1`
-//! means "no preference, read from the leader".
+//! KIP-392 replica selection.
+//!
+//! The partition leader runs `select` on every consumer Fetch that carries a
+//! `client.rack` (`rack_id`) and reports the chosen node id in
+//! `FetchResponse.preferred_read_replica`. Returning `-1` means "no preference,
+//! read from the leader".
 
-use std::time::Duration;
+use std::{cmp::Reverse, time::Duration};
 
 /// One replica's view as the leader sees it, for selection purposes.
 #[derive(Debug, Clone)]
@@ -33,7 +35,7 @@ impl ReplicaView {
     fn caught_up_rank(&self) -> CaughtUpRank {
         CaughtUpRank {
             log_end_offset: self.log_end_offset,
-            time_since_caught_up: std::cmp::Reverse(self.time_since_caught_up),
+            time_since_caught_up: Reverse(self.time_since_caught_up),
             node_id: self.node_id,
         }
     }
@@ -44,7 +46,7 @@ impl ReplicaView {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct CaughtUpRank {
     log_end_offset: i64,
-    time_since_caught_up: std::cmp::Reverse<Duration>,
+    time_since_caught_up: Reverse<Duration>,
     node_id: i32,
 }
 
@@ -69,7 +71,7 @@ impl ReplicaSelectorKind {
         match s.trim() {
             "leader" => Ok(Self::Leader),
             "rack-aware" => Ok(Self::RackAware),
-            other => Err(other.to_string()),
+            other => Err(other.to_owned()),
         }
     }
 
@@ -129,7 +131,7 @@ mod tests {
     fn view(node_id: i32, rack: &str, in_isr: bool) -> ReplicaView {
         ReplicaView {
             node_id,
-            rack: Some(rack.to_string()),
+            rack: Some(rack.to_owned()),
             in_isr,
             is_witness: false,
             log_end_offset: 100,

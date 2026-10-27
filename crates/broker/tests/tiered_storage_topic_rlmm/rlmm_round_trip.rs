@@ -18,7 +18,11 @@ use {
     assert2::assert,
     krabka_broker::BrokerHandle,
     krabka_client_core::Client,
-    std::time::{Duration, Instant},
+    std::{
+        path::Path,
+        time::{Duration, Instant},
+    },
+    tokio::task,
 };
 
 /// Shared copy→metadata→read body: create a tiered topic, wait for the
@@ -26,10 +30,10 @@ use {
 /// copy task to tier one through the topic-backed RLMM, then read offset 0
 /// back. Both the plaintext loopback test and the `SASL_PLAINTEXT` variant use
 /// this body. The only difference is how the caller built `client`.
-pub(crate) async fn copy_then_fetch_round_trip(
+pub async fn copy_then_fetch_round_trip(
     broker: &BrokerHandle,
     client: &Client,
-    remote_dir: &std::path::Path,
+    remote_dir: &Path,
     topic: &str,
 ) {
     // Tiny `internal.segment.bytes` so a modest produce seals several segments;
@@ -57,7 +61,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
             "tiered-storage topic config never propagated within 10s; saw {:?}",
             broker.partition_log_config_for_test(topic, 0)
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
     // Single-record batches (~85 bytes each) roll the 1 KiB segment every
@@ -83,7 +87,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
             Instant::now() <= copy_deadline,
             "no segment tiered to remote storage within 30s"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
     // Read offset 0 back. Whether it is served from a still-local segment
@@ -120,7 +124,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
             Instant::now() <= fetch_deadline,
             "offset 0 never returned records within 30s"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     };
 
     assert!(

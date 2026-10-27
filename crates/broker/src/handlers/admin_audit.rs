@@ -4,7 +4,7 @@
 //! every admin RPC reports the principal, the source endpoint, and the changed
 //! resources in the same shape.
 
-use {super::RequestContext, crate::time_util::now_ms};
+use {super::RequestContext, crate::time_util::now_ms, std::net::SocketAddr};
 
 /// Emits an `AdminOperation` audit event for a completed admin request.
 ///
@@ -12,7 +12,7 @@ use {super::RequestContext, crate::time_util::now_ms};
 /// applies the operation and knows the set of resources that it changed
 /// successfully. [`audit_admin_success`] is the usual entry point: it fixes
 /// the outcome and drops a request that changed nothing.
-pub(crate) fn audit_admin(
+pub fn audit_admin(
     audit_log: &krabka_audit::AuditLog,
     ctx: &RequestContext<'_>,
     operation: &str,
@@ -36,10 +36,10 @@ pub(crate) fn audit_admin(
 /// request, so their dispatch adapters hold a [`krabka_security::Principal`]
 /// and the peer address but no [`RequestContext`]. Everything else about the
 /// record is identical to [`audit_admin`].
-pub(crate) fn audit_admin_for(
+pub fn audit_admin_for(
     audit_log: &krabka_audit::AuditLog,
     principal: &krabka_security::Principal,
-    peer: &std::net::SocketAddr,
+    peer: &SocketAddr,
     operation: &str,
     outcome: krabka_audit::AuditOutcome,
     resources: Vec<krabka_audit::AuditResource>,
@@ -54,7 +54,7 @@ pub(crate) fn audit_admin_for(
             ip: peer.ip().to_string(),
             port: peer.port(),
         },
-        operation: operation.to_string(),
+        operation: operation.to_owned(),
         resources,
         time_ms: now_ms(),
     });
@@ -66,7 +66,7 @@ pub(crate) fn audit_admin_for(
 /// This is the hook an admin handler calls on its success path. A request
 /// every row of which failed authorization or validation changed no resource,
 /// and an audit record naming an empty resource set would claim otherwise.
-pub(crate) fn audit_admin_success(
+pub fn audit_admin_success(
     audit_log: &krabka_audit::AuditLog,
     ctx: &RequestContext<'_>,
     operation: &str,
@@ -84,12 +84,9 @@ pub(crate) fn audit_admin_success(
 }
 
 /// Names one audited resource.
-pub(crate) fn audit_resource(
-    resource_type: &str,
-    name: impl Into<String>,
-) -> krabka_audit::AuditResource {
+pub fn audit_resource(resource_type: &str, name: impl Into<String>) -> krabka_audit::AuditResource {
     krabka_audit::AuditResource {
-        resource_type: resource_type.to_string(),
+        resource_type: resource_type.to_owned(),
         name: name.into(),
     }
 }

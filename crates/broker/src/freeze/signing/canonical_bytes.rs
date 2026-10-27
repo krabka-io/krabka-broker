@@ -17,7 +17,7 @@ use {
 /// `cluster_id` is the string form that `Metadata` and `DescribeCluster`
 /// already give a client, so the operator's command signs the identifier it
 /// read from the cluster it means to act on.
-pub(crate) fn freeze_signing_bytes(cluster_id: &str, record: &TopicFreezeRecord) -> Vec<u8> {
+pub fn freeze_signing_bytes(cluster_id: &str, record: &TopicFreezeRecord) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(signing_bytes_capacity(cluster_id, record));
     bytes.extend_from_slice(FREEZE_DOMAIN);
     put_len_prefixed(&mut bytes, cluster_id.as_bytes());

@@ -209,7 +209,10 @@ impl GroupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use {crate::coordinator::unified::test_support::make_coord, assert2::assert};
+    use {
+        crate::coordinator::unified::test_support::make_coord, assert2::assert,
+        std::time::Duration, tokio::time::timeout,
+    };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_all_closes_all_group_actors() {
@@ -222,7 +225,7 @@ mod tests {
 
         // The reply can precede receiver closure; wait for each channel's
         // notification rather than counting scheduler yields.
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        timeout(Duration::from_secs(1), async {
             tokio::join!(group.tx.closed(), share.tx.closed(), streams.tx.closed());
         })
         .await

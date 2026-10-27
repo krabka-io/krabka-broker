@@ -13,8 +13,12 @@ use {
     krabka_client_core::{Client, SaslCredentials, security::ClientSecurity},
     krabka_protocol::krabka::break_glass::DescribeBreakGlassRequest,
     krabka_security::{ListenerProtocol, SaslMechanism},
-    ring::signature::{Ed25519KeyPair, KeyPair as _},
+    ring::{
+        rand::SystemRandom,
+        signature::{Ed25519KeyPair, KeyPair as _},
+    },
     std::{
+        fs,
         net::SocketAddr,
         path::{Path, PathBuf},
     },
@@ -26,13 +30,12 @@ struct KeyFiles {
 }
 
 fn mint_key(dir: &Path, id: &str) -> KeyFiles {
-    let der = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-        .expect("generate Ed25519 key");
+    let der = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate Ed25519 key");
     let pair = Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("parse generated key");
     let private = dir.join(format!("{id}.pk8"));
-    std::fs::write(&private, der.as_ref()).expect("write private key");
+    fs::write(&private, der.as_ref()).expect("write private key");
     let public = dir.join(format!("{id}.pub"));
-    std::fs::write(&public, pair.public_key().as_ref()).expect("write public key");
+    fs::write(&public, pair.public_key().as_ref()).expect("write public key");
     KeyFiles { private, public }
 }
 

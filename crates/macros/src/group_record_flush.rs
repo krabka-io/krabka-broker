@@ -4,7 +4,7 @@ use {
     crate::{
         meta::{
             edit_native_body, expect_name, function_signature, grouped_value, is_plain_async,
-            native_groups, parameter_ident,
+            native_groups, next_group, parameter_ident,
         },
         sweep_loop::{SpliceValue, splice},
     },
@@ -57,7 +57,7 @@ fn scaffold(metadata: &TokenStream, signature: &Signature) -> Result<TokenStream
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     metadata: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -66,7 +66,7 @@ pub(crate) fn expand(
     let mut expressions = native_groups(metadata);
     let mut values = Vec::new();
     for name in ["__flush_group", "__flush_encode"] {
-        let expression = expressions.next().expect("validated record expression");
+        let expression = next_group(&mut expressions, "a record expression")?;
         let mut group = Group::new(Delimiter::None, expression.stream());
         group.set_span(expression.span());
         values.push(SpliceValue {

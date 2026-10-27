@@ -41,7 +41,10 @@ pub fn latest_checkpoint_index(ids: &[(i64, i32)]) -> Option<usize> {
                 && ids@[selected@].1@ >= ids@[k].1@))]
     #[variant(ids@.len() - i@)]
     while i < ids.len() {
-        if checkpoint_id_newer(ids[i].0, ids[i].1, ids[selected].0, ids[selected].1) {
+        if let (Some(&(offset, epoch)), Some(&(selected_offset, selected_epoch))) =
+            (ids.get(i), ids.get(selected))
+            && checkpoint_id_newer(offset, epoch, selected_offset, selected_epoch)
+        {
             selected = i;
         }
         i += 1;

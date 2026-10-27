@@ -15,7 +15,7 @@ use {
     },
     krabka_security::SaslMechanism,
     krabka_units::Time,
-    std::{collections::HashMap, hash::BuildHasher},
+    std::{collections::HashMap, hash::BuildHasher, str},
 };
 
 /// Handles `SaslAuthenticate` (`api_key` 36) for the PLAIN mechanism.
@@ -51,7 +51,7 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
     ) {
         return SaslAuthenticateResponse {
             error_code: ILLEGAL_SASL_STATE,
-            error_message: Some("not in PLAIN negotiation".to_string()),
+            error_message: Some("not in PLAIN negotiation".to_owned()),
             auth_bytes: bytes::Bytes::new(),
             session_lifetime_ms: 0,
             ..Default::default()
@@ -61,14 +61,13 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
         // `PlainSaslServer` decodes the whole response before it splits it.
         let response = java_utf8_lossy(&req.auth_bytes);
         let parts: Vec<&str> = response.split('\0').collect();
-        if parts.len() != 3 {
+        let &[authzid, username, password] = parts.as_slice() else {
             // `PlainSaslServer.extractTokens` stops splitting at four tokens.
             return fail_authenticate_with(format!(
                 "Invalid SASL/PLAIN response: expected 3 tokens, got {}",
                 parts.len().min(4)
             ));
-        }
-        let (authzid, username, password) = (parts[0], parts[1], parts[2]);
+        };
         if username.is_empty() {
             return fail_authenticate_with(
                 "Authentication failed: username not specified".to_owned(),
@@ -121,7 +120,7 @@ fn java_utf8_lossy(bytes: &[u8]) -> String {
     let mut decoded = String::with_capacity(bytes.len());
     let mut rest = bytes;
     loop {
-        match std::str::from_utf8(rest) {
+        match str::from_utf8(rest) {
             Ok(valid) => {
                 decoded.push_str(valid);
                 return decoded;
@@ -129,14 +128,14 @@ fn java_utf8_lossy(bytes: &[u8]) -> String {
             Err(error) => {
                 let (valid, malformed) = rest.split_at(error.valid_up_to());
                 // `valid_up_to` marks the end of a well-formed prefix.
-                decoded.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                decoded.push_str(str::from_utf8(valid).unwrap_or_default());
                 decoded.push(char::REPLACEMENT_CHARACTER);
                 let replaced = match malformed {
                     [0xED, 0xA0..=0xBF, 0x80..=0xBF, ..] => 3,
                     [0xED, 0xA0..=0xBF, ..] => 2,
                     _ => error.error_len().unwrap_or(malformed.len()),
                 };
-                rest = &malformed[replaced..];
+                rest = malformed.get(replaced..).unwrap_or_default();
             }
         }
     }
@@ -147,6 +146,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            codes::SASL_AUTHENTICATION_FAILED,
             network::auth::{
                 state::AuthenticatedSnapshot,
                 test_support::{
@@ -157,12 +157,13 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_security::AuthMethod,
+        std::mem,
     };
 
     fn credentials() -> HashMap<String, String> {
         let mut creds = HashMap::new();
-        creds.insert("alice".to_string(), "wonderland".to_string());
-        creds.insert("bob".to_string(), "builder".to_string());
+        creds.insert("alice".to_owned(), "wonderland".to_owned());
+        creds.insert("bob".to_owned(), "builder".to_owned());
         creds
     }
 
@@ -209,7 +210,7 @@ mod tests {
     fn authenticate_outside_a_plain_exchange_is_illegal_and_changes_nothing() {
         let expected = SaslAuthenticateResponse {
             error_code: ILLEGAL_SASL_STATE,
-            error_message: Some("not in PLAIN negotiation".to_string()),
+            error_message: Some("not in PLAIN negotiation".to_owned()),
             auth_bytes: bytes::Bytes::new(),
             session_lifetime_ms: 0,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
@@ -243,7 +244,7 @@ mod tests {
             ),
         ];
         for (case, mut auth) in cases {
-            let before = std::mem::discriminant(&auth);
+            let before = mem::discriminant(&auth);
             let resp = handle_authenticate_plain(
                 &payload("alice", "wonderland"),
                 &mut auth,
@@ -251,7 +252,7 @@ mod tests {
                 None,
             );
             check!(resp == expected, "{case}");
-            check!(std::mem::discriminant(&auth) == before, "{case}");
+            check!(mem::discriminant(&auth) == before, "{case}");
             check!(
                 auth.principal().map(|p| p.name.as_str()) != Some("alice"),
                 "{case}"
@@ -507,10 +508,10 @@ mod tests {
         );
         assert!(
             resp == SaslAuthenticateResponse {
-                error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
+                error_code: SASL_AUTHENTICATION_FAILED,
                 error_message: Some(
                     "Cannot change principals during re-authentication from User.alice: User.bob"
-                        .to_string()
+                        .to_owned()
                 ),
                 auth_bytes: bytes::Bytes::new(),
                 session_lifetime_ms: 0,

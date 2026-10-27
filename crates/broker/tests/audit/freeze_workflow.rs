@@ -34,31 +34,32 @@ use {
         owned::metadata_request::MetadataRequest,
         primitives::uuid::Uuid as WireUuid,
     },
+    std::{fs, path::PathBuf},
 };
 
 /// The proposer. She freezes the topic, opens the proposal, and thaws it.
-pub(super) const ALICE: &str = "User:alice";
+pub const ALICE: &str = "User:alice";
 /// The first approver.
-pub(super) const BOB: &str = "User:bob";
+pub const BOB: &str = "User:bob";
 /// The second approver. Two are needed: `break_glass.required_approvals`
 /// defaults to two, and the proposer may not approve her own proposal.
-pub(super) const CAROL: &str = "User:carol";
+pub const CAROL: &str = "User:carol";
 
 /// The operator key alice signs a freeze under.
-pub(super) const ALICE_KEY_ID: &str = "alice-yubi";
+pub const ALICE_KEY_ID: &str = "alice-yubi";
 
 /// The scope alice freezes, and the scope the proposal names.
 const FROZEN_SCOPE: &str = "orders";
 /// The same scope as a break-glass target, which is `"<pattern>:<scope>"`.
-pub(super) const FROZEN_TARGET: &str = "literal:orders";
+pub const FROZEN_TARGET: &str = "literal:orders";
 /// The target of the second proposal, the one that is withdrawn rather than
 /// spent. It names a different scope so that a case joining on the first
 /// proposal cannot match it by accident.
 const WITHDRAWN_TARGET: &str = "literal:invoices";
 
-pub(super) const FREEZE_REASON: &str = "DR cutover: stop writes before the promotion";
-pub(super) const PROPOSE_REASON: &str = "the promotion finished; hand the topic back";
-pub(super) const THAW_REASON: &str = "promotion complete";
+pub const FREEZE_REASON: &str = "DR cutover: stop writes before the promotion";
+pub const PROPOSE_REASON: &str = "the promotion finished; hand the topic back";
+pub const THAW_REASON: &str = "promotion complete";
 const WITHDRAW_REASON: &str = "raised against the wrong scope";
 
 /// `BreakGlassAction::ThawTopicFreeze` as the wire spells it.
@@ -77,7 +78,7 @@ krabka_macros::unix_millis_fixture!(
 
 /// One `SetTopicFreeze` request as the operator's own machine builds it: the
 /// signature is made here, from the private key that never reaches a broker.
-pub(super) struct SignedFreeze<'a> {
+pub struct SignedFreeze<'a> {
     pub(super) key: &'a support::OperatorKey,
     pub(super) cluster_id: &'a str,
     pub(super) frozen: bool,
@@ -86,7 +87,7 @@ pub(super) struct SignedFreeze<'a> {
     pub(super) set_at_ms: i64,
 }
 
-pub(super) async fn send_signed_freeze(
+pub async fn send_signed_freeze(
     client: &krabka_client_core::Client,
     freeze: &SignedFreeze<'_>,
 ) -> SetTopicFreezeResponse {
@@ -117,7 +118,7 @@ pub(super) async fn send_signed_freeze(
 }
 
 /// Open a proposal to thaw `target`.
-pub(super) async fn propose_thaw(
+pub async fn propose_thaw(
     client: &krabka_client_core::Client,
     target: &str,
     reason: &str,
@@ -136,7 +137,7 @@ pub(super) async fn propose_thaw(
 }
 
 /// Approve a proposal, or withdraw it.
-pub(super) async fn settle_proposal(
+pub async fn settle_proposal(
     client: &krabka_client_core::Client,
     proposal_id: WireUuid,
     withdraw: bool,
@@ -156,7 +157,7 @@ pub(super) async fn settle_proposal(
 /// The signed freeze bytes cover it, so an auditor needs it. It is a
 /// client-visible fact about the cluster and not a reading of the metadata
 /// image's freeze registry, which is the thing these cases refuse to consult.
-pub(super) async fn cluster_id_of(client: &krabka_client_core::Client) -> String {
+pub async fn cluster_id_of(client: &krabka_client_core::Client) -> String {
     client
         .send(MetadataRequest::default())
         .await
@@ -172,14 +173,14 @@ pub(super) async fn cluster_id_of(client: &krabka_client_core::Client) -> String
 /// outside it could open a proposal that two approvers then sign, which turns a
 /// rule about three people into a rule about two and a stranger. She still
 /// cannot approve her own proposal, which is why bob and carol both do.
-pub(super) struct Cluster {
+pub struct Cluster {
     pub(super) broker: krabka_broker::BrokerHandle,
     pub(super) bootstrap: String,
     /// alice's key. Only the public half matters once the workflow has run:
     /// that is the half an auditor holds.
     pub(super) alice_key: support::OperatorKey,
     /// Where the audit partition's segment files live, for the offline reader.
-    pub(super) log_dir: std::path::PathBuf,
+    pub(super) log_dir: PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -200,12 +201,12 @@ impl Cluster {
     }
 }
 
-pub(super) async fn boot_workflow_cluster() -> Cluster {
+pub async fn boot_workflow_cluster() -> Cluster {
     let dir = tempfile::tempdir().expect("tempdir");
     // The keys live beside the log directory rather than inside it, so no
     // stray file lands where the broker enumerates partition directories.
     let keys = dir.path().join("keys");
-    std::fs::create_dir_all(&keys).expect("create the operator key directory");
+    fs::create_dir_all(&keys).expect("create the operator key directory");
     let alice_key = support::mint_operator_key(&keys, ALICE_KEY_ID, ALICE);
     let log_dir = dir.path().join("data");
 
@@ -234,7 +235,7 @@ pub(super) async fn boot_workflow_cluster() -> Cluster {
 
 /// One complete freeze-and-thaw workflow, and the facts a case needs to join
 /// its records back together.
-pub(super) struct ThawWorkflow {
+pub struct ThawWorkflow {
     pub(super) cluster: Cluster,
     /// alice's client. Every case reads the audit topic back through it.
     pub(super) alice: krabka_client_core::Client,
@@ -257,7 +258,7 @@ pub(super) struct ThawWorkflow {
 /// append that removes the entry. A second proposal is then withdrawn rather
 /// than spent, because a withdrawal is the one path that records the
 /// `consumed` phase without a Kafka transition behind it.
-pub(super) async fn run_thaw_workflow() -> ThawWorkflow {
+pub async fn run_thaw_workflow() -> ThawWorkflow {
     let cluster = boot_workflow_cluster().await;
     let (alice, bob, carol, cluster_id) = cluster.workflow_clients().await;
 

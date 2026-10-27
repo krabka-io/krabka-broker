@@ -102,18 +102,18 @@ pub const fn share_offset_mutation_decision(
 })]
 #[must_use]
 pub fn share_prune_frontier(offsets: &[i64]) -> Option<i64> {
-    if matches!(offsets.len(), 0) {
-        return None;
-    }
-    let mut frontier = offsets[0];
+    let &first = offsets.first()?;
+    let mut frontier = first;
     let mut i = 1usize;
     #[invariant(1 <= i@ && i@ <= offsets@.len())]
     #[invariant(forall<k: Int> 0 <= k && k < i@ ==> frontier@ <= offsets@[k]@)]
     #[invariant(exists<k: Int> 0 <= k && k < i@ && frontier@ == offsets@[k]@)]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        if offsets[i] < frontier {
-            frontier = offsets[i];
+        if let Some(&offset) = offsets.get(i)
+            && offset < frontier
+        {
+            frontier = offset;
         }
         i += 1;
     }

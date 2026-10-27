@@ -37,12 +37,12 @@ use {
             },
         },
     },
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, time::Duration},
 };
 
 /// One key of Kafka's `GroupConfig.CONFIG_DEF`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GroupKey {
+pub struct GroupKey {
     pub(crate) name: &'static str,
     pub(crate) config_type: super::registry::ConfigType,
     /// Kafka's default, `ConfigDef.convertToString` of `defaultValue`.
@@ -68,7 +68,7 @@ const fn group_key(
 
 /// Every key of Kafka trunk's `GroupConfig.CONFIG_DEF`, in the order
 /// `DescribeConfigs` lists them (by name).
-pub(crate) const KAFKA_GROUP_KEYS: &[GroupKey] = {
+pub const KAFKA_GROUP_KEYS: &[GroupKey] = {
     use super::registry::ConfigType::{Boolean, Int, List, Long, String};
     &[
         group_key(
@@ -230,7 +230,7 @@ pub(crate) const KAFKA_GROUP_KEYS: &[GroupKey] = {
 /// not. Kafka 4.3.1 declares the constants of the three
 /// `*.assignor.offload.enable` keys and never `define`s them, so it too
 /// answers `Unknown group config name` for them.
-pub(crate) const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
+pub const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
     "consumer.assignor.offload.enable",
     "errors.deadletterqueue.copy.record.enable",
     "errors.deadletterqueue.topic.name",
@@ -245,19 +245,14 @@ pub(crate) const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
 
 /// The group keys a broker serves under `unstable`: Kafka 4.3.1's
 /// `GroupConfig` by default, trunk's with unstable api versions enabled.
-pub(crate) fn served_group_keys(
-    unstable: UnstableApiVersions,
-) -> impl Iterator<Item = &'static GroupKey> {
+pub fn served_group_keys(unstable: UnstableApiVersions) -> impl Iterator<Item = &'static GroupKey> {
     KAFKA_GROUP_KEYS.iter().filter(move |key| {
         unstable == UnstableApiVersions::Enabled || !KAFKA_TRUNK_GROUP_KEYS.contains(&key.name)
     })
 }
 
 /// The row for one group key served under `unstable`.
-pub(crate) fn kafka_group_key(
-    name: &str,
-    unstable: UnstableApiVersions,
-) -> Option<&'static GroupKey> {
+pub fn kafka_group_key(name: &str, unstable: UnstableApiVersions) -> Option<&'static GroupKey> {
     served_group_keys(unstable).find(|key| key.name == name)
 }
 
@@ -274,7 +269,7 @@ const NOT_APPLIED: &[&str] = &[
 
 /// A registry-shaped row for a Kafka group key that has none of its own,
 /// which `DescribeConfigs` reports typed and disclosed, at the broker's value.
-pub(crate) fn group_row(key: &GroupKey) -> super::registry::ConfigKey {
+pub fn group_row(key: &GroupKey) -> super::registry::ConfigKey {
     let doc = if NOT_APPLIED.contains(&key.name) {
         "A Kafka group config this broker accepts, stores and reports, and does not apply yet."
     } else {
@@ -388,7 +383,7 @@ const DEFINITION_ORDER: &[&str] = &[
 /// `GroupConfig.validate` reads off `GroupCoordinatorConfig` and
 /// `ShareGroupConfig`.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GroupBounds {
+pub struct GroupBounds {
     pub(crate) consumer: NextGenConfig,
     pub(crate) share: ShareGroupConfig,
     pub(crate) streams: StreamsGroupConfig,
@@ -406,9 +401,7 @@ impl GroupBounds {
     }
 }
 
-fn millis(duration: std::time::Duration) -> i32 {
-    i32::try_from(duration.as_millis()).unwrap_or(i32::MAX)
-}
+fn millis(duration: Duration) -> i32 { i32::try_from(duration.as_millis()).unwrap_or(i32::MAX) }
 
 /// The `ConfigDef` validator floor of an `INT` or `LONG` group key
 /// (`atLeast(n)`), when it has one.
@@ -483,7 +476,10 @@ fn check_bounds(
     unstable: UnstableApiVersions,
 ) -> Result<(), String> {
     let trunk = unstable == UnstableApiVersions::Enabled;
-    let int = |name: &str| overrides.get(name).and_then(|value| int_value(value));
+    let int = |name: &str| {
+        let value = overrides.get(name)?;
+        int_value(value)
+    };
     let range = |name: &str, min: Bound<'_>, max: Bound<'_>| -> Result<(), String> {
         let Some(value) = int(name) else {
             return Ok(());
@@ -677,7 +673,10 @@ fn check_bounds(
 /// The trunk-only bounds of `GroupConfig.validateValues`: the task offset
 /// interval floor, the warmup replica ceiling, and the registered assignor.
 fn check_trunk_streams_bounds(overrides: &BTreeMap<String, String>) -> Result<(), String> {
-    let int = |name: &str| overrides.get(name).and_then(|value| int_value(value));
+    let int = |name: &str| {
+        let value = overrides.get(name)?;
+        int_value(value)
+    };
     if let Some(value) = int(KEY_TASK_OFFSET_INTERVAL_MS)
         && value < MIN_TASK_OFFSET_INTERVAL_MS
     {
@@ -719,7 +718,7 @@ fn check_trunk_streams_bounds(overrides: &BTreeMap<String, String>) -> Result<()
 /// # Errors
 /// Returns Kafka's `InvalidConfigurationException` or `ConfigException`
 /// text, which the alter paths answer with `INVALID_CONFIG`.
-pub(crate) fn validate_group_configs(
+pub fn validate_group_configs(
     overrides: &BTreeMap<String, String>,
     bounds: &GroupBounds,
     unstable: UnstableApiVersions,
@@ -749,6 +748,7 @@ mod tests {
             test_support::config_map as overrides,
         },
         assert2::check,
+        std::time::Duration,
     };
 
     /// One row of a table: a key and value, and the refusal text or `Ok`.
@@ -1064,7 +1064,7 @@ mod tests {
     fn the_session_timeout_must_exceed_the_effective_heartbeat() {
         let bounds = GroupBounds {
             streams: StreamsGroupConfig {
-                max_heartbeat_interval: std::time::Duration::from_mins(1),
+                max_heartbeat_interval: Duration::from_mins(1),
                 ..StreamsGroupConfig::default()
             },
             ..GroupBounds::default()
@@ -1082,7 +1082,7 @@ mod tests {
         // defaults, under either version's bounds.
         let bounds = GroupBounds {
             consumer: NextGenConfig {
-                max_heartbeat_interval: std::time::Duration::from_mins(2),
+                max_heartbeat_interval: Duration::from_mins(2),
                 ..NextGenConfig::default()
             },
             ..GroupBounds::default()

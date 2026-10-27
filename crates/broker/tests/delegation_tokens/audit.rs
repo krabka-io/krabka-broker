@@ -25,7 +25,7 @@ use {
         wire::sasl_plain_authenticate,
     },
     assert2::{assert, check},
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose},
     krabka_broker::coordinator::AUDIT_TOPIC,
     krabka_protocol::owned::{
         create_delegation_token_request::CreateDelegationTokenRequest,
@@ -66,7 +66,7 @@ fn secret_spellings(hmac: &[u8]) -> Vec<String> {
         let _ = write!(out, "{b:02x}");
         out
     });
-    vec![base64::engine::general_purpose::STANDARD.encode(hmac), hex]
+    vec![general_purpose::STANDARD.encode(hmac), hex]
 }
 
 /// Mint, renew and expire one token over a SASL-authenticated connection, and

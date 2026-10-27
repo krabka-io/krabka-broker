@@ -17,7 +17,7 @@ use {
 /// from its next response. Only a fetch that parks reads again after the
 /// update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FollowerPosition {
+pub struct FollowerPosition {
     pub(crate) follower_id: i32,
     /// The broker epoch the follower's Fetch carried. KIP-841 compares it
     /// with the broker's registered epoch before the follower may rejoin the
@@ -167,10 +167,17 @@ mod tests {
             if epoch_moved {
                 assert!(*partition.replica_state.lock().await == before);
             } else {
-                let state = partition.replica_state.lock().await;
-                assert!(state.eligibility(NodeId(2)).fetch_broker_epoch == Some(7));
-                assert!(state.follower_can_serve(NodeId(2), Offset(1)));
-                assert!(!state.follower_can_serve(NodeId(2), Offset(0)));
+                let (fetch_broker_epoch, serves_one, serves_zero) = {
+                    let state = partition.replica_state.lock().await;
+                    (
+                        state.eligibility(NodeId(2)).fetch_broker_epoch,
+                        state.follower_can_serve(NodeId(2), Offset(1)),
+                        state.follower_can_serve(NodeId(2), Offset(0)),
+                    )
+                };
+                assert!(fetch_broker_epoch == Some(7));
+                assert!(serves_one);
+                assert!(!serves_zero);
             }
 
             let recorded = Recorded {
@@ -227,8 +234,11 @@ mod tests {
         assert!(advanced == expected_advance);
         assert!(partition.high_watermark().await == Offset(expected_watermark));
         assert!(futures_util::poll!(changed.as_mut()).is_ready() == expected_advance);
-        let state = partition.replica_state.lock().await;
-        let (log_end, caught_up) = state.follower_progress(NodeId(2));
+        let (log_end, caught_up) = partition
+            .replica_state
+            .lock()
+            .await
+            .follower_progress(NodeId(2));
         assert!(log_end == Offset(read_log_end));
         assert!(caught_up.is_some());
     }

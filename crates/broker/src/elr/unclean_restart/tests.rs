@@ -21,7 +21,7 @@ fn nodes(ids: &[u64]) -> Vec<NodeId> { ids.iter().copied().map(NodeId).collect()
 /// A topic with `partitions` partitions and the ELR value `elr`.
 fn topic_records(name: &str, partitions: i32, elr: &str) -> Vec<MetadataRecord> {
     let mut overrides = BTreeMap::new();
-    overrides.insert(MIN_INSYNC_REPLICAS.to_string(), "2".to_string());
+    overrides.insert(MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned());
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),
@@ -209,11 +209,11 @@ fn the_last_eligible_replica_leaving_tombstones_the_key_and_keeps_other_override
 
     let records = withdraw_elr_membership(&image, NodeId(2));
 
-    let mut after = image.clone();
+    let mut after = image;
     for record in &records {
         after.apply(record);
     }
     let overrides = after.topic_config("orders").expect("topic keeps overrides");
-    assert!(overrides.get(MIN_INSYNC_REPLICAS) == Some(&"2".to_string()));
+    assert!(overrides.get(MIN_INSYNC_REPLICAS) == Some(&"2".to_owned()));
     assert!(TopicElr::of_topic(&after, "orders").partition(0) == PartitionElr::default());
 }

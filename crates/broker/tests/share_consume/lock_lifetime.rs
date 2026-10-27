@@ -18,7 +18,11 @@ use {
         },
     },
     assert2::assert,
-    std::time::{Duration, Instant},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::OwnedSemaphorePermit, time},
 };
 
 /// The background sweep reverts an acquired-but-unacknowledged lock that
@@ -119,7 +123,7 @@ async fn renew_extends_lock_not_redelivered() {
     // Intentional calibrated timing: renew ~200ms in (before the 500ms lock
     // expires) to reset the deadline to renew-time + 500ms ≈ T0+700ms. Epoch
     // is now 2. This sleep proves renew timing; it is NOT a flaky state-guess.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    time::sleep(Duration::from_millis(200)).await;
     let renew = share_renew()
         .client(&client)
         .session(ShareSessionSetup::joined(&member, tid))
@@ -138,8 +142,8 @@ async fn renew_extends_lock_not_redelivered() {
     // overshoot the renewed window. This proves the renew suppressed redelivery;
     // it is NOT a flaky state-guess.
     let target = acquire_at + Duration::from_millis(600);
-    if let Some(rem) = target.checked_duration_since(std::time::Instant::now()) {
-        tokio::time::sleep(rem).await;
+    if let Some(rem) = target.checked_duration_since(Instant::now()) {
+        time::sleep(rem).await;
     }
     fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
 }
@@ -150,22 +154,22 @@ async fn renew_extends_lock_not_redelivered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_renew_redelivers_after_lock_expiry() {
     let fixture = Box::pin(lock_fixture(Duration::from_millis(500), None)).await;
-    let (client, tid, member) = (&fixture.client, fixture.tid, &fixture.member);
-    let (session, _) = acquire_initial_session(client, member, tid).await;
+    let (session, _) = acquire_initial_session(&fixture.client, &fixture.member, fixture.tid).await;
 
     // Intentional calibrated timing: no renew — wait 800ms (well past the 500ms
     // lock + a sweeper tick) so the record is reverted to Available and
     // re-delivered. This sleep mirrors the renew test's timing to prove that
     // WITHOUT a renew the lock IS swept; it is NOT a flaky state-guess.
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    fetch_redelivered(client, ShareFetchSetup::from(session)).await;
+    time::sleep(Duration::from_millis(800)).await;
+    fetch_redelivered(&fixture.client, ShareFetchSetup::from(session)).await;
+    drop(fixture);
 }
 
 /// A joined share-group member and the owners that keep its broker running.
 struct LockFixture {
-    permit: tokio::sync::OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
     broker: krabka_broker::BrokerHandle,
-    client: std::sync::Arc<krabka_client_core::Client>,
+    client: Arc<krabka_client_core::Client>,
     dir: tempfile::TempDir,
     tid: uuid::Uuid,
     member: String,

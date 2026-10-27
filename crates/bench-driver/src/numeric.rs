@@ -8,15 +8,15 @@
 //! unit of the same dimension gives the count as a dimensionless [`Ratio`], so
 //! nobody writes the scale factor out by hand.
 
-use {krabka_units::prelude::*, num_traits::ToPrimitive};
+use {
+    krabka_units::prelude::*,
+    num_traits::{AsPrimitive, ToPrimitive},
+};
 
-pub(crate) fn to_f64<T: ToPrimitive + Copy>(value: T) -> f64 {
-    value
-        .to_f64()
-        .expect("primitive numeric values are representable as f64")
-}
+/// `value` as the nearest `f64`, which every primitive number has.
+pub fn to_f64<T: AsPrimitive<f64>>(value: T) -> f64 { value.as_() }
 
-pub(crate) fn nonnegative_f64_to_u64(value: f64) -> u64 {
+pub fn nonnegative_f64_to_u64(value: f64) -> u64 {
     if value.is_nan() || value <= 0.0 {
         0
     } else if value >= to_f64(u64::MAX) {
@@ -26,19 +26,17 @@ pub(crate) fn nonnegative_f64_to_u64(value: f64) -> u64 {
     }
 }
 
-pub(crate) fn saturating_u128_to_u64(value: u128) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
+pub fn saturating_u128_to_u64(value: u128) -> u64 { u64::try_from(value).unwrap_or(u64::MAX) }
 
-pub(crate) fn nonnegative_i64_to_u64(value: i64) -> u64 { u64::try_from(value).unwrap_or_default() }
+pub fn nonnegative_i64_to_u64(value: i64) -> u64 { u64::try_from(value).unwrap_or_default() }
 
-pub(crate) fn saturating_u64_to_i64(value: u64) -> i64 { i64::try_from(value).unwrap_or(i64::MAX) }
+pub fn saturating_u64_to_i64(value: u64) -> i64 { i64::try_from(value).unwrap_or(i64::MAX) }
 
 /// The rate at which `count` events arrived over `window`.
 ///
 /// A zero or negative window gives no rate and not an infinity. This matches
 /// how [`krabka_units::convert::FrequencyExt::period`] treats a zero rate.
-pub(crate) fn event_rate(count: u64, window: Time) -> Frequency {
+pub fn event_rate(count: u64, window: Time) -> Frequency {
     if window <= Time::ZERO {
         return Frequency::ZERO;
     }
@@ -46,11 +44,11 @@ pub(crate) fn event_rate(count: u64, window: Time) -> Frequency {
 }
 
 /// `size` counted in mebibytes, which is the unit of the report's memory axes.
-pub(crate) fn mebibytes_f64(size: ByteSize) -> f64 { (size / mebibytes(1)).as_f64() }
+pub fn mebibytes_f64(size: ByteSize) -> f64 { (size / mebibytes(1)).as_f64() }
 
 /// `extent` counted in milliseconds, which is the unit of the report's latency
 /// columns and time-series metric keys.
-pub(crate) fn millis_f64(extent: Time) -> f64 { (extent / millis(1)).as_f64() }
+pub fn millis_f64(extent: Time) -> f64 { (extent / millis(1)).as_f64() }
 
 #[cfg(test)]
 mod tests {

@@ -9,19 +9,21 @@ use {
         kraft::types::{NodeId, QuorumState, ReplicaKey},
     },
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    krabka_metadata::voters::VoterSet,
+    std::{fs, io::ErrorKind, path::Path},
     uuid::Uuid,
 };
 
 /// The lowest `data_version` of Kafka's `QuorumStateData` this build reads,
 /// Kafka's `FileQuorumStateStore.LOWEST_SUPPORTED_VERSION`. It is part of the
 /// 1.x on-disk contract.
-pub(crate) const QUORUM_STATE_LOWEST_DATA_VERSION: i64 = 0;
+pub const QUORUM_STATE_LOWEST_DATA_VERSION: i64 = 0;
 
 /// The highest `data_version` of Kafka's `QuorumStateData` this build reads
 /// and writes, Kafka's `FileQuorumStateStore.HIGHEST_SUPPORTED_VERSION`.
 /// `kraft.version` 0 writes `data_version` 0, and `kraft.version` 1 writes
 /// this one. It is part of the 1.x on-disk contract.
-pub(crate) const QUORUM_STATE_HIGHEST_DATA_VERSION: i64 = 1;
+pub const QUORUM_STATE_HIGHEST_DATA_VERSION: i64 = 1;
 
 /// The `data_version` field of Kafka's `QuorumStateData` JSON.
 const DATA_VERSION_FIELD: &str = "data_version";
@@ -58,11 +60,18 @@ struct QuorumStateJson {
     data_version: i32,
 }
 
+/// The refusal of a quorum state that schema v0 or v1 cannot hold exactly.
+fn unrepresentable() -> RaftError {
+    RaftError::Storage(krabka_log::LogError::InvalidArgument(
+        "quorum-state cannot be represented exactly by schema v0 or v1".into(),
+    ))
+}
+
 /// Write Kafka's JSON `QuorumStateData` atomically and durably, syncing the
 /// directory after the rename as Kafka's `FileQuorumStateStore` does. Level 0 uses schema v0
 /// (including the legacy voter ids); level 1 uses schema v1 with the voted
 /// directory id and no embedded voter set.
-pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), RaftError> {
+pub fn save_quorum_state(dir: &Path, state: &QuorumState) -> Result<(), RaftError> {
     let voter_ids = state.voters.ids();
     let all_voter_ids_fit = voter_ids.iter().all(|id| i32::try_from(id.0).is_ok());
     let leader_id_value = state.leader_id.map_or(0, |id| id.0);
@@ -77,20 +86,17 @@ pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(
         all_voter_ids_fit,
     ) == krabka_verified::QuorumStateWriteDecision::Reject
     {
-        return Err(RaftError::Storage(krabka_log::LogError::InvalidArgument(
-            "quorum-state cannot be represented exactly by schema v0 or v1".into(),
-        )));
+        return Err(unrepresentable());
     }
     let leader_id = state
         .leader_id
         .map_or(Ok(-1), |id| i32::try_from(id.0))
-        .expect("write admission proves the leader id fits i32");
-    let leader_epoch =
-        i32::try_from(state.leader_epoch).expect("write admission proves the epoch fits i32");
+        .map_err(|_| unrepresentable())?;
+    let leader_epoch = i32::try_from(state.leader_epoch).map_err(|_| unrepresentable())?;
     let voted_id = state
         .voted_key
         .map_or(Ok(-1), |key| i32::try_from(key.id.0))
-        .expect("write admission proves the voted id fits i32");
+        .map_err(|_| unrepresentable())?;
     let data = if state.kraft_version == 0 {
         QuorumStateJson {
             cluster_id: Some(state.cluster_id.to_string()),
@@ -102,11 +108,12 @@ pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(
             current_voters: Some(
                 voter_ids
                     .into_iter()
-                    .map(|id| QuorumStateVoter {
-                        voter_id: i32::try_from(id.0)
-                            .expect("write admission proves every v0 voter id fits i32"),
+                    .map(|id| {
+                        i32::try_from(id.0)
+                            .map(|voter_id| QuorumStateVoter { voter_id })
+                            .map_err(|_| unrepresentable())
                     })
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             ),
             data_version: 0,
         }
@@ -179,20 +186,25 @@ fn parse_quorum_state(bytes: &[u8]) -> Result<QuorumStateJson, PersistedFormatEr
 /// [`RaftError::PersistedFormat`] when it has an unsupported `data_version`,
 /// does not parse, or does not match `cluster_id` and `voters`.
 pub fn load_quorum_state(
-    dir: &std::path::Path,
+    dir: &Path,
     cluster_id: Uuid,
-    voters: &krabka_metadata::voters::VoterSet,
+    voters: &VoterSet,
 ) -> Result<Option<QuorumState>, RaftError> {
     let path = dir.join(QUORUM_STATE_FILE);
-    let bytes = match std::fs::read(&path) {
+    let bytes = match fs::read(&path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(RaftError::Storage(krabka_log::LogError::Io(e))),
     };
     let refuse = |problem| RaftError::PersistedFormat {
         artifact: QUORUM_STATE_FILE,
         path: path.clone(),
         problem,
+    };
+    let out_of_range = |field: &str| {
+        refuse(PersistedFormatError::Malformed(format!(
+            "its {field} is out of range"
+        )))
     };
     let data = parse_quorum_state(&bytes).map_err(refuse)?;
     let data_version = data.data_version;
@@ -243,19 +255,16 @@ pub fn load_quorum_state(
         }
         krabka_verified::QuorumStateLoadDecision::RestoreNoVote => None,
         krabka_verified::QuorumStateLoadDecision::RestoreVote => Some(ReplicaKey {
-            id: NodeId(
-                u64::try_from(data.voted_id)
-                    .expect("load admission proves the voted id is nonnegative"),
-            ),
+            id: NodeId(u64::try_from(data.voted_id).map_err(|_| out_of_range("voted id"))?),
             directory_id: if data_version == 1 {
-                voted_directory_id.expect("load admission proves the v1 directory id is valid")
+                voted_directory_id.ok_or_else(|| out_of_range("voted directory id"))?
             } else {
                 Uuid::nil()
             },
         }),
     };
     let leader_epoch =
-        u32::try_from(data.leader_epoch).expect("load admission proves the epoch is nonnegative");
+        u32::try_from(data.leader_epoch).map_err(|_| out_of_range("leader epoch"))?;
     // Leadership is VOLATILE, not durable: Raft persists only currentTerm
     // (`leader_epoch`) and votedFor (`voted_key`), never the current leader. A
     // restarted node must NOT trust a persisted `leader_id` — especially an
@@ -270,28 +279,31 @@ pub fn load_quorum_state(
         leader_id: None,
         voted_key,
         voters: voters.clone(),
-        kraft_version: u16::try_from(data_version)
-            .expect("load admission proves the schema version is zero or one"),
+        kraft_version: u16::try_from(data_version).map_err(|_| out_of_range("data_version"))?,
     }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        krabka_metadata::voters::{KRaftVersionRange, Voter, VoterEndpoint},
+        std::fs,
+    };
 
     #[test]
     fn save_and_load_quorum_state_with_no_leader() {
         let dir = tempfile::TempDir::new().unwrap();
         let cluster_id = Uuid::new_v4();
-        let voter = krabka_metadata::voters::Voter {
+        let voter = Voter {
             id: NodeId(1),
             directory_id: Uuid::nil(),
-            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+            endpoints: vec![VoterEndpoint {
                 name: "CONTROLLER".into(),
                 host: "127.0.0.1".into(),
                 port: 9092,
             }],
-            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
+            kraft_version: KRaftVersionRange::default(),
         };
         let state = QuorumState {
             cluster_id,
@@ -303,7 +315,7 @@ mod tests {
         };
         save_quorum_state(dir.path(), &state).expect("save");
         let path = dir.path().join(QUORUM_STATE_FILE);
-        let content = std::fs::read_to_string(&path).expect("read");
+        let content = fs::read_to_string(&path).expect("read");
         assert2::assert!(content.contains("\"leaderId\":-1"));
 
         let loaded = load_quorum_state(dir.path(), cluster_id, &state.voters)

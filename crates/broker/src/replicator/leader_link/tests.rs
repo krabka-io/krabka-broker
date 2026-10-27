@@ -7,6 +7,7 @@ use {
         metadata_response::{MetadataResponse, MetadataResponseBroker},
     },
     krabka_units::secs,
+    std::io,
     tokio::io::{DuplexStream, duplex},
 };
 
@@ -134,15 +135,15 @@ async fn an_unsupported_api_versions_version_is_retried_at_the_leaders_highest()
         leader
             .answer(second.correlation, false, &encoded(&accepted, 2))
             .await;
-        (first, second)
+        [first, second]
     };
 
-    let (link, (first, second)) = tokio::join!(LeaderLink::open(follower, settings()), script);
+    let (link, received) = tokio::join!(LeaderLink::open(follower, settings()), script);
 
     assert!(link.is_ok());
     let client_id = "follower-2".to_owned();
     check!(
-        [first, second]
+        received
             == [
                 Received {
                     api_key: ApiVersionsRequest::API_KEY,
@@ -198,7 +199,7 @@ async fn send_frames_a_request_and_decodes_a_flexible_response() {
 /// Sends a Metadata request that the leader answers with `body` under the
 /// request's correlation ID plus `correlation_shift`, and returns the I/O
 /// error the link fails the request with.
-async fn failed_metadata_request(correlation_shift: i32, body: &[u8]) -> std::io::Error {
+async fn failed_metadata_request(correlation_shift: i32, body: &[u8]) -> io::Error {
     let (mut link, mut leader) = opened(vec![api(MetadataRequest::API_KEY, 12)]).await;
     let script = async {
         let request = leader.read(true).await;
@@ -217,13 +218,13 @@ async fn failed_metadata_request(correlation_shift: i32, body: &[u8]) -> std::io
 async fn a_response_for_another_correlation_id_fails_the_request() {
     let body = encoded(&MetadataResponse::default(), 12);
     let error = failed_metadata_request(7, &body).await;
-    check!(error.kind() == std::io::ErrorKind::InvalidData);
+    check!(error.kind() == io::ErrorKind::InvalidData);
 }
 
 #[tokio::test]
 async fn a_response_over_the_frame_limit_fails_the_request() {
     let error = failed_metadata_request(0, &[0; 2048]).await;
-    check!(error.kind() == std::io::ErrorKind::InvalidData);
+    check!(error.kind() == io::ErrorKind::InvalidData);
 }
 
 #[tokio::test]

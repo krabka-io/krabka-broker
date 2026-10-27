@@ -5,9 +5,12 @@
 //! The sample reuses the read gate, so it cannot disagree with what a gated
 //! read answers.
 
-use super::{
-    TopicBasedRemoteLogMetadataManager,
-    assignment::{HWM_UNKNOWN, ReadGate, read_gate},
+use {
+    super::{
+        TopicBasedRemoteLogMetadataManager,
+        assignment::{HWM_UNKNOWN, ReadGate, read_gate},
+    },
+    std::sync::PoisonError,
 };
 
 /// Readiness of one assigned `__remote_log_metadata` partition, as
@@ -38,16 +41,12 @@ impl TopicBasedRemoteLogMetadataManager {
     ///
     /// `ready` comes from the same rule that every gated read applies, over
     /// the target and applied offset the entry reports.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the assignment-readiness or applied-offset mutex is poisoned.
     #[must_use]
     pub fn metadata_partition_readiness(&self) -> Vec<MetadataPartitionReadiness> {
         let mut targets: Vec<(i32, i64)> = self
             .ready_targets
             .lock()
-            .expect("ready_targets poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|(&partition, &target)| (partition, target))
             .collect();
@@ -80,7 +79,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::Arc},
     };
 
     /// One readiness case: the assignment targets and applied offsets the
@@ -173,7 +172,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn readiness_follows_a_failed_then_refreshed_high_water_mark() {
         let log = HwmFlakyLog::new(4);
-        let SeededManager { manager, partition } = seeded_manager(log.clone()).await;
+        let SeededManager { manager, partition } =
+            seeded_manager(Arc::<HwmFlakyLog>::clone(&log)).await;
         let hwm = log.high_water_marks().await.unwrap()[usize::try_from(partition).unwrap()];
         assert!(hwm > 0);
 

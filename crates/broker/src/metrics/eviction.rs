@@ -61,7 +61,10 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tokio::sync::watch,
+    tokio::{
+        sync::watch,
+        time::{Instant, MissedTickBehavior, interval_at},
+    },
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
 };
@@ -208,8 +211,8 @@ impl BrokerMetrics {
         for reason in RejectReason::LABELS {
             self.schema_validation_rejections
                 .remove(&SchemaRejectionLabel {
-                    topic: topic.to_string(),
-                    reason: reason.to_string(),
+                    topic: topic.to_owned(),
+                    reason: reason.to_owned(),
                 });
         }
         self.evict_topic_lag_series(topic);
@@ -243,7 +246,7 @@ pub struct MetricSeriesIndex {
 /// It compares the labels the data path actually created with the labels the
 /// current image permits. This catches invented client labels as well as
 /// ordinary metadata removal.
-pub(crate) struct MetricSeriesEvictor {
+pub struct MetricSeriesEvictor {
     node_id: NodeId,
     metrics: BrokerMetrics,
     topics: HashMap<String, Uuid>,
@@ -326,7 +329,7 @@ impl MetricSeriesEvictor {
 ///
 /// Image changes release ordinary removals immediately. The periodic pass
 /// catches a data-path write that races behind the removing image.
-pub(crate) fn spawn_metric_series_evictor(
+pub fn spawn_metric_series_evictor(
     mut images: watch::Receiver<Arc<MetadataImage>>,
     node_id: NodeId,
     metrics: BrokerMetrics,
@@ -336,8 +339,8 @@ pub(crate) fn spawn_metric_series_evictor(
     evictor.apply(&images.borrow().clone());
     tokio::spawn(async move {
         let period = Duration::from_secs(30);
-        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut interval = interval_at(Instant::now() + period, period);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 changed = images.changed() => {
@@ -366,6 +369,8 @@ mod tests {
         krabka_metadata::{
             DeleteTopicRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
         },
+        prometheus_client::encoding::text,
+        tokio::{task, time},
     };
 
     const TOPIC: &str = "orders";
@@ -379,7 +384,7 @@ mod tests {
             .registry
             .try_lock()
             .expect("no scrape holds the registry");
-        prometheus_client::encoding::text::encode(&mut body, &registry).expect("encode metrics");
+        text::encode(&mut body, &registry).expect("encode metrics");
         body
     }
 
@@ -471,13 +476,13 @@ mod tests {
     /// in a spawned task, so the test waits on the body rather than on a
     /// sleep.
     async fn scrape_until(metrics: &BrokerMetrics, condition: impl Fn(&str) -> bool) -> String {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             loop {
                 let body = scrape(metrics);
                 if condition(&body) {
                     return body;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

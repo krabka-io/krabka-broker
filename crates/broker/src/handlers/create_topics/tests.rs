@@ -68,14 +68,7 @@ async fn dispatch_v4_as_admin(
         bind(ctx);
         user ["admin"];
     };
-    dispatch_wire(
-        broker,
-        krabka_protocol::api_key::ApiKey::CreateTopics as i16,
-        4,
-        request,
-        &ctx,
-    )
-    .await
+    dispatch_wire(broker, ApiKey::CreateTopics as i16, 4, request, &ctx).await
 }
 
 /// A topic config key and the value it is set to.
@@ -297,7 +290,16 @@ krabka_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
-use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+use {
+    crate::test_support::start_broker_with_authorizer_no_audit as start_broker,
+    krabka_protocol::{api_key::ApiKey, owned::create_topics_request::CreatableReplicaAssignment},
+    std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+        time::Instant,
+    },
+};
 
 handler_drive!(CreateTopicsRequest => CreateTopicsResponse, handle, VERSION);
 
@@ -838,9 +840,9 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
     let image = broker_handle.controller_image_for_test();
     let configs = image.topic_config("retries").expect("topic configs");
     let expected_configs = maplit::btreemap! {
-    "delivery.mode".to_string() => "scheduled".to_string(),
-    "delivery.max.delay.ms".to_string() => "-1".to_string(),
-    "delivery.schedule.monotonic".to_string() => "true".to_string()};
+    "delivery.mode".to_owned() => "scheduled".to_owned(),
+    "delivery.max.delay.ms".to_owned() => "-1".to_owned(),
+    "delivery.schedule.monotonic".to_owned() => "true".to_owned()};
     assert!(*configs == expected_configs);
     broker_handle.shutdown().await;
 }
@@ -888,7 +890,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     // The override reaches the metadata log unchanged, ...
     let image = broker_handle.controller_image_for_test();
     let configs = image.topic_config("events").expect("topic configs");
-    let expected_configs = maplit::btreemap! {"krabka.diskless".to_string() => "true".to_string()};
+    let expected_configs = maplit::btreemap! {"krabka.diskless".to_owned() => "true".to_owned()};
     assert!(*configs == expected_configs);
     // ... and the partition the handler materialized is on the diskless
     // runtime, which is the whole point of the key.
@@ -976,13 +978,11 @@ async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment(
         name: "manual-diskless".into(),
         num_partitions: -1,
         replication_factor: -1,
-        assignments: vec![
-            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
-                partition_index: 0,
-                broker_ids: vec![2, 3],
-                ..Default::default()
-            },
-        ],
+        assignments: vec![CreatableReplicaAssignment {
+            partition_index: 0,
+            broker_ids: vec![2, 3],
+            ..Default::default()
+        }],
         configs: vec![CreatableTopicConfig {
             name: "krabka.diskless".into(),
             value: Some("true".into()),
@@ -1141,9 +1141,9 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
                 &broker_handle.controller_image_for_test(),
                 broker.config.node_id,
                 name,
-                &std::collections::BTreeMap::new(),
+                &BTreeMap::new(),
                 UnstableApiVersions::Disabled,
-                &std::collections::BTreeMap::new(),
+                &BTreeMap::new(),
             )))
         } else {
             expected_row.configs.clone()
@@ -1185,7 +1185,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
     };
     let req = request(vec![topic("throttled", 5, 1)]);
 
-    let charged_no_earlier_than = std::time::Instant::now();
+    let charged_no_earlier_than = Instant::now();
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     check_created_topic_response(&resp, CreatedTopicExpectation {
@@ -1368,9 +1368,9 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
 }
 
 /// Every file and directory under `root`, as paths relative to it, sorted.
-fn tree(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("read dir") {
+fn tree(root: &Path) -> Vec<PathBuf> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read dir") {
             let path = entry.expect("dir entry").path();
             out.push(path.strip_prefix(root).expect("under root").to_path_buf());
             if path.is_dir() {
@@ -1610,12 +1610,10 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             assignments: lists
                 .iter()
                 .enumerate()
-                .map(|(index, broker_ids)| {
-                    krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
-                        partition_index: i32::try_from(index).expect("index"),
-                        broker_ids: broker_ids.to_vec(),
-                        ..Default::default()
-                    }
+                .map(|(index, broker_ids)| CreatableReplicaAssignment {
+                    partition_index: i32::try_from(index).expect("index"),
+                    broker_ids: broker_ids.to_vec(),
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -2210,13 +2208,11 @@ fn check_order_limit_cases() -> Vec<CheckOrderCase> {
     // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
     const TOO_MANY: &str = "Excessively large number of partitions per request.";
     let manual_rf_2 = CreatableTopic {
-        assignments: vec![
-            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
-                partition_index: 0,
-                broker_ids: vec![1],
-                ..Default::default()
-            },
-        ],
+        assignments: vec![CreatableReplicaAssignment {
+            partition_index: 0,
+            broker_ids: vec![1],
+            ..Default::default()
+        }],
         ..topic("m", -1, 2)
     };
     vec![

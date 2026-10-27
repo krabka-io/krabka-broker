@@ -5,16 +5,21 @@
 //! suites that drive those tools boot the cluster here.
 
 use {
-    crate::support::{JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config},
+    crate::support::{
+        JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config, listeners,
+    },
     krabka_broker::{
         Broker, BrokerConfig,
+        authorizer::SimpleAclAuthorizer,
         config::{InterBrokerCredentials, ListenerSpec},
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
+    rustls::crypto::aws_lc_rs,
+    std::{array, sync::Arc},
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct SaslClusterSetup<'a> {
+pub struct SaslClusterSetup<'a> {
     #[default(super::sasl::ADMIN)]
     pub admin: &'a str,
     #[default(super::sasl::ADMIN_PASS)]
@@ -22,7 +27,7 @@ pub(crate) struct SaslClusterSetup<'a> {
     pub extra_users: &'a [(&'a str, &'a str)],
 }
 
-pub(crate) type SaslCluster = (
+pub type SaslCluster = (
     krabka_broker::BrokerHandle,
     krabka_broker::BrokerHandle,
     krabka_broker::BrokerHandle,
@@ -46,7 +51,7 @@ pub(crate) type SaslCluster = (
 /// A caller needs the `cfg*` values to revive a broker after shutdown.
 /// Pass them with `BootstrapMode::Rejoin`.
 #[bon::builder]
-pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
+pub async fn start_three_broker_sasl_plaintext_jvm_cluster(
     #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
     #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
     #[builder(default)] extra_users: &'_ [(&'_ str, &'_ str)],
@@ -73,14 +78,14 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
 
 /// `N` started brokers, the configs they started from, and the directories
 /// that back them.
-pub(crate) struct StartedCluster<const N: usize> {
+pub struct StartedCluster<const N: usize> {
     pub(crate) brokers: [krabka_broker::BrokerHandle; N],
     pub(crate) configs: [BrokerConfig; N],
     pub(crate) dirs: [tempfile::TempDir; N],
 }
 
 #[bon::builder]
-pub(crate) async fn start_sasl_cluster<const N: usize>(
+pub async fn start_sasl_cluster<const N: usize>(
     listeners: [JvmListeners; N],
     #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
     #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
@@ -98,9 +103,9 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
         extra_users,
     } = setup;
     init_jvm_tracing("krabka_broker=info");
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let dirs: [tempfile::TempDir; N] =
-        std::array::from_fn(|_| tempfile::tempdir().expect("broker directory"));
+        array::from_fn(|_| tempfile::tempdir().expect("broker directory"));
     let voters: Vec<_> = listeners
         .iter()
         .enumerate()
@@ -111,7 +116,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
             )
         })
         .collect();
-    let configs: [BrokerConfig; N] = std::array::from_fn(|index| {
+    let configs: [BrokerConfig; N] = array::from_fn(|index| {
         let listener = &listeners[index];
         let mut config = jvm_broker_config()
             .log_dir(dirs[index].path().to_path_buf())
@@ -123,7 +128,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
             .call();
         config.listeners = vec![ListenerSpec {
             advertised: listener.advertised.clone(),
-            ..crate::support::listeners::listener(
+            ..listeners::listener(
                 "SASL_PLAINTEXT",
                 config.listen_addr,
                 ListenerProtocol::SaslPlaintext,
@@ -146,9 +151,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
                 .insert((*user).into(), (*password).into());
         }
         adjust(&mut config);
-        config.authorizer = std::sync::Arc::new(
-            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
-        );
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
         config
     });
     // Every static voter must start before awaiting any one node's election.
@@ -169,7 +172,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
 }
 
 #[bon::builder]
-pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_configured(
+pub async fn start_three_broker_sasl_plaintext_jvm_cluster_configured(
     #[builder(default = super :: sasl :: ADMIN)] admin: &'_ str,
     #[builder(default = super :: sasl :: ADMIN_PASS)] admin_pass: &'_ str,
     #[builder(default)] extra_users: &'_ [(&'_ str, &'_ str)],

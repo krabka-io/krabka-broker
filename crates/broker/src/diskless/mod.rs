@@ -1,9 +1,9 @@
-pub(crate) mod flusher;
-pub(crate) mod hot_tail;
-pub(crate) mod index_log;
-pub(crate) mod read;
+pub mod flusher;
+pub mod hot_tail;
+pub mod index_log;
+pub mod read;
 mod reclaimer;
-pub(crate) mod recovery;
+pub mod recovery;
 mod retention;
-pub(crate) mod wal_index;
-pub(crate) mod wal_object;
+pub mod wal_index;
+pub mod wal_object;

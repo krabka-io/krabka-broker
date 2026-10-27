@@ -26,16 +26,18 @@ use {
     anyhow::{Context, Result},
     clap::Parser,
     krabka_bench_driver::soak::drill::cli::{Cli, run},
+    rustls::crypto::aws_lc_rs,
+    std::io,
     tokio::signal::unix::{SignalKind, signal},
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(io::stderr)
         .with_target(false)
         .init();
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let cli = Cli::parse();
     let mut terminate = signal(SignalKind::terminate()).context("listen for SIGTERM")?;
     let lost = async move {

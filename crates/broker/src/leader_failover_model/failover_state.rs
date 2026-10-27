@@ -109,7 +109,7 @@ impl FailoverModel {
 pub(super) fn pr_of(s: &FailoverState) -> PartitionRecord {
     let epoch = krabka_metadata::LeaderEpoch(s.leader_epoch);
     PartitionRecord {
-        topic: elr::TOPIC.to_string(),
+        topic: elr::TOPIC.to_owned(),
         partition: 0,
         leader: s.leader,
         replicas: s.replicas.clone(),

@@ -13,6 +13,7 @@ use {
     },
     krabka_metadata::{LeaderEpoch, MetadataRecord},
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Recreates a shorter Krabka-led suffix, then verifies the JVM follower
@@ -99,7 +100,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
             Instant::now() <= parked_deadline,
             "dead-leader metadata did not apply before divergent rewrite"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     // Remove the JVM suffix from broker 1, then append the Krabka suffix at the
@@ -154,7 +155,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
             Instant::now() <= convergence_deadline,
             "JVM follower retained its divergent suffix after KIP-320 recovery:\n{dump}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     };
 
     // 6. ASSERTION (a): the JVM follower's on-disk log converged on the Krabka

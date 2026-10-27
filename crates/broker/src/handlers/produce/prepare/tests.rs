@@ -2,7 +2,7 @@
 
 use {
     super::*,
-    crate::{handlers::produce::test_support::encode_batch, metrics::BrokerMetrics},
+    crate::{codes, handlers::produce::test_support::encode_batch, metrics::BrokerMetrics},
     assert2::assert,
     krabka_compression::CompressionType,
     krabka_protocol::records::Record,
@@ -44,11 +44,8 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
             13,
         )
     };
-    assert!(run_prepare(None, policy).unwrap_err() == crate::codes::INVALID_RECORD);
-    assert!(
-        run_prepare(Some(CompressionType::Zstd), policy).unwrap_err()
-            == crate::codes::INVALID_RECORD
-    );
+    assert!(run_prepare(None, policy).unwrap_err() == codes::INVALID_RECORD);
+    assert!(run_prepare(Some(CompressionType::Zstd), policy).unwrap_err() == codes::INVALID_RECORD);
     assert!(
         run_prepare(
             Some(CompressionType::Zstd),
@@ -65,7 +62,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         policy,
     )
     .unwrap_err();
-    assert!(error == crate::codes::INVALID_RECORD);
+    assert!(error == codes::INVALID_RECORD);
 }
 
 // ── verbatim passthrough predicate (prepare_batch + build_produce_data) ──

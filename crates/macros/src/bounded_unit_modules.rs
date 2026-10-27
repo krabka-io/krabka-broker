@@ -4,7 +4,7 @@ use {
     crate::meta::{Tokens, plain_path},
     moxy::{
         ast::{Attributes, FromMeta, Meta, Parse, ParseError, Parser, Path, Token, Visibility},
-        token::{Ident, LitStr, Spanner, TokenStream},
+        token::{Group, Ident, LitStr, Spanner, TokenStream},
     },
     std::collections::HashSet,
 };
@@ -26,7 +26,7 @@ struct UnitModule {
     requirement: LitStr,
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let mut modules = Vec::new();
     let mut names = HashSet::new();
@@ -37,7 +37,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
         let name = Ident::parse(&parser)?;
         <Token![:]>::parse(&parser)?;
         let quantity = Path::parse(&parser)?;
-        let group = moxy::token::Group::parse(&parser)?;
+        let group = Group::parse(&parser)?;
         if !group.delim.is_bracket() || !names.insert(name.text().to_owned()) {
             return Err(ParseError::new(
                 name.span(),

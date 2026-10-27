@@ -17,6 +17,7 @@ use {
         RemoteLogSegmentState, RlmmCacheDump, TopicIdPartition, kafka_uuid,
     },
     krabka_remote_storage_topic::Snapshot,
+    std::{fs, path::Path},
     uuid::Uuid,
 };
 
@@ -34,7 +35,7 @@ pub(super) const FULL_SEGMENT_SUFFIXES: [&str; 5] = [
 /// [`ArchiveObject::size`] in an expected structure is this length.
 pub(super) const STUB_BYTES: &[u8] = b"stub";
 
-pub(super) fn args_from(archive_dir: &std::path::Path, extra: &[&str]) -> RestoreArgs {
+pub(super) fn args_from(archive_dir: &Path, extra: &[&str]) -> RestoreArgs {
     let mut argv: Vec<String> = vec![
         "krabka-restore".to_owned(),
         "--log-dir".to_owned(),
@@ -91,7 +92,7 @@ pub(super) struct SnapshotSegmentSetup<'a> {
 /// Write one artifact at the exact KIP-405 archive key layout, by hand.
 #[bon::builder]
 pub(super) fn write_artifact(
-    root: &std::path::Path,
+    root: &Path,
     prefix: Option<&'_ str>,
     #[builder(default)] segment: SegmentSetup<'_>,
     #[builder(default = ".log")] suffix: &'_ str,
@@ -124,14 +125,14 @@ pub(super) fn write_artifact(
         dir.push(prefix);
     }
     dir.push(dir_name);
-    std::fs::create_dir_all(&dir).expect("create partition dir");
-    std::fs::write(dir.join(file_name), STUB_BYTES).expect("write artifact");
+    fs::create_dir_all(&dir).expect("create partition dir");
+    fs::write(dir.join(file_name), STUB_BYTES).expect("write artifact");
 }
 
 /// Write every artifact of one complete segment copy.
 #[bon::builder]
 pub(super) fn write_full_segment(
-    root: &std::path::Path,
+    root: &Path,
     #[builder(default)] partition: PartitionKey<'_>,
     #[builder(into, default = Offset (0))] base_offset: Offset,
     #[builder(default = Uuid :: from_u128 (10))] segment_id: Uuid,
@@ -152,7 +153,7 @@ pub(super) fn write_full_segment(
 
 #[bon::builder]
 pub(super) fn write_topic_segment(
-    root: &std::path::Path,
+    root: &Path,
     topic: &'_ str,
     #[builder(into, default = PartitionIndex (0))] partition: PartitionIndex,
     topic_id: Uuid,
@@ -259,7 +260,7 @@ pub(super) fn snapshot_segment(
     .expect("valid segment metadata")
 }
 
-pub(super) fn write_snapshot(path: &std::path::Path, dump: RlmmCacheDump) {
+pub(super) fn write_snapshot(path: &Path, dump: RlmmCacheDump) {
     Snapshot {
         committed_offsets: Vec::new(),
         dump,

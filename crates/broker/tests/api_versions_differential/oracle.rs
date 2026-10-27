@@ -27,7 +27,7 @@ use {
     crate::{
         probe::{retry_until, wait_bounded},
         support::{
-            JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
+            self, JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
             jvm_docker_command, kafka_single_node_env_args, remove_container,
             unique_container_name,
         },
@@ -36,7 +36,8 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec},
     krabka_security::ListenerProtocol,
     std::{
-        process::{Command, Stdio},
+        net::SocketAddr,
+        process::{Command, Output, Stdio},
         time::Duration,
     },
 };
@@ -46,7 +47,7 @@ use {
 /// 4.3.1 is the newest image //bazel/images pins, and the newest release is the
 /// right oracle for a table that is meant to be current: an older one would
 /// report an absent key for every API Kafka has added since.
-pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
+pub const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 
 /// The tool, at its path inside the `apache/kafka` image.
 const TOOL: &str = "/opt/kafka/bin/kafka-broker-api-versions.sh";
@@ -58,7 +59,7 @@ const ORACLE_BOOT_BUDGET: Duration = Duration::from_mins(1);
 const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
 
 /// A booted krabka broker, with the data directory that backs it.
-pub(crate) struct KrabkaBroker {
+pub struct KrabkaBroker {
     pub(crate) handle: BrokerHandle,
     pub(crate) dir: tempfile::TempDir,
 }
@@ -78,20 +79,18 @@ pub(crate) struct KrabkaBroker {
 /// single-listener krabka instead and it would read back the eleven extra keys
 /// this suite exists to have removed, because there the one listener carries
 /// both kinds of traffic.
-pub(crate) async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
+pub async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
     init_tracing();
     let dir = tempfile::tempdir().expect("tempdir");
-    let controller_addr: std::net::SocketAddr =
-        listeners.controller.parse().expect("allocated addr");
-    let client_addr: std::net::SocketAddr = listeners.listen.parse().expect("allocated addr");
-    let inter_broker_addr: std::net::SocketAddr =
-        format!("127.0.0.1:{}", crate::support::free_port())
-            .parse()
-            .expect("allocated addr");
+    let controller_addr: SocketAddr = listeners.controller.parse().expect("allocated addr");
+    let client_addr: SocketAddr = listeners.listen.parse().expect("allocated addr");
+    let inter_broker_addr: SocketAddr = format!("127.0.0.1:{}", support::free_port())
+        .parse()
+        .expect("allocated addr");
     let config = BrokerConfig {
         listeners: vec![
             ListenerSpec {
-                name: "PLAINTEXT".to_string(),
+                name: "PLAINTEXT".to_owned(),
                 bind_addr: client_addr,
                 advertised: listeners.advertised.clone(),
                 protocol: ListenerProtocol::Plaintext,
@@ -100,7 +99,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
                 principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             },
             ListenerSpec {
-                name: "BROKER".to_string(),
+                name: "BROKER".to_owned(),
                 bind_addr: inter_broker_addr,
                 advertised: inter_broker_addr.to_string(),
                 protocol: ListenerProtocol::Plaintext,
@@ -109,7 +108,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
                 principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             },
         ],
-        inter_broker_listener_name: "BROKER".to_string(),
+        inter_broker_listener_name: "BROKER".to_owned(),
         ..jvm_broker_config()
             .log_dir(dir.path().to_path_buf())
             .listen(client_addr)
@@ -128,7 +127,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
 
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
-pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
+pub fn krabka_api_versions(listeners: &JvmListeners) -> String {
     let out = jvm_docker_command()
         .image(ORACLE_IMAGE)
         .args(&[TOOL, "--bootstrap-server", &listeners.advertised])
@@ -146,7 +145,7 @@ pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
 }
 
 /// A running single-node Kafka oracle. Dropping it removes the container.
-pub(crate) struct OracleBroker {
+pub struct OracleBroker {
     name: String,
 }
 
@@ -204,7 +203,7 @@ impl OracleBroker {
         command
     }
 
-    fn exec_tool(&self) -> std::process::Output {
+    fn exec_tool(&self) -> Output {
         self.tool_command()
             .output()
             .expect("spawn docker exec kafka-broker-api-versions")

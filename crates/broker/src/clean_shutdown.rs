@@ -49,7 +49,12 @@
 use {
     krabka_metadata::{MetadataImage, NodeId},
     serde::{Deserialize, Serialize},
-    std::{io::Write, path::Path},
+    std::{
+        fs,
+        fs::File,
+        io::{ErrorKind, Write},
+        path::Path,
+    },
 };
 
 /// The file name. Kafka's `CleanShutdownFileHandler.CLEAN_SHUTDOWN_FILE_NAME`
@@ -60,14 +65,14 @@ const FILE_NAME: &str = ".kafka_cleanshutdown";
 ///
 /// Part of the 1.x on-disk contract. It is Kafka's
 /// `CleanShutdownFileHandler.CURRENT_VERSION`.
-pub(crate) const FORMAT_VERSION: i32 = 0;
+pub const FORMAT_VERSION: i32 = 0;
 
 /// The epoch a broker offers when it holds no clean-shutdown proof.
 ///
 /// Broker epochs are commit offsets, so they are never negative and this
 /// sentinel can never be mistaken for one. It is also the value Kafka's
 /// `BrokerRegistrationRequest.previousBrokerEpoch` defaults to.
-pub(crate) const UNPROVEN: i64 = -1;
+pub const UNPROVEN: i64 = -1;
 
 /// The JSON document, in the field order Kafka's Jackson writes.
 ///
@@ -82,7 +87,7 @@ struct Content {
 
 /// Why a clean-shutdown file is not a proof.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum ProofError {
+pub enum ProofError {
     /// The file is not the JSON document Kafka writes.
     #[error("{FILE_NAME} is not a clean-shutdown document: {0}")]
     Malformed(String),
@@ -95,12 +100,11 @@ pub(crate) enum ProofError {
 }
 
 /// The bytes of a clean-shutdown file that proves `broker_epoch`.
-fn encode(broker_epoch: i64) -> String {
+fn encode(broker_epoch: i64) -> serde_json::Result<String> {
     serde_json::to_string(&Content {
         version: FORMAT_VERSION,
         broker_epoch,
     })
-    .expect("a two-integer struct always serializes")
 }
 
 /// The broker epoch a clean-shutdown file proves.
@@ -123,14 +127,14 @@ fn decode(text: &str) -> Result<i64, ProofError> {
 
 /// Read the clean-shutdown proof from `{log_dir}/.kafka_cleanshutdown` and delete
 /// it, or return [`UNPROVEN`] when there is none to read.
-pub(crate) fn take(log_dir: &Path) -> i64 {
+pub fn take(log_dir: &Path) -> i64 {
     let path = log_dir.join(FILE_NAME);
-    let epoch = match std::fs::read_to_string(&path) {
+    let epoch = match fs::read_to_string(&path) {
         Ok(text) => decode(&text).unwrap_or_else(|error| {
             tracing::warn!(path = %path.display(), %error, "clean-shutdown proof not readable; the restart is unclean");
             UNPROVEN
         }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => UNPROVEN,
+        Err(error) if error.kind() == ErrorKind::NotFound => UNPROVEN,
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, "failed to read the clean-shutdown proof; the restart is unclean");
             UNPROVEN
@@ -138,8 +142,8 @@ pub(crate) fn take(log_dir: &Path) -> i64 {
     };
     // Delete whatever was there, parsable or not: a proof this start could not
     // read is not one a later start should get to try again.
-    if let Err(error) = std::fs::remove_file(&path)
-        && error.kind() != std::io::ErrorKind::NotFound
+    if let Err(error) = fs::remove_file(&path)
+        && error.kind() != ErrorKind::NotFound
     {
         tracing::warn!(path = %path.display(), %error, "failed to remove the clean-shutdown proof");
     }
@@ -152,10 +156,10 @@ pub(crate) fn take(log_dir: &Path) -> i64 {
 /// A failure to write is logged and otherwise ignored: the broker is stopping
 /// either way, and the consequence is that the next start is treated as
 /// unclean, which is the safe direction.
-pub(crate) fn write(log_dir: &Path, broker_epoch: i64) {
+pub fn write(log_dir: &Path, broker_epoch: i64) {
     let path = log_dir.join(FILE_NAME);
-    let written = std::fs::File::create(&path).and_then(|mut file| {
-        file.write_all(encode(broker_epoch).as_bytes())?;
+    let written = File::create(&path).and_then(|mut file| {
+        file.write_all(encode(broker_epoch)?.as_bytes())?;
         file.sync_all()
     });
     if let Err(error) = written {
@@ -169,7 +173,7 @@ pub(crate) fn write(log_dir: &Path, broker_epoch: i64) {
 /// A node the image has no registration for cannot prove anything, so it is
 /// unclean. Kafka reaches that through a `-2` sentinel for the held epoch,
 /// which no `previousBrokerEpoch` can equal either.
-pub(crate) fn restart_was_clean(
+pub fn restart_was_clean(
     image: &MetadataImage,
     node_id: NodeId,
     previous_broker_epoch: i64,

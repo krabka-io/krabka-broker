@@ -47,7 +47,7 @@ use crate::{
     handlers::{ErrorResponse as _, cluster_describe_denied},
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],

@@ -32,7 +32,7 @@
 mod key;
 mod value;
 
-pub(crate) use self::{
+pub use self::{
     key::{decode_key, encode_key},
     value::{decode_value, encode_value},
 };

@@ -15,20 +15,19 @@ use {
     crate::error::BrokerError,
     krabka_ids::LeaderEpoch,
     krabka_log::{LeaderEpochCheckpoint, Log, Offset},
-    std::sync::Mutex,
+    std::sync::{Mutex, PoisonError},
 };
 
 /// Cut the future log to `offset`, or to nothing when `offset` lies below its
 /// log start, as the current log did.
 pub(super) fn cut_future_log(future_log: &Mutex<Log>, offset: Offset) -> Result<(), BrokerError> {
-    let mut future = future_log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut future = future_log.lock().unwrap_or_else(PoisonError::into_inner);
     if offset < future.log_start_offset() {
         future.reset_to(offset)?;
     } else {
         future.truncate_to(offset)?;
     }
+    drop(future);
     Ok(())
 }
 
@@ -114,12 +113,13 @@ pub(super) fn truncate_to_current_epochs(
     future_log: &Mutex<Log>,
 ) -> Result<(), BrokerError> {
     // The lock order the swap uses: the current log, then the future log.
-    let current = current_log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut future = future_log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let current = current_log.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut future = future_log.lock().unwrap_or_else(PoisonError::into_inner);
+    truncate_locked_to_current_epochs(&current, &mut future)
+}
+
+/// [`truncate_to_current_epochs`] with both logs already locked.
+fn truncate_locked_to_current_epochs(current: &Log, future: &mut Log) -> Result<(), BrokerError> {
     // Every pass drops the future log's latest epoch or ends the exchange.
     for _ in 0..=future.epoch_checkpoint().entries().len() {
         let future_end = future.log_end_offset();
@@ -165,6 +165,7 @@ mod tests {
         bytes::Bytes,
         krabka_log::LogConfig,
         krabka_protocol::records::{Record, RecordBatch},
+        std::{fs, path::Path},
         tempfile::tempdir,
     };
 
@@ -271,9 +272,9 @@ mod tests {
 
     /// A log at `<dir>/<name>` with `batches` one-record batches, each stamped
     /// with the epoch it is paired with.
-    fn log_with_epochs(dir: &std::path::Path, name: &str, batches: &[LeaderEpoch]) -> Mutex<Log> {
+    fn log_with_epochs(dir: &Path, name: &str, batches: &[LeaderEpoch]) -> Mutex<Log> {
         let path = log_dir::partition_dir(dir, name, 0);
-        std::fs::create_dir_all(&path).unwrap();
+        fs::create_dir_all(&path).unwrap();
         let mut log = Log::open(&path, LogConfig::default()).unwrap();
         for &epoch in batches {
             let mut batch = RecordBatch {

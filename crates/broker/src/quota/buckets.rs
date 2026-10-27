@@ -7,8 +7,8 @@ use {
     krabka_metadata::EntityKey,
     krabka_units::Time,
     std::{
-        sync::{Arc, Mutex},
-        time::Instant,
+        sync::{Arc, Mutex, PoisonError},
+        time::{Duration, Instant},
     },
 };
 
@@ -104,12 +104,15 @@ impl QuotaBuckets {
         initial_rate: f64,
     ) -> Arc<TokenBucket> {
         let key = BucketKey {
-            quota_key: quota_key.to_string(),
+            quota_key: quota_key.to_owned(),
             entity_key: entity_key.clone(),
         };
         if let Some(entry) = self.buckets.get(&key) {
-            *entry.last_accessed.lock().unwrap() = Instant::now();
-            return entry.bucket.clone();
+            *entry
+                .last_accessed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Instant::now();
+            return Arc::clone(&entry.bucket);
         }
         let b = Arc::new(TokenBucket::new());
         let new_rate = super::bucket_rate(initial_rate);
@@ -117,12 +120,15 @@ impl QuotaBuckets {
         b.set_byte_rate_with_burst(new_rate, burst);
         let entry = self.buckets.entry(key).or_insert_with(|| {
             Arc::new(BucketEntry {
-                bucket: b.clone(),
+                bucket: Arc::clone(&b),
                 last_accessed: Mutex::new(Instant::now()),
             })
         });
-        *entry.last_accessed.lock().unwrap() = Instant::now();
-        entry.bucket.clone()
+        *entry
+            .last_accessed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Instant::now();
+        Arc::clone(&entry.bucket)
     }
 
     /// Iterates over every live bucket with the key it is stored under.
@@ -130,7 +136,7 @@ impl QuotaBuckets {
     pub fn iter(&self) -> impl Iterator<Item = LiveBucket> + '_ {
         self.buckets.iter().map(|r| LiveBucket {
             key: r.key().clone(),
-            entry: r.value().clone(),
+            entry: Arc::clone(r.value()),
         })
     }
 
@@ -140,15 +146,10 @@ impl QuotaBuckets {
     /// so the caller can unregister the metric series they carried. The user
     /// and the client id are the ones of the bucket's entity key, which are
     /// the labels a throttle charged to it published.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a bucket's last-accessed timestamp was poisoned by a panic
-    /// while it was held.
     #[must_use]
     pub fn expire_inactive(
         &self,
-        max_age: std::time::Duration,
+        max_age: Duration,
     ) -> Vec<(String, Option<String>, Option<String>)> {
         let now = Instant::now();
         let mut expired = Vec::new();
@@ -158,7 +159,10 @@ impl QuotaBuckets {
                  entity_key,
              },
              entry| {
-                let last = *entry.last_accessed.lock().unwrap();
+                let last = *entry
+                    .last_accessed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 if now.duration_since(last) > max_age {
                     let field = |name: &str| {
                         entity_key

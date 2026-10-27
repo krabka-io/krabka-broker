@@ -23,7 +23,13 @@ use {
         io::{IoTarget, LogIo, file_io, write_all},
     },
     krabka_ids::Offset,
-    std::{fs::OpenOptions, path::PathBuf, sync::Arc},
+    std::{
+        fs::{self, OpenOptions},
+        io::ErrorKind,
+        mem,
+        path::{Path, PathBuf},
+        sync::Arc,
+    },
     tracing::instrument,
     zerocopy::{
         BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
@@ -38,9 +44,9 @@ const ENTRY_BYTES: usize = 24;
 /// It is the big-endian `i16` at the front of every file, and part of the 1.x
 /// on-disk contract: a 1.x broker reads every version an earlier 1.x broker
 /// wrote, so a later layout takes a new number and keeps this one readable.
-pub(crate) const STAMP_INDEX_VERSION: i16 = 0;
+pub const STAMP_INDEX_VERSION: i16 = 0;
 
-const HEADER_BYTES: usize = std::mem::size_of::<i16>();
+const HEADER_BYTES: usize = mem::size_of::<i16>();
 
 /// The artifact name the version errors carry.
 const ARTIFACT: &str = "stampindex";
@@ -90,7 +96,7 @@ impl StampEntryRaw {
     }
 }
 
-const _: [(); ENTRY_BYTES] = [(); std::mem::size_of::<StampEntryRaw>()];
+const _: [(); ENTRY_BYTES] = [(); mem::size_of::<StampEntryRaw>()];
 
 #[derive(Debug)]
 pub struct StampIndex {
@@ -111,12 +117,9 @@ impl StampIndex {
     /// broker before 1.0 wrote, [`LogError::UnsupportedFormatVersion`] for a
     /// version other than `STAMP_INDEX_VERSION`, and an error when log I/O
     /// fails or the entries are not a whole number of fixed-width records.
-    /// # Panics
-    /// Panics if the in-place reinterpretation of a length-validated,
-    /// `Unaligned` byte buffer fails. That invariant cannot be false.
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
         let mut entries = Vec::new();
-        match std::fs::read(&path) {
+        match fs::read(&path) {
             Ok(bytes) if bytes.is_empty() => {}
             Ok(bytes) => {
                 let body = Self::versioned_body(&path, &bytes)?;
@@ -128,8 +131,12 @@ impl StampIndex {
                         ENTRY_BYTES,
                     )));
                 }
-                let raws = <[StampEntryRaw]>::ref_from_bytes(body)
-                    .expect("length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned");
+                let raws = <[StampEntryRaw]>::ref_from_bytes(body).map_err(|_| {
+                    LogError::Corrupt(format!(
+                        "stampindex {} entry bytes do not form whole entries",
+                        path.display(),
+                    ))
+                })?;
                 entries.reserve(raws.len());
                 for raw in raws {
                     entries.push(StampEntry {
@@ -152,7 +159,7 @@ impl StampIndex {
                     )));
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
             Err(e) => return Err(LogError::Io(e)),
         }
         tracing::Span::current().record("entries", entries.len());
@@ -170,7 +177,7 @@ impl StampIndex {
     /// length is a multiple of the entry width has no header. The headed
     /// layout is two bytes longer than such a multiple, so the two never
     /// collide.
-    fn versioned_body<'a>(path: &std::path::Path, bytes: &'a [u8]) -> Result<&'a [u8], LogError> {
+    fn versioned_body<'a>(path: &Path, bytes: &'a [u8]) -> Result<&'a [u8], LogError> {
         if bytes.len().is_multiple_of(ENTRY_BYTES) {
             return Err(LogError::MissingFormatVersion {
                 artifact: ARTIFACT,
@@ -211,7 +218,7 @@ impl StampIndex {
     /// Returns an error when appending to or syncing the file fails.
     pub fn append(&mut self, entry: StampEntry) -> Result<(), LogError> {
         if let Some(position) = self.entry_position(entry) {
-            if self.entries[position] == entry {
+            if self.entries.get(position) == Some(&entry) {
                 return Ok(());
             }
             return Err(LogError::Corrupt(format!(
@@ -270,7 +277,11 @@ impl StampIndex {
         entries
             .binary_search_by_key(&first, |entry| entry.base_offset)
             .ok()
-            .filter(|&position| entries[position].last_offset == last)
+            .filter(|&position| {
+                entries
+                    .get(position)
+                    .is_some_and(|entry| entry.last_offset == last)
+            })
     }
 
     fn insertion_position(entries: &[StampEntry], entry: StampEntry) -> Option<usize> {
@@ -286,7 +297,11 @@ impl StampIndex {
             return Some(entries.len());
         }
         let position = entries.partition_point(|known| known.base_offset < entry.base_offset);
-        if position > 0 && entries[position - 1].last_offset >= entry.base_offset {
+        if position
+            .checked_sub(1)
+            .and_then(|previous| entries.get(previous))
+            .is_some_and(|previous| previous.last_offset >= entry.base_offset)
+        {
             return None;
         }
         if entries
@@ -307,9 +322,13 @@ impl StampIndex {
     /// fails.
     pub fn upsert(&mut self, entry: StampEntry) -> Result<(), LogError> {
         if let Some(position) = self.entry_position(entry) {
-            if self.entries[position] != entry {
-                let mut entries = self.entries.clone();
-                entries[position] = entry;
+            if self.entries.get(position) != Some(&entry) {
+                let entries: Vec<StampEntry> = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(at, known)| if at == position { entry } else { *known })
+                    .collect();
                 self.rewrite(&entries)?;
                 self.entries = entries;
             }
@@ -407,7 +426,12 @@ mod tests {
             index::{IndexFixture, index_fixture},
             test_support::stamp_entry,
         },
-        std::sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        std::{
+            fs::{self, File},
+            io,
+            path::Path,
+            sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
         tempfile::TempDir,
     };
 
@@ -423,12 +447,12 @@ mod tests {
         IndexFixture { dir, path, index }
     }
 
-    fn write_entries(path: &std::path::Path, entries: &[StampEntry]) {
+    fn write_entries(path: &Path, entries: &[StampEntry]) {
         let mut bytes = STAMP_INDEX_VERSION.to_be_bytes().to_vec();
         for &entry in entries {
             bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
         }
-        std::fs::write(path, bytes).unwrap();
+        fs::write(path, bytes).unwrap();
     }
 
     #[test]
@@ -511,7 +535,7 @@ mod tests {
         expected.pop();
         bytes.truncate(bytes.len() - ENTRY_BYTES);
         assert2::assert!(index.entries() == expected);
-        assert2::assert!(std::fs::read(path).unwrap() == bytes);
+        assert2::assert!(fs::read(path).unwrap() == bytes);
     }
 
     #[test]
@@ -519,9 +543,9 @@ mod tests {
         #[derive(Debug)]
         struct FailSyncOnce(AtomicBool);
         impl LogIo for FailSyncOnce {
-            fn sync_file(&self, _target: IoTarget, file: &std::fs::File) -> std::io::Result<()> {
+            fn sync_file(&self, _target: IoTarget, file: &File) -> io::Result<()> {
                 if self.0.swap(false, Ordering::SeqCst) {
-                    Err(std::io::Error::other("injected uncertain stamp sync"))
+                    Err(io::Error::other("injected uncertain stamp sync"))
                 } else {
                     file.sync_data()
                 }
@@ -571,7 +595,7 @@ mod tests {
         #[derive(Debug, Default)]
         struct CountSyncs(AtomicUsize);
         impl LogIo for CountSyncs {
-            fn sync_file(&self, _target: IoTarget, _file: &std::fs::File) -> std::io::Result<()> {
+            fn sync_file(&self, _target: IoTarget, _file: &File) -> io::Result<()> {
                 self.0.fetch_add(1, Ordering::Relaxed);
                 // This scaling regression measures index operations and
                 // exact file bytes, excluding device fsync latency.
@@ -584,7 +608,7 @@ mod tests {
             mut index,
         } = index_with(&[]);
         let io = Arc::new(CountSyncs::default());
-        index.set_io(io.clone());
+        index.set_io(Arc::<CountSyncs>::clone(&io));
         for number in 0..ranges {
             index
                 .upsert(stamp_entry(
@@ -598,7 +622,7 @@ mod tests {
         assert2::assert!(index.entries().len() == count);
         assert2::assert!(io.0.load(Ordering::Relaxed) == count);
         assert2::assert!(
-            std::fs::metadata(&path).unwrap().len()
+            fs::metadata(&path).unwrap().len()
                 == u64::try_from(HEADER_BYTES + ENTRY_BYTES * count).unwrap()
         );
         assert2::assert!(StampIndex::open(path).unwrap().entries() == index.entries());
@@ -659,15 +683,15 @@ mod tests {
         let mut appended_golden = GOLDEN_BYTES[..2].to_vec();
         appended_golden.extend_from_slice(&GOLDEN_BYTES[26..]);
         appended_golden.extend_from_slice(&GOLDEN_BYTES[2..26]);
-        assert2::assert!(std::fs::read(appended).unwrap() == appended_golden);
-        assert2::assert!(std::fs::read(rewritten).unwrap() == GOLDEN_BYTES);
+        assert2::assert!(fs::read(appended).unwrap() == appended_golden);
+        assert2::assert!(fs::read(rewritten).unwrap() == GOLDEN_BYTES);
     }
 
     #[test]
     fn the_golden_bytes_decode_to_their_entries() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("golden.stampindex");
-        std::fs::write(&path, GOLDEN_BYTES).unwrap();
+        fs::write(&path, GOLDEN_BYTES).unwrap();
         assert2::assert!(StampIndex::open(path).unwrap().entries() == GOLDEN_ENTRIES);
     }
 
@@ -684,7 +708,7 @@ mod tests {
         let path = dir.path().join(format!("{name}.stampindex"));
         let mut bytes = GOLDEN_BYTES.to_vec();
         bytes[..2].copy_from_slice(&version.to_be_bytes());
-        std::fs::write(&path, bytes).unwrap();
+        fs::write(&path, bytes).unwrap();
         let error = StampIndex::open(path.clone()).unwrap_err();
         assert2::assert!(
             let LogError::UnsupportedFormatVersion {
@@ -703,7 +727,7 @@ mod tests {
     fn open_refuses_a_headerless_file(name: &str, entries: usize) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(format!("{name}.stampindex"));
-        std::fs::write(&path, &GOLDEN_BYTES[2..2 + entries * ENTRY_BYTES]).unwrap();
+        fs::write(&path, &GOLDEN_BYTES[2..2 + entries * ENTRY_BYTES]).unwrap();
         let error = StampIndex::open(path.clone()).unwrap_err();
         assert2::assert!(
             let LogError::MissingFormatVersion { artifact: "stampindex", path: found_path } =
@@ -723,7 +747,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(format!("{name}.stampindex"));
         if let Some(bytes) = bytes {
-            std::fs::write(&path, bytes).unwrap();
+            fs::write(&path, bytes).unwrap();
         }
         let idx = StampIndex::open(path).unwrap();
         assert2::assert!(idx.entries() == &[]);
@@ -764,7 +788,7 @@ mod tests {
     fn stamp_corrupt_length_is_rejected(len: usize) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(format!("{len}.stampindex"));
-        std::fs::write(&path, vec![0_u8; len]).unwrap();
+        fs::write(&path, vec![0_u8; len]).unwrap();
         let err = StampIndex::open(path).unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = err, "length {len}");
     }
@@ -816,8 +840,8 @@ mod tests {
         let original = stamp_entry(0, 2, 100);
         let mut idx = StampIndex::open(path.clone()).unwrap();
         idx.append(original).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
 
         let replacement = StampEntry {
             stamp: 200,
@@ -969,12 +993,7 @@ mod tests {
         #[derive(Debug)]
         struct SpyIo(Arc<AtomicBool>);
         impl LogIo for SpyIo {
-            fn write_at(
-                &self,
-                _t: IoTarget,
-                file: &std::fs::File,
-                buf: &[u8],
-            ) -> std::io::Result<usize> {
+            fn write_at(&self, _t: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
                 use std::io::Write;
                 self.0.store(true, Ordering::SeqCst);
                 (&*file).write(buf)
@@ -986,7 +1005,7 @@ mod tests {
             path: _path,
             index: mut idx,
         } = index_with(&[]);
-        idx.set_io(Arc::new(SpyIo(called.clone())));
+        idx.set_io(Arc::new(SpyIo(Arc::clone(&called))));
         idx.append(stamp_entry(0, 0, 1)).unwrap();
         assert2::assert!(called.load(Ordering::SeqCst));
     }

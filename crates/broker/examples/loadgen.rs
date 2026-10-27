@@ -35,21 +35,28 @@ use {
     num_traits::ToPrimitive,
     std::{
         collections::VecDeque,
+        env::var,
+        error::Error,
+        str::FromStr,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicU64, Ordering},
         },
         time::{Duration, Instant},
     },
+    tokio::time,
 };
+
+/// Any failure the load generator stops on.
+type LoadError = Box<dyn Error + Send + Sync>;
 
 /// `TOPIC_ALREADY_EXISTS`. A second run against the same broker is expected.
 const TOPIC_ALREADY_EXISTS: i16 = 36;
 
 /// One environment variable, parsed, or `default` when it is absent or does
 /// not parse.
-fn env<T: std::str::FromStr>(key: &str, default: T) -> T {
-    std::env::var(key)
+fn env<T: FromStr>(key: &str, default: T) -> T {
+    var(key)
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
@@ -59,22 +66,25 @@ fn env<T: std::str::FromStr>(key: &str, default: T) -> T {
 ///
 /// `to_f64` rather than an `as` cast: the cast is lossy above 2^53 and says
 /// nothing about it, and this crate's lint set rejects it.
-fn as_f64(value: u64) -> f64 { value.to_f64().expect("a u64 below 2^53 is exact as an f64") }
+fn as_f64(value: u64) -> Result<f64, LoadError> {
+    Ok(value
+        .to_f64()
+        .ok_or_else(|| format!("{value} has no f64 value"))?)
+}
 
 /// A byte count as a `u64`. `usize` is 64 bits on every target this runs on.
 fn bytes_as_u64(value: usize) -> u64 { u64::try_from(value).unwrap_or(u64::MAX) }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() {
-    let bootstrap: String =
-        std::env::var("LOAD_BOOTSTRAP").unwrap_or_else(|_| "127.0.0.1:9092".into());
-    let topic: String = std::env::var("LOAD_TOPIC").unwrap_or_else(|_| "loadgen".into());
+async fn main() -> Result<(), LoadError> {
+    let bootstrap: String = var("LOAD_BOOTSTRAP").unwrap_or_else(|_| "127.0.0.1:9092".into());
+    let topic: String = var("LOAD_TOPIC").unwrap_or_else(|_| "loadgen".into());
     let partitions: i32 = env("LOAD_PARTITIONS", 8);
     let producers: usize = env("LOAD_PRODUCERS", 4);
     let value_bytes: usize = env("LOAD_VALUE_BYTES", 128);
     let seconds: u64 = env("LOAD_SECONDS", 20);
     let inflight: usize = env("LOAD_INFLIGHT", 1000);
-    let acks_name: String = std::env::var("LOAD_ACKS").unwrap_or_else(|_| "1".into());
+    let acks_name: String = var("LOAD_ACKS").unwrap_or_else(|_| "1".into());
     let consume: bool = env::<u8>("LOAD_CONSUME", 0) == 1;
 
     let acks = match acks_name.as_str() {
@@ -83,7 +93,7 @@ async fn main() {
         _ => Acks::One,
     };
 
-    create_topic(&bootstrap, &topic, partitions).await;
+    create_topic(&bootstrap, &topic, partitions).await?;
 
     let value = Bytes::from(vec![0xABu8; value_bytes]);
     let sent = Arc::new(AtomicU64::new(0));
@@ -113,33 +123,38 @@ async fn main() {
         )));
     }
 
-    tokio::time::sleep(Duration::from_secs(seconds)).await;
+    time::sleep(Duration::from_secs(seconds)).await;
     stop.store(true, Ordering::Relaxed);
     for task in tasks {
-        let _ = task.await;
+        match task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("loadgen: a load task failed: {error}"),
+            Err(error) => eprintln!("loadgen: a load task did not finish: {error}"),
+        }
     }
 
     let elapsed = start.elapsed().as_secs_f64();
     let acked = acked.load(Ordering::Relaxed);
     let sent = sent.load(Ordering::Relaxed);
-    let megabytes = as_f64(acked) * as_f64(bytes_as_u64(value_bytes)) / 1.0e6;
+    let acked_f64 = as_f64(acked)?;
+    let megabytes = acked_f64 * as_f64(bytes_as_u64(value_bytes))? / 1.0e6;
     println!(
         "loadgen: acks={acks_name} producers={producers} value={value_bytes}B \
          parts={partitions} | sent={sent} acked={acked} | {:.0} msg/s | {:.1} MB/s \
          over {elapsed:.1}s",
-        as_f64(acked) / elapsed,
+        acked_f64 / elapsed,
         megabytes / elapsed,
     );
+    Ok(())
 }
 
 /// Create the topic, and accept the broker that already has it.
-async fn create_topic(bootstrap: &str, topic: &str, partitions: i32) {
+async fn create_topic(bootstrap: &str, topic: &str, partitions: i32) -> Result<(), LoadError> {
     let client = Client::builder()
         .bootstrap(bootstrap.to_owned())
         .client_id("loadgen-admin")
         .build()
-        .await
-        .expect("admin client");
+        .await?;
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -151,10 +166,14 @@ async fn create_topic(bootstrap: &str, topic: &str, partitions: i32) {
             timeout_ms: 10_000,
             ..Default::default()
         })
-        .await
-        .expect("CreateTopics");
-    let code = response.topics[0].error_code;
+        .await?;
+    let code = response
+        .topics
+        .first()
+        .ok_or("CreateTopics answered no topic")?
+        .error_code;
     assert2::assert!(code == 0 || code == TOPIC_ALREADY_EXISTS);
+    Ok(())
 }
 
 /// What one producer task needs. A struct rather than nine parameters.
@@ -171,7 +190,7 @@ struct Load {
 }
 
 /// One producer task: keep `inflight` sends outstanding until `stop` is set.
-async fn produce(load: Load) {
+async fn produce(load: Load) -> Result<(), LoadError> {
     let Load {
         bootstrap,
         topic,
@@ -190,8 +209,7 @@ async fn produce(load: Load) {
         .acks(acks)
         .linger(Duration::from_millis(5))
         .build()
-        .await
-        .expect("producer build");
+        .await?;
 
     let mut window = VecDeque::new();
     while !stop.load(Ordering::Relaxed) {
@@ -222,11 +240,17 @@ async fn produce(load: Load) {
             acked.fetch_add(1, Ordering::Relaxed);
         }
     }
-    producer.close().await.ok();
+    // A close that fails is not a load failure: every send above is already
+    // counted, so its error is dropped as before.
+    producer.close().await.or(Ok(()))
 }
 
 /// One consumer group, so the fetch path carries load as well.
-async fn consume_group(bootstrap: String, topic: String, stop: Arc<AtomicBool>) {
+async fn consume_group(
+    bootstrap: String,
+    topic: String,
+    stop: Arc<AtomicBool>,
+) -> Result<(), LoadError> {
     let mut consumer = Consumer::builder()
         .bootstrap(&bootstrap)
         .client_id("loadgen-consumer")
@@ -237,10 +261,10 @@ async fn consume_group(bootstrap: String, topic: String, stop: Arc<AtomicBool>) 
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .subscribe([topic])
         .build()
-        .await
-        .expect("consumer build");
+        .await?;
     while !stop.load(Ordering::Relaxed) {
         let _ = consumer.poll(krabka_units::millis(200)).await;
     }
-    consumer.close().await.ok();
+    let _ = consumer.close().await;
+    Ok(())
 }

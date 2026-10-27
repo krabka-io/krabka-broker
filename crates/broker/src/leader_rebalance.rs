@@ -27,6 +27,7 @@ use {
     krabka_units::{Time, convert::TimeExt as _, millis},
     krabka_verified::broker::PreferredLeaderChange,
     std::{collections::HashSet, sync::Arc},
+    tokio::{time, time::sleep},
     tokio_util::sync::CancellationToken,
     tracing::{debug, info, warn},
 };
@@ -60,7 +61,7 @@ pub(crate) async fn run(
     cfg: AutoRebalanceConfig,
     shutdown: CancellationToken,
 ) {
-    let mut ticker = tokio::time::interval(cfg.check_interval.to_std());
+    let mut ticker = time::interval(cfg.check_interval.to_std());
     loop {
         tokio::select! {
             _ = ticker.tick() => {},
@@ -75,7 +76,7 @@ pub(crate) async fn run(
         }
         while rebalance_tick(&*controller, &liveness, &cfg).await {
             tokio::select! {
-                () = tokio::time::sleep(IMMEDIATE_RERUN_DELAY.to_std()) => {},
+                () = sleep(IMMEDIATE_RERUN_DELAY.to_std()) => {},
                 () = shutdown.cancelled() => {
                     info!("auto-rebalance task shutting down");
                     return;
@@ -170,7 +171,15 @@ mod tests {
         assert2::assert,
         krabka_metadata::{PartitionRecord, TopicRecord},
         krabka_units::{millis, minutes, secs},
-        std::{sync::Mutex, time::Duration},
+        std::{
+            iter,
+            sync::{
+                self, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        },
+        tokio::{task, time::timeout},
         uuid::Uuid,
     };
 
@@ -180,8 +189,8 @@ mod tests {
         image: Mutex<Arc<MetadataImage>>,
         is_leader: bool,
         submitted: Mutex<Vec<MetadataRecord>>,
-        submit_calls: std::sync::atomic::AtomicUsize,
-        fail_submissions: std::sync::atomic::AtomicUsize,
+        submit_calls: AtomicUsize,
+        fail_submissions: AtomicUsize,
     }
 
     impl MockController {
@@ -190,15 +199,12 @@ mod tests {
                 image: Mutex::new(image),
                 is_leader,
                 submitted: Mutex::new(Vec::new()),
-                submit_calls: std::sync::atomic::AtomicUsize::new(0),
-                fail_submissions: std::sync::atomic::AtomicUsize::new(0),
+                submit_calls: AtomicUsize::new(0),
+                fail_submissions: AtomicUsize::new(0),
             }
         }
 
-        fn fail_next_submission(&self) {
-            self.fail_submissions
-                .store(1, std::sync::atomic::Ordering::SeqCst);
-        }
+        fn fail_next_submission(&self) { self.fail_submissions.store(1, Ordering::SeqCst); }
     }
 
     #[async_trait]
@@ -208,15 +214,12 @@ mod tests {
         fn current_image(&self) -> Arc<MetadataImage> { self.image.lock().unwrap().clone() }
 
         async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String> {
-            self.submit_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.submit_calls.fetch_add(1, Ordering::SeqCst);
             if self
                 .fail_submissions
-                .try_update(
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                    |remaining| remaining.checked_sub(1),
-                )
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
                 .is_ok()
             {
                 return Err("injected submit failure".into());
@@ -239,8 +242,8 @@ mod tests {
             replication_factor: 3,
         }));
         // Imbalanced partitions precede balanced ones, preserving their indices.
-        for (partition, leader) in std::iter::repeat_n(2, imbalanced)
-            .chain(std::iter::repeat_n(1, balanced))
+        for (partition, leader) in iter::repeat_n(2, imbalanced)
+            .chain(iter::repeat_n(1, balanced))
             .enumerate()
         {
             img.apply(&MetadataRecord::V1Partition(PartitionRecord {
@@ -307,7 +310,7 @@ mod tests {
         assert!(mock.submitted.lock().unwrap().is_empty());
         rebalance_tick(&mock, &liveness, &cfg).await;
         assert!(mock.submitted.lock().unwrap().len() == 1);
-        assert!(mock.submit_calls.load(std::sync::atomic::Ordering::SeqCst) == 2);
+        assert!(mock.submit_calls.load(Ordering::SeqCst) == 2);
     }
 
     #[tokio::test]
@@ -399,7 +402,8 @@ mod tests {
             img_with_n_partitions(imbalanced, 0),
             true,
         ));
-        let controller_for_run: Arc<dyn ControllerLike> = controller.clone();
+        let controller_for_run: Arc<dyn ControllerLike> =
+            sync::Arc::<MockController>::clone(&controller);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
             controller_for_run,
@@ -411,15 +415,10 @@ mod tests {
         ));
 
         // Far below the five-minute interval.
-        tokio::time::sleep(secs(1).to_std()).await;
+        sleep(secs(1).to_std()).await;
 
         assert!(controller.submitted.lock().unwrap().len() == imbalanced);
-        assert!(
-            controller
-                .submit_calls
-                .load(std::sync::atomic::Ordering::SeqCst)
-                == 3
-        );
+        assert!(controller.submit_calls.load(Ordering::SeqCst) == 3);
         shutdown.cancel();
         task.await.unwrap();
     }
@@ -438,7 +437,7 @@ mod tests {
         };
         rebalance_tick(&mock, &liveness, &cfg).await;
         assert!(
-            mock.submit_calls.load(std::sync::atomic::Ordering::SeqCst) == 0,
+            mock.submit_calls.load(Ordering::SeqCst) == 0,
             "must not submit when there is nothing to rebalance"
         );
     }
@@ -461,7 +460,8 @@ mod tests {
     #[tokio::test]
     async fn run_submits_when_controller_is_leader() {
         let controller = Arc::new(MockController::new(img_with_n_partitions(1, 0), true));
-        let controller_for_run: Arc<dyn ControllerLike> = controller.clone();
+        let controller_for_run: Arc<dyn ControllerLike> =
+            sync::Arc::<MockController>::clone(&controller);
         let liveness = Arc::new(liveness_all_alive().await);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
@@ -473,13 +473,9 @@ mod tests {
             shutdown.clone(),
         ));
 
-        tokio::time::timeout(Duration::from_millis(500), async {
-            while controller
-                .submit_calls
-                .load(std::sync::atomic::Ordering::SeqCst)
-                == 0
-            {
-                tokio::task::yield_now().await;
+        timeout(Duration::from_millis(500), async {
+            while controller.submit_calls.load(Ordering::SeqCst) == 0 {
+                task::yield_now().await;
             }
         })
         .await

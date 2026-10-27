@@ -25,10 +25,11 @@ use {
     },
     krabka_ids::Offset,
     krabka_units::prelude::TimeExt as _,
-    std::sync::Arc,
+    std::{future, sync::Arc},
     tokio::{
         sync::mpsc,
-        time::{Duration, Instant},
+        task::JoinError,
+        time::{self, Duration, Instant, MissedTickBehavior},
     },
 };
 
@@ -47,7 +48,7 @@ enum Wake {
     ParkedFetch,
     Noop,
     Clean,
-    SnapshotComplete(Result<super::snapshotting::SnapshotJobCompletion, tokio::task::JoinError>),
+    SnapshotComplete(Result<super::snapshotting::SnapshotJobCompletion, JoinError>),
 }
 
 impl Engine {
@@ -67,8 +68,8 @@ impl Engine {
 
         // Heartbeat ticks the whole time; the loop only acts on it while leader.
         let hb_period = heartbeat_period(self.timeouts.fetch, self.heartbeat_interval);
-        let mut heartbeat = tokio::time::interval(hb_period.to_std());
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut heartbeat = time::interval(hb_period.to_std());
+        heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         let mut faulted = false;
         // Set by a graceful `Shutdown`: when the engine stops waiting for the
@@ -81,12 +82,12 @@ impl Engine {
             let check_quorum_sleep = sleep_until_opt(self.check_quorum_at);
             let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
             let noop_sleep = sleep_until_opt(self.noop_at);
-            let clean_sleep = tokio::time::sleep_until(self.clean_at);
+            let clean_sleep = time::sleep_until(self.clean_at);
             let shutdown_sleep = sleep_until_opt(shutdown_at);
             let snapshot_complete = async {
                 match self.snapshot_job.as_mut() {
                     Some(job) => job.await,
-                    None => std::future::pending().await,
+                    None => future::pending().await,
                 }
             };
             tokio::pin!(election_sleep);
@@ -179,6 +180,9 @@ impl Engine {
                 }
                 held.push(command);
             }
+            // Only now, at shutdown, do the held callers see their replies
+            // dropped.
+            drop(held);
         }
         // A blocking checkpoint cannot be cancelled by dropping its handle.
         // Join it before releasing the directory for a replacement controller.
@@ -238,7 +242,7 @@ impl Engine {
     /// log directory when a write to it returned an I/O error, or else the
     /// failure of a controller activation, or else a committed record this
     /// node could not replay. Returns `true` once a fault is published.
-    pub fn publish_fault(&mut self) -> bool {
+    pub fn publish_fault(&self) -> bool {
         let fault = if let Some(failure) = self.log.failure() {
             format!(
                 "the metadata log directory {} has failed: {failure}",
@@ -646,7 +650,7 @@ impl Engine {
 /// `select!` ignores the disarmed timer.
 pub async fn sleep_until_opt(deadline: Option<Instant>) {
     match deadline {
-        Some(at) => tokio::time::sleep_until(at).await,
-        None => std::future::pending::<()>().await,
+        Some(at) => time::sleep_until(at).await,
+        None => future::pending::<()>().await,
     }
 }

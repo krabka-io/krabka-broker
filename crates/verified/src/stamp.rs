@@ -18,6 +18,20 @@ pub fn sorted_disjoint(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
     }
 }
 
+/// The `index`th range of the parallel `bases` and `lasts`, or `None` past
+/// the end of either.
+#[ensures(match result {
+    Some((base, last)) => index@ < bases@.len() && index@ < lasts@.len()
+        && base == bases@[index@] && last == lasts@[index@],
+    None => bases@.len() <= index@ || lasts@.len() <= index@,
+})]
+fn stamp_range(bases: &[i64], lasts: &[i64], index: usize) -> Option<(i64, i64)> {
+    match (bases.get(index), lasts.get(index)) {
+        (Some(&base), Some(&last)) => Some((base, last)),
+        _ => None,
+    }
+}
+
 /// Validate sorted inclusive ranges as individually ordered and pairwise
 /// nonoverlapping.
 #[ensures(result == sorted_disjoint(bases@, lasts@))]
@@ -32,8 +46,19 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
     #[invariant(forall<i: Int> 1 <= i && i < index@ ==> lasts@[i - 1]@ < bases@[i]@)]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        if bases[index] > lasts[index] || (index > 0 && lasts[index - 1] >= bases[index]) {
+        let Some((base, last)) = stamp_range(bases, lasts, index) else {
             return false;
+        };
+        if base > last {
+            return false;
+        }
+        if index > 0 {
+            let Some(&previous_last) = lasts.get(index - 1) else {
+                return false;
+            };
+            if previous_last >= base {
+                return false;
+            }
         }
         index += 1;
     }
@@ -46,10 +71,9 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
 /// individually ordered, pairwise nonoverlapping inclusive ranges. Use
 /// [`stamp_ranges_valid`] to check these preconditions before calling.
 ///
-/// # Panics
-///
-/// May panic if `lasts` is shorter than `bases`. Proof annotations do not
-/// validate inputs in ordinary Rust builds.
+/// A `lasts` shorter than `bases` breaks the precondition and the answer is
+/// unspecified. Proof annotations do not validate inputs in ordinary Rust
+/// builds.
 #[requires(sorted_disjoint(bases@, lasts@))]
 #[ensures(match result {
     Some(index) => index@ <= bases@.len()
@@ -75,10 +99,11 @@ pub fn stamp_range_insertion_index(
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lasts@[i]@ < new_base@)]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        if new_last < bases[index] {
+        let (base, last) = stamp_range(bases, lasts, index)?;
+        if new_last < base {
             return Some(index);
         }
-        if new_base <= lasts[index] {
+        if new_base <= last {
             return None;
         }
         index += 1;
@@ -90,10 +115,8 @@ pub fn stamp_range_insertion_index(
 ///
 /// `bases` and `lasts` must have equal lengths.
 ///
-/// # Panics
-///
-/// May panic if `lasts` is shorter than `bases`; equal lengths are a caller
-/// precondition, not a runtime check.
+/// A `lasts` shorter than `bases` breaks the precondition and the answer is
+/// unspecified; equal lengths are a caller precondition, not a runtime check.
 #[requires(stamp_range_arrays_parallel(bases@, lasts@))]
 #[ensures(stamp_lookup_result(
     result,
@@ -117,7 +140,8 @@ pub fn exact_stamp_range_index(
     ))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        if bases[index] == target_base && lasts[index] == target_last {
+        let (base, last) = stamp_range(bases, lasts, index)?;
+        if base == target_base && last == target_last {
             return Some(index);
         }
         index += 1;
@@ -127,8 +151,8 @@ pub fn exact_stamp_range_index(
 
 /// Find the first inclusive range that covers `offset`.
 ///
-/// The slices must have equal lengths; a shorter `lasts` slice may panic
-/// because the implementation indexes it alongside `bases`.
+/// The slices must have equal lengths; with a shorter `lasts` slice the answer
+/// is unspecified.
 #[requires(stamp_range_arrays_parallel(bases@, lasts@))]
 #[ensures(stamp_lookup_result(
     result,
@@ -147,7 +171,8 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
     ))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        if bases[index] <= offset && offset <= lasts[index] {
+        let (base, last) = stamp_range(bases, lasts, index)?;
+        if base <= offset && offset <= last {
             return Some(index);
         }
         index += 1;

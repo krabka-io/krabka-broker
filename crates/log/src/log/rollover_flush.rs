@@ -6,10 +6,15 @@ use crate::{
     producer_snapshot::PreparedSnapshot,
 };
 #[cfg(not(target_os = "wasi"))]
-use std::{collections::VecDeque, fs::File};
+use std::{
+    collections::VecDeque,
+    fs::File,
+    mem,
+    panic::{self, AssertUnwindSafe},
+};
 use std::{
     io,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
 };
 
 #[cfg(not(target_os = "wasi"))]
@@ -105,12 +110,21 @@ struct Shared {
 }
 
 impl Shared {
+    /// The state, whether or not a thread panicked while it held the lock.
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Wait for `done` to hold of the state, then report a failed flush.
+    fn wait_until(&self, done: impl Fn(&State) -> bool) -> io::Result<()> {
+        self.changed
+            .wait_while(self.lock(), |state| !done(state))
+            .unwrap_or_else(PoisonError::into_inner)
+            .result()
+    }
+
     fn finish_through(&self, ticket: FlushTicket) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
-        while state.ended < ticket.0 {
-            state = self.changed.wait(state).unwrap();
-        }
-        state.result()
+        self.wait_until(|state| state.ended >= ticket.0)
     }
 }
 
@@ -128,19 +142,13 @@ pub(super) struct Flusher {
 }
 
 impl Flusher {
-    pub fn check(&self) -> io::Result<()> { self.shared.state.lock().unwrap().result() }
+    pub fn check(&self) -> io::Result<()> { self.shared.lock().result() }
 
-    pub fn finish(&self) -> io::Result<()> {
-        let mut state = self.shared.state.lock().unwrap();
-        while state.running {
-            state = self.shared.changed.wait(state).unwrap();
-        }
-        state.result()
-    }
+    pub fn finish(&self) -> io::Result<()> { self.shared.wait_until(|state| !state.running) }
 
     /// The jobs submitted so far, for [`Self::finish_through`] to wait for
     /// later without waiting for any submitted after.
-    pub fn ticket(&self) -> FlushTicket { FlushTicket(self.shared.state.lock().unwrap().submitted) }
+    pub fn ticket(&self) -> FlushTicket { FlushTicket(self.shared.lock().submitted) }
 
     /// Wait until every job submitted before `ticket` was taken has ended,
     /// then report a failed flush as [`Self::check`] does.
@@ -151,10 +159,14 @@ impl Flusher {
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;
-        if self.executor.is_none() {
-            self.executor = Some(executor::Executor::shared()?);
-        }
-        Ok(self.executor.as_ref().unwrap().reserve(bytes))
+        let executor = if let Some(executor) = &self.executor {
+            Arc::clone(executor)
+        } else {
+            let executor = executor::Executor::shared()?;
+            self.executor = Some(Arc::clone(&executor));
+            executor
+        };
+        Ok(executor.reserve(bytes))
     }
 
     #[cfg(not(target_os = "wasi"))]
@@ -186,16 +198,22 @@ impl Flusher {
 
     #[cfg(not(target_os = "wasi"))]
     fn enqueue(&self, job: Job) -> io::Result<()> {
-        let mut state = self.shared.state.lock().unwrap();
-        state.result()?;
-        state.jobs.push_back(job);
-        state.submitted += 1;
-        if !state.running {
-            state.running = true;
-            self.executor
-                .as_ref()
-                .unwrap()
-                .submit(Arc::clone(&self.shared));
+        // `reserve` or `submit_writeback` starts the executor before a job is
+        // queued.
+        let Some(executor) = &self.executor else {
+            return Err(io::Error::other(
+                "rollover flush queued before the executor started",
+            ));
+        };
+        let start = {
+            let mut state = self.shared.lock();
+            state.result()?;
+            state.jobs.push_back(job);
+            state.submitted += 1;
+            !mem::replace(&mut state.running, true)
+        };
+        if start {
+            executor.submit(Arc::clone(&self.shared));
         }
         Ok(())
     }
@@ -203,11 +221,22 @@ impl Flusher {
 
 #[cfg(not(target_os = "wasi"))]
 fn run(shared: &Shared) -> bool {
-    let job = shared.state.lock().unwrap().jobs.pop_front().unwrap();
+    let job = {
+        let mut state = shared.lock();
+        let job = state.jobs.pop_front();
+        // The executor runs a log's jobs only while some are queued.
+        if job.is_none() {
+            state.running = false;
+        }
+        job
+    };
+    let Some(job) = job else {
+        return false;
+    };
     // An injected I/O panic must wake waiters just like an I/O error.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
+    let result = panic::catch_unwind(AssertUnwindSafe(|| job.run()))
         .unwrap_or_else(|_| Err(io::Error::other("rollover flush panicked")));
-    let mut state = shared.state.lock().unwrap();
+    let mut state = shared.lock();
     state.ended += 1;
     if let Err(error) = result {
         tracing::error!(%error, "rollover flush failed");
@@ -236,5 +265,6 @@ impl Drop for Flusher {
     }
 }
 
-#[cfg(all(test, not(target_os = "wasi")))]
+#[cfg(test)]
+#[cfg(not(target_os = "wasi"))]
 mod tests;

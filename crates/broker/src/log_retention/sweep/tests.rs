@@ -16,6 +16,7 @@ use {
     assert2::check,
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, NodeId, PatternType},
+    std::fs,
     uuid::Uuid,
 };
 
@@ -236,7 +237,7 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
     // The same partition, once the filesystem takes the rename again: the
     // sweep trims it and counts itself.
     for tombstone in blocked {
-        std::fs::remove_dir(&tombstone).expect("unblock the tombstone path");
+        fs::remove_dir(&tombstone).expect("unblock the tombstone path");
     }
     let before_retry = segment_files(&dir, "orders");
     tick_all(&registry, None, &metrics).await;

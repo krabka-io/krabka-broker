@@ -12,8 +12,12 @@
 //!   serves the records again.
 //! * Over the copy quota, `RLMCopyTask` uploads one segment and holds the rest
 //!   back, and raising the quota lets the held segments through.
+#![cfg(test)]
 
-use assert2::{assert, check};
+use {
+    assert2::{assert, check},
+    tokio::time,
+};
 mod support;
 
 use {
@@ -135,7 +139,7 @@ async fn await_offset_zero_only_in_the_archive(tiered: &TieredBroker, topic: &st
             Instant::now() <= deadline,
             "offset 0 was never evicted to the archive: {bases:?}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -220,7 +224,7 @@ async fn await_cold_row(tiered: &TieredBroker, topic: &str, topic_id: WireUuid, 
             Instant::now() <= deadline,
             "offset 0 kept answering {row:?}, not {want:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -262,7 +266,7 @@ async fn await_archived_segments(root: &Path, topic: &str, wanted: usize) {
             "the archive holds {} segment(s) of {topic}, wanted {wanted}",
             archived_segments(root, topic)
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -279,7 +283,7 @@ async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {
     // hundreds of times the bound, so every later segment waits. Five copy
     // ticks would upload every sealed segment without the quota.
     await_archived_segments(tiered.remote_dir.path(), TOPIC, 1).await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    time::sleep(Duration::from_secs(5)).await;
     check!(archived_segments(tiered.remote_dir.path(), TOPIC) == 1);
 
     // Back to Kafka's unlimited default: the held segments go up.

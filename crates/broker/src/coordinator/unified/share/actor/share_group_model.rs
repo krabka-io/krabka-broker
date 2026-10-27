@@ -21,6 +21,7 @@ use {
         seed::{apply_seed, snapshot_seed},
     },
     crate::{
+        codes,
         coordinator::unified::{
             actor::MetadataProvider,
             assignor::TopicIdPartition,
@@ -33,6 +34,7 @@ use {
     stateright::{Checker, Model, Property},
     std::{
         collections::{HashMap, HashSet},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -176,8 +178,8 @@ struct ModelMetadata {
 }
 
 impl MetadataProvider for ModelMetadata {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
-        std::sync::Arc::new(ReconcileInput {
+    fn snapshot(&self) -> Arc<ReconcileInput> {
+        Arc::new(ReconcileInput {
             topic_id_by_name: [(TOPIC_NAME.to_owned(), TOPIC)].into(),
             partitions_per_topic: [(TOPIC, self.partitions)].into(),
             ..Default::default()
@@ -345,11 +347,11 @@ impl Model for ShareModel {
                     }
                     Err(error) => match kind {
                         EpochKind::Stale => {
-                            assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                            assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                             state.witnesses |= WITNESS_STALE_FENCED;
                         }
                         EpochKind::Forward => {
-                            assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                            assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                             state.witnesses |= WITNESS_FORWARD_FENCED;
                         }
                         EpochKind::Current => return None,
@@ -394,7 +396,7 @@ impl Model for ShareModel {
                     .group
                     .validate_member_epoch("unknown", 1)
                     .expect_err("unknown member is rejected");
-                assert2::assert!(error == crate::codes::UNKNOWN_MEMBER_ID);
+                assert2::assert!(error == codes::UNKNOWN_MEMBER_ID);
                 state.witnesses |= WITNESS_UNKNOWN;
             }
             Action::Replay => {

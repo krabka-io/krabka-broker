@@ -4,13 +4,13 @@ use {
     crate::{
         meta::{
             compact, edit_native_body, function_signature, named_async_parameter_types,
-            no_arguments,
+            no_arguments, parameter_at,
         },
         sweep_loop::{SpliceValue, splice},
     },
     moxy::{
         ast::{FnParam, ParseError},
-        token::{Spanner, TokenStream},
+        token::{Span, Spanner, TokenStream},
     },
     proc_macro::{
         Delimiter, Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree,
@@ -29,10 +29,15 @@ fn adapter(item: &TokenStream) -> Result<Adapter, ParseError> {
         &["broker", "req", "auth", "peer"],
         "expected ordinary async token adapter(broker, req, auth, peer)",
     )?;
-    let request = &types[1];
-    if types[0] != "&Broker"
-        || types[2] != "&ConnectionAuth"
-        || types[3] != "&SocketAddr"
+    let [broker, request, auth, peer] = types.as_slice() else {
+        return Err(ParseError::new(
+            signature.span(),
+            "expected ordinary async token adapter(broker, req, auth, peer)",
+        ));
+    };
+    if broker != "&Broker"
+        || auth != "&ConnectionAuth"
+        || peer != "&SocketAddr"
         || !matches!(
             request.as_str(),
             "CreateDelegationTokenRequest"
@@ -48,11 +53,16 @@ fn adapter(item: &TokenStream) -> Result<Adapter, ParseError> {
             "expected token request/response and borrowed broker/authentication/peer types",
         ));
     }
-    let FnParam::Typed(request) = &signature.params.inner.inputs[1] else {
-        unreachable!()
+    let (FnParam::Typed(request), Some(response)) = (
+        parameter_at(&signature, 1, "expected a typed request parameter")?,
+        signature.output.as_type(),
+    ) else {
+        return Err(ParseError::new(
+            signature.span(),
+            "expected a typed request parameter and a response type",
+        ));
     };
     let name = &signature.ident;
-    let response = signature.output.as_type().expect("validated response type");
     Ok(Adapter {
         header: moxy::template! {
             fn {{ name }}<'a>(broker: &'a Broker, version: ApiVersion, _correlation_id: CorrelationId, body: &'a [u8], auth: &'a ConnectionAuth, peer: &'a SocketAddr) -> BoxFuture<'a, Result<Bytes, BrokerError>>
@@ -69,10 +79,7 @@ fn adapter(item: &TokenStream) -> Result<Adapter, ParseError> {
     })
 }
 
-pub(crate) fn expand(
-    meta: TokenStream,
-    item: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     no_arguments(meta, "token_dispatch")?;
     let generated = adapter(&item.clone().into())?;
     let header: NativeTokenStream = generated.header.into();
@@ -88,13 +95,17 @@ pub(crate) fn expand(
         )
     });
     let mut tokens: Vec<_> = item.into_iter().collect();
-    let start = tokens
-        .iter()
-        .position(
+    let (Some(start), Some(body)) = (
+        tokens.iter().position(
             |token| matches!(token, NativeTokenTree::Ident(name) if name.to_string() == "async"),
-        )
-        .expect("validated async header");
-    let body = tokens.pop().expect("validated function body");
+        ),
+        tokens.pop(),
+    ) else {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected an async function with a body",
+        ));
+    };
     tokens.truncate(start);
     Ok(tokens.into_iter().chain(header).chain([body]).collect())
 }

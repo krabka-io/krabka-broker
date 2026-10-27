@@ -209,9 +209,9 @@ impl Recorder {
 /// subscription, the group epoch, every member's target (an empty one for a
 /// member with none), the target metadata and every member's current
 /// assignment. The broker sorts the members where Kafka iterates a hash map.
-pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
-    let mut member_ids: Vec<&String> = state.members.keys().collect();
-    member_ids.sort_unstable();
+pub fn full_pending_records(state: &GroupState) -> PendingRecords {
+    let mut members: Vec<_> = state.members.iter().collect();
+    members.sort_unstable_by_key(|(member_id, _)| *member_id);
     let mut pending = PendingRecords {
         group_metadata: Some(NextGenGroupMetadataValue {
             epoch: state.group_epoch,
@@ -223,8 +223,7 @@ pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
         }),
         ..PendingRecords::default()
     };
-    for member_id in member_ids {
-        let member = &state.members[member_id];
+    for (member_id, member) in members {
         pending
             .member_metadata
             .push((member_id.clone(), Some(member_metadata_value(member))));
@@ -253,10 +252,7 @@ pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
 /// classic group with its members and their assignments intact. See
 /// `apply_group_metadata` in `coordinator::bootstrap`. The downgrade flip uses
 /// this function.
-pub(crate) fn classic_group_metadata_record(
-    state: &ClassicGroup,
-    now_ms: i64,
-) -> GroupMetadataValue {
+pub fn classic_group_metadata_record(state: &ClassicGroup, now_ms: i64) -> GroupMetadataValue {
     use crate::coordinator::unified::persistence::{GroupMetadataValue, MemberMetadata};
     let members = state
         .members
@@ -324,7 +320,7 @@ mod tests {
         crate::coordinator::unified::{ClientIdentity, actor::member_state::build_member},
         assert2::{assert, check},
         krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        std::time::Instant,
+        std::time::{Duration, Instant},
     };
 
     fn joined(member_id: &str) -> MemberState {
@@ -412,11 +408,11 @@ mod tests {
                 change: |state| {
                     state.bump_epoch();
                     state.install_target(
-                        [("m1".to_string(), [(Uuid([9; 16]), vec![0, 1])].into())].into(),
+                        [("m1".to_owned(), [(Uuid([9; 16]), vec![0, 1])].into())].into(),
                     );
                 },
                 member_ids: &["m1"],
-                target: Some(vec!["m1".to_string()]),
+                target: Some(vec!["m1".to_owned()]),
             },
         ];
         for Row {
@@ -483,7 +479,7 @@ mod tests {
     #[test]
     fn the_member_subscription_record_is_kafkas() {
         let mut member = joined("m1");
-        member.subscribed_topic_names = ["b".to_string(), "a".to_string(), "c".to_string()].into();
+        member.subscribed_topic_names = ["b".to_owned(), "a".to_owned(), "c".to_owned()].into();
         let value = member_metadata_value(&member);
         check!(value.subscribed_topic_names == vec!["a", "b", "c"]);
         check!(value.subscribed_topic_regex.as_deref() == Some(""));
@@ -513,8 +509,8 @@ mod tests {
                 "m".repeat(length),
                 "client",
                 "host",
-                std::time::Duration::from_secs(10),
-                std::time::Duration::from_secs(10),
+                Duration::from_secs(10),
+                Duration::from_secs(10),
                 vec![("range".into(), bytes::Bytes::new())],
             ),
             "consumer",
@@ -524,7 +520,7 @@ mod tests {
 
         check!(result.is_ok() == written, "member id of {length} bytes");
         check!(
-            written || matches!(result, Err(crate::error::BrokerError::Protocol(_))),
+            written || matches!(result, Err(BrokerError::Protocol(_))),
             "member id of {length} bytes is a protocol error"
         );
         check!(log.batches().await.len() == usize::from(written));

@@ -7,7 +7,11 @@
 
 use {
     crate::docker::{KAFKA_IMAGE, docker_run_kafka_tool_with_image},
-    std::time::{Duration, Instant},
+    std::{
+        process::Output,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 /// How long to wait for an external metadata request to report a leader.
@@ -41,7 +45,7 @@ pub async fn wait_for_described_leader(
             Instant::now() <= deadline,
             "external metadata never observed {topic} leader {expected}: {description}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -84,7 +88,7 @@ pub async fn create_mixed_topic(bootstrap: &str, topic: &str) {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -113,11 +117,11 @@ pub async fn create_and_wait_for_isr(
         }
         assert2::assert!(Instant::now() <= deadline, "{context}: {description}");
         // External JVM fetch progress has no matching in-process awaiter, and needs this two-minute budget.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
-fn describe_topic(bootstrap: &str, topic: &str) -> std::process::Output {
+fn describe_topic(bootstrap: &str, topic: &str) -> Output {
     docker_run_kafka_tool_with_image(KAFKA_IMAGE, &[
         "kafka-topics",
         "--describe",

@@ -13,8 +13,10 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
         Encode,
+        kafka_3_6_2::owned::produce_response,
         owned::produce_response::{ProduceResponse, TopicProduceResponse},
     },
+    std::time::Instant,
 };
 
 /// First `Produce` response version that carries the KIP-951 `CurrentLeader`
@@ -25,7 +27,7 @@ pub(super) fn finish_produce_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &RequestContext<'_>,
-    request_quota_start: Option<std::time::Instant>,
+    request_quota_start: Option<Instant>,
     topic_results: Vec<TopicProduceResponse>,
     version: i16,
 ) -> Result<Bytes, BrokerError> {
@@ -81,8 +83,7 @@ pub(super) fn finish_produce_response(
     context.record_throttle(delay);
     let mut encoded = BytesMut::new();
     if (0..3).contains(&version) {
-        let legacy: krabka_protocol::kafka_3_6_2::owned::produce_response::ProduceResponse =
-            response.into();
+        let legacy: produce_response::ProduceResponse = response.into();
         encoded.reserve(legacy.encoded_len(version));
         legacy.encode(&mut encoded, version)?;
     } else {

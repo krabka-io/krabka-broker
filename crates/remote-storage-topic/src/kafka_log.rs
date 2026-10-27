@@ -96,6 +96,10 @@ use {
             RangeVisitor,
         },
     },
+    krabka_client_core::{security::ClientSecurity, transport::resolve},
+    krabka_protocol::owned::metadata_response::MetadataResponse,
+    std::net::SocketAddr,
+    tokio::{sync::Mutex, time},
 };
 
 /// Whether an opened log may write.
@@ -120,14 +124,14 @@ pub struct KafkaMetadataEventLog {
     partition_count: i32,
     bootstrap: String,
     client_id: String,
-    security: Option<krabka_client_core::security::ClientSecurity>,
+    security: Option<ClientSecurity>,
     fetch_max_wait: Time,
     fetch_max_bytes: ByteSize,
     fetch_retry_backoff: Time,
     event_queue_capacity: MetadataEventQueueCapacity,
     dispatch_queue_capacity: ConnectionDispatchQueueCapacity,
     frame_max: ClientFrameMax,
-    subscriptions: tokio::sync::Mutex<Vec<Arc<ConsumerState>>>,
+    subscriptions: Mutex<Vec<Arc<ConsumerState>>>,
 }
 
 impl KafkaMetadataEventLog {
@@ -236,7 +240,7 @@ impl KafkaMetadataEventLog {
             event_queue_capacity: cfg.event_queue_capacity,
             dispatch_queue_capacity: cfg.dispatch_queue_capacity,
             frame_max: cfg.frame_max,
-            subscriptions: tokio::sync::Mutex::new(Vec::new()),
+            subscriptions: Mutex::new(Vec::new()),
         }))
     }
 
@@ -295,10 +299,11 @@ impl KafkaMetadataEventLog {
                         p.partition_index, p.error_code
                     )));
                 }
-                if let Ok(idx) = usize::try_from(p.partition_index)
-                    && idx < offsets.len()
+                if let Some(slot) = usize::try_from(p.partition_index)
+                    .ok()
+                    .and_then(|idx| offsets.get_mut(idx))
                 {
-                    offsets[idx] = p.offset;
+                    *slot = p.offset;
                 }
             }
         }
@@ -311,21 +316,20 @@ impl KafkaMetadataEventLog {
 async fn resolve_bootstrap(
     bootstrap: &str,
     options: &ConnectionOptions,
-) -> Result<Vec<(std::net::SocketAddr, String)>, MetadataLogError> {
+) -> Result<Vec<(SocketAddr, String)>, MetadataLogError> {
     let mut resolved = Vec::new();
     for address in bootstrap.split(',').map(str::trim) {
         if address.is_empty() {
             continue;
         }
-        let lookup = tokio::time::timeout(
-            options.dns_timeout.time().to_std(),
-            krabka_client_core::transport::resolve(address),
-        )
-        .await
-        .map_err(|_elapsed| MetadataLogError::Other(format!("DNS lookup of {address} timed out")))?
-        .map_err(|error| {
-            MetadataLogError::Other(format!("DNS lookup of {address} failed: {error}"))
-        })?;
+        let lookup = time::timeout(options.dns_timeout.time().to_std(), resolve(address))
+            .await
+            .map_err(|_elapsed| {
+                MetadataLogError::Other(format!("DNS lookup of {address} timed out"))
+            })?
+            .map_err(|error| {
+                MetadataLogError::Other(format!("DNS lookup of {address} failed: {error}"))
+            })?;
         resolved.extend(
             lookup
                 .into_iter()
@@ -341,9 +345,7 @@ async fn resolve_bootstrap(
 }
 
 /// The brokers a `Metadata` response names, in the pool's shape.
-fn brokers_of(
-    metadata: &krabka_protocol::owned::metadata_response::MetadataResponse,
-) -> Vec<BrokerInfo> {
+fn brokers_of(metadata: &MetadataResponse) -> Vec<BrokerInfo> {
     metadata
         .brokers
         .iter()
@@ -367,7 +369,7 @@ pub(super) const METADATA_TOPIC_SCOPE: MetadataScope = MetadataScope::Topics {
 };
 
 pub(super) fn partition_leader(
-    metadata: &krabka_protocol::owned::metadata_response::MetadataResponse,
+    metadata: &MetadataResponse,
     topic: &str,
     partition: i32,
 ) -> Option<i32> {
@@ -533,11 +535,8 @@ impl KafkaMetadataEventLog {
         event: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
         let record = producer_record(&self.topic, self.partition_count, partition, key, event)?;
-        let producer = self
-            .producer
-            .as_ref()
-            .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))?;
-        let meta = producer
+        let meta = self
+            .producer()?
             .send(record)
             .await
             .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
@@ -557,10 +556,23 @@ impl KafkaMetadataEventLog {
         &self,
         events: Vec<KeyedEvent>,
     ) -> Result<Vec<i64>, MetadataLogError> {
-        let producer = self
-            .producer
+        self.publish_record_group_through(self.producer()?, events)
+            .await
+    }
+
+    /// The producer, or an error for a read-only log.
+    fn producer(&self) -> Result<&Producer, MetadataLogError> {
+        self.producer
             .as_ref()
-            .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))?;
+            .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))
+    }
+
+    /// [`Self::publish_record_group`] through `producer`.
+    async fn publish_record_group_through(
+        &self,
+        producer: &Producer,
+        events: Vec<KeyedEvent>,
+    ) -> Result<Vec<i64>, MetadataLogError> {
         let mut failure = None;
         let mut handles = Vec::with_capacity(events.len());
         for KeyedEvent {

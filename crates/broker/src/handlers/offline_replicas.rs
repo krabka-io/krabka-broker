@@ -50,7 +50,7 @@ use {
 ///
 /// `DescribeCluster` reads the same set for `is_fenced` and for the KIP-1073
 /// `include_fenced_brokers` filter.
-pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
+pub async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
     let mut unavailable = fenced_node_ids(image);
     let is_controller = *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
     if is_controller {
@@ -71,7 +71,7 @@ pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) 
 /// registry. This set is the fence replicated on the registrations every node
 /// carries, with the controller's own registry unioned in on the node that
 /// owns it, so every broker refuses and permits the same elections.
-pub(crate) async fn live_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
+pub async fn live_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
     electable(image, &unavailable_brokers(broker, image).await)
 }
 
@@ -91,7 +91,7 @@ fn electable(image: &MetadataImage, unavailable: &HashSet<u64>) -> HashSet<u64> 
 /// The endpoint of `broker` named `listener`, as Kafka's
 /// `BrokerRegistration.node(listenerName)` finds it, or `None` when the broker
 /// has no endpoint on that listener. There is no fallback to another listener.
-pub(crate) fn listener_endpoint<'a>(
+pub fn listener_endpoint<'a>(
     broker: &'a BrokerRegistrationRecord,
     listener: &str,
 ) -> Option<&'a krabka_metadata::BrokerEndpoint> {
@@ -107,7 +107,7 @@ pub(crate) fn listener_endpoint<'a>(
 /// listener the request arrived on. The result is the wire value for
 /// `MetadataResponsePartition.offline_replicas` and
 /// `DescribeTopicPartitionsResponsePartition.offline_replicas`.
-pub(crate) fn offline_replicas(
+pub fn offline_replicas(
     image: &MetadataImage,
     partition: &PartitionRecord,
     unavailable: &HashSet<u64>,
@@ -127,19 +127,19 @@ pub(crate) fn offline_replicas(
 
 /// Kafka's `MetadataResponse.NO_LEADER_ID`. `kafka-topics` renders it as
 /// `Leader: none`, and both of its health filters key on it.
-pub(crate) const NO_LEADER_ID: i32 = -1;
+pub const NO_LEADER_ID: i32 = -1;
 
 /// The leader, ISR and offline-replica columns of one partition row, decided
 /// together so the two APIs cannot answer differently.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PartitionAvailability {
+pub struct PartitionAvailability {
     /// `MetadataResponsePartition.leader_id` /
     /// `DescribeTopicPartitionsResponsePartition.leader_id`.
-    pub(crate) leader_id: i32,
+    pub leader_id: i32,
     /// `isr_nodes`, in ISR order.
-    pub(crate) isr_nodes: Vec<i32>,
+    pub isr_nodes: Vec<i32>,
     /// `offline_replicas`, in replica order.
-    pub(crate) offline_replicas: Vec<i32>,
+    pub offline_replicas: Vec<i32>,
 }
 
 /// Project `partition` into the three columns that describe its health.
@@ -194,7 +194,7 @@ pub(crate) struct PartitionAvailability {
 /// last-known ELR that names it instead (see
 /// [`crate::elr::state::is_leaderless`]) and this projection reads it back:
 /// `Leader: none`, and the last leader is out of the ISR.
-pub(crate) fn partition_availability(
+pub fn partition_availability(
     image: &MetadataImage,
     partition: &PartitionRecord,
     unavailable: &HashSet<u64>,
@@ -237,7 +237,7 @@ pub(crate) fn partition_availability(
 /// Why `leader` has no endpoint to advertise on `listener`, or `None` when it
 /// has one. This is Kafka's `KRaftMetadataCache.getAliveEndpoint`, and the two
 /// errors that `partitionMetadata` derives from its absence.
-pub(crate) fn leader_endpoint_error(
+pub fn leader_endpoint_error(
     image: &MetadataImage,
     leader: NodeId,
     listener: &str,
@@ -253,7 +253,7 @@ pub(crate) fn leader_endpoint_error(
 
 /// The two ways a leader can lack an endpoint on the listener of a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LeaderEndpointError {
+pub enum LeaderEndpointError {
     /// The leader has no registration. Kafka answers `LEADER_NOT_AVAILABLE`.
     Unregistered,
     /// The leader is registered without the listener. Kafka answers
@@ -308,7 +308,7 @@ fn has_online_dir(registration: &BrokerRegistrationRecord, directory: Option<uui
 /// A replica whose broker has no registration in `image` has no directory
 /// list to blame, so it passes: the election's liveness set already refuses an
 /// unregistered broker.
-pub(crate) fn replica_dir_online(
+pub fn replica_dir_online(
     image: &MetadataImage,
     partition: &PartitionRecord,
     replica: NodeId,

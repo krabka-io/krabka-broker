@@ -8,7 +8,9 @@ use {
         EVENT_CLASS_CHECKPOINT, HEADER_PREV_HASH, HEADER_SEQ,
         chain::{chain_hash, from_hex32},
     },
+    krabka_protocol::records,
     krabka_units::ByteSize,
+    std::{convert, str},
 };
 
 /// Audit record-header key carrying the event class (e.g. `checkpoint`).
@@ -17,7 +19,7 @@ const HEADER_EVENT_CLASS: &str = "event_class";
 /// Where the audit hash chain continues: the sequence number of the next
 /// record and the chain head that its `prev_hash` must carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChainResume {
+pub struct ChainResume {
     pub(crate) next_seq: u64,
     pub(crate) head: [u8; 32],
 }
@@ -30,7 +32,7 @@ pub(crate) struct ChainResume {
 /// same is logged at error level: the caller then starts a new chain, and an
 /// auditor sees a break in it.
 #[must_use]
-pub(crate) fn recover_from_partition_tail(
+pub fn recover_from_partition_tail(
     partition: &Partition,
     tail_window_offsets: i64,
     tail_read_max: ByteSize,
@@ -63,10 +65,7 @@ pub(crate) fn recover_from_partition_tail(
             }
             let seq = header_str(rec, HEADER_SEQ).and_then(|s| s.parse::<u64>().ok());
             let prev = header_str(rec, HEADER_PREV_HASH).and_then(from_hex32);
-            let value: &[u8] = rec
-                .value
-                .as_ref()
-                .map_or_default(std::convert::AsRef::as_ref);
+            let value: &[u8] = rec.value.as_ref().map_or_default(convert::AsRef::as_ref);
             if let (Some(seq), Some(prev)) = (seq, prev) {
                 last = Some(ChainResume {
                     next_seq: seq + 1,
@@ -78,15 +77,16 @@ pub(crate) fn recover_from_partition_tail(
     last
 }
 
-fn header_bytes<'a>(rec: &'a krabka_protocol::records::Record, key: &str) -> Option<&'a [u8]> {
+fn header_bytes<'a>(rec: &'a records::Record, key: &str) -> Option<&'a [u8]> {
     rec.headers
         .iter()
         .find(|h| h.key == key)
         .and_then(|h| h.value.as_deref())
 }
 
-fn header_str<'a>(rec: &'a krabka_protocol::records::Record, key: &str) -> Option<&'a str> {
-    header_bytes(rec, key).and_then(|v| std::str::from_utf8(v).ok())
+fn header_str<'a>(rec: &'a records::Record, key: &str) -> Option<&'a str> {
+    let v = header_bytes(rec, key)?;
+    str::from_utf8(v).ok()
 }
 
 fn tail_window_start(
@@ -125,7 +125,7 @@ mod tests {
 
     fn header(key: &str, value: impl Into<Bytes>) -> RecordHeader {
         RecordHeader {
-            key: key.to_string(),
+            key: key.to_owned(),
             value: Some(value.into()),
         }
     }

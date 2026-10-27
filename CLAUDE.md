@@ -173,8 +173,9 @@ remain unresolved. Its **Replace qualified path with use** code action then
 resolves paths and adds a module-scope import. Prefer this assist for shortening
 qualified references; it preserves name resolution and handles import conflicts.
 Avoid `crate::...` paths in code: import the item or its containing module at
-module scope and refer to that name. CI checks this with
-`aspect check-imported-paths`.
+module scope and refer to that name. Clippy's `absolute_paths` lint checks this:
+it rejects a path in code that starts at a crate root and has three or more
+segments, such as `crate::a::b` or `std::a::b`.
 
 ## Code & Documentation Style
 

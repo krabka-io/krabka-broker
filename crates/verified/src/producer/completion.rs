@@ -22,11 +22,12 @@ pub fn completion_source_selected(selected: Seq<usize>, source: Int) -> bool {
 }
 
 /// Merge a deferred data completion into the current epoch's retry window.
+///
 /// The returned indices name old batches, or `ends.len()` for the incoming
 /// batch. Equal physical offsets keep the existing metadata. Earlier
 /// completions cannot displace a newer batch; only the five greatest distinct
-/// offsets survive. A lower epoch preserves the old window and is rejected.
-/// The host supplies sorted retained batches and a truthful incoming batch.
+/// offsets survive. A lower epoch preserves the old window and is rejected. The
+/// host supplies sorted retained batches and a truthful incoming batch.
 #[requires(ends@.len() <= 5)]
 #[requires(current == None ==> ends@.len() == 0)]
 #[requires(crate::sequence::strictly_increasing(ends@))]
@@ -59,23 +60,20 @@ pub fn producer_completion_window(
     incoming: i64,
 ) -> (bool, Vec<usize>) {
     let count = ends.len();
-    let keep_old = match current {
-        Some(value) => epoch <= value,
-        None => false,
-    };
-    let accepted = match current {
-        Some(value) => value <= epoch,
-        None => true,
-    };
+    let keep_old = matches!(current, Some(value) if epoch <= value);
+    let accepted = !matches!(current, Some(value) if value > epoch);
     let mut position = 0usize;
     #[invariant(position@ <= count@)]
     #[invariant(forall<i: Int> 0 <= i && i < position@ ==> ends@[i]@ < incoming@)]
     #[variant(count@ - position@)]
-    while position < count && ends[position] < incoming {
+    while position < count && matches!(ends.get(position), Some(&end) if end < incoming) {
         position += 1;
     }
     proof_assert!(forall<i: Int> position@ <= i && i < count@ ==> incoming@ <= ends@[i]@);
-    let insert = accepted && (!keep_old || position == count || ends[position] != incoming);
+    let insert = accepted
+        && (!keep_old
+            || position == count
+            || !matches!(ends.get(position), Some(&end) if end == incoming));
     let length = if keep_old { count } else { 0 } + usize::from(insert);
     let first = length.saturating_sub(5);
     let mut selected: Vec<usize> = Vec::with_capacity(length - first);

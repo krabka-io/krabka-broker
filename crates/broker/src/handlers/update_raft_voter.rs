@@ -55,7 +55,7 @@ use {
         not_leader: UpdateRaftVoterResponse::error(voter_requests::NOT_LEADER_OR_FOLLOWER),
     },
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -181,6 +181,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            authorizer::AuthorizationResult,
             handlers::{
                 raft_voter::{VoterCase, check_voter_case},
                 test_support::{voter_cluster_id, voter_leader_epoch},
@@ -373,9 +374,9 @@ mod tests {
 
         krabka_macros::test_authorizer!(GrantOnly, req; {
             if req.operation == self.0 {
-                crate::authorizer::AuthorizationResult::Allow
+                AuthorizationResult::Allow
             } else {
-                crate::authorizer::AuthorizationResult::Deny
+                AuthorizationResult::Deny
             }
         });
 

@@ -4,6 +4,7 @@
 //! These tests are gated off Windows, like the other multi-broker tests.
 //! openraft and `tokio` scheduling on Windows runners cause flakes that have
 //! nothing to do with the protocol under test.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -17,12 +18,18 @@ use {
     assert2::assert,
     krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole},
     krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord},
-    std::time::Duration,
+    krabka_raft::reconfig::ReconfigOutcome,
+    std::{
+        iter,
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
     support::{
         cluster_lock,
         durability::{produce_acks, time_acks_after_isr_shrink},
     },
     tempfile::TempDir,
+    tokio::{net::TcpListener, time},
 };
 
 mod support;
@@ -31,7 +38,7 @@ mod support;
 /// leader. It returns the 0-based cluster index of that broker.
 async fn find_controller_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) -> usize {
     for (h, _, _) in cluster {
-        h.wait_until_controller_leader().await;
+        h.wait_until_controller_leader().await.unwrap();
     }
     for (i, (h, cfg, _)) in cluster.iter().enumerate() {
         if h.controller_leader_id() == Some(cfg.node_id) {
@@ -110,8 +117,7 @@ async fn unclean_failover_recovers_after_a_real_broker_restart() {
         .0
         .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "kip704-restart".into(),
-            overrides: [("unclean.leader.election.enable".into(), "true".into())]
-                .into_iter()
+            overrides: iter::once(("unclean.leader.election.enable".into(), "true".into()))
                 .collect(),
         }))
         .await
@@ -214,7 +220,7 @@ async fn isr_expand_on_catchup() {
         .await
         .expect("activate kraft.version 1");
     assert!(
-        matches!(outcome, krabka_raft::reconfig::ReconfigOutcome::Committed),
+        matches!(outcome, ReconfigOutcome::Committed),
         "kraft.version activation was not committed: {outcome:?}"
     );
 
@@ -244,7 +250,7 @@ async fn isr_expand_on_catchup() {
     // 3. Capture the victim's config, then kill it.
     let (dead_h, mut reborn_cfg, _dead_dir) = cluster.remove(victim_idx);
     // Reserve while the old listeners still hold their addresses.
-    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let occupied = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("reserve the occupied client port");
     reborn_cfg.listen_addr = occupied.local_addr().expect("occupied client address");
@@ -267,7 +273,7 @@ async fn isr_expand_on_catchup() {
     reborn_cfg.bootstrap_servers = vec![format!("localhost:{}", bootstrap_controller.port())];
     reborn_cfg.auto_join = true;
     let release = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        time::sleep(Duration::from_secs(1)).await;
         drop(occupied);
     });
     let reborn = support::start_reusing_addrs(&reborn_cfg, "reborn follower").await;
@@ -341,7 +347,7 @@ const LEADER_NOT_AVAILABLE: i16 = 5;
 /// as the leader of `topic`-0, or the error code that write got.
 async fn produce_to_current_leader(
     observer: &BrokerHandle,
-    addresses: &[(krabka_broker::NodeId, std::net::SocketAddr)],
+    addresses: &[(krabka_broker::NodeId, SocketAddr)],
     topic: &str,
     value: &str,
 ) -> Result<i64, i16> {
@@ -450,14 +456,14 @@ async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() 
     } else {
         controller
     };
-    let killed_at = std::time::Instant::now();
+    let killed_at = Instant::now();
     victim_handle.crash_for_test().await;
     victim_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let observer = &cluster[observer_idx].0;
 
     let restart = support::start_reusing_addrs(&victim_config, "restart the killed leader");
     let failover = async {
-        let moved = tokio::time::timeout(
+        let moved = time::timeout(
             RESTART_FAILOVER_DEADLINE,
             observer.wait_for_image(|image| leadership_moved_off(image, TOPIC, victim, &before)),
         )
@@ -475,11 +481,11 @@ async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() 
                 Ok(offset) => break offset,
                 Err(code) => {
                     assert!(
-                        std::time::Instant::now() < deadline,
+                        Instant::now() < deadline,
                         "acks=all still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
                         observer.partition_record_for_test(TOPIC, 0)
                     );
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    time::sleep(Duration::from_millis(100)).await;
                 }
             }
         };
@@ -571,7 +577,9 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
     let (endpoints, mut data_listeners, mut controller_listeners) =
         support::single_controller_endpoints(NODES).await;
     let topology = endpoints.topology();
-    let dirs: Vec<TempDir> = (0..NODES).map(|_| TempDir::new().expect("dir")).collect();
+    let dirs: Vec<TempDir> = iter::repeat_with(|| TempDir::new().expect("dir"))
+        .take(NODES)
+        .collect();
     let configs: Vec<BrokerConfig> = (0..NODES)
         .map(|index| {
             let mut config = topology.config(dirs[index].path(), RoleNodeSetup {
@@ -633,7 +641,7 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
     let survivors: Vec<BrokerHandle> = nodes.collect();
     let observer = &survivors[0];
 
-    let moved = tokio::time::timeout(
+    let moved = time::timeout(
         RESTART_FAILOVER_DEADLINE,
         observer.wait_for_image(|image| leadership_moved_off(image, TOPIC, victim, &before)),
     )
@@ -644,7 +652,7 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
         observer.partition_record_for_test(TOPIC, 0),
     );
     assert!(reborn.controller_leader_id() == Some(victim));
-    tokio::time::timeout(
+    time::timeout(
         RESTART_FAILOVER_DEADLINE,
         observer.wait_for_image(|image| rejoined_as_follower(image, TOPIC, victim)),
     )

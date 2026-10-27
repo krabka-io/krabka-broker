@@ -98,10 +98,8 @@ pub mod test_support {
     impl DlqSink for RecordingDlq {
         async fn write(&self, request: DlqRequest) -> Result<(), DlqError> {
             self.requests.lock().expect("requests lock").push(request);
-            match self.fail_with.lock().expect("failure lock").clone() {
-                Some(error) => Err(error),
-                None => Ok(()),
-            }
+            let failure = self.fail_with.lock().expect("failure lock").clone();
+            failure.map_or(Ok(()), Err)
         }
     }
 }

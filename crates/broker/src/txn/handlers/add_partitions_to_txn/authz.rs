@@ -29,7 +29,7 @@ use {
         },
     },
     krabka_security::Principal,
-    std::net::SocketAddr,
+    std::{collections::HashSet, net::SocketAddr},
 };
 
 /// Who sent the request, and so which topics need a `Write` check.
@@ -55,8 +55,8 @@ pub(super) fn failed_partitions(
     authorization: TopicAuthorization<'_>,
     topics: &[AddPartitionsToTxnTopic],
 ) -> Option<Vec<AddPartitionsToTxnTopicResult>> {
-    let denied: std::collections::HashSet<&str> = match authorization {
-        TopicAuthorization::Broker => std::collections::HashSet::new(),
+    let denied: HashSet<&str> = match authorization {
+        TopicAuthorization::Broker => HashSet::new(),
         TopicAuthorization::Client {
             authorizer,
             principal,
@@ -67,7 +67,7 @@ pub(super) fn failed_partitions(
                 .iter()
                 .map(|topic| topic.name.as_str())
                 .filter(|name| !is_internal_topic(config, name));
-            let allowed: std::collections::HashSet<&str> = authorize_topics(
+            let allowed: HashSet<&str> = authorize_topics(
                 authorizer,
                 image,
                 principal,

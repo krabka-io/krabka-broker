@@ -39,6 +39,8 @@
 //! emits, `sink` decides what a given stream can take, and `drain` writes the
 //! finished plan out with `sendfile` for the file-backed ops.
 
+#[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
 use {
     self::body_plan::{FetchWriteOp, fetch_response_write_plan},
     crate::{
@@ -61,10 +63,12 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::body_plan::records_to_serve;
 #[krabka_macros::sendfile_cfg]
 pub use self::resolve::resolve_records_sendfile;
-pub use self::{drain::write_fetch_plan, resolve::resolve_records_inline, sink::SendfileSink};
+pub use self::{
+    body_plan::records_to_serve, drain::write_fetch_plan, resolve::resolve_records_inline,
+    sink::SendfileSink,
+};
 
 /// One ordered segment of the fetch response wire frame.
 #[derive(Debug)]
@@ -86,7 +90,7 @@ pub enum WriteOp {
         target_os = "freebsd",
         target_os = "dragonfly",
     ))]
-    File(krabka_protocol::records::FileRegion),
+    File(FileRegion),
 }
 
 impl WriteOp {

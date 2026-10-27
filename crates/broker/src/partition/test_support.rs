@@ -26,13 +26,16 @@ use {
         atomic::{AtomicI32, AtomicU64},
     },
     tempfile::tempdir,
-    tokio::sync::{Notify, mpsc},
+    tokio::{
+        sync,
+        sync::{Notify, mpsc},
+    },
 };
 
 // Fails leader-epoch checkpoint writes as a full disk would.
 krabka_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
 
-pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
+pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let log = Log::open(dir.path(), LogConfig::default()).expect("open log");
     let (tx, _rx) = mpsc::channel::<WriterMessage>(1);
@@ -45,7 +48,7 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
         writer_tx: tx,
         marker_materialization: empty_marker_materialization(),
         append_notify: Arc::new(Notify::new()),
-        replica_state: Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
+        replica_state: Arc::new(sync::Mutex::new(ReplicaState::new())),
         hw_advance_notify,
         writer_gate: WriterGate::shared(false),
         current_leader: Arc::new(AtomicU64::new(0)),
@@ -60,7 +63,7 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
 }
 
 /// Update a test partition's log configuration without copying the log-lock boilerplate.
-pub(crate) fn update_log_config(partition: &Partition, update: impl FnOnce(&mut LogConfig)) {
+pub fn update_log_config(partition: &Partition, update: impl FnOnce(&mut LogConfig)) {
     let log = partition.log.lock().expect("partition log lock");
     let mut config = log.config_snapshot();
     update(&mut config);
@@ -69,21 +72,21 @@ pub(crate) fn update_log_config(partition: &Partition, update: impl FnOnce(&mut 
 
 /// Whether a commit fixture keeps the partition's initial leader or installs the test term.
 #[derive(Clone, Copy, Default)]
-pub(crate) enum CommitFixtureLeader {
+pub enum CommitFixtureLeader {
     #[default]
     KeepPartitionDefault,
     BrokerOneAtEpochZero,
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct CommitPartitionSetup {
+pub struct CommitPartitionSetup {
     pub high_watermark: krabka_log::Offset,
     pub leader: CommitFixtureLeader,
 }
 
 /// A real temporary partition with the requested commit frontier and its own notifier.
 #[bon::builder]
-pub(crate) async fn commit_partition(
+pub async fn commit_partition(
     #[builder(into, default)] high_watermark: krabka_log::Offset,
     #[builder(default)] leader: CommitFixtureLeader,
 ) -> (Arc<Partition>, tempfile::TempDir, Arc<Notify>) {
@@ -101,7 +104,7 @@ pub(crate) async fn commit_partition(
     (partition, directory, notify)
 }
 
-pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
+pub fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(
         Log::open(dir.path(), LogConfig::default()).expect("open log"),
@@ -120,7 +123,7 @@ pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
 }
 
 /// Project checkpoint rows without choosing the caller's mutex-poison diagnostic.
-pub(crate) fn epoch_history(log: &Log) -> Vec<(i32, i64)> {
+pub fn epoch_history(log: &Log) -> Vec<(i32, i64)> {
     log.epoch_checkpoint()
         .entries()
         .iter()
@@ -129,7 +132,7 @@ pub(crate) fn epoch_history(log: &Log) -> Vec<(i32, i64)> {
 }
 
 /// Install the three-replica setup; expected ISR rows remain independent in callers.
-pub(crate) async fn install_three_replica_isr(partition: &Partition) {
+pub async fn install_three_replica_isr(partition: &Partition) {
     let replicas = [
         krabka_audit::NodeId(1),
         krabka_audit::NodeId(2),

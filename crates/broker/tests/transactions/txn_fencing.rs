@@ -23,7 +23,7 @@ use {
     },
     assert2::assert,
     krabka_client_consumer::{AutoOffsetReset, Consumer},
-    krabka_client_producer::ProducerError,
+    krabka_client_producer::{EndTransactionError, ProducerError},
 };
 
 /// Producer B with the same `transactional_id` fences Producer A. Every
@@ -66,25 +66,29 @@ async fn fenced_producer_cannot_commit() {
 
     // Still-live path: the first commit after the fencing learns of it from
     // the coordinator's own EndTxn answer.
-    let err = txn_a
-        .commit()
-        .await
-        .expect_err("commit should fail after fencing");
-    assert!(
-        matches!(err.source, ProducerError::FencedProducer),
-        "expected FencedProducer, got: {err:?}"
-    );
+    let EndTransactionError {
+        source: retried, ..
+    } = {
+        let EndTransactionError {
+            transaction,
+            source,
+        } = txn_a
+            .commit()
+            .await
+            .expect_err("commit should fail after fencing");
+        assert!(
+            matches!(source, ProducerError::FencedProducer),
+            "expected FencedProducer, got: {source:?}"
+        );
 
-    // Already-fenced path: a retry on the same guard fails on the recorded
-    // fatal state, with no further EndTxn.
-    let err = err
-        .transaction
-        .commit()
-        .await
-        .expect_err("a retried commit on a fenced producer must still fail");
+        // Already-fenced path: a retry on the same guard fails on the recorded
+        // fatal state, with no further EndTxn.
+        transaction.commit().await
+    }
+    .expect_err("a retried commit on a fenced producer must still fail");
     assert!(
-        matches!(err.source, ProducerError::FencedProducer),
-        "expected FencedProducer on the retried commit, got: {err:?}"
+        matches!(retried, ProducerError::FencedProducer),
+        "expected FencedProducer on the retried commit, got: {retried:?}"
     );
 
     broker.shutdown().await;
@@ -223,7 +227,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         .bootstrap(bootstrap.clone())
         .group_id("fence-g")
         .auto_offset_reset(AutoOffsetReset::Earliest)
-        .subscribe(["fence-in".to_string()])
+        .subscribe(["fence-in".to_owned()])
         .build()
         .await
         .unwrap();

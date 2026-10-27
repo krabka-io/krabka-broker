@@ -37,7 +37,7 @@ const NO_COORDINATOR: i32 = -1;
     api = "DescribeBarrierGroups",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeBarrierGroupsRequest,
     version: ApiVersion,

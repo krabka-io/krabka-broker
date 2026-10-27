@@ -5,6 +5,7 @@
 //!
 //! The shared harness lives in [`jvm_acceptance`]; see it for the container
 //! networking these suites depend on.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -13,6 +14,12 @@ use {
     assert2::{assert, check},
     jvm_acceptance::*,
     krabka_broker::Broker,
+    std::{
+        path::{Path, PathBuf},
+        process::Output,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 // 200 records of ~30 bytes seal several segments at TIERED_SEGMENT_SIZE.
@@ -96,7 +103,7 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
     wait_for_minio_segments(MINIO_BUCKET, 2).await;
 
     let bootstrap = broker0_advertised();
-    let alter = |config: &str| -> std::process::Output {
+    let alter = |config: &str| -> Output {
         docker_run_kafka_tool_allowing_failure(&[
             "kafka-configs",
             "--bootstrap-server",
@@ -139,10 +146,10 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
     //
     // intentional poll: the sweep runs on its own 1 s timer, and the bucket
     // is the only signal that it has run.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut listing = minio_list_objects(MINIO_BUCKET);
-    while listing.contains(TOPIC) && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    while listing.contains(TOPIC) && Instant::now() < deadline {
+        time::sleep(Duration::from_millis(500)).await;
         listing = minio_list_objects(MINIO_BUCKET);
     }
     check!(
@@ -197,7 +204,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
             replication: 1,
             min_isr: 1,
             snapshot_interval: krabka_units::secs(2),
-            snapshot_dir: std::path::PathBuf::new(),
+            snapshot_dir: PathBuf::new(),
             security: None,
             ..krabka_broker::KafkaRlmmConfig::default()
         }),
@@ -215,7 +222,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // if the snapshot hasn't flushed, recovery still succeeds via
     // `__remote_log_metadata` topic replay — the snapshot is only an
     // optimisation that avoids replaying the full topic on startup.
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
 
     // -----------------------------------------------------------------------
     // RESTART: shut down the broker and re-start against the same log.dir.
@@ -293,7 +300,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
 
 /// The `--archive-s3-*` flags that point `krabka-restore` at the same `MinIO`
 /// bucket the broker archived into.
-fn restore_argv(minio_port: u16, log_dir: &std::path::Path) -> Vec<String> {
+fn restore_argv(minio_port: u16, log_dir: &Path) -> Vec<String> {
     [
         "krabka-restore",
         "--archive-s3-bucket",

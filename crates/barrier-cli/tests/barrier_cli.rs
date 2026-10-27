@@ -8,10 +8,17 @@
 //! What these cover that the unit tests cannot: that each subcommand's request
 //! actually reaches a broker that answers it, and that the exit code reports
 //! what happened.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    std::{
+        collections::BTreeMap,
+        slice,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 /// The exit code for a request the broker refused.
@@ -57,16 +64,16 @@ async fn broker() -> TestBroker {
 ///
 /// `describe` is the cheapest request that needs the state partition open.
 async fn wait_for_coordinator(bootstrap: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if cli(bootstrap, &["describe"]).await == 0 {
             return;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the barrier coordinator never became available"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -80,17 +87,17 @@ async fn cli(bootstrap: &str, args: &[&str]) -> i32 {
 /// Create the topic the barrier group cuts across.
 async fn create_topic(bootstrap: &str, partitions: i32) {
     let mut admin =
-        krabka_client_admin::AdminClient::connect(std::slice::from_ref(&bootstrap.to_owned()))
+        krabka_client_admin::AdminClient::connect(slice::from_ref(&bootstrap.to_owned()))
             .await
             .expect("admin connect");
     admin
         .create_topics(
             &[krabka_client_admin::CreateTopicSpec {
-                name: TOPIC.to_string(),
+                name: TOPIC.to_owned(),
                 partitions,
                 replicas: 1,
-                configs: std::collections::BTreeMap::default(),
-                replica_assignments: std::collections::BTreeMap::new(),
+                configs: BTreeMap::default(),
+                replica_assignments: BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )

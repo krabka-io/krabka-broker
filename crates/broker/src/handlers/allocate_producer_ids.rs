@@ -14,6 +14,7 @@ use {
         allocate_producer_ids_request::AllocateProducerIdsRequest,
         allocate_producer_ids_response::AllocateProducerIdsResponse,
     },
+    std::sync::Arc,
 };
 
 /// Checks `ClusterAction` on the cluster, then allocates a block.
@@ -24,7 +25,7 @@ use {
 /// `CLUSTER_AUTHORIZATION_FAILED` and the default block fields, and no block
 /// is allocated. A request that arrives in an `Envelope` runs this check
 /// against the principal that the envelope names.
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     request: AllocateProducerIdsRequest,
     _version: ApiVersion,
@@ -47,7 +48,7 @@ async fn serve(
     broker: &Broker,
     request: &AllocateProducerIdsRequest,
 ) -> AllocateProducerIdsResponse {
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
     let result = match u64::try_from(request.broker_id) {
         Ok(broker_id) => allocate_block(&controller, NodeId(broker_id), request.broker_epoch).await,
         Err(_) => Err(ProducerIdAllocationError::BrokerNotRegistered(NodeId(
@@ -96,6 +97,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        krabka_protocol::owned::allocate_producer_ids_request,
     };
 
     /// Serves a request as a principal that the default `AllowAllAuthorizer`
@@ -263,7 +265,7 @@ mod tests {
             let ctx = request_context(&user, &address, "allocate-test");
             let answered: AllocateProducerIdsResponse = dispatch_wire(
                 &broker,
-                krabka_protocol::owned::allocate_producer_ids_request::API_KEY,
+                allocate_producer_ids_request::API_KEY,
                 0,
                 &request,
                 &ctx,

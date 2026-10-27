@@ -183,7 +183,7 @@ pub fn render_markdown(
         };
         for (metric, judged) in metrics {
             let allowed = if judged.status == Status::NotBudgeted {
-                "—".to_string()
+                "—".to_owned()
             } else {
                 percent(judged.allowed_change)
             };

@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 /// One ACL binding, flattened out of the resource it was printed under.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct AclBinding {
+pub struct AclBinding {
     /// `TOPIC`, `GROUP`, `CLUSTER`, `TRANSACTIONAL_ID`, `DELEGATION_TOKEN`…
     pub(crate) resource_type: String,
     pub(crate) resource_name: String,
@@ -46,7 +46,7 @@ struct ResourcePattern {
 /// order, which neither broker promises and which differs between the two
 /// sides for the same bindings. What the shorthands are about is *which*
 /// bindings exist, and that is exactly what a set states.
-pub(crate) fn parse_acls(stdout: &str) -> BTreeSet<AclBinding> {
+pub fn parse_acls(stdout: &str) -> BTreeSet<AclBinding> {
     let mut bindings = BTreeSet::new();
     let mut resource: Option<ResourcePattern> = None;
     for line in stdout.lines() {
@@ -86,15 +86,10 @@ pub(crate) fn parse_acls(stdout: &str) -> BTreeSet<AclBinding> {
 /// terminator as often as the first, because it is the last field of an
 /// `AccessControlEntry`-shaped render and the first of a `ResourcePattern`.
 fn field(line: &str, key: &str) -> Option<String> {
-    let at = line.find(key)? + key.len();
-    let rest = &line[at..];
-    let end = rest
-        .find(", ")
-        .into_iter()
-        .chain(rest.find(')'))
-        .min()
-        .unwrap_or(rest.len());
-    Some(rest[..end].trim().to_owned())
+    let (_, rest) = line.split_once(key)?;
+    // The value ends at the first `, ` or `)`, whichever comes first.
+    let value = rest.split(", ").next()?.split(')').next()?;
+    Some(value.trim().to_owned())
 }
 
 #[cfg(test)]

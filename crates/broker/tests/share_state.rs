@@ -13,6 +13,7 @@
 //! topic's partitions asynchronously in the replicator supervisor. So the first
 //! `Initialize` may briefly return a coordinator-not-ready code. The `*_ready`
 //! helpers retry, exactly as a real client would.
+#![cfg(test)]
 
 mod support;
 
@@ -37,14 +38,17 @@ use {
         read_share_group_state_request::{
             PartitionData as ReadPart, ReadShareGroupStateRequest, ReadStateData,
         },
+        read_share_group_state_response,
         read_share_group_state_summary_request::{
             PartitionData as SummaryPart, ReadShareGroupStateSummaryRequest, ReadStateSummaryData,
         },
+        read_share_group_state_summary_response,
         write_share_group_state_request::{
             PartitionData as WritePart, StateBatch, WriteShareGroupStateRequest, WriteStateData,
         },
     },
     std::{sync::Arc, time::Duration},
+    tokio::time,
 };
 
 const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
@@ -86,7 +90,7 @@ async fn find_share_once(client: &Client, key: &str) -> Coordinator {
         .send(coordinator_lookup_request(
             FindCoordinatorRequest::default().key,
             support::KEY_TYPE_SHARE,
-            vec![key.to_string()],
+            vec![key.to_owned()],
         ))
         .await
         .expect("FindCoordinator(SHARE)");
@@ -136,7 +140,7 @@ async fn initialize_ready(
         // state (COORDINATOR_LOAD_IN_PROGRESS) — not share-partition state, so
         // the wait_until_share_* awaiters don't apply (they observe SPSO /
         // delivery / acquired state that this very Initialize creates).
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     panic!("share coordinator never became ready for {group}:{tid}:{partition}");
 }
@@ -181,7 +185,7 @@ async fn read_summary(
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
-) -> krabka_protocol::owned::read_share_group_state_summary_response::PartitionResult {
+) -> read_share_group_state_summary_response::PartitionResult {
     let resp = client
         .send(ReadShareGroupStateSummaryRequest {
             group_id: group.into(),
@@ -209,7 +213,7 @@ async fn read_summary_ready(
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
-) -> krabka_protocol::owned::read_share_group_state_summary_response::PartitionResult {
+) -> read_share_group_state_summary_response::PartitionResult {
     for _ in 0..40 {
         let result = read_summary(client, group, tid, partition).await;
         if !not_ready(result.error_code) {
@@ -217,7 +221,7 @@ async fn read_summary_ready(
         }
         // intentional: bounded retry while the restarted coordinator still
         // takes over `__share_group_state`; see `initialize_ready`.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     panic!("share coordinator never became ready for {group}:{tid}:{partition}");
 }
@@ -227,7 +231,7 @@ async fn read_state(
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
-) -> krabka_protocol::owned::read_share_group_state_response::PartitionResult {
+) -> read_share_group_state_response::PartitionResult {
     let resp = client
         .send(ReadShareGroupStateRequest {
             group_id: group.into(),
@@ -382,7 +386,7 @@ async fn persister_round_trip() {
     let after = read_state(&client, "g1", tid, 0).await;
     assert!(
         after
-            == krabka_protocol::owned::read_share_group_state_response::PartitionResult {
+            == read_share_group_state_response::PartitionResult {
                 partition: 0,
                 error_code: INVALID_REQUEST,
                 error_message: Some(

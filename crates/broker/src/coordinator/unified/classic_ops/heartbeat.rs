@@ -19,7 +19,7 @@ use {
 /// `Stable`. `PreparingRebalance` answers `REBALANCE_IN_PROGRESS` so the member
 /// joins again. `CompletingRebalance` answers `NONE`, because a consumer
 /// heartbeats between its `JoinGroup` response and its `SyncGroup`.
-pub(crate) fn handle_heartbeat(state: &mut ClassicState, req: &HeartbeatRequest) -> i16 {
+pub fn handle_heartbeat(state: &mut ClassicState, req: &HeartbeatRequest) -> i16 {
     if let Err(code) = state.validate_member(&req.member_id, req.group_instance_id.as_deref()) {
         return code;
     }
@@ -143,7 +143,7 @@ mod tests {
                 group_id: "g".into(),
                 generation_id: g.generation_id + row.generation_offset,
                 member_id: row.member.into(),
-                group_instance_id: row.instance.map(str::to_string),
+                group_instance_id: row.instance.map(str::to_owned),
                 ..Default::default()
             };
             check!(handle_heartbeat(&mut g, &req) == row.want, "{}", row.name);
@@ -175,7 +175,7 @@ mod tests {
 
         let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
 
-        check!(dropped == vec!["m2".to_string()]);
+        check!(dropped == vec!["m2".to_owned()]);
         check!(g.members.contains_key("m1"));
     }
 }

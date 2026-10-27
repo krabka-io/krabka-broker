@@ -15,6 +15,7 @@
 //! `streams_group.enable` config kill-switch, which is true by default in
 //! `BrokerConfig::for_tests`. Every test therefore finalizes `streams.version`
 //! to level 1 with `UpdateFeatures` before it issues streams RPCs.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

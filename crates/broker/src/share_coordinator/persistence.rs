@@ -31,7 +31,10 @@ use {
     },
     bytes::{Buf, BufMut, Bytes, BytesMut},
     krabka_log::Offset,
-    krabka_protocol::ProtocolError,
+    krabka_protocol::{
+        ProtocolError,
+        owned::{read_share_group_state_response, write_share_group_state_request},
+    },
     uuid::Uuid,
 };
 
@@ -78,15 +81,13 @@ pub fn parse_state_key(mut buf: &[u8]) -> Result<ShareStateKey, BrokerError> {
         )));
     }
     let group_id = get_string(&mut buf)?;
-    if buf.len() < 16 {
+    let Some((id, rest)) = buf.split_first_chunk::<16>() else {
         return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
             "short share-state key",
         )));
-    }
-    let mut id = [0u8; 16];
-    id.copy_from_slice(&buf[..16]);
-    buf.advance(16);
-    let topic_id = Uuid::from_bytes(id);
+    };
+    let topic_id = Uuid::from_bytes(*id);
+    buf = rest;
     let partition = get_i32(&mut buf)?;
     Ok(ShareStateKey {
         record_type,
@@ -100,8 +101,8 @@ pub fn parse_state_key(mut buf: &[u8]) -> Result<ShareStateKey, BrokerError> {
 /// Conversions keep protocol defaults for their tagged fields.
 #[derive(Debug, Clone, PartialEq, Eq, krabka_macros::WireStateBatch)]
 #[wire_state_batch(
-    read = krabka_protocol::owned::read_share_group_state_response::StateBatch,
-    write = krabka_protocol::owned::write_share_group_state_request::StateBatch,
+    read = read_share_group_state_response::StateBatch,
+    write = write_share_group_state_request::StateBatch,
 )]
 pub struct StateBatch {
     pub first_offset: Offset,

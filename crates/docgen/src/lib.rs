@@ -10,6 +10,8 @@
 //! `docs/docgen-contract.md` names every entry point the renderers read.
 //! `crates/broker/tests/docgen_contract.rs` holds the broker to that shape.
 
+use std::path::Path;
+
 pub mod broker;
 pub mod emit;
 pub mod scenarios;
@@ -23,10 +25,7 @@ pub mod snippets;
 ///
 /// # Errors
 /// Returns an error if a directory walk, file read/write, or snippet sync fails.
-pub fn sync_snippets(
-    content_dir: &std::path::Path,
-    crates_dir: &std::path::Path,
-) -> anyhow::Result<usize> {
+pub fn sync_snippets(content_dir: &Path, crates_dir: &Path) -> anyhow::Result<usize> {
     use std::fs;
     let mut changed = 0;
     let mut stack = vec![content_dir.to_path_buf()];

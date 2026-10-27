@@ -1,6 +1,6 @@
 //! Election admission must remain current across the durable audit await.
 
-use {super::*, crate::test_support::paused_audit::PausedAudit, assert2::assert};
+use {super::*, crate::test_support::paused_audit::PausedAudit, assert2::assert, std::sync};
 
 #[tokio::test]
 async fn recovery_commit_rejects_changes_while_durable_audit_is_pending() {
@@ -31,10 +31,10 @@ async fn recovery_commit_rejects_changes_while_durable_audit_is_pending() {
         let image = source.current_image();
         let (audit, pause, writer) = PausedAudit::start();
         let manager = manager_with(
-            source.clone(),
+            sync::Arc::clone(&source),
             liveness_with_alive(&[2, 3]).await,
             &gated(BackgroundUncleanRecovery::AuditOnly),
-            audit.clone(),
+            sync::Arc::clone(&audit),
         );
         let commit = tokio::spawn(async move {
             let outcome = commit_fixture_election(&manager, &image, &job(), fallback_to(2)).await;
@@ -81,7 +81,7 @@ async fn recovery_commit_rejects_an_uncommitted_metadata_tail() {
             .build(),
     );
     let image = source.current_image();
-    let manager = manager(source.clone(), liveness_with_alive(&[2]).await);
+    let manager = manager(sync::Arc::clone(&source), liveness_with_alive(&[2]).await);
 
     let outcome = commit_fixture_election(&manager, &image, &job(), fallback_to(2)).await;
 

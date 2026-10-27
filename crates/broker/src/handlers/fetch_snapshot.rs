@@ -56,7 +56,7 @@ const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
 /// becomes `FetchSnapshotRequest.getErrorResponse`: a top-level
 /// `CLUSTER_AUTHORIZATION_FAILED` and no topics.
 #[krabka_macros::decode_dispatch(request = FetchSnapshotRequest, binding(req))]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -137,7 +137,12 @@ mod tests {
             fetch_snapshot_response::{self, LeaderIdAndEpoch},
         },
         krabka_raft::SnapshotRange,
-        std::{net::SocketAddr, sync::Arc},
+        std::{
+            net::SocketAddr,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::time,
     };
 
     /// A request for partition 0 of the metadata topic, at the given id,
@@ -241,8 +246,7 @@ mod tests {
             for grants in ["none", "Cluster:Describe+Cluster:Alter+Topic:Read"] {
                 let bytes = snapshot_wire(grants, &broker, version, &address).await;
                 check!(
-                    crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version)
-                        == refused,
+                    decode_response::<FetchSnapshotResponse>(&bytes, version) == refused,
                     "v{version} {grants}"
                 );
             }
@@ -274,7 +278,7 @@ mod tests {
             .await
             .expect("trigger metadata snapshot");
         // The trigger only schedules the snapshot, so wait for its file.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = Instant::now() + Duration::from_secs(30);
         let (snapshot, size, first_page) = loop {
             if let SnapshotRange::Slice(slice) = broker.controller.read_snapshot_range(0, 16) {
                 break (
@@ -288,10 +292,10 @@ mod tests {
                 );
             }
             assert!(
-                std::time::Instant::now() <= deadline,
+                Instant::now() <= deadline,
                 "no metadata snapshot within 30s"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         };
         let leader_epoch = i32::try_from(broker.controller.quorum_state().current_term)
             .expect("the leader epoch is on the wire as an int32");

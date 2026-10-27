@@ -53,7 +53,7 @@ async fn quorum_wal_store_commits_on_f_plus_1_and_survives_one_loss() {
     let source_dir = tempfile::tempdir().unwrap();
     let source = open_log(source_dir.path());
     let (_replica_dirs, engine) = local_replicas(3);
-    let store = QuorumWalStore::new(source.clone(), engine.clone());
+    let store = QuorumWalStore::new(Arc::clone(&source), Arc::clone(&engine));
 
     let (results, leo) = append_source(&store, 3).await;
     assert!(results.iter().all(Result::is_ok));
@@ -82,7 +82,7 @@ async fn five_voter_quorum_requires_three_durable_copies() {
     let source_dir = tempfile::tempdir().unwrap();
     let source = open_log(source_dir.path());
     let (_replica_dirs, engine) = local_replicas(5);
-    let store = QuorumWalStore::new(source, engine.clone());
+    let store = QuorumWalStore::new(source, Arc::clone(&engine));
     for voter in [NodeId(3), NodeId(4), NodeId(5)] {
         engine.set_replica_alive(voter, false);
     }
@@ -104,12 +104,12 @@ async fn quorum_wal_store_populates_hot_tail_after_durable_sync() {
     let topic_id = Uuid::from_u128(9);
     let partition = PartitionIndex(0);
     let store = QuorumWalStore {
-        source: source.clone(),
+        source: Arc::clone(&source),
         engine,
         hot_tail: Some(HotTailTarget {
             topic_id,
             partition,
-            cache: cache.clone(),
+            cache: Arc::clone(&cache),
         }),
     };
 
@@ -149,8 +149,8 @@ async fn quorum_wal_store_trims_every_replica_before_the_source() {
         Some(topic_id),
         partition,
         dir.path(),
-        source.clone(),
-        Some(cache.clone()),
+        Arc::clone(&source),
+        Some(Arc::clone(&cache)),
         3,
     )
     .unwrap();

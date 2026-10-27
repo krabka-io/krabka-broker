@@ -48,7 +48,7 @@ fn scaffold(input: &TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let generated = scaffold(&input.clone().into())?;
     let Some(TokenTree::Group(operation)) = input.into_iter().last() else {
         unreachable!("validated partition operation")

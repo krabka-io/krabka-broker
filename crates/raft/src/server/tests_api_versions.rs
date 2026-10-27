@@ -20,7 +20,7 @@ use {
         },
     },
     std::sync::Arc,
-    tokio::io::AsyncWriteExt,
+    tokio::{io, io::AsyncWriteExt},
     tokio_util::sync::CancellationToken,
 };
 
@@ -115,7 +115,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
         admin_router: None,
         unstable,
     };
-    let (mut client, server) = tokio::io::duplex(1 << 16);
+    let (mut client, server) = io::duplex(1 << 16);
     let shutdown = CancellationToken::new();
     let conn = tokio::spawn(handle_conn(
         server,

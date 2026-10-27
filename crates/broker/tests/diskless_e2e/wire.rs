@@ -25,11 +25,16 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_client_core::Client,
     krabka_protocol::{
-        owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
+        owned::{
+            fetch_request::FetchRequest,
+            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
+        },
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch},
     },
     std::time::{Duration, Instant},
+    tokio::time,
+    tokio_util::sync::CancellationToken,
 };
 
 /// Kafka `NOT_LEADER_OR_FOLLOWER`. The Produce handler returns it before it
@@ -38,20 +43,20 @@ const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 /// Kafka `UNKNOWN_TOPIC_OR_PARTITION`. Also pre-append.
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// Kafka `OFFSET_OUT_OF_RANGE`.
-pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
+pub const OFFSET_OUT_OF_RANGE: i16 = 1;
 /// Request timestamp sentinel (-2): resolve the earliest available offset.
 /// Kafka's `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
 const EARLIEST_TIMESTAMP: i64 = -2;
 
 /// One record read back over the wire.
-#[derive(Debug, PartialEq)]
-pub(crate) struct FetchedRecord {
+#[derive(Debug, PartialEq, Eq)]
+pub struct FetchedRecord {
     pub(crate) offset: i64,
     pub(crate) value: Bytes,
 }
 
 /// A log read back over the wire.
-pub(crate) struct FetchedLog {
+pub struct FetchedLog {
     /// Every record, in offset order.
     pub(crate) records: Vec<FetchedRecord>,
     /// The re-encoded record batches, concatenated in offset order. Two reads
@@ -81,9 +86,7 @@ fn stamped_batch(value: Bytes) -> RecordBatch {
 }
 
 /// The value this suite produces at `index`.
-pub(crate) fn value_at(index: usize) -> Bytes {
-    Bytes::from(format!("diskless-e2e-record-{index:04}"))
-}
+pub fn value_at(index: usize) -> Bytes { Bytes::from(format!("diskless-e2e-record-{index:04}")) }
 
 /// Produce `values` one record at a time with `acks=all`, and require every
 /// one of them to be acknowledged.
@@ -95,7 +98,7 @@ pub(crate) fn value_at(index: usize) -> Bytes {
 /// A `REQUEST_TIMED_OUT` is **not** retried. It means the append landed
 /// but the quorum never committed it, which is the failure this
 /// suite exists to catch, so it fails the test instead of being papered over.
-pub(crate) async fn produce_all(client: &Client, topic_id: WireUuid, values: &[Bytes]) {
+pub async fn produce_all(client: &Client, topic_id: WireUuid, values: &[Bytes]) {
     for (index, value) in values.iter().enumerate() {
         produce_one(client, topic_id, value.clone(), index).await;
     }
@@ -119,7 +122,7 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
                     Instant::now() <= deadline,
                     "record {index} never found a diskless leader: {response:?}"
                 );
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                time::sleep(Duration::from_millis(100)).await;
             }
             error_code => panic!(
                 "acks=all produce of record {index} failed with error_code {error_code}: \
@@ -130,10 +133,7 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
 }
 
 /// The same diskless read shape is used for data and for a raw offset error.
-fn data_fetch(
-    topic_id: WireUuid,
-    offset: krabka_ids::Offset,
-) -> krabka_protocol::owned::fetch_request::FetchRequest {
+fn data_fetch(topic_id: WireUuid, offset: krabka_ids::Offset) -> FetchRequest {
     single_partition_fetch()
         .topic(TOPIC.into())
         .topic_id(topic_id)
@@ -152,7 +152,7 @@ fn data_fetch(
 /// The loop retries until the deadline because a just-promoted broker settles
 /// its metadata asynchronously, and because a cold read returns one covering
 /// batch per round trip rather than the whole range at once.
-pub(crate) async fn fetch_log(
+pub async fn fetch_log(
     bootstrap: &str,
     topic_id: WireUuid,
     start_offset: i64,
@@ -215,7 +215,7 @@ pub(crate) async fn fetch_log(
              deadline (stalled at offset {next})",
             records.len()
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     // Whole batches go into `bytes`, so a batch that straddled `expected`
@@ -244,11 +244,7 @@ pub(crate) async fn fetch_log(
 /// Each request is a full `acks=all` quorum round trip, so the loop already
 /// self-throttles on the network; the short sleep only keeps it from
 /// monopolising a worker thread on a small runtime.
-pub(crate) async fn produce_until_stopped(
-    client: Client,
-    topic_id: WireUuid,
-    stop: tokio_util::sync::CancellationToken,
-) {
+pub async fn produce_until_stopped(client: Client, topic_id: WireUuid, stop: CancellationToken) {
     let mut index = 0usize;
     while !stop.is_cancelled() {
         let batch = stamped_batch(Bytes::from(format!("diskless-e2e-churn-{index:04}")));
@@ -260,13 +256,13 @@ pub(crate) async fn produce_until_stopped(
             }))
             .await;
         index += 1;
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 }
 
 /// Assert that a read-back log carries exactly the values this suite produced,
 /// at consecutive offsets from `start_offset`.
-pub(crate) fn assert_matches_produced(log: &FetchedLog, start_offset: i64, expected: usize) {
+pub fn assert_matches_produced(log: &FetchedLog, start_offset: i64, expected: usize) {
     let want: Vec<FetchedRecord> = (0..expected)
         .map(|index| FetchedRecord {
             offset: start_offset + i64::try_from(index).expect("small count"),
@@ -284,7 +280,7 @@ pub(crate) fn assert_matches_produced(log: &FetchedLog, start_offset: i64, expec
 /// this to the broker it already resolved as the leader. `DeleteRecords`
 /// carries no topic id at any version, so this names the topic and there is
 /// nothing to pass.
-pub(crate) async fn delete_records_below(bootstrap: &str, offset: i64) -> i64 {
+pub async fn delete_records_below(bootstrap: &str, offset: i64) -> i64 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
         .send(delete_records_request(
@@ -304,7 +300,7 @@ pub(crate) async fn delete_records_below(bootstrap: &str, offset: i64) -> i64 {
 }
 
 /// The offset `ListOffsets(EARLIEST)` answers for the suite's partition.
-pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
+pub async fn earliest_offset(bootstrap: &str) -> i64 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
         .send(ListOffsetsRequest {
@@ -329,7 +325,7 @@ pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
 /// [`fetch_log`] refuses `OFFSET_OUT_OF_RANGE`, which is exactly the answer a
 /// case about a deleted offset is asserting, so that case reads the raw code
 /// through here instead.
-pub(crate) async fn fetch_error_code(bootstrap: &str, topic_id: WireUuid, offset: i64) -> i16 {
+pub async fn fetch_error_code(bootstrap: &str, topic_id: WireUuid, offset: i64) -> i16 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
         .send(data_fetch(topic_id, krabka_ids::Offset(offset)))

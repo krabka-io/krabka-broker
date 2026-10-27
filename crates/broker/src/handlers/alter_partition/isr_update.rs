@@ -12,8 +12,6 @@
 
 #[cfg(test)]
 use crate::test_support::WireBrokerId;
-#[cfg(test)]
-use krabka_metadata::LeaderEpoch;
 use {
     crate::{codes, metadata_epoch::next_i32},
     krabka_metadata::{
@@ -29,6 +27,8 @@ use {
     krabka_verified::isr::{AlterPartitionFacts, IsrAdmission, ProposedIsr, isr_admission},
     std::collections::HashSet,
 };
+#[cfg(test)]
+use {krabka_metadata::LeaderEpoch, krabka_protocol::owned::alter_partition_request::BrokerState};
 
 /// A broker the request proposes for the ISR, with the broker epoch it claims.
 struct ProposedReplica {
@@ -161,7 +161,7 @@ pub(super) fn handle_partition_with_recovery(
         return error_part(partition_index, codes::INVALID_REQUEST);
     };
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic_name.to_string(),
+        topic: topic_name.to_owned(),
         partition: partition_index,
         leader: part_rec.leader,
         replicas: part_rec.replicas.clone(),
@@ -175,7 +175,7 @@ pub(super) fn handle_partition_with_recovery(
     if requested_recovery_state != current_recovery_state {
         changes.push(MetadataRecord::V1PartitionRecovery(
             PartitionRecoveryRecord {
-                topic: topic_name.to_string(),
+                topic: topic_name.to_owned(),
                 partition: partition_index,
                 state: requested_recovery_state,
             },
@@ -221,10 +221,10 @@ struct PartitionRequestSetup<'a> {
     partition: krabka_ids::PartitionIndex,
     #[default(LeaderEpoch(5))]
     leader_epoch: LeaderEpoch,
-    #[default(&[crate::test_support::WireBrokerId(1)])]
+    #[default(&[WireBrokerId(1)])]
     new_isr: &'a [WireBrokerId],
     #[default(&[])]
-    new_isr_with_epochs: &'a [krabka_protocol::owned::alter_partition_request::BrokerState],
+    new_isr_with_epochs: &'a [BrokerState],
 }
 
 /// Runs [`handle_partition_with_recovery`] for one row from the partition's
@@ -238,10 +238,8 @@ fn handle_partition(
     #[builder(default = "t")] topic: &'_ str,
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
     #[builder(into, default = LeaderEpoch (5))] leader_epoch: LeaderEpoch,
-    #[builder(default = & [crate :: test_support :: WireBrokerId (1)])]
-    new_isr: &'_ [WireBrokerId],
-    #[builder(default = & [])]
-    new_isr_with_epochs: &'_ [krabka_protocol::owned::alter_partition_request::BrokerState],
+    #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
+    #[builder(default = & [])] new_isr_with_epochs: &'_ [BrokerState],
 ) -> RespPartitionData {
     let setup = PartitionRequestSetup {
         topic,
@@ -256,7 +254,7 @@ fn handle_partition(
         image,
         &active,
         current.map_or(1, |partition| {
-            i32::try_from(partition.leader.0).expect("test leader fits i32")
+            i32::try_from(partition.leader.0).unwrap_or(i32::MAX)
         }),
         setup.topic,
         &ReqPartitionData {
@@ -1039,14 +1037,8 @@ mod tests {
                     partition_index: 0,
                     leader_epoch: 5,
                     new_isr_with_epochs: vec![
-                        bs(
-                            crate::test_support::WireBrokerId(1),
-                            crate::test_support::BrokerEpoch(10),
-                        ),
-                        bs(
-                            crate::test_support::WireBrokerId(2),
-                            crate::test_support::BrokerEpoch(-1),
-                        ),
+                        bs(WireBrokerId(1), BrokerEpoch(10)),
+                        bs(WireBrokerId(2), BrokerEpoch(-1)),
                     ],
                     ..Default::default()
                 }),

@@ -56,6 +56,7 @@ mod tests {
             handlers::delete_topics::test_support::{DOOMED, gated_config},
         },
         assert2::{assert, check},
+        std::slice,
     };
 
     const NOW_MS: i64 = 60_000;
@@ -81,7 +82,7 @@ mod tests {
     #[test]
     fn an_approved_deletion_appends_the_consume_beside_the_delete() {
         let proposal = approved_proposal(BreakGlassAction::DeleteTopic, DOOMED);
-        let image = image_of(std::slice::from_ref(&proposal));
+        let image = image_of(slice::from_ref(&proposal));
 
         let records = delete_topic_records(&image, &gated_config(), DOOMED, NOW_MS)
             .expect("the proposal authorizes the deletion");

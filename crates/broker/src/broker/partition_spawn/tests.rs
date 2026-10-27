@@ -6,20 +6,26 @@ use {
         log_dir_status::LogDirRegistry,
         producer_state::ProducerState,
         wal::quorum::{
-            registry::{ShardId, WalShardRegistry},
+            registry::{ShardId, WalPlacement, WalShardRegistry},
             router::WalShardRouter,
             wire::{QuorumGroup, fetch_request},
         },
     },
     assert2::assert,
+    krabka_protocol::records::{Record, RecordBatch},
+    std::{
+        fs,
+        time::{Duration, Instant},
+    },
     tempfile::tempdir,
+    tokio::sync::{mpsc::error::TrySendError, oneshot},
 };
 
 #[tokio::test]
 async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
     let dir = tempdir().expect("tempdir");
     let partition = try_spawn_partition_with_sequencer(PartitionSpawnConfig {
-        topic: "queue-bound".to_string(),
+        topic: "queue-bound".to_owned(),
         topic_id: None,
         partition_id: PartitionIndex(0),
         log_dir: dir.path().to_path_buf(),
@@ -35,7 +41,7 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
     .expect("spawn partition");
 
     for _ in 0..2 {
-        let (ack, _ack_rx) = tokio::sync::oneshot::channel();
+        let (ack, _ack_rx) = oneshot::channel();
         assert!(
             partition
                 .writer_tx
@@ -43,10 +49,10 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
                 .is_ok()
         );
     }
-    let (ack, _ack_rx) = tokio::sync::oneshot::channel();
+    let (ack, _ack_rx) = oneshot::channel();
     assert!(matches!(
         partition.writer_tx.try_send(WriterMessage::Compact { ack }),
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+        Err(TrySendError::Full(_))
     ));
 
     partition
@@ -68,12 +74,12 @@ fn diskless_partition_requires_distributed_identity_and_registry() {
     };
 
     assert!(
-        partition_wal(identity, log.clone(), false, None, None, 3,)
+        partition_wal(identity, Arc::clone(&log), false, None, None, 3,)
             .expect("partition wal")
             .wal
             .is_none()
     );
-    let error = partition_wal(identity, log.clone(), true, None, None, 3)
+    let error = partition_wal(identity, Arc::clone(&log), true, None, None, 3)
         .err()
         .expect("missing topic id must fail");
     assert!(matches!(
@@ -112,28 +118,23 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         partition: PartitionIndex(0),
     };
     let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1)));
-    registry.replace_placements(
-        &maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
-            voters: vec![
-                krabka_raft::NodeId(1),
-                krabka_raft::NodeId(2),
-                krabka_raft::NodeId(3),
-            ],
-            leader_epoch: 0,
-        }},
-    );
-    let partition_dir = partition_dir(dir.path(), "recovered", 0);
-    std::fs::create_dir_all(&partition_dir).expect("partition directory");
-    let mut log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
-    let mut batch = krabka_protocol::records::RecordBatch {
-        last_offset_delta: 1,
-        records: vec![
-            krabka_protocol::records::Record::default(),
-            krabka_protocol::records::Record {
-                offset_delta: 1,
-                ..Default::default()
-            },
+    registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
+        voters: vec![
+            krabka_raft::NodeId(1),
+            krabka_raft::NodeId(2),
+            krabka_raft::NodeId(3),
         ],
+        leader_epoch: 0,
+    }});
+    let partition_dir = partition_dir(dir.path(), "recovered", 0);
+    fs::create_dir_all(&partition_dir).expect("partition directory");
+    let mut log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
+    let mut batch = RecordBatch {
+        last_offset_delta: 1,
+        records: vec![Record::default(), Record {
+            offset_delta: 1,
+            ..Default::default()
+        }],
         ..Default::default()
     };
     log.append(&mut batch).expect("append recovered records");
@@ -148,7 +149,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         runtime: PartitionRuntimeConfig::new(
             (1_024, 64, 3),
             true,
-            (None, Some(registry.clone()), None),
+            (None, Some(Arc::clone(&registry)), None),
         ),
     })
     .expect("spawn recovered partition");
@@ -162,7 +163,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         2,
         krabka_units::mebibytes(1),
     );
-    WalShardRouter::new(registry.clone())
+    WalShardRouter::new(Arc::clone(&registry))
         .route_fetch_request(&acknowledgement, krabka_raft::NodeId(2))
         .expect("WAL route")
         .expect("WAL response");
@@ -170,7 +171,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
     partition
         .await_hw_at_least(
             krabka_log::Offset(2),
-            std::time::Instant::now() + std::time::Duration::from_secs(2),
+            Instant::now() + Duration::from_secs(2),
         )
         .await
         .expect("restored WAL watermark");

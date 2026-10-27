@@ -56,7 +56,7 @@ use {
 };
 
 /// A [`RemoteMarkerWriter`] over the inter-broker listener.
-pub(crate) struct InterBrokerMarkerWriter {
+pub struct InterBrokerMarkerWriter {
     node_id: NodeId,
     controller: Arc<dyn MetadataSource>,
     client: Arc<InterBrokerClient>,

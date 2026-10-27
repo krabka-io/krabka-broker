@@ -7,11 +7,11 @@
 //! may change, taken before it, and [`MemberValues::record_changes`] compares
 //! them with the values after it.
 
-use crate::error::BrokerError;
+use {crate::error::BrokerError, std::collections::HashMap};
 
 /// A pending batch's three per-member record families. `Some(value)` writes
 /// the record, and `None` writes a tombstone.
-pub(crate) trait MemberRecordFamilies {
+pub trait MemberRecordFamilies {
     /// The member-metadata (subscription) record value.
     type Metadata: PartialEq;
     /// The target-assignment record value of one member.
@@ -25,14 +25,14 @@ pub(crate) trait MemberRecordFamilies {
 }
 
 /// The mutable record lists that [`MemberRecordFamilies`] lends out.
-pub(crate) type MemberRecordLists<'a, P> = (
+pub type MemberRecordLists<'a, P> = (
     &'a mut Vec<(String, Option<<P as MemberRecordFamilies>::Metadata>)>,
     &'a mut Vec<(String, Option<<P as MemberRecordFamilies>::Target>)>,
     &'a mut Vec<(String, Option<<P as MemberRecordFamilies>::Current>)>,
 );
 
 /// Member ids whose metadata is being removed, in record order.
-pub(crate) fn removed_member_ids<M>(metadata: &[(String, Option<M>)]) -> Vec<String> {
+pub fn removed_member_ids<M>(metadata: &[(String, Option<M>)]) -> Vec<String> {
     metadata
         .iter()
         .filter(|(_, value)| value.is_none())
@@ -41,14 +41,14 @@ pub(crate) fn removed_member_ids<M>(metadata: &[(String, Option<M>)]) -> Vec<Str
 }
 
 /// The tombstone families, in Kafka's member-removal order.
-pub(crate) enum MemberTombstone {
+pub enum MemberTombstone {
     Current,
     Target,
     Metadata,
 }
 
 /// Append removed members before the surviving members' updates.
-pub(crate) fn append_removed_members<M, T, C>(
+pub fn append_removed_members<M, T, C>(
     batch: &mut super::OffsetRecordBatchBuilder,
     metadata: &[(String, Option<M>)],
     targets: &[(String, Option<T>)],
@@ -71,7 +71,7 @@ pub(crate) fn append_removed_members<M, T, C>(
 /// The member-metadata and current-assignment values of the members that a
 /// transition may change, taken before it. `None` stands for a member that the
 /// group does not hold.
-pub(crate) struct MemberValues<M, C>(Vec<(String, Option<(M, C)>)>);
+pub struct MemberValues<M, C>(Vec<(String, Option<(M, C)>)>);
 
 impl<M: PartialEq, C: PartialEq> MemberValues<M, C> {
     /// Takes the values of `member_ids` that `values` projects from the group.
@@ -124,10 +124,10 @@ impl<M: PartialEq, C: PartialEq> MemberValues<M, C> {
 }
 
 /// Queue changed target assignments in the caller's member order.
-pub(crate) fn append_target_records<T: Default, V>(
+pub fn append_target_records<T: Default, V>(
     records: &mut Vec<(String, Option<V>)>,
     changed: &[String],
-    targets: &std::collections::HashMap<String, T>,
+    targets: &HashMap<String, T>,
     encode: impl Fn(&T) -> V,
 ) {
     for member_id in changed {
@@ -138,7 +138,7 @@ pub(crate) fn append_target_records<T: Default, V>(
 }
 
 /// Whether this transition includes a tombstone for the named member.
-pub(crate) fn has_member_tombstone<V>(records: &[(String, Option<V>)], member_id: &str) -> bool {
+pub fn has_member_tombstone<V>(records: &[(String, Option<V>)], member_id: &str) -> bool {
     records
         .iter()
         .any(|(id, value)| id == member_id && value.is_none())

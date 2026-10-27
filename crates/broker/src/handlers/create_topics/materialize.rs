@@ -11,7 +11,7 @@ fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) ->
 
 impl super::InitialLeadership {
     /// The authoritative registration shared by both creation APIs.
-    pub(crate) fn partition_record(
+    pub fn partition_record(
         &self,
         topic: &str,
         partition: i32,
@@ -53,7 +53,7 @@ impl super::InitialLeadership {
     /// recorded. The role and the ISR are then not installed, and the
     /// supervisor's next reconcile retries the promotion, as it does for a
     /// promotion of its own that fails.
-    pub(crate) async fn install(
+    pub async fn install(
         &self,
         partition: &Partition,
         producer_state: &ProducerState,
@@ -148,7 +148,7 @@ mod tests {
         }
     }
 
-    use crate::partition::test_support::EpochCheckpointFull;
+    use {crate::partition::test_support::EpochCheckpointFull, tokio::sync::Notify};
 
     /// Kafka's `Partition.makeLeader` records the first leader epoch at the
     /// log end the moment a disk-backed partition's leader is created, so a
@@ -241,7 +241,7 @@ mod tests {
             expected,
         } in cases
         {
-            let (mut partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+            let (mut partition, _dir) = test_partition(Arc::new(Notify::new()));
             partition.diskless = diskless;
             if checkpoint_fails {
                 partition

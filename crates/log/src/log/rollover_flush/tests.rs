@@ -12,25 +12,29 @@ use {
         test_support::open_log,
     },
     assert2::assert,
+    bytes::Bytes,
     krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::{Record, RecordBatch},
     krabka_units::bytes,
     std::{
         collections::HashSet,
-        fs::File,
-        io,
-        sync::{Arc, Condvar, Mutex, mpsc},
-        time::Duration,
+        fs::{self, File},
+        io, iter,
+        path::Path,
+        sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread::{self, JoinHandle, ThreadId},
+        time::{Duration, SystemTime},
     },
     tempfile::tempdir,
 };
 
-fn check_boundary_snapshot(
-    log: &Log,
-    directory: &std::path::Path,
-    expected: &[ProducerSnapshotEntry],
-) {
+fn check_boundary_snapshot(log: &Log, directory: &Path, expected: &[ProducerSnapshotEntry]) {
     let copy = tempdir().unwrap();
-    std::fs::copy(
+    fs::copy(
         name::producer_snapshot_path(directory, 1),
         name::producer_snapshot_path(copy.path(), 1),
     )
@@ -44,7 +48,7 @@ fn check_boundary_snapshot(
 
 #[derive(Debug)]
 struct GatedIo {
-    started: Mutex<Option<mpsc::Sender<std::thread::ThreadId>>>,
+    started: Mutex<Option<mpsc::Sender<ThreadId>>>,
     released: Mutex<bool>,
     changed: Condvar,
     fail: bool,
@@ -53,7 +57,7 @@ struct GatedIo {
 /// A [`GatedIo`] and the channel that reports the thread that reached it.
 struct Gate {
     io: Arc<GatedIo>,
-    started: mpsc::Receiver<std::thread::ThreadId>,
+    started: mpsc::Receiver<ThreadId>,
 }
 
 impl GatedIo {
@@ -70,7 +74,7 @@ impl GatedIo {
         }
     }
 
-    fn release(&self) {
+    fn open_gate(&self) {
         *self.released.lock().unwrap() = true;
         self.changed.notify_all();
     }
@@ -80,11 +84,12 @@ impl LogIo for GatedIo {
     fn sync_data(&self, file: &File) -> io::Result<()> {
         let started = self.started.lock().unwrap().take();
         if let Some(started) = started {
-            let _ = started.send(std::thread::current().id());
-            let mut released = self.released.lock().unwrap();
-            while !*released {
-                released = self.changed.wait(released).unwrap();
-            }
+            let _ = started.send(thread::current().id());
+            drop(
+                self.changed
+                    .wait_while(self.released.lock().unwrap(), |released| !*released)
+                    .unwrap(),
+            );
             if self.fail {
                 return Err(io::ErrorKind::StorageFull.into());
             }
@@ -93,7 +98,7 @@ impl LogIo for GatedIo {
     }
 }
 
-fn first_append(dir: &std::path::Path, strict: bool) -> Log {
+fn first_append(dir: &Path, strict: bool) -> Log {
     let mut log = Log::open(dir, LogConfig {
         flush_on_append: strict,
         retention: None,
@@ -113,7 +118,7 @@ fn first_append(dir: &std::path::Path, strict: bool) -> Log {
 
 fn install_gate(log: &mut Log, fail: bool) -> Gate {
     let gate = GatedIo::gate(fail);
-    log.test_set_io(gate.io.clone());
+    log.test_set_io(Arc::<GatedIo>::clone(&gate.io));
     gate
 }
 
@@ -128,7 +133,7 @@ fn observe_pending<T>(receiver: &mpsc::Receiver<T>) -> Result<T, mpsc::RecvTimeo
 /// A thread that writes to a log and hands the log back, and the channel that
 /// carries what the write returned.
 struct SpawnedWriter<T> {
-    writer: std::thread::JoinHandle<Log>,
+    writer: JoinHandle<Log>,
     received: mpsc::Receiver<T>,
 }
 
@@ -137,7 +142,7 @@ fn spawn_writer<T: Send + 'static>(
     write: impl FnOnce(&mut Log) -> T + Send + 'static,
 ) -> SpawnedWriter<T> {
     let (sent, received) = mpsc::channel();
-    let writer = std::thread::spawn(move || {
+    let writer = thread::spawn(move || {
         sent.send(write(&mut log)).unwrap();
         log
     });
@@ -154,7 +159,7 @@ fn partition_with_executor(executor: impl FnOnce() -> Arc<super::executor::Execu
     }
 }
 
-fn check_flushed_boundary(log: &Log, directory: &std::path::Path) {
+fn check_flushed_boundary(log: &Log, directory: &Path) {
     assert!(log.log_end_offset() == Offset(2));
     assert!(name::producer_snapshot_path(directory, 1).exists());
 }
@@ -162,7 +167,7 @@ fn check_flushed_boundary(log: &Log, directory: &std::path::Path) {
 /// The gate of a rollover that has started, and whether its flush job began.
 struct GatedRollover {
     gate: Arc<GatedIo>,
-    began: Result<std::thread::ThreadId, mpsc::RecvTimeoutError>,
+    began: Result<ThreadId, mpsc::RecvTimeoutError>,
 }
 
 fn begin_gated_rollover(log: &mut Log) -> GatedRollover {
@@ -174,11 +179,11 @@ fn begin_gated_rollover(log: &mut Log) -> GatedRollover {
 
 fn join_blocked_writer<T, U>(
     gate: &GatedIo,
-    writer: std::thread::JoinHandle<T>,
-    began: Result<std::thread::ThreadId, mpsc::RecvTimeoutError>,
+    writer: JoinHandle<T>,
+    began: Result<ThreadId, mpsc::RecvTimeoutError>,
     pending: &Result<U, mpsc::RecvTimeoutError>,
 ) -> T {
-    gate.release();
+    gate.open_gate();
     let log = writer.join().unwrap();
     began.unwrap();
     assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
@@ -192,7 +197,7 @@ fn buffered_rollovers_allow_appends_reads_and_idle_maintenance_during_disk_sync(
     let first_state = log.producer_state_snapshot();
     let Gate { io: gate, started } = install_gate(&mut log, false);
     let (tx, rx) = mpsc::channel();
-    let writer = std::thread::spawn(move || {
+    let writer = thread::spawn(move || {
         for sequence in [1, 2] {
             let mut batch = sample_batch(1);
             batch.producer_id = 41;
@@ -200,7 +205,7 @@ fn buffered_rollovers_allow_appends_reads_and_idle_maintenance_during_disk_sync(
             batch.base_sequence = sequence;
             log.append(&mut batch).unwrap();
         }
-        log.tick(std::time::SystemTime::now(), Offset(3)).unwrap();
+        log.tick(SystemTime::now(), Offset(3)).unwrap();
         assert!(log.read(Offset(0), bytes(4096)).unwrap().batches.len() == 3);
         tx.send(log).unwrap();
     });
@@ -212,7 +217,7 @@ fn buffered_rollovers_allow_appends_reads_and_idle_maintenance_during_disk_sync(
     let untierable = returned
         .as_ref()
         .is_ok_and(|log| log.tierable_segments().is_empty());
-    gate.release();
+    gate.open_gate();
     writer.join().unwrap();
     began.unwrap();
     let mut log = returned.expect("buffered roll must not wait for disk sync");
@@ -281,22 +286,19 @@ fn slow_disk_bounds_the_rollover_queue_without_losing_boundary_state() {
             Some(super::executor::Executor::new(2, max_jobs, budget).unwrap());
         let GatedRollover { gate, began } = begin_gated_rollover(&mut log);
         let (tx, rx) = mpsc::channel();
-        let writer = std::thread::spawn(move || {
+        let writer = thread::spawn(move || {
             for offset in 2..=4 {
                 log.append(&mut sample_batch(1)).unwrap();
                 tx.send(offset).unwrap();
             }
             log
         });
-        let queued: Vec<_> = (2..=3).map(|_| await_progress(&rx)).collect();
+        let queued: Result<Vec<_>, _> = iter::repeat_with(|| await_progress(&rx)).take(2).collect();
         let pending = observe_pending(&rx);
-        gate.release();
+        gate.open_gate();
         let mut log = writer.join().unwrap();
         began.unwrap();
-        assert!(
-            queued.into_iter().collect::<Result<Vec<_>, _>>().unwrap()
-                == (2..=3).collect::<Vec<_>>()
-        );
+        assert!(queued.unwrap() == (2..=3).collect::<Vec<_>>());
         assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
         assert!(rx.recv().unwrap() == 4);
         log.sync().unwrap();
@@ -312,13 +314,13 @@ fn strict_rollover_waits_for_disk_before_acknowledging() {
     let mut log = first_append(dir.path(), true);
     let Gate { io: gate, started } = install_gate(&mut log, false);
     let (tx, rx) = mpsc::channel();
-    let writer = std::thread::spawn(move || {
+    let writer = thread::spawn(move || {
         log.append(&mut sample_batch(1)).unwrap();
         tx.send(log).unwrap();
     });
     let began = await_progress(&started);
     let pending = rx.try_recv();
-    gate.release();
+    gate.open_gate();
     writer.join().unwrap();
     began.unwrap();
     assert!(matches!(pending, Err(mpsc::TryRecvError::Empty)));
@@ -334,7 +336,7 @@ fn failed_background_flush_is_reported_by_sync_and_both_append_paths() {
     log.append(&mut sample_batch(1)).unwrap();
     let began = await_progress(&started);
     log.append(&mut sample_batch(1)).unwrap();
-    gate.release();
+    gate.open_gate();
     began.unwrap();
     assert!(matches!(log.sync(), Err(LogError::Io(e)) if e.kind() == io::ErrorKind::StorageFull));
     assert!(!name::producer_snapshot_path(dir.path(), 1).exists());
@@ -387,7 +389,7 @@ fn many_partitions_share_a_fixed_worker_pool() {
     let executor = super::executor::Executor::new(4, 256, 64 * 1024 * 1024).unwrap();
     let mut partitions = Vec::new();
     for _ in 0..24 {
-        let TempLog { dir, mut log } = partition_with_executor(|| executor.clone());
+        let TempLog { dir, mut log } = partition_with_executor(|| Arc::clone(&executor));
         let Gate { io: gate, started } = install_gate(&mut log, false);
         log.append(&mut sample_batch(1)).unwrap();
         partitions.push((dir, log, gate, started));
@@ -401,7 +403,7 @@ fn many_partitions_share_a_fixed_worker_pool() {
         .map(|(_, _, _, started)| started.recv_timeout(Duration::from_millis(10)))
         .collect();
     for (_, _, gate, _) in &partitions {
-        gate.release();
+        gate.open_gate();
     }
     let mut threads: HashSet<_> = started.into_iter().map(Result::unwrap).collect();
     assert!(
@@ -432,7 +434,7 @@ fn snapshot_byte_backpressure_is_shared_between_partitions_and_admits_oversized_
         let TempLog {
             dir: _first_dir,
             log: mut first,
-        } = partition_with_executor(|| executor.clone());
+        } = partition_with_executor(|| Arc::clone(&executor));
         let TempLog {
             dir: second_dir,
             log: mut second,
@@ -442,7 +444,7 @@ fn snapshot_byte_backpressure_is_shared_between_partitions_and_admits_oversized_
         let began = await_progress(&started);
         let (tx, rx) = mpsc::channel();
         let (preparing, prepared) = mpsc::channel();
-        let writer = std::thread::spawn(move || {
+        let writer = thread::spawn(move || {
             producer_snapshot::test_observe_prepare(preparing);
             second.append(&mut sample_batch(1)).unwrap();
             tx.send(()).unwrap();
@@ -451,7 +453,7 @@ fn snapshot_byte_backpressure_is_shared_between_partitions_and_admits_oversized_
         let pending = observe_pending(&rx);
         let not_prepared = observe_pending(&prepared);
         let uncaptured = !name::producer_snapshot_path(second_dir.path(), 1).exists();
-        gate.release();
+        gate.open_gate();
         began.unwrap();
         let mut second = writer.join().unwrap();
         assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
@@ -479,7 +481,7 @@ fn sealed_segment_flush_survives_each_post_roll_setup_failure() {
             install_stamps(&mut log, 100, 1);
         }
         let blocked = dir.path().join(format!("{:020}.{extension}", 1));
-        std::fs::create_dir(&blocked).unwrap();
+        fs::create_dir(&blocked).unwrap();
         let result = log.append(&mut sample_batch(1));
         // Flush even when setup failed before there was a new active segment.
         log.rollover_flusher.finish().unwrap();
@@ -487,7 +489,7 @@ fn sealed_segment_flush_survives_each_post_roll_setup_failure() {
         check_boundary_snapshot(&log, dir.path(), &first_state);
         if extension == "stampindex" {
             assert!(log.tierable_segments().len() == 1);
-            std::fs::remove_dir(&blocked).unwrap();
+            fs::remove_dir(&blocked).unwrap();
             // A retry and another roll must not leave a gap in the archive.
             append_samples(&mut log, 2, 1);
             log.sync().unwrap();
@@ -523,7 +525,7 @@ fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
     let TempLog {
         dir: first_dir,
         log: mut first,
-    } = partition_with_executor(|| executor.clone());
+    } = partition_with_executor(|| Arc::clone(&executor));
     let Gate {
         io: first_gate,
         started: first_started,
@@ -540,11 +542,11 @@ fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
         started: second_started,
     } = install_gate(&mut second, false);
     second.append(&mut sample_batch(1)).unwrap();
-    first_gate.release();
+    first_gate.open_gate();
     let second_began = await_progress(&second_started);
     let first_boundary = name::producer_snapshot_path(first_dir.path(), 1).exists();
     let later_boundary = name::producer_snapshot_path(first_dir.path(), 2).exists();
-    second_gate.release();
+    second_gate.open_gate();
     first_began.unwrap();
     second_began.unwrap();
     first.sync().unwrap();
@@ -559,7 +561,7 @@ fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
 }
 
 /// A compacted log of five keyed segments, with flushes on a private pool.
-fn compacted_log(dir: &std::path::Path) -> Log {
+fn compacted_log(dir: &Path) -> Log {
     let mut log = Log::open(dir, LogConfig {
         flush_on_append: false,
         retention: None,
@@ -616,14 +618,14 @@ fn a_ticket_waits_only_for_the_flushes_before_it() {
     let wait_for = |ticket| {
         let (tx, waited) = mpsc::channel();
         let shared = Arc::clone(&log.rollover_flusher.shared);
-        std::thread::spawn(move || tx.send(shared.finish_through(ticket)).unwrap());
+        thread::spawn(move || tx.send(shared.finish_through(ticket)).unwrap());
         waited
     };
     let (earlier, later) = (wait_for(before), wait_for(after));
 
     let unblocked = await_progress(&earlier);
     let pending = observe_pending(&later);
-    gate.release();
+    gate.open_gate();
 
     began.unwrap();
     assert!(matches!(unblocked, Ok(Ok(()))));
@@ -634,7 +636,7 @@ fn a_ticket_waits_only_for_the_flushes_before_it() {
 /// Performs every `sync_data` and counts the ones on the `.log` file.
 #[derive(Debug, Default)]
 struct CountingIo {
-    syncs: std::sync::atomic::AtomicUsize,
+    syncs: AtomicUsize,
 }
 
 impl LogIo for CountingIo {
@@ -643,18 +645,14 @@ impl LogIo for CountingIo {
             offset % 4096 == 0 && len % 4096 == 0,
             "a write-out range covers whole pages"
         );
-        self.syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.syncs.fetch_add(1, Ordering::SeqCst);
         file.sync_data()
     }
 }
 
 /// A log with `window` as its writeback window and a private flush pool,
 /// after `appends` appends of one 1 KiB record each.
-fn appended_through_page_cache(
-    dir: &std::path::Path,
-    window: u32,
-    appends: usize,
-) -> (Log, Arc<CountingIo>) {
+fn appended_through_page_cache(dir: &Path, window: u32, appends: usize) -> (Log, Arc<CountingIo>) {
     let mut log = Log::open(dir, LogConfig {
         writeback_window: bytes(window),
         retention: None,
@@ -662,13 +660,13 @@ fn appended_through_page_cache(
     })
     .unwrap();
     let io = Arc::new(CountingIo::default());
-    log.test_set_io(io.clone());
+    log.test_set_io(Arc::<CountingIo>::clone(&io));
     log.rollover_flusher.executor =
         Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
     for _ in 0..appends {
-        let mut batch = krabka_protocol::records::RecordBatch {
-            records: vec![krabka_protocol::records::Record {
-                value: Some(bytes::Bytes::from(vec![7u8; 1024])),
+        let mut batch = RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from(vec![7u8; 1024])),
                 ..Default::default()
             }],
             ..Default::default()
@@ -686,7 +684,7 @@ fn appends_through_the_page_cache_start_a_sync_every_writeback_window() {
     // 32 KiB of records through a 4 KiB window: at least 7 windows filled.
     let (log, io) = appended_through_page_cache(dir.path(), 4096, 32);
     log.rollover_flusher.finish().unwrap();
-    let syncs = io.syncs.load(std::sync::atomic::Ordering::SeqCst);
+    let syncs = io.syncs.load(Ordering::SeqCst);
     assert!((7..=8).contains(&syncs), "{syncs} syncs");
 }
 
@@ -696,5 +694,5 @@ fn a_zero_writeback_window_starts_no_sync() {
     let dir = tempdir().unwrap();
     let (log, io) = appended_through_page_cache(dir.path(), 0, 32);
     log.rollover_flusher.finish().unwrap();
-    assert!(io.syncs.load(std::sync::atomic::Ordering::SeqCst) == 0);
+    assert!(io.syncs.load(Ordering::SeqCst) == 0);
 }

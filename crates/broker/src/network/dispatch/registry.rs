@@ -54,9 +54,7 @@ pub(super) async fn registry_reply(
             return Reply::Done(AfterResponse::Close);
         }
     };
-    if response.bytes.is_empty()
-        && matches!(entry.kind(), crate::handlers::DispatchKind::Produce(_))
-    {
+    if response.bytes.is_empty() && matches!(entry.kind(), DispatchKind::Produce(_)) {
         // `acks=0`: there is no response frame to write. Kafka's
         // `KafkaApis.handleProduceRequest` closes the connection instead of
         // answering when any partition of such a request carried an error --
@@ -237,22 +235,18 @@ fn encode_dispatch_result(
     parsed: &ParsedRequest<'_>,
     result: Result<Bytes, BrokerError>,
 ) -> Result<Bytes, BrokerError> {
-    result.and_then(|body| {
-        encode_response(
-            parsed.api_key,
-            parsed.correlation_id,
-            parsed.body_flexible,
-            &body,
-        )
-    })
+    let body = result?;
+    encode_response(
+        parsed.api_key,
+        parsed.correlation_id,
+        parsed.body_flexible,
+        &body,
+    )
 }
 
 async fn dispatch_registry_response(
     entry: DispatchEntry,
     context: DispatchContext<'_, '_>,
 ) -> Result<Option<ThrottledResponse>, BrokerError> {
-    match dispatch_registered_bytes(entry, context).await {
-        Some(result) => result.map(Some),
-        None => Ok(None),
-    }
+    dispatch_registered_bytes(entry, context).await.transpose()
 }

@@ -1,7 +1,15 @@
 //! The `main` that `cli_main!` writes, run in a child copy of this test
 //! binary so that its `std::process::exit` ends the child and not the suite.
+#![cfg(test)]
 
-use {assert2::assert, std::process::Command};
+use {
+    assert2::assert,
+    std::{
+        env,
+        process::{Command, Stdio},
+        thread,
+    },
+};
 
 /// The exit code a child's `run_from_args` returns. Its presence marks the
 /// child.
@@ -10,19 +18,24 @@ const CHILD_EXIT: &str = "KRABKA_CLI_MAIN_CHILD_EXIT";
 const CHILD_FLAVOR: &str = "KRABKA_CLI_MAIN_CHILD_FLAVOR";
 
 mod fake_cli {
-    use assert2::assert;
+    use {
+        assert2::assert,
+        std::{env, env::ArgsOs},
+        tokio::{runtime::Handle, task},
+        tracing::dispatcher,
+    };
 
     /// Checks that the generated `main` passed the process arguments through,
     /// installed a tracing subscriber and built the runtime the parent asked
     /// for, then answers the exit code the parent asked for. A failed check
     /// panics, which exits the child with 101.
-    pub async fn run_from_args(args: std::env::ArgsOs) -> i32 {
-        tokio::task::yield_now().await;
-        assert!(args.eq(std::env::args_os()));
-        assert!(tracing::dispatcher::has_been_set());
-        let flavor = format!("{:?}", tokio::runtime::Handle::current().runtime_flavor());
-        assert!(std::env::var(super::CHILD_FLAVOR).ok() == Some(flavor));
-        std::env::var(super::CHILD_EXIT)
+    pub async fn run_from_args(args: ArgsOs) -> i32 {
+        task::yield_now().await;
+        assert!(args.eq(env::args_os()));
+        assert!(dispatcher::has_been_set());
+        let flavor = format!("{:?}", Handle::current().runtime_flavor());
+        assert!(env::var(super::CHILD_FLAVOR).ok() == Some(flavor));
+        env::var(super::CHILD_EXIT)
             .expect("child exit code")
             .parse()
             .expect("an i32")
@@ -44,21 +57,21 @@ mod single_threaded {
 /// Runs `test` in a child copy of this binary whose `run_from_args` expects
 /// `flavor` and returns `code`, and answers the child's exit code.
 fn child_exit_code(test: &str, flavor: &str, code: i32) -> Option<i32> {
-    Command::new(std::env::current_exe().expect("test executable"))
+    Command::new(env::current_exe().expect("test executable"))
         .args(["--exact", test])
         .env(CHILD_EXIT, code.to_string())
         .env(CHILD_FLAVOR, flavor)
-        .stdout(std::process::Stdio::null())
+        .stdout(Stdio::null())
         .status()
         .expect("child test")
         .code()
 }
 
 fn child_test_name(run: fn()) -> String {
-    if std::env::var_os(CHILD_EXIT).is_some() {
+    if env::var_os(CHILD_EXIT).is_some() {
         run();
     }
-    std::thread::current()
+    thread::current()
         .name()
         .expect("test thread name")
         .to_owned()

@@ -18,6 +18,7 @@ use {
     },
     krabka_units::prelude::*,
     serde::{Deserialize, Serialize},
+    std::cmp::Ordering,
 };
 
 /// One occurrence of a fault plan.
@@ -89,7 +90,7 @@ fn unit_fraction(draw: u64) -> f64 {
     // 53 bits fit an f64 mantissa exactly, so neither conversion rounds.
     let top = u32::try_from(draw >> 32).unwrap_or(u32::MAX);
     let low = u32::try_from((draw >> 11) & 0x1F_FFFF).unwrap_or(0);
-    (f64::from(top) * f64::from(1_u32 << 21) + f64::from(low)) / 9_007_199_254_740_992.0
+    f64::mul_add(f64::from(top), f64::from(1_u32 << 21), f64::from(low)) / 9_007_199_254_740_992.0
 }
 
 /// Expand every fault plan of `contract` into its occurrences, in start order.
@@ -153,11 +154,7 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
             }
         }
     }
-    schedule.sort_by(|a, b| {
-        a.start
-            .partial_cmp(&b.start)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    schedule.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(Ordering::Equal));
 
     for fault in &schedule {
         if fault.end() + fault.recovery_budget(&contract.deadlines) > quiet_from {
@@ -199,6 +196,7 @@ mod tests {
         crate::soak::contract::{Contract, FaultKind, RecoveryCheck, Target, fixture},
         assert2::{assert, check},
         krabka_units::prelude::*,
+        std::collections::BTreeSet,
     };
 
     fn periodic(seed: u64) -> Contract {
@@ -260,7 +258,7 @@ mod tests {
     fn any_resolves_to_more_than_one_broker_over_a_long_run() {
         let mut contract = periodic(1392);
         contract.duration = hours(24);
-        let targets: std::collections::BTreeSet<String> = expand(&contract)
+        let targets: BTreeSet<String> = expand(&contract)
             .unwrap()
             .iter()
             .map(|fault| format!("{:?}", fault.target))

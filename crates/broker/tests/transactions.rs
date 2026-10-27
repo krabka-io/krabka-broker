@@ -8,6 +8,7 @@
 //! `INVALID_TXN_STATE` errors during `InitProducerId`. The transactional
 //! control plane is correct on every platform. The gate avoids a flaky CI
 //! signal until the Windows scheduling work is done.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

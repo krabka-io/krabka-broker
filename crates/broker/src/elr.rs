@@ -75,14 +75,14 @@
 //! keeps, offered back as `previousBrokerEpoch` -- keeps its membership,
 //! because its log is still the log the claim was about.
 
-pub(crate) mod maintain;
-pub(crate) mod state;
-pub(crate) mod unclean_restart;
+pub mod maintain;
+pub mod state;
+pub mod unclean_restart;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
+pub use self::{
     maintain::ElrPublisher,
     state::TopicElr,
     unclean_restart::{clear_published_elr, withdraw_elr_membership},

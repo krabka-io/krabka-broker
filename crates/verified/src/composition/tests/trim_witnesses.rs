@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, std::cmp::Reverse};
 
 pub(super) fn logical_oracle(
     f: DeleteRecordsTrimFacts,
@@ -32,7 +32,7 @@ pub(super) fn logical_oracle(
         .iter()
         .enumerate()
         .filter(|(_, offset)| floor < **offset && **offset <= f.log_end)
-        .max_by_key(|(i, offset)| (**offset, std::cmp::Reverse(*i)))
+        .max_by_key(|(i, offset)| (**offset, Reverse(*i)))
         .map(|(i, _)| i);
     Ok((floor, selected, selected.map_or(floor, |i| snapshots[i])))
 }

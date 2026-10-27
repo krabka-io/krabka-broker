@@ -1,6 +1,4 @@
-// rustc 1.95 clippy::pedantic ICEs on some broker integration test files
-// (an upstream bug in clippy's body-analysis pass). Disable pedantic
-// locally; the rest of the workspace still enforces the full pedantic gate.
+#![cfg(test)]
 
 //! Byte-exactness pin for `DescribeGroups` (`api_key=15`) on a CLASSIC
 //! consumer group.
@@ -32,8 +30,10 @@ use {
     krabka_protocol::owned::{
         describe_groups_request::DescribeGroupsRequest,
         describe_groups_response::DescribeGroupsResponse, join_group_request::JoinGroupRequest,
+        sync_group_request::SyncGroupRequest,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -51,7 +51,7 @@ fn sync_request(
     #[builder(into, default)] generation_id: GenerationId,
     #[builder(default)] member_id: &'_ str,
     #[builder(default)] assignment: &'static [u8],
-) -> krabka_protocol::owned::sync_group_request::SyncGroupRequest {
+) -> SyncGroupRequest {
     let setup = AssignedSyncSetup {
         group_id,
         generation_id,
@@ -144,15 +144,15 @@ fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> Joi
     JoinGroupRequest {
         group_instance_id: None,
         ..classic_join_request()
-            .group_id(group_id.to_string())
-            .member_id(member_id.to_string())
+            .group_id(group_id.to_owned())
+            .member_id(member_id.to_owned())
             .timeouts(ClassicTimeouts {
                 session: krabka_units::millis(10_000),
                 ..Default::default()
             })
-            .protocol_type("consumer".to_string())
+            .protocol_type("consumer".to_owned())
             .protocols(vec![join_protocol(
-                "range".to_string(),
+                "range".to_owned(),
                 Bytes::from_static(metadata),
             )])
             .call()
@@ -187,7 +187,7 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
     // ── JoinGroup round 2: with the supplied id. Blocks for up to the
     // ~3 s initial-rebalance-delay before the broker completes the
     // rebalance and returns NONE. This lone member is the leader. ──
-    let r2 = tokio::time::timeout(
+    let r2 = time::timeout(
         JOIN_GROUP_TIMEOUT,
         client.send(join_request(group_id, &member_id, KNOWN_METADATA)),
     )
@@ -231,7 +231,7 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 
     // ── DescribeGroups: the populated fields are the contract. ──
     let req = DescribeGroupsRequest {
-        groups: vec![group_id.to_string()],
+        groups: vec![group_id.to_owned()],
         ..Default::default()
     };
     let resp = client
@@ -271,7 +271,7 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
     );
     let member_id = r1.member_id;
 
-    let r2 = tokio::time::timeout(
+    let r2 = time::timeout(
         JOIN_GROUP_TIMEOUT,
         client.send(join_request(group_id, &member_id, REAL_KAFKA_SUBSCRIPTION)),
     )
@@ -307,7 +307,7 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
 
     let resp = client
         .send(DescribeGroupsRequest {
-            groups: vec![group_id.to_string()],
+            groups: vec![group_id.to_owned()],
             ..Default::default()
         })
         .await

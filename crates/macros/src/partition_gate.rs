@@ -5,7 +5,7 @@ use moxy::{
     token::{Ident, TokenStream},
 };
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let attributes = Attributes::parse(&parser)?;
     let visibility = Visibility::parse(&parser)?;

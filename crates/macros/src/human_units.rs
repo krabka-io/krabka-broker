@@ -7,7 +7,7 @@
 //! moxy's [`Meta`] parser.
 
 use {
-    crate::meta::{ItemBody, compact, named_body},
+    crate::meta::{ItemBody, body_group, compact, named_body},
     moxy::{
         ast::{List, Meta, ParseError, Parser},
         token::{Group, TokenStream, TokenTree},
@@ -78,20 +78,20 @@ fn split_fields(tokens: &[TokenTree]) -> Vec<&[TokenTree]> {
     let mut fields = Vec::new();
     let mut depth = 0_usize;
     let mut start = 0;
+    let mut previous: Option<&TokenTree> = None;
     for (index, token) in tokens.iter().enumerate() {
-        let arrow = index > 0 && tokens[index - 1].is_punct_minus();
+        let arrow = previous.is_some_and(TokenTree::is_punct_minus);
         if token.is_punct_lt() {
             depth += 1;
         } else if token.is_punct_gt() && !arrow {
             depth = depth.saturating_sub(1);
         } else if token.is_punct_comma() && depth == 0 {
-            fields.push(&tokens[start..index]);
+            fields.extend(tokens.get(start..index));
             start = index + 1;
         }
+        previous = Some(token);
     }
-    if start < tokens.len() {
-        fields.push(&tokens[start..]);
-    }
+    fields.extend(tokens.get(start..).filter(|rest| !rest.is_empty()));
     fields
 }
 
@@ -100,7 +100,7 @@ fn attributes_len(field: &[TokenTree]) -> usize {
     field
         .chunks(2)
         .take_while(|pair| {
-            pair[0].is_punct_pound()
+            pair.first().is_some_and(TokenTree::is_punct_pound)
                 && pair
                     .get(1)
                     .and_then(TokenTree::as_group)
@@ -138,7 +138,10 @@ fn annotate(field: &[TokenTree]) -> Result<Vec<TokenTree>, ParseError> {
     let Some(colon) = rest.iter().position(TokenTree::is_punct_colon) else {
         return Ok(field.to_vec());
     };
-    let Some(unit) = option_unit(&compact(&TokenStream::from(&rest[colon + 1..]))) else {
+    let Some(unit) = rest
+        .get(colon + 1..)
+        .and_then(|ty| option_unit(&compact(&TokenStream::from(ty))))
+    else {
         return Ok(field.to_vec());
     };
     let args = serde_args(attrs)?;
@@ -156,7 +159,7 @@ fn annotate(field: &[TokenTree]) -> Result<Vec<TokenTree>, ParseError> {
 }
 
 /// Expands `#[human_units]` on `item`.
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     if let Some(argument) = meta.into_iter().next() {
         return Err(ParseError::new(
             argument.span(),
@@ -167,9 +170,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         mut tokens,
         body_index: body,
     } = named_body(item, "human_units")?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     let comma: TokenStream = ",".parse()?;
     let mut fields = Vec::new();
     for field in split_fields(&group.tokens) {

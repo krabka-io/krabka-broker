@@ -10,12 +10,7 @@ use {
 // tagged bytes let malformed-header cases exercise the same path.
 krabka_macros::request_frame_fixture!(request_frame);
 
-pub(crate) fn raw_request_frame(
-    api_key: i16,
-    version: i16,
-    correlation_id: i32,
-    body: &[u8],
-) -> BytesMut {
+pub fn raw_request_frame(api_key: i16, version: i16, correlation_id: i32, body: &[u8]) -> BytesMut {
     let mut frame = BytesMut::new();
     frame.put_i16(api_key);
     frame.put_i16(version);
@@ -24,7 +19,7 @@ pub(crate) fn raw_request_frame(
     frame
 }
 
-pub(crate) async fn tcp_pair() -> (TcpStream, TcpStream) {
+pub async fn tcp_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind loopback listener");
@@ -41,7 +36,7 @@ pub(crate) async fn tcp_pair() -> (TcpStream, TcpStream) {
 /// Kernels clamp and may double requested sizes; compare the configured
 /// buffers to their deliberately smaller baselines rather than host-specific
 /// values. Both accepted and outbound tuning must also enable `TCP_NODELAY`.
-pub(crate) fn check_socket_tuning(socket: &TcpStream, tune: impl FnOnce(&TcpStream)) {
+pub fn check_socket_tuning(socket: &TcpStream, tune: impl FnOnce(&TcpStream)) {
     let sock = socket2::SockRef::from(socket);
     socket.set_nodelay(false).expect("clear TCP_NODELAY");
     sock.set_send_buffer_size(4096).expect("shrink send buffer");
@@ -58,7 +53,7 @@ pub(crate) fn check_socket_tuning(socket: &TcpStream, tune: impl FnOnce(&TcpStre
 }
 
 /// Check every authentication field; only the event's clock value is supplied by the event.
-pub(crate) fn assert_authentication_event(
+pub fn assert_authentication_event(
     event: &krabka_audit::AuditEvent,
     outcome: krabka_audit::AuditOutcome,
     mechanism: &str,
@@ -83,7 +78,7 @@ pub(crate) fn assert_authentication_event(
 }
 
 /// The unchanged default config and its directory guard, before caller-specific edits.
-pub(crate) fn broker_config() -> (tempfile::TempDir, BrokerConfig) {
+pub fn broker_config() -> (tempfile::TempDir, BrokerConfig) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
     (dir, cfg)

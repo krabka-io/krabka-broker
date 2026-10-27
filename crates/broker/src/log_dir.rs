@@ -6,7 +6,11 @@
 pub use krabka_log::name::{FUTURE_SUFFIX, parse_partition_dir, partition_dir};
 use {
     crate::{cordoned_log_dirs::CordonedLogDirs, error::BrokerError},
-    std::path::{Path, PathBuf},
+    std::{
+        collections::hash_map::Entry,
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 /// A partition directory found on disk, named by its topic and partition.
@@ -67,7 +71,7 @@ fn parse_hosted_partition_dir(name: &str) -> Option<DiscoveredPartition> {
 /// partition `__cluster_metadata-0` is not one of them.
 pub fn scan(log_dir: &Path) -> Result<Vec<DiscoveredPartition>, BrokerError> {
     if !log_dir.exists() {
-        std::fs::create_dir_all(log_dir)?;
+        fs::create_dir_all(log_dir)?;
         return Ok(Vec::new());
     }
     scan_existing(log_dir, parse_hosted_partition_dir)
@@ -91,7 +95,7 @@ fn scan_existing(
     parse_dir_name: fn(&str) -> Option<DiscoveredPartition>,
 ) -> Result<Vec<DiscoveredPartition>, BrokerError> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(log_dir)? {
+    for entry in fs::read_dir(log_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -115,7 +119,7 @@ fn scan_existing(
 /// partition `__cluster_metadata-0` and stray files.
 #[must_use]
 pub fn count_partitions(dir: &Path) -> usize {
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(rd) = fs::read_dir(dir) else {
         return 0;
     };
     rd.filter_map(Result::ok)
@@ -142,16 +146,13 @@ pub fn count_partitions(dir: &Path) -> usize {
 /// `log_dir`.
 #[must_use]
 pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) -> PathBuf {
-    assert2::assert!(!log_dirs.is_empty(), "log_dirs must be non-empty");
     if let Some(existing) = partition_dir_in(log_dirs, topic, partition) {
         return existing;
     }
 
     // Least-loaded placement, ties broken by order.
-    let chosen = log_dirs
-        .iter()
-        .min_by_key(|dir| count_partitions(dir))
-        .unwrap_or(&log_dirs[0]);
+    let chosen = log_dirs.iter().min_by_key(|dir| count_partitions(dir));
+    assert2::assert!(let Some(chosen) = chosen, "log_dirs must be non-empty");
     partition_dir(chosen, topic, partition)
 }
 
@@ -160,7 +161,7 @@ pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) ->
 /// least-loaded directory `cordoned` leaves open, as Kafka's
 /// `LogManager.nextLogDirs` filters the cordoned ones out.
 #[must_use]
-pub(crate) fn place_partition_dir_avoiding(
+pub fn place_partition_dir_avoiding(
     log_dirs: &[PathBuf],
     cordoned: &CordonedLogDirs,
     topic: &str,
@@ -193,7 +194,7 @@ pub fn scan_all(log_dirs: &[PathBuf]) -> Result<Vec<LocatedPartition>, BrokerErr
     for dir in log_dirs {
         for found in scan(dir)? {
             match seen.entry(found.clone()) {
-                std::collections::hash_map::Entry::Occupied(existing) => {
+                Entry::Occupied(existing) => {
                     tracing::warn!(
                         topic = %found.topic, partition = found.partition,
                         first = %existing.get().display(),
@@ -201,7 +202,7 @@ pub fn scan_all(log_dirs: &[PathBuf]) -> Result<Vec<LocatedPartition>, BrokerErr
                         "partition present in multiple log dirs; ignoring duplicate"
                     );
                 }
-                std::collections::hash_map::Entry::Vacant(slot) => {
+                Entry::Vacant(slot) => {
                     slot.insert(dir.clone());
                 }
             }
@@ -246,7 +247,7 @@ mod tests {
     fn partition_dirs(names: &[&str]) -> tempfile::TempDir {
         let dir = tempdir().unwrap();
         for name in names {
-            std::fs::create_dir(dir.path().join(name)).unwrap();
+            fs::create_dir(dir.path().join(name)).unwrap();
         }
         dir
     }
@@ -263,13 +264,13 @@ mod tests {
     #[test]
     fn scan_returns_existing_partitions() {
         let dir = tempdir().expect("tempdir");
-        std::fs::create_dir(dir.path().join("foo-0")).expect("mkdir foo-0");
-        std::fs::create_dir(dir.path().join("foo-1")).expect("mkdir foo-1");
-        std::fs::create_dir(dir.path().join("bar-0")).expect("mkdir bar-0");
-        std::fs::create_dir(dir.path().join("not_a_partition")).expect("mkdir other");
+        fs::create_dir(dir.path().join("foo-0")).expect("mkdir foo-0");
+        fs::create_dir(dir.path().join("foo-1")).expect("mkdir foo-1");
+        fs::create_dir(dir.path().join("bar-0")).expect("mkdir bar-0");
+        fs::create_dir(dir.path().join("not_a_partition")).expect("mkdir other");
         // The metadata partition of a metadata log directory that is also a
         // data directory.
-        std::fs::create_dir(dir.path().join("__cluster_metadata-0")).expect("mkdir metadata");
+        fs::create_dir(dir.path().join("__cluster_metadata-0")).expect("mkdir metadata");
         let mut out = scan(dir.path()).expect("scan ok");
         out.sort();
         assert!(
@@ -284,10 +285,10 @@ mod tests {
     #[test]
     fn count_partitions_ignores_non_partition_entries() {
         let dir = tempdir().expect("tempdir");
-        std::fs::create_dir(dir.path().join("foo-0")).unwrap();
-        std::fs::create_dir(dir.path().join("foo-1")).unwrap();
-        std::fs::create_dir(dir.path().join("__cluster_metadata-0")).unwrap();
-        std::fs::write(dir.path().join("bootstrap.json"), b"{}").unwrap();
+        fs::create_dir(dir.path().join("foo-0")).unwrap();
+        fs::create_dir(dir.path().join("foo-1")).unwrap();
+        fs::create_dir(dir.path().join("__cluster_metadata-0")).unwrap();
+        fs::write(dir.path().join("bootstrap.json"), b"{}").unwrap();
         assert!(count_partitions(dir.path()) == 2);
     }
 
@@ -301,7 +302,7 @@ mod tests {
     fn place_reuses_existing_location() {
         let (_a, b, dirs) = two_log_dirs();
         // Pre-create the partition in the *second* dir.
-        std::fs::create_dir(b.path().join("t-0")).unwrap();
+        fs::create_dir(b.path().join("t-0")).unwrap();
         let placed = place_partition_dir(&dirs, "t", 0);
         assert!(placed == b.path().join("t-0"));
     }
@@ -312,8 +313,8 @@ mod tests {
         // Empty cluster: tie → first dir.
         assert!(place_partition_dir(&dirs, "t", 0) == a.path().join("t-0"));
         // Load `a` with two partitions; next placement should go to `b`.
-        std::fs::create_dir(a.path().join("t-0")).unwrap();
-        std::fs::create_dir(a.path().join("t-1")).unwrap();
+        fs::create_dir(a.path().join("t-0")).unwrap();
+        fs::create_dir(a.path().join("t-1")).unwrap();
         assert!(place_partition_dir(&dirs, "t", 2) == b.path().join("t-2"));
     }
 
@@ -322,7 +323,7 @@ mod tests {
     #[test]
     fn placement_avoids_cordoned_dirs_but_keeps_existing_partitions() {
         let (a, b, dirs) = two_log_dirs();
-        std::fs::create_dir(b.path().join("t-0")).unwrap();
+        fs::create_dir(b.path().join("t-0")).unwrap();
         let cordoned = CordonedLogDirs::new(dirs.clone(), Some(a.path().display().to_string()));
         let cases = [
             ("a new partition", 1, b.path().join("t-1")),
@@ -334,7 +335,7 @@ mod tests {
                 "{label}"
             );
         }
-        std::fs::create_dir(a.path().join("u-0")).unwrap();
+        fs::create_dir(a.path().join("u-0")).unwrap();
         let everything = CordonedLogDirs::new(dirs.clone(), Some("*".into()));
         check!(place_partition_dir_avoiding(&dirs, &everything, "u", 0) == a.path().join("u-0"));
         check!(place_partition_dir_avoiding(&dirs, &everything, "t", 1) == a.path().join("t-1"));
@@ -379,7 +380,7 @@ mod tests {
     #[test]
     fn scan_future_returns_only_future_dirs() {
         let dir = partition_dirs(&["foo-0", "foo-1-future"]);
-        std::fs::create_dir(dir.path().join("bar-3-future")).unwrap();
+        fs::create_dir(dir.path().join("bar-3-future")).unwrap();
         let mut out = scan_future(dir.path()).expect("scan_future ok");
         out.sort();
         assert!(out == vec![discovered("bar", 3), discovered("foo", 1)]);

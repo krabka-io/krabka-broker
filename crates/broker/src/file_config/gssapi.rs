@@ -5,7 +5,7 @@
 //! it dials a peer. Both name a keytab and a Kerberos service name, so they
 //! share the protocol default for `sasl.kerberos.service.name`.
 
-use {krabka_units::Time, schemars::JsonSchema, serde::Deserialize};
+use {krabka_units::Time, schemars::JsonSchema, serde::Deserialize, std::path::PathBuf};
 
 /// Kafka protocol default for `sasl.kerberos.service.name`.
 pub(super) const DEFAULT_KERBEROS_SERVICE_NAME: &str = "kafka";
@@ -22,7 +22,7 @@ fn default_principal_to_local_rules() -> Vec<String> { vec!["DEFAULT".to_owned()
 pub struct FileGssapiConfig {
     /// Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI
     /// accept path reads it to answer a client's ticket.
-    pub keytab_path: std::path::PathBuf,
+    pub keytab_path: PathBuf,
     /// `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted.
     pub service_name: Option<String>,
     /// `auth_to_local` rule specs, applied in order (first match wins). Kafka's
@@ -44,12 +44,12 @@ pub struct FileGssapiConfig {
 /// TOML shape of `[inter_broker_credentials]`. A `type` discriminator
 /// selects the variant. PLAIN/SCRAM inter-broker over TOML remain
 /// intentionally unexposed.
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum FileInterBrokerCredentials {
     Gssapi {
         /// Keytab that holds the key for `client_principal`.
-        keytab_path: std::path::PathBuf,
+        keytab_path: PathBuf,
         /// Kerberos principal this broker authenticates as when it dials a
         /// peer.
         client_principal: String,
@@ -64,7 +64,7 @@ pub enum FileInterBrokerCredentials {
     OAuthBearer {
         /// File containing the bearer token. A trailing newline is ignored.
         /// The token itself never appears in the parsed config's `Debug` form.
-        token_path: std::path::PathBuf,
+        token_path: PathBuf,
     },
 }
 
@@ -81,10 +81,12 @@ mod tests {
             test_support::{OAuthTokenContents, oauth_token_file},
         },
         assert2::{assert, check},
+        krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         krabka_units::secs,
+        std::path::{Path, PathBuf},
     };
 
-    fn oauthbearer_source(token_path: &std::path::Path) -> String {
+    fn oauthbearer_source(token_path: &Path) -> String {
         format!(
             r#"
 [inter_broker_credentials]
@@ -109,13 +111,13 @@ max_time_skew = "17s"
 "#;
         let cfg = configured(src, "parse [gssapi]").expect("apply [gssapi]");
         let g = cfg.gssapi.expect("gssapi config present");
-        check!(g.keytab_path == std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"));
+        check!(g.keytab_path == PathBuf::from("/etc/krabka/gssapi-keytab/keytab"));
         check!(g.service_name.as_str() == "kafka");
         check!(g.principal_to_local_rules.len() == 2);
         // Second rule in the fixture is the bare DEFAULT rule.
         check!(matches!(
             g.principal_to_local_rules[1],
-            crate::network::auth::KerberosRule::Default
+            KerberosRule::Default
         ));
         check!(g.realm.as_deref() == Some("EXAMPLE.COM"));
         check!(g.kdc.as_deref() == Some("tcp://kdc:88"));
@@ -132,7 +134,7 @@ principal_to_local_rules = ["DEFAULT"]
         let cfg = configured_unwrap_parse(src).unwrap();
         let gssapi = cfg.gssapi.unwrap();
         assert!(gssapi.service_name == "kafka");
-        assert!(gssapi.max_time_skew == krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+        assert!(gssapi.max_time_skew == DEFAULT_GSSAPI_MAX_TIME_SKEW);
     }
 
     /// Kafka's `sasl.kerberos.principal.to.local.rules` defaults to
@@ -213,10 +215,10 @@ kdc_url = "tcp://kdc:88"
 "#;
         let cfg = configured_unwrap_parse(src).unwrap();
         let expected = InterBrokerCredentials::Gssapi {
-            keytab_path: std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"),
-            client_principal: "kafka@EXAMPLE.COM".to_string(),
-            service_name: "kafka".to_string(),
-            kdc_url: "tcp://kdc:88".to_string(),
+            keytab_path: PathBuf::from("/etc/krabka/gssapi-keytab/keytab"),
+            client_principal: "kafka@EXAMPLE.COM".to_owned(),
+            service_name: "kafka".to_owned(),
+            kdc_url: "tcp://kdc:88".to_owned(),
         };
         assert!(cfg.inter_broker_credentials == Some(expected));
     }

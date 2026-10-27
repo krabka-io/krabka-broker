@@ -166,14 +166,14 @@ fn split_bootstrap_server(target: &str) -> Result<HostPort, String> {
 
 fn auto_join_connection_options() -> krabka_client_core::ConnectionOptions {
     krabka_client_core::ConnectionOptions {
-        client_id: "krabka-auto-join".to_string(),
+        client_id: "krabka-auto-join".to_owned(),
         ..Default::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, std::fmt::Debug, tokio::net::TcpListener};
 
     #[test]
     fn auto_join_connection_options_uses_joiner_client_id() {
@@ -183,7 +183,7 @@ mod tests {
     }
 
     async fn unreachable_target() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind ephemeral port");
         let target = listener.local_addr().expect("local addr");
@@ -191,7 +191,7 @@ mod tests {
         target.to_string()
     }
 
-    fn check_dial_refusal<R: std::fmt::Debug>(result: Result<R, String>) {
+    fn check_dial_refusal<R: Debug>(result: Result<R, String>) {
         let err = result.expect_err("closed port must not produce a successful default response");
         assert2::assert!(err.contains("dial"), "unexpected error: {err}");
     }

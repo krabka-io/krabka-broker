@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! KIP-714 client-metrics telemetry handshake, push, and error-path coverage.
 //!
@@ -35,6 +35,12 @@ use {
         discovery::api_versions_request_for,
     },
     assert2::{assert, check},
+    std::{
+        collections::HashSet,
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 mod support;
 
@@ -99,7 +105,7 @@ async fn start_one_node_with_client_metrics() -> TelemetryCluster {
     TelemetryCluster { cluster, client }
 }
 
-async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
+async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
     connect_owned(
         format!("127.0.0.1:{}", addr.port()),
         "client-telemetry-test",
@@ -172,7 +178,7 @@ fn sample_otlp_metrics() -> bytes::Bytes {
     bytes::Bytes::from(md.encode_to_vec())
 }
 
-async fn advertised_apis(client: &krabka_client_core::Client) -> std::collections::HashSet<i16> {
+async fn advertised_apis(client: &krabka_client_core::Client) -> HashSet<i16> {
     let resp = client
         .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
@@ -416,7 +422,7 @@ async fn push_telemetry_happy_path_after_subscription() {
         "broker must assign a fresh client_instance_id"
     );
     check!(
-        get_resp.requested_metrics == vec!["*".to_string()],
+        get_resp.requested_metrics == vec!["*".to_owned()],
         "match-all subscription must reflect as [\"*\"], got {:?}",
         get_resp.requested_metrics,
     );
@@ -564,7 +570,7 @@ async fn closing_the_connection_drops_the_client_instance() {
     );
     drop(first);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let reconnected = build_client(addr).await;
         let error_code = get_error_code(&reconnected, id).await;
@@ -572,10 +578,10 @@ async fn closing_the_connection_drops_the_client_instance() {
             break;
         }
         assert!(
-            error_code == THROTTLING_QUOTA_EXCEEDED && std::time::Instant::now() < deadline,
+            error_code == THROTTLING_QUOTA_EXCEEDED && Instant::now() < deadline,
             "the reconnected client's instance survived: error_code={error_code}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 
     p.broker.shutdown().await;

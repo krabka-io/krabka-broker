@@ -10,6 +10,7 @@ use {
     },
     assert2::assert,
     krabka_protocol::records::{Attributes, Record, RecordBatch},
+    std::fmt,
 };
 
 // A data batch of `producer` (`(id, epoch)`) with `records` records from
@@ -241,7 +242,7 @@ struct LastRecordsCase {
 }
 
 /// Compare a projection after each append path, replay and producer snapshot load.
-fn check_append_paths<T: std::fmt::Debug + PartialEq>(
+fn check_append_paths<T: fmt::Debug + PartialEq>(
     name: &str,
     batches: &[RecordBatch],
     want: &T,

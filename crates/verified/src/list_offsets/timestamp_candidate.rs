@@ -1,9 +1,10 @@
 use creusot_std::prelude::*;
 
 /// Select the earliest matching record across two readable tiers.
-/// Preserve its timestamp, prefer remote on equal offsets, and return no
-/// match exactly when neither tier found one. Tier lookup errors are handled
-/// by the caller before this choice.
+///
+/// Preserve its timestamp, prefer remote on equal offsets, and return no match
+/// exactly when neither tier found one. Tier lookup errors are handled by the
+/// caller before this choice.
 #[ensures((result == None) == (remote == None && local == None))]
 #[ensures(match result {
     Some((offset, _)) => (result == remote || result == local)

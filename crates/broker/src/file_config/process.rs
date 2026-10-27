@@ -9,6 +9,7 @@ use {super::FileConfigError, crate::config::StretchProfile};
 
 /// `[process]` TOML section — `KRaft` `process.roles`.
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileProcessConfig {
     /// Role strings: `"controller"`, `"broker"`, `"witness"`
     /// (case-insensitive). Empty or absent leaves the `BrokerConfig` default
@@ -24,6 +25,7 @@ pub struct FileProcessConfig {
 /// be, because a half-built profile would let the broker start with a site
 /// layout that no node agrees on.
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileStretchConfig {
     /// The three site names. Each one is a `rack` value that some node of
     /// the cluster reports.
@@ -64,7 +66,10 @@ fn missing_stretch_field(name: &str) -> FileConfigError {
 #[cfg(test)]
 mod tests {
     use {
-        crate::file_config::{FileConfigError, test_support::configured},
+        crate::{
+            config::{NodeRole, StretchProfile},
+            file_config::{FileConfigError, test_support::configured},
+        },
         assert2::assert,
     };
 
@@ -75,7 +80,7 @@ mod tests {
             roles = ["controller"]
         "#;
         let cfg = configured(toml, "parse").expect("apply");
-        assert!(cfg.roles == vec![crate::config::NodeRole::Controller]);
+        assert!(cfg.roles == vec![NodeRole::Controller]);
     }
     #[test]
     fn process_roles_both_from_toml() {
@@ -84,13 +89,7 @@ mod tests {
             roles = ["broker", "controller"]
         "#;
         let cfg = configured(toml, "parse").expect("apply");
-        assert!(
-            cfg.roles
-                == vec![
-                    crate::config::NodeRole::Broker,
-                    crate::config::NodeRole::Controller
-                ]
-        );
+        assert!(cfg.roles == vec![NodeRole::Broker, NodeRole::Controller]);
     }
     #[yare::parameterized(
         lowercase_roles = { r#"["broker", "controller", "witness"]"# },
@@ -100,12 +99,7 @@ mod tests {
         let toml = format!("[process]\nroles = {roles}");
         let cfg = configured(&toml, "parse").expect("apply");
         assert2::assert!(
-            cfg.roles
-                == vec![
-                    crate::config::NodeRole::Broker,
-                    crate::config::NodeRole::Controller,
-                    crate::config::NodeRole::Witness
-                ],
+            cfg.roles == vec![NodeRole::Broker, NodeRole::Controller, NodeRole::Witness],
             "{roles}"
         );
         assert2::assert!(cfg.is_witness(), "{roles}");
@@ -123,10 +117,10 @@ mod tests {
         let cfg = configured(toml, "parse").expect("apply");
         assert!(
             cfg.stretch
-                == Some(crate::config::StretchProfile {
-                    sites: vec!["dc-a".to_string(), "dc-b".to_string(), "dc-w".to_string()],
-                    witness_site: "dc-w".to_string(),
-                    preferred_leader_site: "dc-a".to_string(),
+                == Some(StretchProfile {
+                    sites: vec!["dc-a".to_owned(), "dc-b".to_owned(), "dc-w".to_owned()],
+                    witness_site: "dc-w".to_owned(),
+                    preferred_leader_site: "dc-a".to_owned(),
                 })
         );
     }
@@ -182,12 +176,6 @@ mod tests {
     #[test]
     fn process_section_absent_leaves_default_roles() {
         let cfg = configured("", "parse").expect("apply");
-        assert!(
-            cfg.roles
-                == vec![
-                    crate::config::NodeRole::Controller,
-                    crate::config::NodeRole::Broker
-                ]
-        );
+        assert!(cfg.roles == vec![NodeRole::Controller, NodeRole::Broker]);
     }
 }

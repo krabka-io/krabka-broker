@@ -135,7 +135,7 @@ fn refusal_match(rules: &Rules, binding: &Ident) -> TokenStream {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let rules = declaration(&input.clone().into())?;
     let headers = input.into_iter().filter_map(|token| match token {
         TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => Some(group),

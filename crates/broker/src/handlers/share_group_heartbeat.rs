@@ -25,18 +25,19 @@ use {
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         share_group_heartbeat_response::ShareGroupHeartbeatResponse,
     },
+    std::sync::Arc,
 };
 
 /// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
 const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ShareGroupHeartbeatRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<ShareGroupHeartbeatResponse, BrokerError> {
-    let ng = broker.group_coordinator.clone();
+    let ng = Arc::clone(&broker.group_coordinator);
 
     // ── Protocol gate ───────────────────────────────────────────
     // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
@@ -268,12 +269,7 @@ mod tests {
         };
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
-        assert!(!group_read_denied(
-            &crate::authorizer::AllowAllAuthorizer,
-            &image,
-            &ctx,
-            "g"
-        ));
+        assert!(!group_read_denied(&AllowAllAuthorizer, &image, &ctx, "g"));
 
         let bytes = encode_response(
             &ShareGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None),
@@ -621,7 +617,7 @@ mod tests {
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_broker(std::sync::Arc::new(AllowAllAuthorizer)).await;
+        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         krabka_macros::request_test_identity! {
@@ -750,7 +746,7 @@ mod tests {
             }
         }
 
-        assert!(coordinator.share_group_ids() == vec!["joined".to_string()]);
+        assert!(coordinator.share_group_ids() == vec!["joined".to_owned()]);
         broker_handle.shutdown().await;
     }
 }

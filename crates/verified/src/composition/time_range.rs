@@ -54,7 +54,7 @@ pub(super) fn constructed_time_range_preserves_first(
     #[invariant(super::time_index::absolute_record_prefix_bounded(offsets@, i@, base@, end@))]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        if base + i64::from(offsets[i]) > end {
+        if base + i64::from(*offsets.get(i).ok_or(())?) > end {
             return Err(());
         }
         i += 1;
@@ -67,11 +67,10 @@ pub(super) fn constructed_time_range_preserves_first(
         if base@ + offsets@[j]@ >= minimum@ && lower@ <= times@[j]@ && times@[j]@ <= upper@ { 1 } else { 0 })]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
+        let (&offset, &time) = (offsets.get(i).ok_or(())?, times.get(i).ok_or(())?);
+        let absolute = base + i64::from(offset);
         eligible.push(i64::from(
-            base + i64::from(offsets[i]) >= scan
-                && base + i64::from(offsets[i]) >= minimum
-                && times[i] >= lower
-                && times[i] <= upper,
+            absolute >= scan && absolute >= minimum && time >= lower && time <= upper,
         ));
         i += 1;
     }

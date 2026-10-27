@@ -36,9 +36,12 @@ use {
     krabka_protocol::{primitives::uuid::Uuid as WireUuid, records::RecordBatch},
     std::{
         collections::BTreeSet,
+        fs,
         path::Path,
+        sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The topic this suite produces into. It sets no `segment.bytes`, so each
@@ -67,7 +70,7 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
     let mut segments: Vec<RemoteSegment> = files
         .iter()
         .filter_map(|path| {
-            let bytes = std::fs::read(path).ok()?;
+            let bytes = fs::read(path).ok()?;
             let mut cursor: &[u8] = &bytes;
             let mut first: Option<i64> = None;
             let mut last: Option<i64> = None;
@@ -146,7 +149,7 @@ async fn await_remote_segments(remote_dir: &Path, wanted: usize, what: &str) -> 
         );
         // intentional: the copy task runs on the broker's own 1s interval, and
         // the object store is a directory; there is no in-process signal.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -274,7 +277,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         );
         // intentional: the follower's RLMM consumer and its retention pass
         // both run on the broker's own 1s interval; no in-process signal.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 
     drop(admin);
@@ -333,7 +336,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
             survivor.partition_log_start_for_test(TOPIC, 0),
         );
         // intentional: the copy task runs on the broker's own 1s interval.
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        time::sleep(Duration::from_secs(5)).await;
     };
     eprintln!("ITEST: the tier after the failover holds {after:?}");
 
@@ -343,7 +346,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     // that read zero over a segment the old skip set had marked copied by its
     // base offset while nothing had ever been uploaded for it.
     let lag_label = TopicLabel {
-        topic: std::sync::Arc::from(TOPIC),
+        topic: Arc::from(TOPIC),
     };
     survivor
         .wait_for_metrics(
@@ -369,7 +372,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
             local_segment_bases(&survivor_dir)
         );
         // intentional: local retention runs on the broker's own interval tick.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 
     let segments = remote_segments(remote_dir.path());

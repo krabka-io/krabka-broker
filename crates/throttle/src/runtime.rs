@@ -103,8 +103,8 @@ pub const MICROS_PER_TOKEN: u64 = 1_000_000;
 /// about 1.75e18 ns.
 #[inline]
 fn clock_nanos(clock: &dyn MonotonicClock) -> u64 {
-    u64::try_from(clock.now().elapsed_since_origin().as_nanos())
-        .expect("nanoseconds elapsed since the clock's origin must fit in u64")
+    // Saturating is a formality: the span reaches `u64::MAX` after 584 years.
+    u64::try_from(clock.now().elapsed_since_origin().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// The group every consume and every reset reads and writes as one unit.

@@ -68,9 +68,9 @@ mod tests {
         check!(
             required_topics(&topology)
                 == vec![
-                    "orders".to_string(),
-                    "rp".to_string(),
-                    "store-changelog".to_string(),
+                    "orders".to_owned(),
+                    "rp".to_owned(),
+                    "store-changelog".to_owned(),
                 ]
         );
     }

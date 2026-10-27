@@ -15,10 +15,14 @@ use {
         BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind,
         config::{InterBrokerCredentials, ListenerSpec},
     },
-    krabka_client_core::Client,
+    krabka_client_core::{Client, security::ClientSecurity},
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::time::{Duration, Instant},
+    std::{
+        path::Path,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
+    tokio::task,
 };
 
 krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
@@ -26,13 +30,13 @@ krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
 /// Boot a single broker with the `Local` tiered-storage backend and the
 /// topic-backed RLMM pointed at its own loopback listener. Returns the
 /// handle plus the log + remote tempdirs. The caller keeps them alive.
-pub(crate) async fn start_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
+pub async fn start_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
     start_configured_topic_rlmm(|_, _| {}).await
 }
 
 /// Keep held listeners and tempdirs alive while applying a scenario-specific configuration.
-pub(crate) async fn start_configured_topic_rlmm(
-    configure: impl FnOnce(&mut BrokerConfig, &std::path::Path),
+pub async fn start_configured_topic_rlmm(
+    configure: impl FnOnce(&mut BrokerConfig, &Path),
 ) -> (BrokerHandle, TempDir, TempDir) {
     support::init_tracing();
 
@@ -72,7 +76,7 @@ pub(crate) async fn start_configured_topic_rlmm(
     (broker, log_dir, remote_dir)
 }
 
-pub(crate) async fn await_tiered_config(broker: &BrokerHandle, topic: &str) {
+pub async fn await_tiered_config(broker: &BrokerHandle, topic: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if broker
@@ -90,20 +94,20 @@ pub(crate) async fn await_tiered_config(broker: &BrokerHandle, topic: &str) {
             "tiered-storage topic config never propagated; saw {:?}",
             broker.partition_log_config_for_test(topic, 0)
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 
-pub(crate) async fn build_client(broker: &BrokerHandle) -> Client {
+pub async fn build_client(broker: &BrokerHandle) -> Client {
     build_client_secured(broker, None).await
 }
 
 /// Build a test client, optionally negotiating TLS/SASL. `None` is the
 /// plaintext path used by the loopback tests. `Some(..)` authenticates
 /// against a SASL listener.
-pub(crate) async fn build_client_secured(
+pub async fn build_client_secured(
     broker: &BrokerHandle,
-    security: Option<krabka_client_core::security::ClientSecurity>,
+    security: Option<ClientSecurity>,
 ) -> Client {
     Client::builder()
         .bootstrap(broker.listen_addr().to_string())
@@ -116,7 +120,7 @@ pub(crate) async fn build_client_secured(
 
 /// Wait for the topic-backed remote-log-metadata-manager bootstrap to swap the topic-backed manager in. The
 /// `tiered_storage_rlmm_topic_backed` gauge flips to 1 to signal the swap.
-pub(crate) async fn await_activation(broker: &BrokerHandle) {
+pub async fn await_activation(broker: &BrokerHandle) {
     broker
         .wait_for_metrics("rlmm topic-backed", |m| {
             m.tiered_storage_rlmm_topic_backed.get() == 1
@@ -127,10 +131,10 @@ pub(crate) async fn await_activation(broker: &BrokerHandle) {
 /// Boot a single broker whose only listener, which is also the inter-broker
 /// listener, is `SASL_PLAINTEXT/PLAIN`. The topic-backed RLMM points at it. The
 /// RLMM authenticates as the inter-broker PLAIN principal.
-pub(crate) async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
+pub async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
     start_configured_topic_rlmm(|cfg, _| {
         cfg.listeners = vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
+            name: "SASL_PLAINTEXT".to_owned(),
             bind_addr: cfg.listen_addr,
             advertised: format!("127.0.0.1:{}", cfg.listen_addr.port()),
             protocol: ListenerProtocol::SaslPlaintext,
@@ -138,13 +142,13 @@ pub(crate) async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDi
             sasl_mechanisms: None,
             principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }];
-        cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+        cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
         cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         cfg.plain_credentials
-            .insert("rlmm".to_string(), "rlmm-secret".to_string());
+            .insert("rlmm".to_owned(), "rlmm-secret".to_owned());
         cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-            username: "rlmm".to_string(),
-            password: "rlmm-secret".to_string(),
+            username: "rlmm".to_owned(),
+            password: "rlmm-secret".to_owned(),
         });
     })
     .await

@@ -5,7 +5,10 @@ use {
     super::{IdleTimer, WriteIdle, for_response},
     crate::test_support::localhost_ecdsa_pair,
     assert2::assert,
-    rustls::pki_types::{PrivateKeyDer, ServerName},
+    rustls::{
+        crypto::aws_lc_rs,
+        pki_types::{PrivateKeyDer, ServerName},
+    },
     std::{
         io,
         pin::Pin,
@@ -17,9 +20,13 @@ use {
         time::Duration,
     },
     tokio::{
-        io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf},
-        time::{Instant, Sleep},
+        io::{
+            AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf,
+            duplex,
+        },
+        time::{self, Instant, Sleep},
     },
+    tokio_rustls::{client::TlsStream, server},
 };
 
 /// Limit ciphertext reads to 64 bytes every 10ms after the handshake. Delaying
@@ -45,7 +52,7 @@ impl AsyncRead for PacedReader {
         }
         let timer = this
             .next_read
-            .get_or_insert_with(|| Box::pin(tokio::time::sleep(Duration::from_millis(10))));
+            .get_or_insert_with(|| Box::pin(time::sleep(Duration::from_millis(10))));
         if timer.as_mut().poll(cx).is_pending() {
             return Poll::Pending;
         }
@@ -81,8 +88,8 @@ impl AsyncWrite for PacedReader {
     }
 }
 
-type ServerTls = tokio_rustls::server::TlsStream<WriteIdle<DuplexStream>>;
-type ClientTls = tokio_rustls::client::TlsStream<PacedReader>;
+type ServerTls = server::TlsStream<WriteIdle<DuplexStream>>;
+type ClientTls = TlsStream<PacedReader>;
 
 /// Both ends of a completed TLS handshake, and the switch that paces the
 /// client's reads.
@@ -93,7 +100,7 @@ struct TlsPair {
 }
 
 async fn tls_pair(window: Duration) -> TlsPair {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let (certificate, key) = localhost_ecdsa_pair();
     let cert = certificate.der().clone();
     let server = rustls::ServerConfig::builder()
@@ -112,11 +119,11 @@ async fn tls_pair(window: Duration) -> TlsPair {
     let connector = tokio_rustls::TlsConnector::from(Arc::new(client));
     // Enough room for both peers to finish the handshake, including TLS 1.3
     // session tickets after the client stops polling its connector.
-    let (server, client) = tokio::io::duplex(8 * 1024);
+    let (server, client) = duplex(8 * 1024);
     let paced = Arc::new(AtomicBool::new(false));
     let reader = PacedReader {
         inner: client,
-        enabled: paced.clone(),
+        enabled: Arc::clone(&paced),
         next_read: None,
     };
     let (server, client) = tokio::join!(

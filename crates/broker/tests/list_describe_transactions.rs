@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! KIP-664 `ListTransactions` (`api_key` 66) and `DescribeTransactions`
 //! (`api_key` 65). Both surface the broker's local `TxnCoordinator`
@@ -23,13 +23,18 @@ use {
         describe_transactions_response::{
             TopicData, TransactionState as DescribedTransactionState,
         },
+        find_coordinator_request::FindCoordinatorRequest,
         list_transactions_request::ListTransactionsRequest,
         list_transactions_response::{
             ListTransactionsResponse, TransactionState as ListedTransactionState,
         },
     },
-    std::{sync::Arc, time::Duration},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// `ListTransactions`, retried while the coordinator loads its state
@@ -39,20 +44,19 @@ async fn list_transactions(
     client: &krabka_client_core::Client,
     request: &ListTransactionsRequest,
 ) -> ListTransactionsResponse {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let response = client
             .send(request.clone())
             .await
             .expect("ListTransactions");
-        if response.error_code != codes::COORDINATOR_LOAD_IN_PROGRESS
-            || std::time::Instant::now() >= deadline
+        if response.error_code != codes::COORDINATOR_LOAD_IN_PROGRESS || Instant::now() >= deadline
         {
             return response;
         }
         // intentional: the coordinator load has no awaiter reachable from a
         // client; the answer is the signal.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -65,17 +69,15 @@ async fn describe_transaction(
     transactional_id: &str,
 ) -> DescribedTransactionState {
     let _ = client
-        .send(
-            krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
-                key: transactional_id.into(),
-                key_type: 1,
-                coordinator_keys: vec![transactional_id.into()],
-                ..Default::default()
-            },
-        )
+        .send(FindCoordinatorRequest {
+            key: transactional_id.into(),
+            key_type: 1,
+            coordinator_keys: vec![transactional_id.into()],
+            ..Default::default()
+        })
         .await
         .expect("FindCoordinator");
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let response = client
             .send(DescribeTransactionsRequest {
@@ -92,13 +94,13 @@ async fn describe_transaction(
         if !matches!(
             row.error_code,
             codes::COORDINATOR_LOAD_IN_PROGRESS | codes::NOT_COORDINATOR
-        ) || std::time::Instant::now() >= deadline
+        ) || Instant::now() >= deadline
         {
             return row;
         }
         // intentional: the coordinator load has no awaiter reachable from a
         // client; the answer is the signal.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -183,7 +185,7 @@ async fn boot_with_ongoing_txn(tid: &str, topic: &str) -> OngoingTxn {
     // to wait on instead. The deadline is generous because macOS runners are
     // measurably slower than linux on the in-process transactional path.
     let admin = admin_client(&bootstrap).await;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let r = admin
             .send(DescribeTransactionsRequest {
@@ -202,10 +204,10 @@ async fn boot_with_ongoing_txn(tid: &str, topic: &str) -> OngoingTxn {
             break;
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "txn {tid} never reached Ongoing with its partitions: {r:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     OngoingTxn {
@@ -285,7 +287,7 @@ async fn list_transactions_reports_unknown_state_filters() {
     .await;
     assert!(
         r == ListTransactionsResponse {
-            unknown_state_filters: vec!["BogusState".to_string()],
+            unknown_state_filters: vec!["BogusState".to_owned()],
             ..Default::default()
         }
     );

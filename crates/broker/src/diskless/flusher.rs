@@ -20,6 +20,10 @@ use {
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    tokio::{
+        sync::watch,
+        time::{self, Instant, MissedTickBehavior},
+    },
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
 };
@@ -29,21 +33,21 @@ mod object_flush;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     config::FlushConfig,
     object_flush::{FlushTarget, flush_once},
 };
 
-pub(crate) struct FlushPartition {
+pub struct FlushPartition {
     pub(crate) topic_id: Uuid,
     pub(crate) handle: Arc<Partition>,
     pub(crate) high_watermark: Offset,
 }
 
 /// Dependencies owned by the broker's diskless flush task.
-pub(crate) struct FlusherContext {
+pub struct FlusherContext {
     pub(crate) partitions: Arc<PartitionRegistry>,
-    pub(crate) image_rx: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+    pub(crate) image_rx: watch::Receiver<Arc<MetadataImage>>,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) index_log: DisklessIndexLog,
     pub(crate) node_id: NodeId,
@@ -56,7 +60,7 @@ pub(crate) struct FlusherContext {
 
 /// Why [`run`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FlusherExit {
+pub enum FlusherExit {
     /// Shutdown was requested. The flusher is done.
     ShutDown,
     /// The index projection never replayed the index topic, so no tick ever
@@ -79,7 +83,7 @@ pub(crate) enum FlusherExit {
 /// object the previous incarnation wrote unreferenced forever.
 ///
 /// [`WalIndexCache::apply`]: crate::diskless::wal_index::WalIndexCache::apply
-pub(crate) async fn run(
+pub async fn run(
     context: FlusherContext,
     config: FlushConfig,
     shutdown: CancellationToken,
@@ -113,13 +117,10 @@ pub(crate) async fn run(
         () = reclaimer.sweep() => {}
     }
     context.ready.store(true, Ordering::Release);
-    let mut ticker = tokio::time::interval(config.interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut reclaim_ticker = tokio::time::interval_at(
-        tokio::time::Instant::now() + RECLAIM_INTERVAL,
-        RECLAIM_INTERVAL,
-    );
-    reclaim_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ticker = time::interval(config.interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut reclaim_ticker = time::interval_at(Instant::now() + RECLAIM_INTERVAL, RECLAIM_INTERVAL);
+    reclaim_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut rotation = 0usize;
     // Shutdown comes before both tickers, and it also interrupts the tick in
     // flight. A tick that outlasts the interval leaves the next tick already
@@ -249,7 +250,7 @@ mod tests {
         },
         assert2::assert,
         futures_util::stream::BoxStream,
-        krabka_metadata::{MetadataRecord, TopicRecord},
+        krabka_metadata::{MetadataRecord, TopicRecord, krabka_version::KRABKA_VERSION_FEATURE},
         krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::{ByteSize, convert::ByteSizeExt as _},
@@ -259,10 +260,15 @@ mod tests {
             RenameOptions, memory::InMemory, path::Path,
         },
         std::{
-            fmt,
+            fmt, path,
             time::{Duration, Instant},
         },
         tempfile::tempdir,
+        tokio::{
+            sync::{Mutex, Notify, watch},
+            task::{self, JoinHandle},
+            time,
+        },
     };
 
     fn test_reclaimer(context: &FlusherContext, grace: Duration) -> Reclaimer {
@@ -282,8 +288,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct VisibleBlockedPutStore {
         inner: InMemory,
-        visible: tokio::sync::Notify,
-        finish_put: tokio::sync::Notify,
+        visible: Notify,
+        finish_put: Notify,
     }
 
     impl fmt::Display for VisibleBlockedPutStore {
@@ -368,7 +374,7 @@ mod tests {
 
     fn test_context(
         partitions: Arc<PartitionRegistry>,
-        image_rx: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+        image_rx: watch::Receiver<Arc<MetadataImage>>,
         object_store: Arc<dyn ObjectStore>,
         index_log: DisklessIndexLog,
         ready: impl FnOnce() -> Arc<AtomicBool>,
@@ -387,13 +393,13 @@ mod tests {
 
     struct MemoryFlusher {
         topic_id: Uuid,
-        image_rx: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+        image_rx: watch::Receiver<Arc<MetadataImage>>,
         store: Arc<dyn ObjectStore>,
     }
     fn memory_flusher_dependencies(count: i32) -> MemoryFlusher {
         let OrdersImage { topic_id, image } = orders_image(count);
         // Tokio's fixed channel API returns a sender/receiver pair; only the receiver is retained.
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+        let (_, image_rx) = watch::channel(Arc::new(image));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         MemoryFlusher {
             topic_id,
@@ -440,7 +446,7 @@ mod tests {
         dir: tempfile::TempDir,
         topic_id: Uuid,
         context: FlusherContext,
-        cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
+        cache: Arc<Mutex<WalIndexCache>>,
     }
     async fn rotation_fixture() -> RotationFixture {
         let dir = tempdir().unwrap();
@@ -486,13 +492,13 @@ mod tests {
         assert!(object_keys(store).await.is_empty());
     }
 
-    async fn stop_worker(shutdown: &CancellationToken, task: tokio::task::JoinHandle<FlusherExit>) {
+    async fn stop_worker(shutdown: &CancellationToken, task: JoinHandle<FlusherExit>) {
         shutdown.cancel();
         assert!(task.await.unwrap() == FlusherExit::ShutDown);
     }
 
     async fn wait_for_frontier(
-        cache: &Arc<tokio::sync::Mutex<WalIndexCache>>,
+        cache: &Arc<Mutex<WalIndexCache>>,
         topic_id: Uuid,
         partition: i32,
         frontier: i64,
@@ -548,7 +554,7 @@ mod tests {
         context: FlusherContext,
     }
 
-    async fn rotation_context(root: &std::path::Path) -> RotationContext {
+    async fn rotation_context(root: &path::Path) -> RotationContext {
         let partitions = Arc::new(PartitionRegistry::new());
         for partition in 0..2 {
             partitions.insert(
@@ -558,7 +564,7 @@ mod tests {
             );
         }
         let OrdersImage { topic_id, image } = orders_image(2);
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+        let (_, image_rx) = watch::channel(Arc::new(image));
         let index_log = test_index_log().await;
         RotationContext {
             topic_id,
@@ -593,9 +599,15 @@ mod tests {
         .await
         .unwrap();
 
-        let cache = cache.lock().await;
-        assert!(cache.flushed_frontier(topic_id, 0).is_none());
-        assert!(cache.flushed_frontier(topic_id, 1) == Some(3));
+        let (first, second) = {
+            let cache = cache.lock().await;
+            (
+                cache.flushed_frontier(topic_id, 0),
+                cache.flushed_frontier(topic_id, 1),
+            )
+        };
+        assert!(first.is_none());
+        assert!(second == Some(3));
     }
 
     /// An image whose finalized `krabka.version` is `level`, holding `orders`.
@@ -603,7 +615,7 @@ mod tests {
         let mut image = orders_image(1).image;
         image.apply(&MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                name: KRABKA_VERSION_FEATURE.into(),
                 level,
             },
         ));
@@ -615,7 +627,7 @@ mod tests {
     struct BlockedPut {
         _dir: tempfile::TempDir,
         store: Arc<VisibleBlockedPutStore>,
-        flush: tokio::task::JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
+        flush: JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
     }
 
     async fn flush_until_put(level: i16, index_log: &DisklessIndexLog) -> BlockedPut {
@@ -626,13 +638,12 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             test_partition().root(dir.path()).partition(0).call(),
         );
-        let (_, image_rx) =
-            tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(level)));
+        let (_, image_rx) = watch::channel(Arc::new(orders_image_at_krabka_version(level)));
         let store = Arc::new(VisibleBlockedPutStore::default());
         let context = test_context(
             partitions,
             image_rx,
-            store.clone(),
+            Arc::<VisibleBlockedPutStore>::clone(&store),
             index_log.clone(),
             || Arc::new(AtomicBool::new(false)),
         );
@@ -658,7 +669,11 @@ mod tests {
     #[tokio::test]
     async fn a_reservation_protects_a_visible_upload_whose_ranges_are_not_published_yet() {
         let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
-        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let index_log = DisklessIndexLog::start(Arc::<
+            krabka_remote_storage_topic::InProcessMetadataEventLog,
+        >::clone(&event_log))
+        .await
+        .unwrap();
         let BlockedPut { _dir, store, flush } =
             flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL, &index_log).await;
 
@@ -684,7 +699,7 @@ mod tests {
                 .wait_until_caught_up(Duration::from_secs(1))
                 .await
         );
-        let peer_store: Arc<dyn ObjectStore> = store.clone();
+        let peer_store: Arc<dyn ObjectStore> = Arc::<VisibleBlockedPutStore>::clone(&store);
         let mut reclaimer = Reclaimer::new(peer_index, peer_store, None, Duration::from_mins(1));
         let observed = Instant::now();
         sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
@@ -717,8 +732,12 @@ mod tests {
     async fn a_view_stalled_after_startup_never_reclaims_a_peers_live_object() {
         for reserve_objects in [false, true] {
             let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
-            let stalling = StallableLog::new(log.clone());
-            let stale = DisklessIndexLog::start(stalling.clone()).await.unwrap();
+            let stalling = StallableLog::new(Arc::<
+                krabka_remote_storage_topic::InProcessMetadataEventLog,
+            >::clone(&log));
+            let stale = DisklessIndexLog::start(Arc::<StallableLog>::clone(&stalling))
+                .await
+                .unwrap();
             assert!(stale.wait_until_caught_up(Duration::from_secs(1)).await);
             stalling.stall_delivery();
             let peer = DisklessIndexLog::start(log).await.unwrap();
@@ -782,7 +801,9 @@ mod tests {
         let log = StallableLog::new(krabka_remote_storage_topic::InProcessMetadataEventLog::new(
             2,
         ));
-        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let index = DisklessIndexLog::start(Arc::<StallableLog>::clone(&log))
+            .await
+            .unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&Path::from(ORPHAN), PutPayload::from_static(b"object"))
@@ -792,7 +813,7 @@ mod tests {
         let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), None, Duration::ZERO)
             .with_freshness_timeout(Duration::from_millis(50));
 
-        tokio::time::timeout(Duration::from_secs(5), reclaimer.sweep())
+        time::timeout(Duration::from_secs(5), reclaimer.sweep())
             .await
             .expect("the sweep returns while fence publication stalls");
 
@@ -842,26 +863,22 @@ mod tests {
     }
 
     async fn wait_for_cache(
-        cache: &Arc<tokio::sync::Mutex<WalIndexCache>>,
+        cache: &Arc<Mutex<WalIndexCache>>,
         predicate: impl Fn(&WalIndexCache) -> bool,
     ) {
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             loop {
                 if predicate(&*cache.lock().await) {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
         .unwrap();
     }
 
-    async fn wait_for_object(
-        cache: &Arc<tokio::sync::Mutex<WalIndexCache>>,
-        topic_id: Uuid,
-        object_key: &str,
-    ) {
+    async fn wait_for_object(cache: &Arc<Mutex<WalIndexCache>>, topic_id: Uuid, object_key: &str) {
         wait_for_cache(cache, |cache| {
             cache
                 .lookup(topic_id, 0, 0)
@@ -921,7 +938,11 @@ mod tests {
         let object_key = format!("diskless-wal/7/{}.ckwl", Uuid::new_v4());
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
-        let writer = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let writer = DisklessIndexLog::start(Arc::<
+            krabka_remote_storage_topic::InProcessMetadataEventLog,
+        >::clone(&log))
+        .await
+        .unwrap();
         writer.reserve_object(&object_key).await.unwrap();
 
         // The writer can stop after recording the reservation and after its
@@ -1036,7 +1057,7 @@ mod tests {
 
     struct StoredReclaimer {
         index: DisklessIndexLog,
-        cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
+        cache: Arc<Mutex<WalIndexCache>>,
     }
 
     async fn stored_reclaimer(object_key: &str, store: &Arc<dyn ObjectStore>) -> StoredReclaimer {
@@ -1052,7 +1073,7 @@ mod tests {
     fn reclaim_in_background(
         index: &DisklessIndexLog,
         store: &Arc<dyn ObjectStore>,
-    ) -> tokio::task::JoinHandle<()> {
+    ) -> JoinHandle<()> {
         let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), None, Duration::ZERO);
         tokio::spawn(async move { reclaimer.sweep().await })
     }
@@ -1065,13 +1086,13 @@ mod tests {
             inner,
             FaultPolicy::none().with(StoreOp::Delete, OpFault::stall(DELETE_DELAY)),
         ));
-        let store: Arc<dyn ObjectStore> = delayed.clone();
+        let store: Arc<dyn ObjectStore> = Arc::<FaultInjectingStore>::clone(&delayed);
         let StoredReclaimer { index, cache } =
             stored_reclaimer("diskless-wal/7/unreferenced.ckwl", &store).await;
         let sweep = reclaim_in_background(&index, &store);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while delayed.attempts(StoreOp::Delete) == 0 {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -1119,7 +1140,7 @@ mod tests {
         let sweep = reclaim_in_background(&index, &store);
         // Let the sweep snapshot this object as unreferenced and reach its
         // object fence before the replacement projection becomes visible.
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
         cache
             .lock()
             .await
@@ -1182,7 +1203,7 @@ mod tests {
     /// The partition itself is only here for its log configuration and its
     /// index, which is what the retention pass reads.
     async fn seeded_retention_flusher(
-        dir: &std::path::Path,
+        dir: &path::Path,
         topic_id: Uuid,
         ranges: &[RetentionRange],
     ) -> SeededRetention {
@@ -1225,7 +1246,7 @@ mod tests {
         image.apply(&MetadataRecord::V1Topic(single_partition_topic(
             "orders", topic_id,
         )));
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
+        let (_, image_rx) = watch::channel(Arc::new(image.clone()));
         SeededRetention {
             context: test_context(partitions, image_rx, Arc::clone(&store), index, || {
                 Arc::new(AtomicBool::new(false))
@@ -1257,7 +1278,7 @@ mod tests {
         handle.log.lock().unwrap().set_config(config);
     }
 
-    fn led_orders_partition(dir: &std::path::Path) -> Arc<PartitionRegistry> {
+    fn led_orders_partition(dir: &path::Path) -> Arc<PartitionRegistry> {
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert(
             "orders".into(),
@@ -1503,16 +1524,16 @@ mod tests {
             config,
             shutdown.clone(),
         ));
-        tokio::time::timeout(Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             while !ready.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
         .expect("the restarted flusher becomes ready once the replay finishes");
         // Well inside the replay delay, so a flusher that ticked without
         // waiting has already landed its object by now.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         stop_worker(&shutdown, task).await;
 
         // A tick during the replay re-uploads offsets 0..=2 under a second
@@ -1533,7 +1554,7 @@ mod tests {
     /// holds a flush record, but whose replay never delivers -- the shape a
     /// dead partition fetch loop leaves behind, with the stream open and
     /// silent. Returns the context and the object store behind it.
-    async fn silent_replay_flusher(dir: &std::path::Path, ready: Arc<AtomicBool>) -> SilentReplay {
+    async fn silent_replay_flusher(dir: &path::Path, ready: Arc<AtomicBool>) -> SilentReplay {
         let partitions = led_orders_partition(dir);
 
         let MemoryFlusher {
@@ -1597,7 +1618,7 @@ mod tests {
                 test_context(
                     led_orders_partition(dir.path()),
                     image_rx,
-                    store.clone(),
+                    Arc::<FaultInjectingStore>::clone(&store),
                     index,
                     || Arc::clone(&ready),
                 ),
@@ -1607,9 +1628,9 @@ mod tests {
                 },
                 CancellationToken::new(),
             ));
-            tokio::time::timeout(Duration::from_secs(5), async {
+            time::timeout(Duration::from_secs(5), async {
                 while store.attempts(operation) == 0 {
-                    tokio::task::yield_now().await;
+                    task::yield_now().await;
                 }
             })
             .await
@@ -1623,7 +1644,7 @@ mod tests {
                 .publish(0, bytes::Bytes::from_static(b"invalid index record"))
                 .await
                 .unwrap();
-            let exit = tokio::time::timeout(Duration::from_secs(1), task)
+            let exit = time::timeout(Duration::from_secs(1), task)
                 .await
                 .expect("projection failure cancels work in flight")
                 .unwrap();
@@ -1641,7 +1662,7 @@ mod tests {
             store,
         } = silent_replay_fixture().await;
         let store = Arc::new(FaultInjectingStore::new(store, FaultPolicy::none()));
-        context.object_store = store.clone();
+        context.object_store = Arc::<FaultInjectingStore>::clone(&store);
         let exit = run(
             context,
             stall_after(Duration::from_millis(50)),
@@ -1662,7 +1683,7 @@ mod tests {
         let index = DisklessIndexLog::start(Arc::clone(&event_log))
             .await
             .unwrap();
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
+        let (_, image_rx) = watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
         let ready = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(run(
             test_context(
@@ -1678,9 +1699,9 @@ mod tests {
             },
             CancellationToken::new(),
         ));
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while !ready.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -1691,7 +1712,7 @@ mod tests {
             .await
             .unwrap();
 
-        let exit = tokio::time::timeout(Duration::from_secs(1), task)
+        let exit = time::timeout(Duration::from_secs(1), task)
             .await
             .expect("invalid projection stops the flusher")
             .unwrap();
@@ -1707,7 +1728,7 @@ mod tests {
             store,
         } = silent_replay_fixture().await;
 
-        let exit = tokio::time::timeout(
+        let exit = time::timeout(
             Duration::from_secs(5),
             run(
                 context,
@@ -1737,7 +1758,7 @@ mod tests {
         // far longer than this test would tolerate.
         let shutdown = CancellationToken::new();
         shutdown.cancel();
-        let exit = tokio::time::timeout(
+        let exit = time::timeout(
             Duration::from_secs(1),
             run(context, stall_after(Duration::from_mins(1)), shutdown),
         )
@@ -1786,7 +1807,7 @@ mod tests {
                 "orders",
                 Uuid::from_u128(11),
             )));
-            let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+            let (_, image_rx) = watch::channel(Arc::new(image));
             let store = Arc::new(FaultInjectingStore::new(
                 Arc::new(InMemory::new()),
                 FaultPolicy::none().with(StoreOp::Put, put_fault),
@@ -1813,16 +1834,16 @@ mod tests {
                 shutdown.clone(),
             ));
 
-            tokio::time::timeout(Duration::from_secs(5), async {
+            time::timeout(Duration::from_secs(5), async {
                 while store.attempts(StoreOp::Put) < puts_before_shutdown {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    time::sleep(Duration::from_millis(1)).await;
                 }
             })
             .await
             .unwrap_or_else(|_| panic!("{case}: the flusher never uploaded"));
             shutdown.cancel();
 
-            let exit = tokio::time::timeout(Duration::from_secs(1), task)
+            let exit = time::timeout(Duration::from_secs(1), task)
                 .await
                 .map(Result::unwrap);
             assert!(exit == Ok(FlusherExit::ShutDown), "{case}");

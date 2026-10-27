@@ -7,6 +7,7 @@
 
 use {
     super::JwksRefresher,
+    axum::routing,
     krabka_security::{Jwks, JwksHandle},
     krabka_units::{Time, hours, millis, secs},
     qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer},
@@ -15,10 +16,10 @@ use {
         path::PathBuf,
         sync::{
             Arc,
-            atomic::{AtomicI64, AtomicU64, Ordering},
+            atomic::{self, AtomicI64, AtomicU64, Ordering},
         },
     },
-    tokio::sync::mpsc,
+    tokio::{net::TcpListener, sync::mpsc},
     tokio_util::sync::CancellationToken,
 };
 
@@ -38,14 +39,10 @@ pub fn dormant_timer() -> Arc<dyn Timer> { ManualMonotonicClock::new_shared().ne
 
 /// Yield-polls until `cond` holds. A bounded hang-guard makes a real stall
 /// fail the test deterministically instead of spinning forever.
-pub(crate) use crate::test_support::await_until;
+pub use crate::test_support::await_until;
 use crate::test_support::{LoopbackTlsServer, serve_loopback_tls};
 
-fn spawn_axum_server(
-    listener: tokio::net::TcpListener,
-    app: axum::Router,
-    shutdown: &CancellationToken,
-) {
+fn spawn_axum_server(listener: TcpListener, app: axum::Router, shutdown: &CancellationToken) {
     let srv_shutdown = shutdown.clone();
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -58,10 +55,10 @@ fn spawn_axum_server(
 /// Serves a fixed body at `/jwks` on an ephemeral port. It returns the
 /// bound address and a shutdown token for the server task.
 pub async fn serve_jwks(body: &'static str) -> (SocketAddr, CancellationToken) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
-    let app = axum::Router::new().route("/jwks", axum::routing::get(move || async move { body }));
+    let app = axum::Router::new().route("/jwks", routing::get(move || async move { body }));
     spawn_axum_server(listener, app, &shutdown);
     (addr, shutdown)
 }
@@ -127,9 +124,7 @@ pub fn test_refresher(
 /// generated self-signed cert that carries `127.0.0.1` as a SAN. It
 /// returns the bound address, a shutdown token, and the PEM path of the
 /// cert, which the client can use as a trust bundle.
-pub async fn serve_jwks_https(
-    body: &'static str,
-) -> (std::net::SocketAddr, CancellationToken, std::path::PathBuf) {
+pub async fn serve_jwks_https(body: &'static str) -> (SocketAddr, CancellationToken, PathBuf) {
     use tokio::io::AsyncWriteExt as _;
 
     let LoopbackTlsServer {
@@ -160,20 +155,16 @@ pub async fn serve_jwks_https(
 /// assert on the call count after it drives the refresher.
 pub async fn serve_jwks_counting(
     body: &'static str,
-) -> (
-    SocketAddr,
-    CancellationToken,
-    Arc<std::sync::atomic::AtomicUsize>,
-) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+) -> (SocketAddr, CancellationToken, Arc<atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
-    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counter_cl = counter.clone();
+    let counter = Arc::new(atomic::AtomicUsize::new(0));
+    let counter_cl = Arc::clone(&counter);
     let app = axum::Router::new().route(
         "/jwks",
-        axum::routing::get(move || {
-            let c = counter_cl.clone();
+        routing::get(move || {
+            let c = Arc::clone(&counter_cl);
             async move {
                 c.fetch_add(1, Ordering::Relaxed);
                 body
@@ -205,7 +196,7 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
     let cache_generation = Arc::new(AtomicU64::new(0));
     let handle = JwksHandle::new_with_refresher_handles(
         Jwks::empty(),
-        last_successful.clone(),
+        Arc::clone(&last_successful),
         signal_tx.clone(),
     );
     let refresher = JwksRefresher {
@@ -217,9 +208,9 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
         tls_trust: None,
         signal_rx,
         min_on_demand_pause,
-        last_successful_fetch_ms: last_successful.clone(),
-        cache_generation: cache_generation.clone(),
-        last_on_demand_refresh_ms: last_on_demand.clone(),
+        last_successful_fetch_ms: Arc::clone(&last_successful),
+        cache_generation: Arc::clone(&cache_generation),
+        last_on_demand_refresh_ms: Arc::clone(&last_on_demand),
         ignore_key_use: false,
         // Signal tests isolate the on-demand arm; periodic refreshes have
         // dedicated manual-timeline coverage above. The one-hour interval is

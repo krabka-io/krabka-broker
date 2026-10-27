@@ -13,7 +13,7 @@ mod collector;
 mod point;
 mod render;
 
-pub(crate) use self::{
+pub use self::{
     collector::{
         ClientMetricsCollector, MAX_RETAINED_SERIES, MAX_RETAINED_SERIES_PER_CLIENT,
         MAX_RETAINED_SERIES_PER_INSTANCE, MAX_RETAINED_SERIES_PER_PRINCIPAL, SeriesCeilings,

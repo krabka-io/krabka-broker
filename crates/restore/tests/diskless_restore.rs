@@ -1,8 +1,11 @@
+#![cfg(test)]
+
 use {
     assert2::check,
     bytes::{Bytes, BytesMut},
     clap::Parser as _,
     krabka_audit::FileEd25519Signer,
+    krabka_broker::bootstrap,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig},
     krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord},
@@ -17,18 +20,22 @@ use {
             object::{WalObjectBuilder, parse_wal_object},
         },
     },
-    krabka_remote_storage_topic::snapshot::Snapshot,
+    krabka_remote_storage_topic::{snapshot, snapshot::Snapshot},
     krabka_restore::{Cli, RestoreError, restore},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
-fn fixture(root: &std::path::Path, object: bool, corrupt: bool) -> DisklessWalCapture {
+fn fixture(root: &Path, object: bool, corrupt: bool) -> DisklessWalCapture {
     fixture_with_second_base(root, object, corrupt, 1)
 }
 
 fn fixture_with_second_base(
-    root: &std::path::Path,
+    root: &Path,
     object: bool,
     corrupt: bool,
     second_base: i64,
@@ -59,13 +66,15 @@ fn fixture_with_second_base(
     let mut encoded = first.clone();
     encoded.extend_from_slice(&second);
     let mut builder = WalObjectBuilder::new();
-    builder.append_run(topic_id, 0, 0, second_base, &encoded);
-    let bytes = builder.finish();
+    builder
+        .append_run(topic_id, 0, 0, second_base, &encoded)
+        .unwrap();
+    let bytes = builder.finish().unwrap();
     let manifest = parse_wal_object(&bytes).unwrap().remove(0);
     if object {
         let path = root.join("diskless-wal/1");
-        std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&path).unwrap();
+        fs::write(
             path.join("a.ckwl"),
             if corrupt {
                 b"broken".as_slice()
@@ -106,9 +115,9 @@ fn fixture_with_second_base(
 }
 
 fn capture_args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
+    archive: &Path,
+    target: &Path,
+    capture: &Path,
     extra: &[String],
 ) -> krabka_restore::RestoreArgs {
     let mut argv = vec![
@@ -129,29 +138,21 @@ fn capture_args(
     Cli::parse_from(argv).args
 }
 
-fn args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) -> krabka_restore::RestoreArgs {
+fn args(archive: &Path, target: &Path, capture: &Path) -> krabka_restore::RestoreArgs {
     let empty: [String; 0] = [];
     capture_args(archive, target, capture, &empty)
 }
 
-fn bounded_args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) -> krabka_restore::RestoreArgs {
+fn bounded_args(archive: &Path, target: &Path, capture: &Path) -> krabka_restore::RestoreArgs {
     let limit = ["--to-offset".into(), "orders:0=0".into()];
     capture_args(archive, target, capture, &limit)
 }
 
 fn trusted_args(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-    public_key: &std::path::Path,
+    archive: &Path,
+    target: &Path,
+    capture: &Path,
+    public_key: &Path,
     head: &str,
 ) -> krabka_restore::RestoreArgs {
     capture_args(archive, target, capture, &[
@@ -164,15 +165,15 @@ fn trusted_args(
     ])
 }
 
-fn write_capture(path: &std::path::Path, capture: &DisklessWalCapture) {
-    std::fs::write(path, serde_json::to_vec(capture).unwrap()).unwrap();
+fn write_capture(path: &Path, capture: &DisklessWalCapture) {
+    fs::write(path, serde_json::to_vec(capture).unwrap()).unwrap();
 }
 
 /// The two test directories and the path of the published capture.
 struct RestoreFixture {
     archive: tempfile::TempDir,
     target: tempfile::TempDir,
-    capture_path: std::path::PathBuf,
+    capture_path: PathBuf,
 }
 
 /// Open the two test directories, build the selected WAL and publish its capture.
@@ -191,17 +192,13 @@ fn restore_fixture(object: bool, corrupt: bool) -> RestoreFixture {
     }
 }
 
-fn check_orders_offsets(target: &std::path::Path, start: Offset, end: Offset) {
+fn check_orders_offsets(target: &Path, start: Offset, end: Offset) {
     let log = Log::open(target.join("orders-0"), LogConfig::default()).unwrap();
     check!(log.log_start_offset() == start);
     check!(log.log_end_offset() == end);
 }
 
-async fn restore_and_check_full_diskless(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) {
+async fn restore_and_check_full_diskless(archive: &Path, target: &Path, capture: &Path) {
     let report = restore(&args(archive, target, capture)).await.unwrap();
     check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
     check_orders_offsets(target, Offset(1), Offset(2));
@@ -211,7 +208,7 @@ async fn restore_and_check_full_diskless(
 struct UnwrittenFixture {
     archive: tempfile::TempDir,
     target: tempfile::TempDir,
-    capture_path: std::path::PathBuf,
+    capture_path: PathBuf,
     capture: DisklessWalCapture,
 }
 
@@ -228,11 +225,7 @@ fn unwritten_fixture(object: bool, corrupt: bool) -> UnwrittenFixture {
     }
 }
 
-async fn dry_run_error(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) -> RestoreError {
+async fn dry_run_error(archive: &Path, target: &Path, capture: &Path) -> RestoreError {
     let mut options = args(archive, target, capture);
     options.dry_run = true;
     restore(&options).await.unwrap_err()
@@ -245,7 +238,7 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
         target,
         capture_path,
     } = restore_fixture(true, false);
-    std::fs::write(archive.path().join("orphan.ckwl"), b"uncommitted garbage").unwrap();
+    fs::write(archive.path().join("orphan.ckwl"), b"uncommitted garbage").unwrap();
     restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;
 }
 
@@ -259,8 +252,8 @@ async fn a_prefixed_persisted_key_restores_without_reapplying_the_prefix() {
     } = unwritten_fixture(true, false);
     let old_path = archive.path().join("diskless-wal/1/a.ckwl");
     let new_path = archive.path().join("clusters/one/diskless-wal/1/a.ckwl");
-    std::fs::create_dir_all(new_path.parent().unwrap()).unwrap();
-    std::fs::rename(old_path, &new_path).unwrap();
+    fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+    fs::rename(old_path, &new_path).unwrap();
     capture.partitions[0].ranges[0].object_key = "clusters/one/diskless-wal/1/a.ckwl".to_owned();
     write_capture(&capture_path, &capture);
 
@@ -304,7 +297,7 @@ async fn diskless_restore_accepts_complete_batch_subranges_of_a_footer_run() {
         mut capture,
     } = unwritten_fixture(true, false);
     let range = &mut capture.partitions[0].ranges[0].entry;
-    let object = std::fs::read(archive.path().join("diskless-wal/1/a.ckwl")).unwrap();
+    let object = fs::read(archive.path().join("diskless-wal/1/a.ckwl")).unwrap();
     let start = usize::try_from(range.byte_start).unwrap();
     let first_len = validate_one_v2_batch(&object[start..]).unwrap().total_len;
     range.first_offset = 1;
@@ -386,9 +379,9 @@ async fn missing_or_corrupt_required_wal_fails_closed(object: bool, corrupt: boo
 
 struct TrustedCaptureSetup {
     archive: tempfile::TempDir,
-    capture_path: std::path::PathBuf,
-    public_path: std::path::PathBuf,
-    rlmm_path: std::path::PathBuf,
+    capture_path: PathBuf,
+    public_path: PathBuf,
+    rlmm_path: PathBuf,
     capture: DisklessWalCapture,
     wal_key: String,
     wal: Vec<u8>,
@@ -407,15 +400,15 @@ fn trusted_capture_setup() -> TrustedCaptureSetup {
     }
     .write_atomic(&rlmm_path)
     .unwrap();
-    let rlmm_bytes = std::fs::read(&rlmm_path).unwrap();
+    let rlmm_bytes = fs::read(&rlmm_path).unwrap();
     let mut capture = fixture(archive.path(), true, false);
     capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&rlmm_bytes));
     let wal_key = capture.partitions[0].ranges[0].object_key.clone();
-    let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
+    let wal = fs::read(archive.path().join(&wal_key)).unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
     let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "capture-key".into()).unwrap();
-    let public_key = signer.public_key().clone();
-    std::fs::write(&public_path, &public_key).unwrap();
+    let public_key = signer.public_key();
+    fs::write(&public_path, &public_key).unwrap();
     let head = capture
         .seal(
             vec![ObjectEntry {
@@ -475,7 +468,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
         &target
             .path()
             .join("remote-log-metadata")
-            .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+            .join(snapshot::SNAPSHOT_FILE_NAME),
     )
     .unwrap()
     .unwrap();
@@ -483,7 +476,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
 
     let target = tempfile::tempdir().unwrap();
     let tampered_rlmm_path = archive.path().join("tampered-rlmm-snapshot");
-    std::fs::write(&tampered_rlmm_path, b"tampered rlmm").unwrap();
+    fs::write(&tampered_rlmm_path, b"tampered rlmm").unwrap();
     let mut tampered_rlmm = trusted_args(
         archive.path(),
         target.path(),
@@ -497,7 +490,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
 
     let target = tempfile::tempdir().unwrap();
     let metadata_path = archive.path().join("tampered-metadata.checkpoint");
-    std::fs::write(&metadata_path, b"tampered metadata").unwrap();
+    fs::write(&metadata_path, b"tampered metadata").unwrap();
     let mut tampered_metadata = trusted_args(
         archive.path(),
         target.path(),
@@ -545,7 +538,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let target = tempfile::tempdir().unwrap();
     let mut wal_tampered = wal;
     wal_tampered[10] ^= 1;
-    std::fs::write(archive.path().join(wal_key), wal_tampered).unwrap();
+    fs::write(archive.path().join(wal_key), wal_tampered).unwrap();
     let mut wal_args = trusted_args(
         archive.path(),
         target.path(),
@@ -571,7 +564,7 @@ enum TrustedCaptureTampering {
 #[tokio::test]
 async fn continue_on_corrupt_rejects_a_changed_signed_snapshot_before_target_writes() {
     let setup = trusted_capture_setup();
-    std::fs::write(&setup.rlmm_path, b"changed signed snapshot").unwrap();
+    fs::write(&setup.rlmm_path, b"changed signed snapshot").unwrap();
     let target = tempfile::tempdir().unwrap();
     let mut args = trusted_args(
         setup.archive.path(),
@@ -584,7 +577,7 @@ async fn continue_on_corrupt_rejects_a_changed_signed_snapshot_before_target_wri
     args.continue_on_corrupt = true;
     let error = restore(&args).await.unwrap_err();
     assert2::assert!(matches!(error, RestoreError::Authenticity { .. }));
-    assert2::assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+    assert2::assert!(fs::read_dir(target.path()).unwrap().next().is_none());
 }
 
 #[yare::parameterized(
@@ -617,7 +610,7 @@ async fn trusted_capture_rejects_changed_state_head_and_key(
     let changed_path = setup.archive.path().join(format!("{name}.json"));
     let key_path = setup.archive.path().join(format!("{name}.pub"));
     write_capture(&changed_path, &changed);
-    std::fs::write(&key_path, key_bytes).unwrap();
+    fs::write(&key_path, key_bytes).unwrap();
     let mut args = trusted_args(
         setup.archive.path(),
         target.path(),
@@ -674,9 +667,9 @@ enum DryRunExpectation {
 }
 
 async fn assert_dry_run_error(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture_path: &std::path::Path,
+    archive: &Path,
+    target: &Path,
+    capture_path: &Path,
     capture: &DisklessWalCapture,
     expectation: DryRunExpectation,
 ) {
@@ -803,8 +796,8 @@ async fn a_capture_that_disagrees_with_its_batches_is_refused(
 
 /// The target's bootstrap records start `orders-0` at `next_offset`, with the
 /// one `V1PartitionOffsetAdvance` the restore seeds for it.
-fn check_restored_next_offset(target: &std::path::Path, next_offset: i64) {
-    let advances: Vec<MetadataRecord> = krabka_broker::bootstrap::load_bootstrap_records(target)
+fn check_restored_next_offset(target: &Path, next_offset: i64) {
+    let advances: Vec<MetadataRecord> = bootstrap::load_bootstrap_records(target)
         .unwrap()
         .into_iter()
         .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))

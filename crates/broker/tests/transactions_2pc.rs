@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! KIP-939 two-phase-commit (2PC) participation — `InitProducerId` v6
 //! coordinator semantics:
@@ -24,15 +24,16 @@ use {
         transactions::init_producer_request, wire::At,
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions},
     krabka_client_producer::Producer,
     krabka_protocol::owned::{
         describe_transactions_request::DescribeTransactionsRequest,
         init_producer_id_request::{self, InitProducerIdRequest},
         update_features_request::UpdateFeaturesRequest,
     },
-    std::time::Duration,
+    std::time::{Duration, Instant},
     tempfile::TempDir,
+    tokio::time,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -119,7 +120,7 @@ async fn boot(support: TwoPhaseCommitSupport) -> Booted {
         matches!(support, TwoPhaseCommitSupport::Enabled);
     // v6 is `latestVersionUnstable`: a broker accepts it only with Kafka's
     // `unstable.api.versions.enable`, and closes the connection otherwise.
-    cfg.features.unstable_api_versions = krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+    cfg.features.unstable_api_versions = UnstableApiVersions::Enabled;
     let broker = Broker::start(cfg).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
     Booted {
@@ -170,31 +171,33 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
         bootstrap,
         dir: _dir,
     } = boot(TwoPhaseCommitSupport::Enabled).await;
-    let producer = initialized_producer()
-        .broker(&broker)
-        .bootstrap(&bootstrap)
-        .call()
-        .await;
-    let client = client(&bootstrap).await;
+    let _ = {
+        let producer = initialized_producer()
+            .broker(&broker)
+            .bootstrap(&bootstrap)
+            .call()
+            .await;
+        let client = client(&bootstrap).await;
 
-    let resp = client
-        .send(
-            two_phase_init()
-                .transactional_id("tid-keep")
-                .recovery(PreparedTransactionRecovery::Keep)
-                .call(),
-        )
-        .await
-        .expect("InitProducerId");
+        let resp = client
+            .send(
+                two_phase_init()
+                    .transactional_id("tid-keep")
+                    .recovery(PreparedTransactionRecovery::Keep)
+                    .call(),
+            )
+            .await
+            .expect("InitProducerId");
 
-    assert!(
-        resp.error_code == NONE,
-        "keepPreparedTxn without an ongoing transaction failed: {}",
-        resp.error_code
-    );
-    assert!(resp.ongoing_txn_producer_id == -1);
-    assert!(resp.ongoing_txn_producer_epoch == -1);
-    producer.close().await.ok();
+        assert!(
+            resp.error_code == NONE,
+            "keepPreparedTxn without an ongoing transaction failed: {}",
+            resp.error_code
+        );
+        assert!(resp.ongoing_txn_producer_id == -1);
+        assert!(resp.ongoing_txn_producer_epoch == -1);
+        producer.close().await
+    };
     broker.shutdown().await;
 }
 
@@ -213,55 +216,57 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
         bootstrap,
         dir: _dir,
     } = boot(TwoPhaseCommitSupport::Enabled).await;
-    let producer = initialized_producer()
-        .broker(&broker)
-        .bootstrap(&bootstrap)
-        .transactional_id("tid-2pc-ok")
-        .call()
-        .await;
+    let _ = {
+        let producer = initialized_producer()
+            .broker(&broker)
+            .bootstrap(&bootstrap)
+            .transactional_id("tid-2pc-ok")
+            .call()
+            .await;
 
-    // Re-init the SAME tid with enable2Pc → flips it to a no-timeout 2PC txn.
-    let client = client(&bootstrap).await;
-    let resp = client
-        .send(two_phase_init().transactional_id("tid-2pc-ok").call())
-        .await
-        .expect("InitProducerId(enable2Pc)");
-    assert!(
-        resp.error_code == NONE,
-        "enable2Pc init should succeed once the cluster enables 2PC, got {}",
-        resp.error_code
-    );
-    assert!(resp.producer_id >= 0);
-
-    // The persisted transaction timeout must be the 2PC no-timeout sentinel.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let timeout_ms = loop {
-        let r = client
-            .send(DescribeTransactionsRequest {
-                transactional_ids: vec!["tid-2pc-ok".into()],
-                ..Default::default()
-            })
+        // Re-init the SAME tid with enable2Pc → flips it to a no-timeout 2PC txn.
+        let client = client(&bootstrap).await;
+        let resp = client
+            .send(two_phase_init().transactional_id("tid-2pc-ok").call())
             .await
-            .expect("DescribeTransactions");
-        let row = &r.transaction_states[0];
-        if row.error_code == NONE {
-            break row.transaction_timeout_ms;
-        }
+            .expect("InitProducerId(enable2Pc)");
         assert!(
-            std::time::Instant::now() < deadline,
-            "DescribeTransactions never returned the tid: {row:?}"
+            resp.error_code == NONE,
+            "enable2Pc init should succeed once the cluster enables 2PC, got {}",
+            resp.error_code
         );
-        // intentional: transaction-coordinator state (persisted txn timeout) is
-        // read via a DescribeTransactions RPC and is not in the metadata image
-        // nor exposed as a metric — bounded RPC-response poll, no awaiter exists.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert!(
-        timeout_ms == i32::MAX,
-        "2PC transaction must persist the no-timeout sentinel i32::MAX, got {timeout_ms}"
-    );
+        assert!(resp.producer_id >= 0);
 
-    producer.close().await.ok();
+        // The persisted transaction timeout must be the 2PC no-timeout sentinel.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let timeout_ms = loop {
+            let r = client
+                .send(DescribeTransactionsRequest {
+                    transactional_ids: vec!["tid-2pc-ok".into()],
+                    ..Default::default()
+                })
+                .await
+                .expect("DescribeTransactions");
+            let row = &r.transaction_states[0];
+            if row.error_code == NONE {
+                break row.transaction_timeout_ms;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "DescribeTransactions never returned the tid: {row:?}"
+            );
+            // intentional: transaction-coordinator state (persisted txn timeout) is
+            // read via a DescribeTransactions RPC and is not in the metadata image
+            // nor exposed as a metric — bounded RPC-response poll, no awaiter exists.
+            time::sleep(Duration::from_millis(100)).await;
+        };
+        assert!(
+            timeout_ms == i32::MAX,
+            "2PC transaction must persist the no-timeout sentinel i32::MAX, got {timeout_ms}"
+        );
+
+        producer.close().await
+    };
     broker.shutdown().await;
 }
 

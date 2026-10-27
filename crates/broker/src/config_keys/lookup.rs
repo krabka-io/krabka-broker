@@ -14,7 +14,7 @@
 /// A key that a running broker applies reads it here on each use, parses it,
 /// and falls back to its static value when this gives none or a value that
 /// does not parse.
-pub(crate) fn node_or_cluster_default<'a>(
+pub fn node_or_cluster_default<'a>(
     image: &'a krabka_metadata::MetadataImage,
     node: krabka_metadata::NodeId,
     key: &str,

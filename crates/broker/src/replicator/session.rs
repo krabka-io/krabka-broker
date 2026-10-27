@@ -31,7 +31,7 @@ use {
         owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     },
-    std::collections::BTreeMap,
+    std::{cmp, collections::BTreeMap},
 };
 
 /// The identity a session row is keyed by. `topic_id` is the KIP-516 identity
@@ -49,7 +49,7 @@ pub(super) struct SessionKey {
 // `FetchTopic` by walking the keys once. Ordering by name first also makes the
 // grouping read in the order an operator would expect in a trace.
 impl Ord for SessionKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         (&self.topic, self.topic_id.0, self.partition).cmp(&(
             &other.topic,
             other.topic_id.0,
@@ -59,7 +59,7 @@ impl Ord for SessionKey {
 }
 
 impl PartialOrd for SessionKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> { Some(self.cmp(other)) }
 }
 
 /// What one round wants sent, before the session decides what actually is.

@@ -8,12 +8,7 @@ use {
     },
 };
 
-pub(crate) async fn check_topic_configuration(
-    client: &Client,
-    topic: &str,
-    name: &str,
-    value: &str,
-) {
+pub async fn check_topic_configuration(client: &Client, topic: &str, name: &str, value: &str) {
     let configs = client
         .send(DescribeConfigsRequest {
             resources: vec![DescribeConfigsResource {

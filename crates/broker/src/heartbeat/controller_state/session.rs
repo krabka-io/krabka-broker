@@ -6,8 +6,13 @@
 //! so they sit together and the edge transitions they emit are compared in one
 //! place.
 
-use super::{
-    BrokerLivenessState, ControllerLivenessState, LivenessTransition, registry::BrokerEntry,
+use {
+    super::{
+        BrokerLivenessState, ControllerLivenessState, LivenessTransition, ReplicatedRegistration,
+        registry::BrokerEntry,
+    },
+    std::{collections::HashMap, time::Instant},
+    tokio::sync::MutexGuard,
 };
 
 impl ControllerLivenessState {
@@ -30,24 +35,21 @@ impl ControllerLivenessState {
         broker_id: u64,
         initially_fenced: bool,
     ) -> Option<LivenessTransition> {
-        let mut map = self.brokers.lock().await;
-        let now = self.clock.now();
-        let entry = map
-            .entry(broker_id)
-            .or_insert(BrokerEntry::new(now, initially_fenced, true));
-        let prev = entry.state;
-        entry.last_heartbeat = now;
-        entry.state = BrokerLivenessState::Alive;
-        entry.contact = true;
-        if prev == BrokerLivenessState::Dead {
+        // The lock is taken before the clock is read, and released at the end
+        // of the statement.
+        let prev = refresh_session(
+            &mut *self.brokers.lock().await,
+            self.clock.now(),
+            broker_id,
+            initially_fenced,
+        );
+        (prev == BrokerLivenessState::Dead).then(|| {
             tracing::info!(
                 broker_id,
                 "broker liveness: DEAD -> ALIVE (heartbeat resumed)"
             );
-            Some(LivenessTransition::DeadToAlive(broker_id))
-        } else {
-            None
-        }
+            LivenessTransition::DeadToAlive(broker_id)
+        })
     }
 
     /// Scan all registered brokers and mark those that have not sent a
@@ -73,6 +75,7 @@ impl ControllerLivenessState {
                 transitions.push(LivenessTransition::AliveToDead(id));
             }
         }
+        drop(map);
         transitions
     }
 
@@ -95,7 +98,8 @@ impl ControllerLivenessState {
         let mut map = self.brokers.lock().await;
         let now = self.clock.now();
         for id in broker_ids {
-            map.entry(id).or_insert(BrokerEntry::new(now, true, false));
+            map.entry(id)
+                .or_insert_with(|| BrokerEntry::new(now, true, false));
         }
     }
 
@@ -123,24 +127,9 @@ impl ControllerLivenessState {
         &self,
         brokers: impl IntoIterator<Item = super::ReplicatedRegistration>,
     ) {
-        let mut map = self.brokers.lock().await;
-        let now = self.clock.now();
-        for replicated in brokers {
-            let entry = map.entry(replicated.node_id).or_insert(BrokerEntry::new(
-                now,
-                replicated.fenced,
-                !replicated.fenced,
-            ));
-            entry.last_heartbeat = now;
-            entry.state = BrokerLivenessState::Alive;
-            entry.fenced = entry.fenced || replicated.fenced;
-            entry.contact = !entry.fenced;
-            if entry.fenced {
-                entry.controlled_shutdown_offset = None;
-            } else if replicated.in_controlled_shutdown {
-                entry.controlled_shutdown_offset.get_or_insert(-1);
-            }
-        }
+        // The lock is taken before the clock is read, and held across the
+        // whole seed.
+        seed_sessions(&mut *self.brokers.lock().await, self.clock.now(), brokers);
     }
 
     /// [`seed_brokers`](Self::seed_brokers) once per controller term.
@@ -202,7 +191,7 @@ impl ControllerLivenessState {
     ///
     /// Registrations are rare, and the guard is a `tokio` mutex, so a waiter
     /// yields its worker thread and no heartbeat waits on it.
-    pub(crate) async fn registration_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+    pub(crate) async fn registration_turn(&self) -> MutexGuard<'_, ()> {
         self.registrations.lock().await
     }
 
@@ -223,6 +212,47 @@ impl ControllerLivenessState {
     }
 }
 
+/// Refresh the heartbeat session of `broker_id` in `map` at `now`, opening one
+/// if the broker has none, and return the state it was in before.
+fn refresh_session(
+    map: &mut HashMap<u64, BrokerEntry>,
+    now: Instant,
+    broker_id: u64,
+    initially_fenced: bool,
+) -> BrokerLivenessState {
+    let entry = map
+        .entry(broker_id)
+        .or_insert_with(|| BrokerEntry::new(now, initially_fenced, true));
+    let prev = entry.state;
+    entry.last_heartbeat = now;
+    entry.state = BrokerLivenessState::Alive;
+    entry.contact = true;
+    prev
+}
+
+/// The body of [`ControllerLivenessState::seed_brokers`], run on the registry
+/// while its lock is held.
+fn seed_sessions(
+    map: &mut HashMap<u64, BrokerEntry>,
+    now: Instant,
+    brokers: impl IntoIterator<Item = ReplicatedRegistration>,
+) {
+    for replicated in brokers {
+        let entry = map
+            .entry(replicated.node_id)
+            .or_insert_with(|| BrokerEntry::new(now, replicated.fenced, !replicated.fenced));
+        entry.last_heartbeat = now;
+        entry.state = BrokerLivenessState::Alive;
+        entry.fenced = entry.fenced || replicated.fenced;
+        entry.contact = !entry.fenced;
+        if entry.fenced {
+            entry.controlled_shutdown_offset = None;
+        } else if replicated.in_controlled_shutdown {
+            entry.controlled_shutdown_offset.get_or_insert(-1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -232,7 +262,7 @@ mod tests {
             test_support::expired_broker_fixture,
         },
         assert2::assert,
-        std::time::Duration,
+        std::{iter, time::Duration},
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -346,7 +376,7 @@ mod tests {
         // is fenced until it proves catch-up: not dead, not electable, and
         // unavailable for new replicas.
         liveness.track_registered([1, 2]).await;
-        assert!(liveness.dead_snapshot().await == [1].into_iter().collect());
+        assert!(liveness.dead_snapshot().await == iter::once(1).collect());
         assert!(!liveness.is_alive(2).await);
         assert!(liveness.unavailable_snapshot().await.contains(&2));
 

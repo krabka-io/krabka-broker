@@ -18,7 +18,12 @@ use {
         sink::AuditError,
     },
     krabka_protocol::records::RecordBatch,
-    std::{collections::HashMap, path::Path},
+    std::{
+        collections::HashMap,
+        fs,
+        path::{Path, PathBuf},
+    },
+    tracing::field::Empty,
 };
 
 mod walk;
@@ -90,7 +95,7 @@ pub struct VerifyReport {
 #[tracing::instrument(
     level = "info",
     skip_all,
-    fields(dir = %dir.display(), records = tracing::field::Empty, checkpoints = tracing::field::Empty, ok = tracing::field::Empty),
+    fields(dir = %dir.display(), records = Empty, checkpoints = Empty, ok = Empty),
     err
 )]
 /// # Errors
@@ -99,7 +104,7 @@ pub struct VerifyReport {
 /// or in a signature is not an error: it is an `Ok` report with `ok` set to
 /// `false`.
 pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyReport, AuditError> {
-    let mut segments: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+    let mut segments: Vec<PathBuf> = fs::read_dir(dir)
         .map_err(|e| AuditError::Sink(format!("read dir {}: {e}", dir.display())))?
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -110,7 +115,7 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
     let mut state = WalkState::new();
 
     for seg in segments {
-        let bytes = std::fs::read(&seg)
+        let bytes = fs::read(&seg)
             .map_err(|e| AuditError::Sink(format!("read segment {}: {e}", seg.display())))?;
         let mut cur: &[u8] = &bytes;
         while !cur.is_empty() {

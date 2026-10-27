@@ -45,9 +45,12 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     std::{
+        fs,
         path::Path,
+        sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The topic this suite produces into.
@@ -66,7 +69,7 @@ fn archive_bytes(root: &Path) -> u64 {
     let files = topic_remote_log_files(root, TOPIC);
     files
         .iter()
-        .filter_map(|path| std::fs::metadata(path).ok())
+        .filter_map(|path| fs::metadata(path).ok())
         .map(|meta| meta.len())
         .sum()
 }
@@ -205,7 +208,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         );
         // intentional: the copy pass and local retention both run on the
         // broker's own 1s interval, and the object store is a directory.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     };
     let archive = archive_bytes(remote_dir.path());
     let leader_local = local_log_bytes(&leader_dir);
@@ -252,7 +255,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
             b3.partition_log_start_for_test(TOPIC, 0),
         );
         // intentional: replication has no in-process completion signal here.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 
     // Where the new replica's log begins. Zero means it took the archive.
@@ -274,7 +277,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
     // partition's whole life on this broker, so it cannot be flattered by a
     // later eviction the way an on-disk measurement can.
     let label = PartitionLabel {
-        topic: std::sync::Arc::from(TOPIC),
+        topic: Arc::from(TOPIC),
         partition: 0,
     };
     let replicated = b3

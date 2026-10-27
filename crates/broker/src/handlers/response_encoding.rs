@@ -7,12 +7,43 @@ use {
     super::wire_types::ApiVersion,
     crate::{codes::NONE, error::BrokerError},
     bytes::{Bytes, BytesMut},
-    krabka_protocol::{Decode, Encode},
+    krabka_protocol::{
+        Decode, Encode,
+        krabka::barrier::ListBarrierCutsResponse,
+        owned::{
+            add_offsets_to_txn_response::AddOffsetsToTxnResponse,
+            add_raft_voter_response::AddRaftVoterResponse, alter_client_quotas_response::EntryData,
+            alter_configs_response::AlterConfigsResourceResponse,
+            alter_partition_reassignments_response::ReassignablePartitionResponse,
+            alter_share_group_offsets_response::AlterShareGroupOffsetsResponse,
+            alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
+            broker_heartbeat_response::BrokerHeartbeatResponse,
+            consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+            delete_acls_response::DeleteAclsFilterResult,
+            delete_share_group_offsets_response::DeleteShareGroupOffsetsResponse,
+            describe_acls_response::DescribeAclsResponse,
+            describe_delegation_token_response::DescribeDelegationTokenResponse,
+            describe_quorum_response::DescribeQuorumResponse,
+            elect_leaders_response::PartitionResult,
+            expire_delegation_token_response::ExpireDelegationTokenResponse,
+            heartbeat_response::HeartbeatResponse, incremental_alter_configs_response,
+            leave_group_response::LeaveGroupResponse, offset_delete_response::OffsetDeleteResponse,
+            remove_raft_voter_response::RemoveRaftVoterResponse,
+            renew_delegation_token_response::RenewDelegationTokenResponse,
+            share_acknowledge_response::ShareAcknowledgeResponse,
+            share_fetch_response::ShareFetchResponse,
+            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+            streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
+            sync_group_response::SyncGroupResponse,
+            unregister_broker_response::UnregisterBrokerResponse,
+            update_raft_voter_response::UpdateRaftVoterResponse,
+        },
+    },
 };
 
 /// Decode one request body at the supplied version. As at the wire entry
 /// points, bytes beyond that body are left unread.
-pub(crate) fn decode_request<'a, R: Decode<'a>>(
+pub fn decode_request<'a, R: Decode<'a>>(
     bytes: &'a [u8],
     version: ApiVersion,
 ) -> Result<R, BrokerError> {
@@ -20,10 +51,7 @@ pub(crate) fn decode_request<'a, R: Decode<'a>>(
     Ok(R::decode(&mut cursor, version)?)
 }
 
-pub(crate) fn encode_response<R: Encode>(
-    resp: &R,
-    version: ApiVersion,
-) -> Result<Bytes, BrokerError> {
+pub fn encode_response<R: Encode>(resp: &R, version: ApiVersion) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
     resp.encode(&mut buf, version)?;
     Ok(buf.freeze())
@@ -31,18 +59,18 @@ pub(crate) fn encode_response<R: Encode>(
 
 /// A response whose whole-request refusal is its top-level `error_code` and
 /// `error_message`, with every other field at its generated default.
-pub(crate) trait ErrorResponse: Default {
+pub trait ErrorResponse: Default {
     fn error(error_code: i16, error_message: Option<String>) -> Self;
 }
 
 /// An [`ErrorResponse`] for a response that has no top-level `error_message`.
-pub(crate) trait ErrorCodeResponse: Default {
+pub trait ErrorCodeResponse: Default {
     fn error(error_code: i16) -> Self;
 }
 
 /// A per-item response row that carries its own `error_code` and
 /// `error_message`.
-pub(crate) trait ErrorRow {
+pub trait ErrorRow {
     fn error_code(&self) -> i16;
     fn set_error(&mut self, error_code: i16, error_message: Option<String>);
 
@@ -56,14 +84,14 @@ pub(crate) trait ErrorRow {
 }
 
 /// A generated per-resource error row from either config-alter API.
-pub(crate) trait ResourceErrorRow: ErrorRow + Default {
+pub trait ResourceErrorRow: ErrorRow + Default {
     fn for_resource(resource_type: i8, resource_name: String) -> Self;
 }
 
 /// Stamps `error_code` and `error_message` on every row still at `NONE`, and
 /// leaves a row an earlier check already refused as it is: the rewrite a
 /// handler applies when the metadata submit behind its accepted rows fails.
-pub(crate) fn stamp_unset<'a, R: ErrorRow + 'a>(
+pub fn stamp_unset<'a, R: ErrorRow + 'a>(
     rows: impl IntoIterator<Item = &'a mut R>,
     error_code: i16,
     error_message: &str,
@@ -77,44 +105,44 @@ pub(crate) fn stamp_unset<'a, R: ErrorRow + 'a>(
 
 krabka_macros::response_errors! {
     response {
-        krabka_protocol::krabka::barrier::ListBarrierCutsResponse,
-        krabka_protocol::owned::add_raft_voter_response::AddRaftVoterResponse,
-        krabka_protocol::owned::alter_share_group_offsets_response::AlterShareGroupOffsetsResponse,
-        krabka_protocol::owned::consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-        krabka_protocol::owned::delete_share_group_offsets_response::DeleteShareGroupOffsetsResponse,
-        krabka_protocol::owned::describe_acls_response::DescribeAclsResponse,
-        krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse,
-        krabka_protocol::owned::remove_raft_voter_response::RemoveRaftVoterResponse,
+        ListBarrierCutsResponse,
+        AddRaftVoterResponse,
+        AlterShareGroupOffsetsResponse,
+        ConsumerGroupHeartbeatResponse,
+        DeleteShareGroupOffsetsResponse,
+        DescribeAclsResponse,
+        DescribeQuorumResponse,
+        RemoveRaftVoterResponse,
         // Kafka's `getErrorResponse` for both share RPCs leaves the acquisition
         // lock timeout at 0, not the configured one.
-        krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse,
-        krabka_protocol::owned::share_fetch_response::ShareFetchResponse,
-        krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-        krabka_protocol::owned::streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
-        krabka_protocol::owned::unregister_broker_response::UnregisterBrokerResponse,
+        ShareAcknowledgeResponse,
+        ShareFetchResponse,
+        ShareGroupHeartbeatResponse,
+        StreamsGroupTopologyDescriptionUpdateResponse,
+        UnregisterBrokerResponse,
     }
     code_response {
-        krabka_protocol::owned::add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-        krabka_protocol::owned::broker_heartbeat_response::BrokerHeartbeatResponse,
-        krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
-        krabka_protocol::owned::expire_delegation_token_response::ExpireDelegationTokenResponse,
-        krabka_protocol::owned::heartbeat_response::HeartbeatResponse,
-        krabka_protocol::owned::leave_group_response::LeaveGroupResponse,
-        krabka_protocol::owned::offset_delete_response::OffsetDeleteResponse,
-        krabka_protocol::owned::renew_delegation_token_response::RenewDelegationTokenResponse,
-        krabka_protocol::owned::sync_group_response::SyncGroupResponse,
-        krabka_protocol::owned::update_raft_voter_response::UpdateRaftVoterResponse,
+        AddOffsetsToTxnResponse,
+        BrokerHeartbeatResponse,
+        DescribeDelegationTokenResponse,
+        ExpireDelegationTokenResponse,
+        HeartbeatResponse,
+        LeaveGroupResponse,
+        OffsetDeleteResponse,
+        RenewDelegationTokenResponse,
+        SyncGroupResponse,
+        UpdateRaftVoterResponse,
     }
     row {
-        krabka_protocol::owned::alter_client_quotas_response::EntryData,
-        krabka_protocol::owned::alter_partition_reassignments_response::ReassignablePartitionResponse,
-        krabka_protocol::owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
-        krabka_protocol::owned::delete_acls_response::DeleteAclsFilterResult,
-        krabka_protocol::owned::elect_leaders_response::PartitionResult,
+        EntryData,
+        ReassignablePartitionResponse,
+        AlterUserScramCredentialsResult,
+        DeleteAclsFilterResult,
+        PartitionResult,
     }
     resource_row {
-        krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse,
-        krabka_protocol::owned::incremental_alter_configs_response::AlterConfigsResourceResponse,
+        AlterConfigsResourceResponse,
+        incremental_alter_configs_response::AlterConfigsResourceResponse,
     }
 }
 
@@ -122,7 +150,10 @@ krabka_macros::response_errors! {
 mod tests {
     use {
         super::*,
-        crate::codes::{NONE, NOT_CONTROLLER},
+        crate::{
+            codes,
+            codes::{NONE, NOT_CONTROLLER},
+        },
         assert2::assert,
         krabka_protocol::{
             Decode,
@@ -148,7 +179,7 @@ mod tests {
         let mut cur: &[u8] = &bytes;
         let decoded = ApiVersionsResponse::decode(&mut cur, 3).expect("decode response");
 
-        assert!(decoded.error_code == crate::codes::NONE);
+        assert!(decoded.error_code == codes::NONE);
         assert!(decoded.api_keys.len() == 1);
         assert!(decoded.api_keys[0].api_key == 18);
         assert!(decoded.api_keys[0].min_version == 0);
@@ -168,10 +199,10 @@ mod tests {
             }
         };
         let mut rows = vec![
-            row(7, crate::codes::NONE, None),
+            row(7, codes::NONE, None),
             row(
                 8,
-                crate::codes::UNKNOWN_TOPIC_OR_PARTITION,
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
                 Some("unknown partition"),
             ),
         ];
@@ -181,12 +212,12 @@ mod tests {
         let expected = vec![
             row(
                 7,
-                crate::codes::NOT_CONTROLLER,
+                codes::NOT_CONTROLLER,
                 Some("submit failed: not controller"),
             ),
             row(
                 8,
-                crate::codes::UNKNOWN_TOPIC_OR_PARTITION,
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
                 Some("unknown partition"),
             ),
         ];

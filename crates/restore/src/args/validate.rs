@@ -10,6 +10,7 @@
 use {
     super::{PartitionRef, RestoreArgs},
     crate::error::RestoreError,
+    std::collections::HashSet,
 };
 
 impl RestoreArgs {
@@ -39,7 +40,7 @@ impl RestoreArgs {
                 "--worm-expect-head requires --worm-key-id and --worm-public-key".to_owned(),
             ));
         }
-        let mut expected_partitions = std::collections::HashSet::new();
+        let mut expected_partitions = HashSet::new();
         for expected in &self.worm_expect_head {
             let Some((partition, head)) = expected.split_once('=') else {
                 return Err(RestoreError::InvalidArgument(format!(

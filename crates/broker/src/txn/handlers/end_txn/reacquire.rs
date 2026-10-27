@@ -5,10 +5,11 @@
 
 /// Decision for the Phase-3 (Complete) re-acquire re-validation. See
 /// [`validate_complete_reacquire`].
-pub(crate) use krabka_verified::transaction::TransactionCompletionDecision as ReacquireDecision;
+pub use krabka_verified::transaction::TransactionCompletionDecision as ReacquireDecision;
 use {
     crate::txn::state::{TxnEntry, TxnState},
     krabka_log::ProducerId,
+    krabka_verified::transaction::transaction_completion_decision,
 };
 
 /// Re-validate, after re-acquiring the coordinator's *current* entry for a
@@ -33,7 +34,7 @@ use {
 ///   finalise.
 /// - [`ReacquireDecision::Proceed`] only when the epoch matches and the state
 ///   is still exactly `prepare`.
-pub(crate) fn validate_complete_reacquire(
+pub fn validate_complete_reacquire(
     entry: &TxnEntry,
     expected_pid: ProducerId,
     expected_epoch: i16,
@@ -44,7 +45,7 @@ pub(crate) fn validate_complete_reacquire(
 ) -> ReacquireDecision {
     use krabka_verified::transaction::{TransactionIdentity, TransactionSnapshot};
 
-    krabka_verified::transaction::transaction_completion_decision(
+    transaction_completion_decision(
         TransactionSnapshot {
             pid: entry.producer_id.get(),
             epoch: entry.producer_epoch,

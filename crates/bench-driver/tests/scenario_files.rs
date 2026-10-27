@@ -27,12 +27,12 @@ use {
     assert2::{assert, check},
     krabka_bench_driver::scenario::{LoadMode, Scenario},
     krabka_units::prelude::*,
-    std::{path::Path, process::ExitCode},
+    std::{error::Error, fs, path::Path, process::ExitCode},
 };
 
 /// Loads one scenario file and checks it describes a runnable benchmark.
-fn scenario_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let yaml = std::fs::read_to_string(path)?;
+fn scenario_file(path: &Path) -> Result<(), Box<dyn Error>> {
+    let yaml = fs::read_to_string(path)?;
     let scenario: Scenario = serde_saphyr::from_str(&yaml)
         .map_err(|error| format!("{} does not load: {error}", path.display()))?;
 
@@ -65,7 +65,14 @@ fn scenario_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> ExitCode {
     let args = libtest_mimic::Arguments::from_args();
-    let trials = corpus::yaml_files("scenarios")
+    let paths = match corpus::yaml_files("scenarios") {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let trials = paths
         .into_iter()
         .map(|path| {
             // The same `scenario_file::<file>` names `datatest-stable` produced,

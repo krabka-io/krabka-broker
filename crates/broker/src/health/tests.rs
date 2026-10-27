@@ -4,7 +4,15 @@
 use {
     super::*,
     assert2::assert,
-    axum::{body::Body, http::Request},
+    axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    },
+    std::{io::ErrorKind, net::SocketAddr, time::Duration},
+    tokio::{
+        net::{TcpListener, TcpStream},
+        time,
+    },
     tower::ServiceExt as _,
 };
 
@@ -58,9 +66,7 @@ async fn get(state: HealthState, path: &str) -> Probe {
         .await
         .unwrap();
     let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
-        .await
-        .unwrap();
+    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
     Probe {
         status,
         body: String::from_utf8(body.to_vec()).unwrap(),
@@ -182,10 +188,10 @@ struct Scraped {
 }
 
 /// One HTTP/1.1 GET against a served socket.
-async fn scrape(addr: std::net::SocketAddr, path: &str) -> Scraped {
+async fn scrape(addr: SocketAddr, path: &str) -> Scraped {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
     let req =
         format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
@@ -193,8 +199,8 @@ async fn scrape(addr: std::net::SocketAddr, path: &str) -> Scraped {
     stream.read_to_string(&mut raw).await.unwrap();
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
     Scraped {
-        status_line: head.lines().next().unwrap_or_default().to_string(),
-        body: body.to_string(),
+        status_line: head.lines().next().unwrap_or_default().to_owned(),
+        body: body.to_owned(),
     }
 }
 
@@ -252,11 +258,11 @@ async fn serve_answers_on_the_reported_port_until_it_is_cancelled() {
     // nothing there. Retry briefly: the accept loop stops on its own task.
     let mut refused = false;
     for _ in 0..200 {
-        if tokio::net::TcpStream::connect(bound).await.is_err() {
+        if TcpStream::connect(bound).await.is_err() {
             refused = true;
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
     assert!(refused, "the health server should stop when cancelled");
 }
@@ -265,9 +271,7 @@ async fn serve_answers_on_the_reported_port_until_it_is_cancelled() {
 /// the `health` listener, the address and `--health-listen-addr`.
 #[tokio::test]
 async fn serve_on_a_taken_port_names_the_health_listener() {
-    let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let taken = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = taken.local_addr().expect("local address");
 
     let Err(error) = serve(addr, HealthState::new(100), CancellationToken::new()).await else {
@@ -279,7 +283,7 @@ async fn serve_on_a_taken_port_names_the_health_listener() {
     assert!(listener == "health");
     assert!(failed == addr);
     assert!(setting == "--health-listen-addr");
-    assert!(source.kind() == std::io::ErrorKind::AddrInUse);
+    assert!(source.kind() == ErrorKind::AddrInUse);
     assert!(
         message
             == format!(

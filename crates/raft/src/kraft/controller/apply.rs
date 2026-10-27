@@ -15,8 +15,11 @@ use {
         },
     },
     krabka_ids::Offset,
-    krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
-    std::sync::Arc,
+    krabka_metadata::{
+        MetadataImage, MetadataRecord, VotersRecord, metadata_version::METADATA_VERSION_FEATURE,
+    },
+    std::{sync::Arc, time::Instant},
+    tracing::field::Empty,
 };
 
 impl Engine {
@@ -39,7 +42,7 @@ impl Engine {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(node = self.me.0, new_hwm = new_hwm.0, prev_hwm = tracing::field::Empty)
+        fields(node = self.me.0, new_hwm = new_hwm.0, prev_hwm = Empty)
     )]
     pub fn advance_and_apply(&mut self, new_hwm: Offset) {
         // A controller that met a record it cannot replay takes no more part.
@@ -73,7 +76,7 @@ impl Engine {
             self.maybe_snapshot();
             return;
         }
-        let processing_started = std::time::Instant::now();
+        let processing_started = Instant::now();
         let mut cursor = prev_hwm;
         let mut changed = false;
         let mut metadata_version_downgraded = false;
@@ -133,7 +136,7 @@ impl Engine {
                                         &meta,
                                         MetadataRecord::V1FeatureLevel(feature)
                                             if feature.name
-                                                == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                                == METADATA_VERSION_FEATURE
                                                 && self
                                                     .image
                                                     .finalized_metadata_version()

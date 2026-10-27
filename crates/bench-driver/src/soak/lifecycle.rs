@@ -44,8 +44,8 @@ pub enum Side {
 impl fmt::Display for Side {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Side::Source => "source",
-            Side::Target => "target",
+            Self::Source => "source",
+            Self::Target => "target",
         })
     }
 }
@@ -131,7 +131,7 @@ pub fn rollback(source: &Release, finalized: &BTreeMap<String, i16>) -> Rollback
 }
 
 /// The cluster as it stood after one lifecycle transition.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
     /// The transition, `<plan>#<n>`.
     pub fault: String,
@@ -152,7 +152,7 @@ pub struct Checkpoint {
 }
 
 /// One path's records at a checkpoint.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointRead {
     pub path: String,
     pub semantics: Semantics,
@@ -248,7 +248,7 @@ pub fn judge_lifecycle(
     }
     let mut rollback_ruled_out: Option<String> = None;
     for fault in schedule.iter().filter(|fault| is_transition(&fault.kind)) {
-        if let FaultKind::Roll { to: Side::Source } = fault.kind
+        if fault.kind == (FaultKind::Roll { to: Side::Source })
             && let Some(reason) = &rollback_ruled_out
         {
             failures.push(format!(

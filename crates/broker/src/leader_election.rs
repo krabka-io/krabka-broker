@@ -29,13 +29,13 @@ mod scan;
 // `unclean_recovery::selection` reads the same witness set the failover scans
 // do, so its tests build one out of these fixtures too.
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 // `leader_failover_model` checks the real per-partition policy, so these
 // two are re-exported for it alone.
 #[cfg(test)]
-pub(crate) use self::policy::{FailoverDecision, Ladder, failover_one};
-pub(crate) use self::{
+pub use self::policy::{FailoverDecision, Ladder, failover_one};
+pub use self::{
     driver::{LivenessTickState, run_liveness_tick},
     operator::{ElectError, ElectionType, select_new_leader_for_partition},
     scan::{

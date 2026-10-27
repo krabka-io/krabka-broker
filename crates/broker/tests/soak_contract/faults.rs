@@ -33,10 +33,12 @@ use {
     krabka_bench_driver::soak::contract::{FaultKind, HostResources, Slowdown},
     krabka_units::prelude::*,
     std::{
-        fs::File,
+        fs::{self, File},
         io::{ErrorKind, Write as _},
+        num::NonZero,
         path::{Path, PathBuf},
         process::Command,
+        thread,
     },
 };
 
@@ -46,7 +48,7 @@ const BALLAST: &str = "soak-ballast";
 
 /// How a fault is undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Cleanup {
+pub enum Cleanup {
     Resume {
         container: String,
     },
@@ -80,17 +82,17 @@ impl Cleanup {
     /// Undo the fault, and say how.
     fn run(&self) -> Result<String, String> {
         match self {
-            Cleanup::Resume { container } => {
+            Self::Resume { container } => {
                 docker_try(&["kill", "--signal=SIGCONT", container]).map(|_| "SIGCONT".to_owned())
             }
-            Cleanup::Start { container } => docker_try(&["start", container]).map(|_| "docker start".to_owned()),
-            Cleanup::Uncap { container, host_cpus } => match docker_try(&["update", "--cpu-quota", "-1", container]) {
+            Self::Start { container } => docker_try(&["start", container]).map(|_| "docker start".to_owned()),
+            Self::Uncap { container, host_cpus } => match docker_try(&["update", "--cpu-quota", "-1", container]) {
                 Ok(_) => Ok("CFS quota lifted with --cpu-quota -1".to_owned()),
                 Err(refused) => docker_try(&["update", "--cpus", &host_cpus.to_string(), container]).map(|_| {
                     format!("--cpu-quota -1 refused ({refused}); quota raised to the host's {host_cpus} CPUs")
                 }),
             },
-            Cleanup::DropQdisc { container, image } => {
+            Self::DropQdisc { container, image } => {
                 let namespace = format!("container:{container}");
                 docker_try(&[
                     "run", "--rm", "--network", &namespace, "--cap-add", "NET_ADMIN", image, "tc", "qdisc",
@@ -98,20 +100,20 @@ impl Cleanup {
                 ])
                 .map(|_| "netem qdisc deleted".to_owned())
             }
-            Cleanup::RemoveBallast { path } => match std::fs::remove_file(path) {
+            Self::RemoveBallast { path } => match fs::remove_file(path) {
                 Ok(()) => Ok(format!("removed {}", path.display())),
                 Err(error) if error.kind() == ErrorKind::NotFound => {
                     Ok(format!("{} was never written", path.display()))
                 }
                 Err(error) => Err(format!("remove {}: {error}", path.display())),
             },
-            Cleanup::Relaunch { container, argv } => {
+            Self::Relaunch { container, argv } => {
                 // Absent after a completed `docker rm`, which is the usual case.
                 let _ = docker_try(&["rm", "--force", container]);
                 let args: Vec<&str> = argv.iter().map(String::as_str).collect();
                 docker_try(&args).map(|_| format!("docker {}", relaunched_image(argv)))
             }
-            Cleanup::Nothing { what } => Ok(what.clone()),
+            Self::Nothing { what } => Ok(what.clone()),
         }
     }
 }
@@ -126,7 +128,7 @@ fn relaunched_image(argv: &[String]) -> String {
 /// A fault in place. [`FaultGuard::clear`] undoes it; dropping the guard
 /// undoes it too, best effort.
 #[derive(Debug)]
-pub(crate) struct FaultGuard {
+pub struct FaultGuard {
     cleanup: Option<Cleanup>,
 }
 
@@ -158,7 +160,7 @@ impl Drop for FaultGuard {
 /// less than `reserve` free on a host file system with `host_free` bytes
 /// free. A fill is refused rather than shrunk, so a run on a smaller disk
 /// fails instead of silently testing less pressure than it declares.
-pub(crate) fn ballast_bytes(
+pub fn ballast_bytes(
     watermark: Ratio,
     capacity: ByteSize,
     used: u64,
@@ -207,7 +209,7 @@ fn write_ballast(path: &Path, bytes: u64) -> Result<&'static str, String> {
 }
 
 /// A fault in place and what it did.
-pub(crate) struct Injected {
+pub struct Injected {
     pub(crate) guard: FaultGuard,
     pub(crate) detail: String,
 }
@@ -218,7 +220,7 @@ pub(crate) struct Injected {
 ///
 /// Blocking: it runs Docker and writes files, so callers run it off the async
 /// workers.
-pub(crate) fn inject(
+pub fn inject(
     kind: &FaultKind,
     container: &str,
     root: &Path,
@@ -281,7 +283,7 @@ pub(crate) fn inject(
         } => {
             let guard = FaultGuard::new(Cleanup::Uncap {
                 container: container.clone(),
-                host_cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+                host_cpus: thread::available_parallelism().map_or(1, NonZero::get),
             });
             docker_try(&["update", "--cpus", &cpus.to_string(), &container])?;
             Ok(Injected {
@@ -359,6 +361,7 @@ mod tests {
         super::{Cleanup, FaultGuard, ballast_bytes},
         assert2::{assert, check},
         krabka_units::prelude::*,
+        std::fs,
     };
 
     #[yare::parameterized(
@@ -389,7 +392,7 @@ mod tests {
     fn a_dropped_guard_undoes_its_fault() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("ballast");
-        std::fs::write(&path, b"x").unwrap();
+        fs::write(&path, b"x").unwrap();
         drop(FaultGuard::new(Cleanup::RemoveBallast {
             path: path.clone(),
         }));
@@ -400,7 +403,7 @@ mod tests {
     fn a_cleared_guard_reports_its_cleanup() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("ballast");
-        std::fs::write(&path, b"x").unwrap();
+        fs::write(&path, b"x").unwrap();
         let guard = FaultGuard::new(Cleanup::RemoveBallast { path: path.clone() });
         check!(guard.clear().is_ok_and(|how| how.starts_with("removed")));
         check!(!path.exists());

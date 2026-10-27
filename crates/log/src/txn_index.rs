@@ -17,7 +17,7 @@ use {
         index::{read_sidecar, rewrite_retained_entries, rewrite_sidecar_file},
     },
     krabka_ids::{Offset, ProducerId},
-    std::{collections::HashSet, fs::OpenOptions, io::Write, path::PathBuf},
+    std::{collections::HashSet, fs::OpenOptions, io::Write, mem, path::PathBuf},
     tracing::instrument,
     zerocopy::{
         BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
@@ -52,7 +52,7 @@ struct AbortedTxnRaw {
     last_stable_offset: I64<BigEndian>,
 }
 
-const _: [(); ENTRY_BYTES] = [(); std::mem::size_of::<AbortedTxnRaw>()];
+const _: [(); ENTRY_BYTES] = [(); mem::size_of::<AbortedTxnRaw>()];
 
 impl AbortedTxnRaw {
     fn new(entry: AbortedTxn) -> Self {
@@ -85,8 +85,6 @@ impl TxnIndex {
     /// missing file is acceptable and means zero aborted transactions.
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
         let read = read_sidecar::<AbortedTxnRaw, _>(
             &path,
@@ -257,6 +255,7 @@ mod tests {
     use {
         super::*,
         crate::{index::IndexFixture, test_support::aborted_txn},
+        std::{fs, iter, path::Path},
         tempfile::TempDir,
     };
 
@@ -318,9 +317,9 @@ mod tests {
         ]
     }
 
-    fn write_entry(path: &std::path::Path, entry: AbortedTxn) {
+    fn write_entry(path: &Path, entry: AbortedTxn) {
         let raw = AbortedTxnRaw::new(entry);
-        std::fs::write(path, raw.as_bytes()).unwrap();
+        fs::write(path, raw.as_bytes()).unwrap();
     }
 
     /// The exact 34-byte wire layout of one aborted-transaction record:
@@ -338,7 +337,7 @@ mod tests {
             index: _index,
         } = populated_index("00.txnindex", &[entry]);
 
-        let bytes = std::fs::read(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&0_i16.to_be_bytes()); // version
         expected.extend_from_slice(&1000_i64.to_be_bytes()); // producer_id
@@ -373,7 +372,7 @@ mod tests {
             index.append(entry).unwrap();
         }
 
-        let bytes = std::fs::read(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
         assert2::assert!(bytes.len() == 3 * ENTRY_BYTES);
 
         let reopened = TxnIndex::open(path).unwrap();
@@ -391,7 +390,7 @@ mod tests {
         bytes.extend_from_slice(&0_i64.to_be_bytes());
         bytes.extend_from_slice(&3_i64.to_be_bytes());
         bytes.extend_from_slice(&4_i64.to_be_bytes());
-        std::fs::write(&path, bytes).unwrap();
+        fs::write(&path, bytes).unwrap();
         assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(path).unwrap_err());
     }
 
@@ -436,7 +435,7 @@ mod tests {
         assert2::assert!(index.entries().is_empty());
 
         let partial = dir.path().join("partial.txnindex");
-        std::fs::write(&partial, [0_u8]).unwrap();
+        fs::write(&partial, [0_u8]).unwrap();
         assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(partial).unwrap_err());
 
         for MalformedEntry { name, entry } in malformed_entries() {
@@ -460,7 +459,7 @@ mod tests {
         let raw = AbortedTxnRaw::new(entry);
         let mut bytes = raw.as_bytes().to_vec();
         bytes.extend_from_slice(raw.as_bytes());
-        std::fs::write(&path, bytes).unwrap();
+        fs::write(&path, bytes).unwrap();
         assert2::assert!(TxnIndex::open(path).unwrap().entries() == [entry]);
     }
 
@@ -500,7 +499,7 @@ mod tests {
             .iter()
             .flat_map(|&entry| AbortedTxnRaw::new(entry).as_bytes().to_vec())
             .collect::<Vec<_>>();
-        std::fs::write(&path, &bytes).unwrap();
+        fs::write(&path, &bytes).unwrap();
 
         let mut reopened = TxnIndex::open(path.clone()).unwrap();
         assert2::assert!(reopened.entries() == &written[..5]);
@@ -508,7 +507,7 @@ mod tests {
         // Retrying after reopen neither writes nor reorders the first entry.
         reopened.append(first).unwrap();
         assert2::check!(reopened.entries() == &written[..5]);
-        assert2::check!(std::fs::read(path).unwrap() == bytes);
+        assert2::check!(fs::read(path).unwrap() == bytes);
     }
 
     #[test]
@@ -519,12 +518,12 @@ mod tests {
             path,
             mut index,
         } = populated_index("00.txnindex", &[original]);
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
 
         assert2::assert!(
             let LogError::Io(_) = index
-                .append(crate :: test_support :: aborted_txn().bounds(Offset(10)..=Offset(12)).stable(13).call())
+                .append(aborted_txn().bounds(Offset(10)..=Offset(12)).stable(13).call())
                 .unwrap_err()
         );
         assert2::assert!(index.entries() == [original]);
@@ -598,7 +597,7 @@ mod tests {
             assert2::assert!(index.entries().len() == 1);
             assert2::assert!(index.entries()[0].last_offset == Offset(4));
         }
-        let reopened = TxnIndex::open(path.clone()).unwrap();
+        let reopened = TxnIndex::open(path).unwrap();
         assert2::assert!(reopened.entries() == index.entries());
 
         index.truncate_from(Offset(4)).unwrap();
@@ -654,12 +653,12 @@ mod tests {
         assert2::assert!(
             in_3_to_12
                 == vec![
-                    crate::test_support::aborted_txn()
+                    aborted_txn()
                         .producer(1)
                         .bounds(Offset(0)..=Offset(4))
                         .stable(5)
                         .call(),
-                    crate::test_support::aborted_txn()
+                    aborted_txn()
                         .producer(2)
                         .bounds(Offset(10)..=Offset(14))
                         .stable(15)
@@ -742,7 +741,7 @@ mod tests {
 
         let actual = index.collect_aborted(Offset(start), Offset(end), &mut out);
 
-        let expected: Vec<AbortedTxn> = std::iter::once(entries[2])
+        let expected: Vec<AbortedTxn> = iter::once(entries[2])
             .chain(taken.iter().map(|&at| entries[at]))
             .collect();
         assert2::check!((actual, out) == (complete, expected));

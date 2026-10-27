@@ -248,6 +248,7 @@ mod tests {
             WritableTxnMarkerPartitionResult, WritableTxnMarkerResult, WritableTxnMarkerTopicResult,
         },
         krabka_security::ListenerProtocol,
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider,
     };
 
     fn marker_response(codes_by_partition: &[PartitionAnswer]) -> WriteTxnMarkersResponse {
@@ -255,7 +256,7 @@ mod tests {
             markers: vec![WritableTxnMarkerResult {
                 producer_id: 7,
                 topics: vec![WritableTxnMarkerTopicResult {
-                    name: "t".to_string(),
+                    name: "t".to_owned(),
                     partitions: codes_by_partition
                         .iter()
                         .map(
@@ -279,7 +280,7 @@ mod tests {
 
     fn partition(index: i32) -> TopicPartition {
         TopicPartition {
-            topic: "t".to_string(),
+            topic: "t".to_owned(),
             partition: krabka_ids::PartitionIndex(index),
         }
     }
@@ -398,7 +399,7 @@ mod tests {
                         producer_epoch: 3,
                         transaction_result: true,
                         topics: vec![WritableTxnMarkerTopic {
-                            name: "t".to_string(),
+                            name: "t".to_owned(),
                             partition_indexes: vec![0],
                             ..Default::default()
                         }],
@@ -463,8 +464,8 @@ mod tests {
             BrokerRegistrationRecord {
                 port: 9,
                 endpoints: vec![BrokerEndpoint {
-                    name: "INTERNAL".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "INTERNAL".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     // Discard port: refuses connections immediately.
                     port: 9,
                     protocol: ListenerProtocol::Plaintext,
@@ -492,8 +493,8 @@ mod tests {
                 // Endpoint exists but under a different listener name, so the
                 // `find(name == inter_broker_listener_name)` misses.
                 endpoints: vec![BrokerEndpoint {
-                    name: "SOMETHING_ELSE".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "SOMETHING_ELSE".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port: 65000,
                     protocol: ListenerProtocol::Plaintext,
                 }],
@@ -521,7 +522,7 @@ mod tests {
             },
         };
 
-        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = default_provider().install_default();
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -543,8 +544,8 @@ mod tests {
             BrokerRegistrationRecord {
                 port,
                 endpoints: vec![BrokerEndpoint {
-                    name: "INTERNAL".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "INTERNAL".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port,
                     protocol: ListenerProtocol::Ssl,
                 }],

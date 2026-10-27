@@ -17,7 +17,10 @@ use {
     },
     krabka_log::Offset,
     krabka_protocol::primitives::uuid::Uuid,
-    std::collections::HashMap,
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// One partition of an `AlterShareGroupOffsets` request whose topic and
@@ -92,7 +95,7 @@ struct TopicToDelete {
 /// in-memory change whose record did not reach the log, as Kafka's timeline
 /// snapshot reverts a failed write.
 struct MetadataSnapshot {
-    initialized: std::collections::HashSet<TopicIdPartition>,
+    initialized: HashSet<TopicIdPartition>,
     initializing: HashMap<TopicIdPartition, i64>,
     deleting: HashMap<Uuid, String>,
     topic_names: HashMap<Uuid, String>,
@@ -102,7 +105,7 @@ struct MetadataSnapshot {
 fn empty_group_persister<'a>(
     state: &ShareGroupState,
     coordinator: &'a GroupCoordinator,
-) -> Result<&'a std::sync::Arc<SharePersister>, i16> {
+) -> Result<&'a Arc<SharePersister>, i16> {
     if !state.members.is_empty() {
         return Err(codes::NON_EMPTY_GROUP);
     }
@@ -149,7 +152,7 @@ impl MetadataSnapshot {
 /// Returns `NON_EMPTY_GROUP` for a group with members, and
 /// `COORDINATOR_NOT_AVAILABLE` without a persister or when the first record
 /// does not reach the log.
-pub(crate) async fn reset_offsets(
+pub async fn reset_offsets(
     state: &mut ShareGroupState,
     coordinator: &GroupCoordinator,
     requests: Vec<ResetPartition>,
@@ -260,7 +263,7 @@ pub(crate) async fn reset_offsets(
 /// Returns `NON_EMPTY_GROUP` for a group with members, and
 /// `COORDINATOR_NOT_AVAILABLE` without a persister or when a record does not
 /// reach the log.
-pub(crate) async fn delete_offsets(
+pub async fn delete_offsets(
     state: &mut ShareGroupState,
     coordinator: &GroupCoordinator,
     topic_names: Vec<String>,
@@ -389,6 +392,7 @@ mod tests {
             },
         },
         assert2::check,
+        krabka_protocol::primitives::uuid::Uuid,
         std::collections::HashSet,
     };
 
@@ -515,7 +519,7 @@ mod tests {
     async fn a_failed_delete_leaves_the_topic_deleting_for_a_retry() {
         let (coordinator, log, topic_id) = unavailable_persister_coordinator().call();
         let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
-        let other = krabka_protocol::primitives::uuid::Uuid([8; 16]);
+        let other = Uuid([8; 16]);
         let mut state = ShareGroupState::new("g");
         state.initialized.insert(share_partition(topic_id, 0));
         state.initializing.insert(share_partition(other, 0), 1);

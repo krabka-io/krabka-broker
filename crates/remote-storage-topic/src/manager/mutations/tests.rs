@@ -24,13 +24,18 @@ use {
         RemotePartitionDeleteState, RemoteStorageError,
     },
     std::{sync::Arc, time::Duration},
+    tokio::{
+        sync::oneshot,
+        task::{self, JoinHandle},
+        time,
+    },
     tokio_util::sync::CancellationToken,
 };
 
 #[tokio::test(flavor = "multi_thread")]
 async fn rejected_mutations_return_the_cache_error_and_valid_retries_succeed() {
     let manager = start_manager_all(InProcessMetadataEventLog::new(2)).await;
-    let m = manager.clone();
+    let m = Arc::clone(&manager);
     on_blocking(move || {
         m.add_remote_log_segment_metadata(started(10, 0, 99))
             .unwrap();
@@ -71,22 +76,24 @@ async fn rejected_mutations_return_the_cache_error_and_valid_retries_succeed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn replay_without_local_waiters_keeps_no_outcome_history() {
     let log = InProcessMetadataEventLog::new(2);
-    let manager = start_manager_all(log.clone()).await;
-    let partition = metadata_partition_for(&tp(), log.partition_count());
+    let manager = start_manager_all(Arc::<InProcessMetadataEventLog>::clone(&log)).await;
+    let partition = metadata_partition_for(&tp(), log.partition_count()).unwrap();
     let mut last = -1;
     for _ in 0..64 {
         last = log
             .publish(
                 partition,
-                MetadataEvent::AddSegment(started(10, 0, 99)).encode(),
+                MetadataEvent::AddSegment(started(10, 0, 99))
+                    .encode()
+                    .unwrap(),
             )
             .await
             .unwrap();
     }
-    tokio::time::timeout(Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         let index = usize::try_from(partition).unwrap();
         while manager.applied.lock().unwrap()[index] < last {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -124,13 +131,13 @@ async fn shutdown_stream_close_and_unassignment_release_pending_mutations(cause:
         inner: InProcessMetadataEventLog::new(2),
         close: CancellationToken::new(),
     });
-    let manager = start_manager_all(log.clone()).await;
-    let m = manager.clone();
+    let manager = start_manager_all(Arc::<SilentLog>::clone(&log)).await;
+    let m = Arc::clone(&manager);
     let mutation =
-        tokio::task::spawn_blocking(move || m.add_remote_log_segment_metadata(started(10, 0, 99)));
-    tokio::time::timeout(Duration::from_secs(2), async {
+        task::spawn_blocking(move || m.add_remote_log_segment_metadata(started(10, 0, 99)));
+    time::timeout(Duration::from_secs(2), async {
         while manager.mutation_waiters.registered() == 0 {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -141,7 +148,7 @@ async fn shutdown_stream_close_and_unassignment_release_pending_mutations(cause:
         "unassignment" => manager.reconcile_assignment(&[]).await,
         _ => unreachable!(),
     }
-    let error = tokio::time::timeout(Duration::from_secs(2), mutation)
+    let error = time::timeout(Duration::from_secs(2), mutation)
         .await
         .expect("pending mutation released")
         .unwrap()
@@ -150,7 +157,7 @@ async fn shutdown_stream_close_and_unassignment_release_pending_mutations(cause:
         assert2::assert!(matches!(error, RemoteStorageError::NotReady { .. }));
     } else {
         assert2::assert!(error.to_string() == MetadataLogError::Closed.into_storage().to_string());
-        let m = manager.clone();
+        let m = Arc::clone(&manager);
         let error = on_blocking(move || m.add_remote_log_segment_metadata(started(11, 100, 199)))
             .await
             .unwrap_err();
@@ -168,9 +175,9 @@ async fn wait_applied(
 ) {
     let index = usize::try_from(partition).unwrap();
     let last = log.inner.high_water_marks().await.unwrap()[index] - 1;
-    tokio::time::timeout(Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         while manager.applied.lock().unwrap()[index] < last {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -187,8 +194,8 @@ struct HeldManager {
 
 async fn held_manager() -> HeldManager {
     let log = HeldPublishLog::new(2);
-    let manager = start_manager_all(log.clone()).await;
-    let partition = metadata_partition_for(&tp(), log.partition_count());
+    let manager = start_manager_all(Arc::<HeldPublishLog>::clone(&log)).await;
+    let partition = metadata_partition_for(&tp(), log.partition_count()).unwrap();
     HeldManager {
         log,
         manager,
@@ -196,7 +203,7 @@ async fn held_manager() -> HeldManager {
     }
 }
 
-type Mutation = tokio::task::JoinHandle<Result<(), RemoteStorageError>>;
+type Mutation = JoinHandle<Result<(), RemoteStorageError>>;
 
 /// Start adding segment 10 with its publish parked at `hold`.
 async fn parked_add(
@@ -205,10 +212,10 @@ async fn parked_add(
     hold: Hold,
 ) -> Mutation {
     log.set_hold(Some(hold));
-    let m = manager.clone();
+    let m = Arc::clone(manager);
     let mutation =
-        tokio::task::spawn_blocking(move || m.add_remote_log_segment_metadata(started(10, 0, 99)));
-    tokio::time::timeout(Duration::from_secs(2), log.wait_parked())
+        task::spawn_blocking(move || m.add_remote_log_segment_metadata(started(10, 0, 99)));
+    time::timeout(Duration::from_secs(2), log.wait_parked())
         .await
         .expect("publish parked");
     mutation
@@ -216,7 +223,7 @@ async fn parked_add(
 
 async fn released(log: &HeldPublishLog, mutation: Mutation) -> Result<(), RemoteStorageError> {
     log.release();
-    tokio::time::timeout(Duration::from_secs(2), mutation)
+    time::timeout(Duration::from_secs(2), mutation)
         .await
         .expect("publisher completed")
         .unwrap()
@@ -248,13 +255,15 @@ async fn a_pending_publish_does_not_stall_the_pump() {
     log.inner
         .publish(
             partition,
-            MetadataEvent::AddSegment(started(11, 100, 199)).encode(),
+            MetadataEvent::AddSegment(started(11, 100, 199))
+                .encode()
+                .unwrap(),
         )
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         while manager.list_remote_log_segments(&tp()).unwrap().is_empty() {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -286,7 +295,9 @@ async fn an_outcome_applied_before_the_acknowledgement_reaches_the_publisher(
         log.inner
             .publish(
                 partition,
-                MetadataEvent::AddSegment(started(10, 0, 99)).encode(),
+                MetadataEvent::AddSegment(started(10, 0, 99))
+                    .encode()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -358,9 +369,7 @@ fn run(waiters: &MutationWaiters, steps: &[Step]) {
 }
 
 /// What the publisher of the record at [`PUBLISHED`] learns.
-fn outcome(
-    reply: &mut tokio::sync::oneshot::Receiver<Result<(), RemoteStorageError>>,
-) -> &'static str {
+fn outcome(reply: &mut oneshot::Receiver<Result<(), RemoteStorageError>>) -> &'static str {
     match reply.try_recv() {
         Ok(Ok(())) => "ok",
         Ok(Err(RemoteStorageError::InvalidArgument(_))) => "rejected",

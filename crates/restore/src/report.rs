@@ -12,7 +12,11 @@
 use {
     crate::materialize::SegmentOutcome,
     serde::Serialize,
-    std::{collections::BTreeMap, fmt::Write as _, path::PathBuf},
+    std::{
+        collections::BTreeMap,
+        fmt::{self, Display, Write},
+        path::PathBuf,
+    },
     uuid::Uuid,
 };
 
@@ -115,21 +119,25 @@ impl MetadataRestoreReport {
     /// Warning emitted when cluster metadata could not be recovered.
     #[must_use]
     pub fn warning(&self) -> Option<String> {
-        match &self.snapshot {
-            None => Some(format!(
-                "WARNING: no --metadata-snapshot; topic configuration was not recovered for: {}; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered",
-                self.topics_without_configuration.join(", ")
-            )),
-            Some(snapshot) => (!self.topics_without_configuration.is_empty()).then(|| {
-                format!(
-                    "WARNING: --metadata-snapshot {} does not hold these restored topics under \
-                     their archived topic ids, so their configuration was not recovered: {}. Set \
-                     their configuration again with kafka-configs",
-                    snapshot.display(),
+        self.snapshot.as_ref().map_or_else(
+            || {
+                Some(format!(
+                    "WARNING: no --metadata-snapshot; topic configuration was not recovered for: {}; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered",
                     self.topics_without_configuration.join(", ")
-                )
-            }),
-        }
+                ))
+            },
+            |snapshot| {
+                (!self.topics_without_configuration.is_empty()).then(|| {
+                    format!(
+                        "WARNING: --metadata-snapshot {} does not hold these restored topics \
+                         under their archived topic ids, so their configuration was not \
+                         recovered: {}. Set their configuration again with kafka-configs",
+                        snapshot.display(),
+                        self.topics_without_configuration.join(", ")
+                    )
+                })
+            },
+        )
     }
 }
 
@@ -162,28 +170,18 @@ pub struct SkippedSegment {
 impl RestoreReport {
     /// Render the report in `format`.
     ///
-    /// The rendering is total. Every field of the model is a string, a number,
-    /// or a sequence of the same, so the JSON encoder has no failure mode to
-    /// report.
-    #[must_use]
-    pub fn render(&self, format: ReportFormat) -> String {
-        match format {
-            ReportFormat::Text => self.render_text(),
-            ReportFormat::Json => self.render_json(),
-        }
-    }
-
-    /// Render as one JSON object.
+    /// # Errors
     ///
-    /// `serde_json::to_string_pretty` fails only on a map with non-string
-    /// keys, a `NaN`/`infinite` float, or a type whose `Serialize` impl
-    /// itself errors. `RestoreReport` has none of those: every field is a
-    /// string, an integer, a `Uuid`, a `PathBuf`, a bool, or a sequence or
-    /// struct built from the same, so the `.expect` below documents a real
-    /// invariant rather than papering over a live failure mode.
-    fn render_json(&self) -> String {
-        serde_json::to_string_pretty(self)
-            .expect("RestoreReport holds only strings, numbers, and sequences of the same")
+    /// The JSON encoder's error. It fails only on a map with non-string keys,
+    /// a `NaN` or infinite float, or a type whose `Serialize` impl itself
+    /// errors, and every field of the model is a string, an integer, a `Uuid`,
+    /// a `PathBuf`, a bool, or a sequence or struct built from the same. The
+    /// text rendering does not fail.
+    pub fn render(&self, format: ReportFormat) -> serde_json::Result<String> {
+        match format {
+            ReportFormat::Text => Ok(TextReport(self).to_string()),
+            ReportFormat::Json => serde_json::to_string_pretty(self),
+        }
     }
 
     /// Render as aligned text for an operator reading the terminal or a log.
@@ -198,20 +196,17 @@ impl RestoreReport {
     /// from the kept/dropped record counts, because "records dropped" alone
     /// does not tell an operator who ran `--exclude-key` that the exclusion
     /// actually matched something.
-    fn render_text(&self) -> String {
-        let mut out = String::new();
+    fn write_text(&self, out: &mut impl Write) -> fmt::Result {
         let status = if self.dry_run {
             "dry run against"
         } else {
             "wrote"
         };
-        writeln!(out, "krabka restore: {status} {}", self.log_dir.display())
-            .expect("String writer is infallible");
+        writeln!(out, "krabka restore: {status} {}", self.log_dir.display())?;
         if self.dry_run {
-            writeln!(out, "  (dry run: nothing was written to disk)")
-                .expect("String writer is infallible");
+            writeln!(out, "  (dry run: nothing was written to disk)")?;
         }
-        writeln!(out, "cluster id: {}", self.cluster_id).expect("String writer is infallible");
+        writeln!(out, "cluster id: {}", self.cluster_id)?;
 
         if let Some(diskless) = &self.diskless {
             writeln!(
@@ -220,8 +215,7 @@ impl RestoreReport {
                 diskless.partitions.len(),
                 plural(diskless.partitions.len() as u64),
                 diskless.captured_at_ms
-            )
-            .expect("String writer is infallible");
+            )?;
             for partition in &diskless.partitions {
                 writeln!(
                     out,
@@ -235,11 +229,10 @@ impl RestoreReport {
                     partition.records,
                     plural(partition.records),
                     partition.records_dropped,
-                )
-                .expect("String writer is infallible");
+                )?;
             }
             for limitation in &diskless.limitations {
-                writeln!(out, "WARNING: {limitation}").expect("String writer is infallible");
+                writeln!(out, "WARNING: {limitation}")?;
             }
         }
 
@@ -255,8 +248,7 @@ impl RestoreReport {
                 plural(authentication.partitions as u64),
                 authentication.trusted_keys,
                 plural(authentication.trusted_keys as u64),
-            )
-            .expect("String writer is infallible");
+            )?;
             let tail = if authentication.tail_truncation_protected {
                 "tail truncation protected by independently pinned heads"
             } else {
@@ -271,12 +263,11 @@ impl RestoreReport {
                     .map(|(partition, head)| format!("{partition}={head}"))
                     .collect::<Vec<_>>()
                     .join(", ")
-            )
-            .expect("String writer is infallible");
+            )?;
         }
 
         if let Some(warning) = self.metadata.warning() {
-            writeln!(out, "{warning}").expect("String writer is infallible");
+            writeln!(out, "{warning}")?;
         }
         // Without a snapshot nothing was recovered, and the warning says so.
         // With one, the counts stay visible beside any warning.
@@ -294,8 +285,7 @@ impl RestoreReport {
                 plural(self.metadata.scram_credentials as u64),
                 self.metadata.feature_levels,
                 plural(self.metadata.feature_levels as u64),
-            )
-            .expect("String writer is infallible");
+            )?;
         }
 
         let mut current_topic: Option<TopicHeading<'_>> = None;
@@ -305,35 +295,39 @@ impl RestoreReport {
                 topic_id: partition.topic_id,
             };
             if current_topic != Some(topic_key) {
-                writeln!(out).expect("String writer is infallible");
-                writeln!(out, "{} (topic id {})", partition.topic, partition.topic_id)
-                    .expect("String writer is infallible");
+                writeln!(out)?;
+                writeln!(out, "{} (topic id {})", partition.topic, partition.topic_id)?;
                 current_topic = Some(topic_key);
             }
-            write_partition_line(&mut out, partition);
+            write_partition_line(out, partition)?;
         }
 
         if !self.skipped.is_empty() {
-            writeln!(out).expect("String writer is infallible");
+            writeln!(out)?;
             writeln!(
                 out,
                 "skipped ({} segment{} failed verification):",
                 self.skipped.len(),
                 plural(self.skipped.len() as u64)
-            )
-            .expect("String writer is infallible");
+            )?;
             for segment in &self.skipped {
                 writeln!(
                     out,
                     "  {} partition {} segment {}: {}",
                     segment.topic, segment.partition, segment.segment_id, segment.reason
-                )
-                .expect("String writer is infallible");
+                )?;
             }
         }
 
-        out
+        Ok(())
     }
+}
+
+/// [`RestoreReport::write_text`] as a [`Display`].
+struct TextReport<'a>(&'a RestoreReport);
+
+impl Display for TextReport<'_> {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result { self.0.write_text(out) }
 }
 
 /// The topic a text rendering last printed a heading for.
@@ -349,20 +343,15 @@ struct TopicHeading<'a> {
 /// into an empty `segments` slice or dividing by zero: the report model does
 /// not forbid it even though `discover.rs`'s `EmptyArchive` check makes it
 /// unlikely in practice.
-fn write_partition_line(out: &mut String, partition: &PartitionReport) {
-    let Some(first) = partition.segments.first() else {
+fn write_partition_line(out: &mut impl Write, partition: &PartitionReport) -> fmt::Result {
+    let (Some(first), Some(last)) = (partition.segments.first(), partition.segments.last()) else {
         writeln!(
             out,
             "  partition {}: no segments restored",
             partition.partition
-        )
-        .expect("String writer is infallible");
-        return;
+        )?;
+        return Ok(());
     };
-    let last = partition
-        .segments
-        .last()
-        .expect("just checked segments is non-empty");
 
     let mut records_kept = 0u64;
     let mut records_dropped = 0u64;
@@ -408,7 +397,6 @@ fn write_partition_line(out: &mut String, partition: &PartitionReport) {
         format_thousands(records_kept),
         format_thousands(records_dropped),
     )
-    .expect("String writer is infallible");
 }
 
 /// `"s"` for anything but exactly one, so counts read as plain English.
@@ -595,7 +583,7 @@ mod tests {
     #[test]
     fn text_rendering_contains_key_facts() {
         let report = sample_report(RestoreMode::Perform);
-        let text = report.render(ReportFormat::Text);
+        let text = report.render(ReportFormat::Text).unwrap();
 
         check!(text.contains("orders"));
         check!(text.contains("orders-archive"));
@@ -659,13 +647,17 @@ mod tests {
              \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n"
         );
 
-        check!(report.render(ReportFormat::Text) == expected);
+        check!(report.render(ReportFormat::Text).unwrap() == expected);
     }
 
     #[test]
     fn dry_run_is_visible_in_text() {
-        let dry = sample_report(RestoreMode::DryRun).render(ReportFormat::Text);
-        let real = sample_report(RestoreMode::Perform).render(ReportFormat::Text);
+        let dry = sample_report(RestoreMode::DryRun)
+            .render(ReportFormat::Text)
+            .unwrap();
+        let real = sample_report(RestoreMode::Perform)
+            .render(ReportFormat::Text)
+            .unwrap();
 
         check!(dry.contains("dry run"));
         check!(!real.contains("dry run"));
@@ -675,7 +667,7 @@ mod tests {
     fn empty_skipped_list_omits_section() {
         let mut report = sample_report(RestoreMode::Perform);
         report.skipped.clear();
-        let text = report.render(ReportFormat::Text);
+        let text = report.render(ReportFormat::Text).unwrap();
 
         check!(!text.contains("skipped"));
     }
@@ -689,7 +681,7 @@ mod tests {
             segment_id: Uuid::from_u128(0xF00D),
             reason: "truncated batch header".to_owned(),
         });
-        let text = report.render(ReportFormat::Text);
+        let text = report.render(ReportFormat::Text).unwrap();
 
         for skipped in &report.skipped {
             check!(text.contains(&skipped.topic));
@@ -724,7 +716,7 @@ mod tests {
             skipped: vec![],
         };
 
-        let text = report.render(ReportFormat::Text);
+        let text = report.render(ReportFormat::Text).unwrap();
 
         check!(text.contains("empty-topic"));
         check!(text.contains("no segments restored"));
@@ -765,7 +757,7 @@ mod tests {
     #[test]
     fn json_rendering_round_trips_field_values() {
         let report = sample_report(RestoreMode::Perform);
-        let json = report.render(ReportFormat::Json);
+        let json = report.render(ReportFormat::Json).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
         check!(value["dry_run"] == serde_json::json!(false));

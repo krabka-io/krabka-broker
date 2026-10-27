@@ -31,15 +31,20 @@ mod sealed_input;
 mod test_support;
 mod timestamp_scan;
 
-pub(crate) use self::{
+pub use self::{
     append::PlacedBatch,
     open::{FrontierScan, TailScan},
     sealed_input::SealedInput,
 };
-use crate::{
-    index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
-    io::LogIo,
-    name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
+#[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
+use {
+    crate::{
+        index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
+        io::LogIo,
+        name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
+    },
+    std::{sync::atomic::AtomicBool, time::SystemTime},
 };
 
 /// A single log segment: the `.log` data file paired with its sparse
@@ -51,6 +56,18 @@ use crate::{
 /// filename. [`Segment::create`] makes a new active segment.
 /// [`Segment::open`] validates and opens a sealed segment for reading, and
 /// [`Segment::open_active`] opens an active segment with tail recovery.
+/// The state of a segment's block reservation requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ReserveRequest {
+    /// Nothing has been asked.
+    #[default]
+    None,
+    /// The segment size the last request worked from.
+    Size(u64),
+    /// The filesystem refused; the segment grows as it is written.
+    Refused,
+}
+
 #[derive(Debug)]
 pub struct Segment {
     dir: PathBuf,
@@ -88,10 +105,10 @@ pub struct Segment {
     /// range `log_size..reserved_end`. It is `0` when there is nothing to
     /// give back.
     reserved_end: u64,
-    /// The end the last [`Segment::reserve`] asked for, granted or not, so
-    /// a filesystem that refuses is asked once per segment rather than once
-    /// per append. `0` when nothing has been asked.
-    reserve_requested: u64,
+    /// What [`Segment::reserve`] has been asked and told, so a truncate can
+    /// take the reservation again for the same size and a filesystem that
+    /// refused is asked for no more.
+    reserve_requested: ReserveRequest,
     /// The `O_DIRECT` writer and the newest bytes it wrote, while this
     /// segment writes through `O_DIRECT`. See [`direct_mode`]. Boxed: every
     /// sealed segment carries the field, and a log is held across `await`s.
@@ -107,7 +124,7 @@ pub struct Segment {
     wrote_direct: bool,
     /// Unsupported page-cache probes are remembered per open segment: other
     /// segments can live on filesystems with different NOWAIT capabilities.
-    cache_probe_unsupported: std::sync::atomic::AtomicBool,
+    cache_probe_unsupported: AtomicBool,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].
@@ -139,7 +156,7 @@ pub struct RawSegmentDesc {
     pub last_offset: Offset,
     /// The records run, as a file-backed descriptor. `None` when the walk
     /// found no complete batch in range.
-    pub region: Option<krabka_protocol::records::FileRegion>,
+    pub region: Option<FileRegion>,
 }
 
 #[krabka_macros::sendfile_cfg]
@@ -181,7 +198,7 @@ impl RawSegmentRead {
 
 /// What an activation walk found in one segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActivationScan {
+pub struct ActivationScan {
     /// Exclusive end of the run of active batches that begins at the offset
     /// the walk started from. It equals that offset when the first batch is
     /// already waiting.
@@ -199,21 +216,17 @@ impl Segment {
 
     /// Path to this segment's `.txnindex` file (may not exist yet).
     #[must_use]
-    pub fn txn_index_path(&self) -> std::path::PathBuf {
-        txnindex_path(&self.dir, self.base_offset.0)
-    }
+    pub fn txn_index_path(&self) -> PathBuf { txnindex_path(&self.dir, self.base_offset.0) }
 
     /// Path to this segment's `.stampindex` sidecar (may not exist yet).
     #[must_use]
-    pub fn stamp_index_path(&self) -> std::path::PathBuf {
-        stampindex_path(&self.dir, self.base_offset.0)
-    }
+    pub fn stamp_index_path(&self) -> PathBuf { stampindex_path(&self.dir, self.base_offset.0) }
 
     /// Path to the per-partition `.leader-epoch-checkpoint` file in this
     /// segment's directory. All segments in a partition share the checkpoint,
     /// and epoch history accumulates over the log's lifetime.
     #[must_use]
-    pub fn leader_epoch_checkpoint_path(&self) -> std::path::PathBuf {
+    pub fn leader_epoch_checkpoint_path(&self) -> PathBuf {
         leader_epoch_checkpoint_path(&self.dir)
     }
 
@@ -274,7 +287,7 @@ impl Segment {
     /// `None` when the filesystem cannot report it, which retention treats
     /// as "unknown, not overdue" rather than as license to guess.
     #[must_use]
-    pub fn last_modified(&self) -> Option<std::time::SystemTime> {
+    pub fn last_modified(&self) -> Option<SystemTime> {
         self.log_file.metadata().ok()?.modified().ok()
     }
 

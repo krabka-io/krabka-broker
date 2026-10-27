@@ -352,7 +352,7 @@ pub(super) async fn start_broker_runtime(
         inter_broker_client,
         &metrics,
         &supervisor_shutdown,
-    );
+    )?;
     spawn_cluster_data_maintenance(
         config,
         controller,

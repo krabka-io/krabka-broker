@@ -10,7 +10,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, ByteSizeExt},
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 impl Segment {
@@ -20,7 +20,7 @@ impl Segment {
     #[instrument(
         level = "debug",
         skip(self),
-        fields(base_offset = self.base_offset.0, batches = tracing::field::Empty),
+        fields(base_offset = self.base_offset.0, batches = field::Empty),
         err,
     )]
     /// # Errors
@@ -77,9 +77,9 @@ mod tests {
     use {
         super::*,
         crate::segment::test_support::{
-            FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, SECOND_LARGE_TIMESTAMP_BATCH,
-            SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH, TempSegment, sample_batch,
-            seeded_fixture, test_segment,
+            FIRST_LARGE_TIMESTAMP_BATCH, INDEXED_READ_BATCHES, NO_LIMIT, ONE_RECORD_BATCH,
+            SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH,
+            TempSegment, sample_batch, seeded_fixture, test_segment, three_single_record_batches,
         },
         krabka_units::prelude::kibibytes,
     };
@@ -101,38 +101,14 @@ mod tests {
         assert2::assert!(
             read == vec![
                 sample_batch()
-                    .offset(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
-                            .offset
-                            .0
-                    )
-                    .records(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
-                            .records
-                            .0
-                    )
-                    .timestamp(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
-                            .timestamp
-                            .0
-                    )
+                    .offset(INDEXED_READ_BATCHES[1].offset.0)
+                    .records(INDEXED_READ_BATCHES[1].records.0)
+                    .timestamp(INDEXED_READ_BATCHES[1].timestamp.0)
                     .call(),
                 sample_batch()
-                    .offset(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
-                            .offset
-                            .0
-                    )
-                    .records(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
-                            .records
-                            .0
-                    )
-                    .timestamp(
-                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
-                            .timestamp
-                            .0
-                    )
+                    .offset(INDEXED_READ_BATCHES[2].offset.0)
+                    .records(INDEXED_READ_BATCHES[2].records.0)
+                    .timestamp(INDEXED_READ_BATCHES[2].timestamp.0)
                     .call()
             ]
         );
@@ -161,7 +137,7 @@ mod tests {
         let max_size = seg.size();
 
         let read = seg.read(Offset(0), max_size).unwrap();
-        assert2::assert!(read == crate::segment::test_support::three_single_record_batches());
+        assert2::assert!(read == three_single_record_batches());
     }
 
     #[test]
@@ -193,21 +169,9 @@ mod tests {
         assert2::assert!(
             read == vec![
                 sample_batch()
-                    .offset(
-                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
-                            .offset
-                            .0
-                    )
-                    .records(
-                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
-                            .records
-                            .0
-                    )
-                    .timestamp(
-                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
-                            .timestamp
-                            .0
-                    )
+                    .offset(SECOND_LARGE_TIMESTAMP_BATCH.offset.0)
+                    .records(SECOND_LARGE_TIMESTAMP_BATCH.records.0)
+                    .timestamp(SECOND_LARGE_TIMESTAMP_BATCH.timestamp.0)
                     .call()
             ]
         );

@@ -5,7 +5,10 @@ use {
     anyhow::{Context, Result},
     clap::Parser,
     krabka_bench_driver::{qualification, report},
-    std::path::PathBuf,
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -50,10 +53,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let md = report::render_markdown(&cli.input_dir, cli.strict)?;
     if let Some(parent) = cli.out.parent() {
-        std::fs::create_dir_all(parent).ok();
+        let _ = fs::create_dir_all(parent);
     }
-    std::fs::write(&cli.out, md)
-        .with_context(|| format!("write summary to {}", cli.out.display()))?;
+    fs::write(&cli.out, md).with_context(|| format!("write summary to {}", cli.out.display()))?;
     println!("wrote {}", cli.out.display());
 
     if let Some(p) = &cli.csv {
@@ -95,11 +97,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn write_report(path: &std::path::Path, content: impl AsRef<[u8]>, kind: &str) -> Result<()> {
+fn write_report(path: &Path, content: impl AsRef<[u8]>, kind: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        let _ = fs::create_dir_all(parent);
     }
-    std::fs::write(path, content).with_context(|| format!("write {kind} to {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("write {kind} to {}", path.display()))?;
     println!("wrote {}", path.display());
     Ok(())
 }

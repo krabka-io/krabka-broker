@@ -20,7 +20,7 @@
 /// RE2J's `ERR_INVALID_PERL_OP`, the description Kafka formats into the
 /// `INVALID_REGULAR_EXPRESSION` message when a pattern names a flag RE2J does
 /// not have.
-pub(crate) const INVALID_PERL_OP: &str = "invalid or unsupported Perl syntax";
+pub const INVALID_PERL_OP: &str = "invalid or unsupported Perl syntax";
 
 /// The inline flags RE2J's `Parser.parsePerlFlags` accepts, plus the `-` that
 /// negates the ones that follow it.
@@ -33,12 +33,11 @@ const INLINE_FLAGS: [char; 5] = ['i', 'm', 's', 'U', '-'];
 /// and everything inside `[...]`, is left alone, and it hands every other
 /// `(?` form -- named captures, non-capturing groups, the lookarounds both
 /// engines refuse -- to the regex parser rather than judging it here.
-pub(crate) fn unsupported_inline_flag(pattern: &str) -> Option<char> {
+pub fn unsupported_inline_flag(pattern: &str) -> Option<char> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut index = 0;
     let mut in_class = false;
-    while index < chars.len() {
-        let current = chars[index];
+    while let Some(&current) = chars.get(index) {
         if current == '\\' {
             index += 2;
             continue;
@@ -80,7 +79,7 @@ pub(crate) fn unsupported_inline_flag(pattern: &str) -> Option<char> {
 
 /// RE2J's `ERR_INVALID_REPEAT_OP`, its message for a repetition of a
 /// repetition, a possessive quantifier among them.
-pub(crate) const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
+pub const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
 
 /// RE2J's `ERR_INVALID_CHAR_RANGE`.
 const INVALID_CHAR_RANGE: &str = "invalid character class range";
@@ -153,7 +152,7 @@ fn translate_count(chars: &[char], start: usize, out: &mut String) -> Result<usi
     if min > MAX_REPEAT || max.is_some_and(|max| max > MAX_REPEAT || max < min) {
         return Err(INVALID_REPEAT_SIZE.to_owned());
     }
-    out.extend(&chars[start..=close]);
+    out.extend(chars.iter().take(close + 1).skip(start));
     Ok(close + 1)
 }
 
@@ -181,7 +180,7 @@ fn decimal(chars: &[char], start: usize) -> Option<(u32, usize)> {
         .iter()
         .map_while(|digit| digit.to_digit(10))
         .collect();
-    if digits.is_empty() || (digits.len() > 1 && digits[0] == 0) {
+    if digits.is_empty() || (digits.len() > 1 && digits.first() == Some(&0)) {
         return None;
     }
     // Nine digits fit a `u32`, and any count past them is refused all the same.
@@ -202,11 +201,15 @@ fn translate_escape(chars: &[char], start: usize, out: &mut String) -> Result<us
         'Q' => {
             // Quoting ends at the first `\E`, or runs to the end of the pattern.
             let body = start + 2;
-            let close = chars[body..]
-                .windows(2)
-                .position(|pair| pair == ['\\', 'E'])
+            let close = chars
+                .get(body..)
+                .and_then(|rest| rest.windows(2).position(|pair| pair == ['\\', 'E']))
                 .map(|offset| body + offset);
-            let quoted: String = chars[body..close.unwrap_or(chars.len())].iter().collect();
+            let quoted: String = chars
+                .iter()
+                .take(close.unwrap_or(chars.len()))
+                .skip(body)
+                .collect();
             out.push_str(&regex::escape(&quoted));
             return Ok(close.map_or(chars.len(), |close| close + 2));
         }
@@ -217,7 +220,7 @@ fn translate_escape(chars: &[char], start: usize, out: &mut String) -> Result<us
             // possessive quantifiers from reading `{Greek}` as a repetition.
             let end = unicode_class_end(chars, start);
             out.push('[');
-            out.extend(&chars[start..end]);
+            out.extend(chars.iter().take(end).skip(start));
             out.push(']');
             return Ok(end);
         }
@@ -228,7 +231,7 @@ fn translate_escape(chars: &[char], start: usize, out: &mut String) -> Result<us
             return Ok(end);
         }
     };
-    out.extend(&chars[start..end]);
+    out.extend(chars.iter().take(end).skip(start));
     Ok(end)
 }
 
@@ -241,8 +244,9 @@ fn unicode_class_end(chars: &[char], start: usize) -> usize {
     if chars.get(name) != Some(&'{') {
         return (name + 1).min(chars.len());
     }
-    chars[name..]
+    chars
         .iter()
+        .skip(name)
         .position(|&candidate| candidate == '}')
         .map_or(chars.len(), |offset| name + offset + 1)
 }
@@ -300,10 +304,11 @@ fn hex_escape(chars: &[char], end: &mut usize) -> Option<u32> {
         return Some(first.to_digit(16)? * 16 + second);
     }
     let close = *end
-        + chars[*end..]
+        + chars
             .iter()
+            .skip(*end)
             .position(|&candidate| candidate == '}')?;
-    let digits: String = chars[*end..close].iter().collect();
+    let digits: String = chars.iter().take(close).skip(*end).collect();
     *end = close + 1;
     if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
         return None;
@@ -335,7 +340,7 @@ fn translate_class(chars: &[char], start: usize, out: &mut String) -> Result<usi
         first = false;
 
         if let Some(end) = posix_class_end(chars, index)? {
-            out.extend(&chars[index..end]);
+            out.extend(chars.iter().take(end).skip(index));
             index = end;
             continue;
         }
@@ -346,7 +351,7 @@ fn translate_class(chars: &[char], start: usize, out: &mut String) -> Result<usi
                 _ => None,
             };
             if let Some(end) = end {
-                out.extend(&chars[index..end]);
+                out.extend(chars.iter().take(end).skip(index));
                 index = end;
                 continue;
             }
@@ -377,14 +382,14 @@ fn posix_class_end(chars: &[char], start: usize) -> Result<Option<usize>, String
     if chars.get(start..start + 2) != Some(&['[', ':']) {
         return Ok(None);
     }
-    let Some(offset) = chars[start + 1..]
-        .windows(2)
-        .position(|pair| pair == [':', ']'])
+    let Some(offset) = chars
+        .get(start + 1..)
+        .and_then(|rest| rest.windows(2).position(|pair| pair == [':', ']']))
     else {
         return Ok(None);
     };
     let end = start + 1 + offset + 2;
-    let name: String = chars[start..end].iter().collect();
+    let name: String = chars.iter().take(end).skip(start).collect();
     let known = name
         .strip_prefix("[:")
         .and_then(|name| name.strip_suffix(":]"))
@@ -422,7 +427,7 @@ fn push_literal(out: &mut String, literal: char) {
 /// two engines on the same answer. It runs on the translated pattern, where an
 /// unescaped `{` always opens a count, and it tracks escapes and character
 /// classes, so a literal `+` is left alone.
-pub(crate) fn stacked_repetition(pattern: &str) -> bool {
+pub fn stacked_repetition(pattern: &str) -> bool {
     let chars: Vec<char> = pattern.chars().collect();
     let mut index = 0;
     let mut in_class = false;
@@ -452,8 +457,9 @@ pub(crate) fn stacked_repetition(pattern: &str) -> bool {
                 after_repeat = true;
                 lazy = false;
                 if current == '{' {
-                    index += chars[index..]
+                    index += chars
                         .iter()
+                        .skip(index)
                         .position(|&candidate| candidate == '}')
                         .map_or(chars.len() - index, |offset| offset + 1);
                 }
@@ -469,7 +475,7 @@ pub(crate) fn stacked_repetition(pattern: &str) -> bool {
 
 /// `regex`'s `Display` is a multi-line diagram. Flatten it so a response's
 /// `error_message` stays one line.
-pub(crate) fn flatten_error(error: &regex::Error) -> String {
+pub fn flatten_error(error: &regex::Error) -> String {
     error
         .to_string()
         .lines()
@@ -485,7 +491,7 @@ pub(crate) fn flatten_error(error: &regex::Error) -> String {
 ///
 /// Returns the reason, in the wording Kafka puts in its
 /// `INVALID_REGULAR_EXPRESSION` message.
-pub(crate) fn check(pattern: &str) -> Result<(), String> { compile_full_match(pattern).map(|_| ()) }
+pub fn check(pattern: &str) -> Result<(), String> { compile_full_match(pattern).map(|_| ()) }
 
 /// Compiles `pattern` for Kafka's `Matcher.matches()`, which matches the whole
 /// input.
@@ -497,7 +503,7 @@ pub(crate) fn check(pattern: &str) -> Result<(), String> { compile_full_match(pa
 ///
 /// Returns the reason, in the wording Kafka puts in its
 /// `INVALID_REGULAR_EXPRESSION` message.
-pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> {
+pub fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> {
     if pattern.len() > MAX_PATTERN_BYTES {
         return Err(format!(
             "pattern exceeds Kafka string limit of {MAX_PATTERN_BYTES} bytes"

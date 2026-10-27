@@ -182,7 +182,7 @@ mod tests {
 
     fn replica(topic: &str, partition: i32, node: u64) -> ReplicaLagLabel {
         ReplicaLagLabel {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition,
             replica: node,
         }
@@ -190,8 +190,8 @@ mod tests {
 
     fn group(group_id: &str, topic: &str, partition: i32) -> ConsumerGroupLabel {
         ConsumerGroupLabel {
-            group_id: group_id.to_string(),
-            topic: topic.to_string(),
+            group_id: group_id.to_owned(),
+            topic: topic.to_owned(),
             partition,
         }
     }

@@ -26,7 +26,10 @@ use {
         owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
         records::RecordBatch,
     },
-    std::{collections::HashMap, time::Duration},
+    std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    },
     tokio::sync::oneshot,
 };
 
@@ -37,7 +40,7 @@ fn stored_member(
 ) -> MemberMetadata {
     MemberMetadata {
         member_id: "m1".into(),
-        group_instance_id: group_instance_id.map(str::to_string),
+        group_instance_id: group_instance_id.map(str::to_owned),
         client_id: "c".into(),
         client_host: "h".into(),
         rebalance_timeout_ms,
@@ -55,8 +58,8 @@ fn stored_group(
     GroupMetadataValue {
         protocol_type: protocol_type.into(),
         generation: 5,
-        protocol_name: protocol_name.map(str::to_string),
-        leader: (!members.is_empty()).then(|| "m1".to_string()),
+        protocol_name: protocol_name.map(str::to_owned),
+        leader: (!members.is_empty()).then(|| "m1".to_owned()),
         current_state_timestamp_ms: 0,
         members,
     }
@@ -70,12 +73,12 @@ fn loaded_member(
 ) -> Member {
     Member {
         id: "m1".into(),
-        group_instance_id: group_instance_id.map(str::to_string),
+        group_instance_id: group_instance_id.map(str::to_owned),
         client_id: "c".into(),
         host: "h".into(),
         session_timeout,
         rebalance_timeout,
-        last_heartbeat: std::time::Instant::now(),
+        last_heartbeat: Instant::now(),
         protocol_metadata: Bytes::from_static(b"sub"),
         protocols: vec![("range".into(), Bytes::from_static(b"sub"))],
         assignment: Some(Bytes::from_static(b"asn")),
@@ -96,12 +99,12 @@ fn loaded_group(
         leader_id: Some("m1".into()),
         protocol_name: Some("range".into()),
         members: HashMap::from([(
-            "m1".to_string(),
+            "m1".to_owned(),
             loaded_member(instance_id, rebalance_timeout, session_timeout),
         )]),
         static_members: instance_id
             .into_iter()
-            .map(|id| (id.to_string(), "m1".to_string()))
+            .map(|id| (id.to_owned(), "m1".to_owned()))
             .collect(),
         ..ClassicState::new("g")
     }

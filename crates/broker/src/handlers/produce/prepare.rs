@@ -22,7 +22,7 @@ use {
         },
     },
     krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission},
-    std::sync::Arc,
+    std::{ops::Range, sync::Arc},
 };
 
 /// The topic-and-metrics context [`prepare_batch`] and [`owned_fallback`]
@@ -413,15 +413,17 @@ fn prepare_source(
     let fast_maximum = if compressed {
         None
     } else {
-        uncompressed_max_timestamp(
-            &bytes[HEADER_LEN..],
-            validated.header.records_count.get(),
-            header.base_timestamp,
-            |timestamp, has_key| {
-                (!compacted_topic || has_key)
-                    && record_now.is_none_or(|now| !timestamps.rejects_record(timestamp, now))
-            },
-        )
+        bytes.get(HEADER_LEN..).and_then(|body| {
+            uncompressed_max_timestamp(
+                body,
+                validated.header.records_count.get(),
+                header.base_timestamp,
+                |timestamp, has_key| {
+                    (!compacted_topic || has_key)
+                        && record_now.is_none_or(|now| !timestamps.rejects_record(timestamp, now))
+                },
+            )
+        })
     };
     if let Some(maximum) = fast_maximum {
         max_timestamp.observe(maximum);
@@ -471,7 +473,9 @@ fn prepare_source(
                 max_timestamp: max_timestamp.0,
                 ..header
             },
-            with_max_timestamp(&bytes, max_timestamp.0),
+            // A batch too short to hold a v2 header is Kafka's
+            // `CorruptRecordException`.
+            with_max_timestamp(&bytes, max_timestamp.0).ok_or(codes::CORRUPT_MESSAGE)?,
         )
     } else {
         (header, bytes)
@@ -521,12 +525,11 @@ const NO_TIMESTAMP: i64 = -1;
 /// Byte range of `max_timestamp` in the v2 batch header: `attributes` (2) and
 /// `last_offset_delta` (4) and `base_timestamp` (8) follow the CRC, so it
 /// starts 14 bytes into the CRC-covered region and is eight bytes wide.
-const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
-    CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
+const MAX_TIMESTAMP_RANGE: Range<usize> = CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
 
 /// Byte range of the CRC in the v2 batch header: the four bytes in front of
 /// the region it covers.
-const CRC_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
+const CRC_RANGE: Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
 
 /// The producer's batch with `max_timestamp` rewritten and the CRC that
 /// covers it recomputed: Kafka's `DefaultRecordBatch.setMaxTimestamp` on wire
@@ -538,15 +541,19 @@ const CRC_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_S
 /// largest record timestamp keeps the zero-copy append, as Kafka's
 /// `setMaxTimestamp` skips the CRC when the value does not change.
 /// [`validate_one_v2_batch`] has already checked that the slice holds a whole
-/// header.
-fn with_max_timestamp(bytes: &Bytes, max_timestamp: i64) -> Bytes {
-    let mut patched = BytesMut::from(&bytes[..]);
-    patched[MAX_TIMESTAMP_RANGE].copy_from_slice(&max_timestamp.to_be_bytes());
+/// header, so the `None` of a slice too short for one does not arise.
+fn with_max_timestamp(bytes: &Bytes, max_timestamp: i64) -> Option<Bytes> {
+    let mut patched = BytesMut::from(bytes.as_ref());
+    patched
+        .get_mut(MAX_TIMESTAMP_RANGE)?
+        .copy_from_slice(&max_timestamp.to_be_bytes());
     // The CRC covers the header from `attributes` to the end of the batch,
     // and the body follows the header without a gap.
-    let crc = crc32c(&patched[CRC_COVERAGE_START..]);
-    patched[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
-    patched.freeze()
+    let crc = crc32c(patched.get(CRC_COVERAGE_START..)?);
+    patched
+        .get_mut(CRC_RANGE)?
+        .copy_from_slice(&crc.to_be_bytes());
+    Some(patched.freeze())
 }
 
 /// The per-record message of Kafka's `LogValidator.validateTimestamp`, for one
@@ -602,14 +609,15 @@ pub(super) fn owned_fallback(
         return Err(codes::CORRUPT_MESSAGE);
     }
     match RecordsPayload::from_bytes_with_policy(bytes.clone(), policy) {
-        Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
+        Ok(rp) => {
+            let batch = decode_owned_batch(rp, topic_name, metrics, policy)?;
             validate_owned_client_batch(&batch, version)?;
             Ok(PreparedBatch::from_owned(
                 batch,
                 compacted_topic,
                 timestamps,
             ))
-        }),
+        }
         Err(error) => Err(decode_failure_code(&error, bytes)),
     }
 }
@@ -636,7 +644,7 @@ fn decode_failure_code(error: &RecordsError, records: &[u8]) -> i16 {
     if magic != 2 {
         return codes::INVALID_RECORD;
     }
-    match next_batch(&records[len..]) {
+    match next_batch(records.get(len..).unwrap_or_default()) {
         NextBatch::Corrupt => return codes::CORRUPT_MESSAGE,
         NextBatch::Batch { .. } => return codes::INVALID_RECORD,
         NextBatch::Incomplete => {}

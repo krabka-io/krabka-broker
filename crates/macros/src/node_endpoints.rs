@@ -1,13 +1,16 @@
 //! Move a locally owned endpoint into each explicitly listed wire response.
 
-use moxy::ast::{ItemStruct, ParseError};
+use moxy::{
+    ast::{FromMeta, ItemStruct, Meta, ParseError, Path},
+    token::TokenStream,
+};
 
 struct Targets {
-    paths: Vec<moxy::ast::Path>,
+    paths: Vec<Path>,
 }
 
-impl moxy::ast::FromMeta for Targets {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for Targets {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         use moxy::{
             ast::{List, MetaContent, Parser, Path, PathArguments, Token},
             token::{Spanner, ToTokenStream},
@@ -56,7 +59,7 @@ struct EndpointArgs {
     targets: Targets,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<moxy::token::TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     use {
         crate::meta::{field_ident, named_fields},
         moxy::ast::Attributed,

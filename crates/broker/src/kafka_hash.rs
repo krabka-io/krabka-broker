@@ -5,10 +5,15 @@ const MURMUR2_M: u32 = 0x5bd1_e995;
 const MURMUR2_R: u32 = 24;
 
 #[must_use]
-pub(crate) fn murmur2(data: &[u8]) -> u32 {
+pub fn murmur2(data: &[u8]) -> u32 {
     let length = data.len();
     let length_bytes = length.to_le_bytes();
-    let length32 = u32::from_le_bytes(length_bytes[..4].try_into().expect("usize is at least u32"));
+    // The low 32 bits of the length, as Java's `int` length holds them.
+    let length32 = length_bytes
+        .iter()
+        .take(4)
+        .rev()
+        .fold(0_u32, |low, &byte| (low << 8) | u32::from(byte));
     let mut h: u32 = MURMUR2_SEED ^ length32;
     let (chunks, rem) = data.as_chunks::<4>();
 
@@ -49,7 +54,7 @@ pub(crate) fn murmur2(data: &[u8]) -> u32 {
 
 /// Apply Kafka's `Utils.abs(murmur2(data)) % numPartitions` convention.
 #[must_use]
-pub(crate) fn murmur2_partition(data: &[u8], num_partitions: i32) -> i32 {
+pub fn murmur2_partition(data: &[u8], num_partitions: i32) -> i32 {
     let hash = murmur2(data).cast_signed();
     let positive = if hash == i32::MIN { 0 } else { hash.abs() };
     positive % num_partitions

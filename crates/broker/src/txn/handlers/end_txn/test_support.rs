@@ -20,12 +20,12 @@ pub(super) fn entry(pid: i64, epoch: i16, state: TxnState) -> TxnEntry {
 }
 
 pub(super) fn marker_entry() -> TxnEntry {
-    TxnEntry::new_empty("tid".to_string(), ProducerId(7), 0, 60_000, 0)
+    TxnEntry::new_empty("tid".to_owned(), ProducerId(7), 0, 60_000, 0)
 }
 
 pub(super) fn tps() -> Vec<TopicPartition> {
     vec![TopicPartition {
-        topic: "t".to_string(),
+        topic: "t".to_owned(),
         partition: PartitionIndex(0),
     }]
 }

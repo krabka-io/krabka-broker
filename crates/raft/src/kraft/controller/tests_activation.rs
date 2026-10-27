@@ -15,7 +15,7 @@ use {
                 open_test_controller_with, voter_set,
             },
         },
-        serialize_bootstrap_snapshot,
+        serialize_bootstrap_snapshot, test_support,
     },
     assert2::check,
     krabka_metadata::{
@@ -24,7 +24,8 @@ use {
         metadata_version::{ELR_VERSION_FEATURE, METADATA_VERSION_FEATURE},
     },
     krabka_units::prelude::secs,
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, time::Duration},
+    tokio::time,
 };
 
 /// A `metadata.version` level below the latest production one, which an
@@ -347,8 +348,8 @@ async fn the_records_of_the_bootstrap_checkpoint_reach_the_image_through_the_log
         .expect("inject the election timeout");
     await_leader(&ctrl, Some(NodeId(1))).await;
     let mut images = ctrl.watch_image();
-    let led = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+    let led = time::timeout(
+        Duration::from_secs(5),
         images.wait_for(|image| image.finalized_metadata_version().is_some()),
     )
     .await
@@ -424,7 +425,7 @@ fn a_refused_activation_is_a_fatal_fault() {
     engine.activation = Activation {
         bootstrap_records: vec![
             feature(METADATA_VERSION_FEATURE, LATEST_PRODUCTION_METADATA_VERSION),
-            MetadataRecord::V1Partition(crate::test_support::single_replica_partition(
+            MetadataRecord::V1Partition(test_support::single_replica_partition(
                 "missing",
                 krabka_ids::PartitionIndex(0),
                 NodeId(1),
@@ -475,7 +476,7 @@ async fn the_activation_starts_a_restored_diskless_partition_at_its_materialized
             partitions: 1,
             replication_factor: 1,
         }),
-        MetadataRecord::V1Partition(crate::test_support::single_replica_partition(
+        MetadataRecord::V1Partition(test_support::single_replica_partition(
             "orders",
             krabka_ids::PartitionIndex(0),
             NodeId(1),

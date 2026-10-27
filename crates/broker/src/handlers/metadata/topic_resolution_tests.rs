@@ -19,6 +19,7 @@ use {
     assert2::assert,
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::{
+        api_key::ApiKey,
         owned::{
             create_topics_request::{CreatableTopic, CreateTopicsRequest},
             metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -136,7 +137,7 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> Fixture {
             topics: [TOPIC_A, TOPIC_B]
                 .into_iter()
                 .map(|name| CreatableTopic {
-                    name: name.to_string(),
+                    name: name.to_owned(),
                     num_partitions: 1,
                     replication_factor: 1,
                     ..Default::default()
@@ -179,14 +180,7 @@ async fn metadata(
         user ["describer"];
         client ["metadata-client"];
     };
-    dispatch_wire(
-        &shared,
-        krabka_protocol::api_key::ApiKey::Metadata as i16,
-        version,
-        request,
-        &ctx,
-    )
-    .await
+    dispatch_wire(&shared, ApiKey::Metadata as i16, version, request, &ctx).await
 }
 
 impl Fixture {
@@ -205,8 +199,8 @@ impl Fixture {
                 rows.iter()
                     .map(|RequestedTopic { name, id }| MetadataRequestTopic {
                         name: match name {
-                            Name::A => Some(TOPIC_A.to_string()),
-                            Name::Unknown => Some(UNKNOWN_NAME.to_string()),
+                            Name::A => Some(TOPIC_A.to_owned()),
+                            Name::Unknown => Some(UNKNOWN_NAME.to_owned()),
                             Name::Null => None,
                         },
                         topic_id: self.id(*id),
@@ -267,7 +261,7 @@ impl Fixture {
                         },
                         Row::UnknownName => MetadataResponseTopic {
                             error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                            name: Some(UNKNOWN_NAME.to_string()),
+                            name: Some(UNKNOWN_NAME.to_owned()),
                             topic_id: WireUuid::ZERO,
                             ..Default::default()
                         },
@@ -279,7 +273,7 @@ impl Fixture {
                         },
                         Row::DeniedName => MetadataResponseTopic {
                             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                            name: Some(TOPIC_A.to_string()),
+                            name: Some(TOPIC_A.to_owned()),
                             topic_id: WireUuid::ZERO,
                             ..Default::default()
                         },
@@ -312,7 +306,7 @@ async fn baseline(fixture: &Fixture) -> MetadataResponse {
             [TOPIC_A, TOPIC_B]
                 .into_iter()
                 .map(|name| MetadataRequestTopic {
-                    name: Some(name.to_string()),
+                    name: Some(name.to_owned()),
                     ..Default::default()
                 })
                 .collect(),

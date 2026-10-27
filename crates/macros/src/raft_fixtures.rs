@@ -1,11 +1,11 @@
 //! Consensus log and voter fixtures shared by unit and integration tests.
 
 use {
-    crate::{fixtures::name, meta::arguments},
+    crate::{fixtures::name, meta::argument_array},
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn empty_endpoint_voters(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn empty_endpoint_voters(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(ids: &[::krabka_ids::NodeId]) -> ::krabka_metadata::voters::VoterSet {
@@ -21,7 +21,7 @@ pub(crate) fn empty_endpoint_voters(input: TokenStream) -> Result<TokenStream, P
     })
 }
 
-pub(crate) fn epoch_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn epoch_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(base: i64, epoch: i32, value: &[u8]) -> ::krabka_protocol::records::RecordBatch {
@@ -48,15 +48,14 @@ pub(crate) fn epoch_record_batch(input: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn epoch_log_view(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut arguments = arguments(input.clone(), 2)
-        .or_else(|_| arguments(input, 3))?
-        .into_iter();
-    let name = name(arguments.next().unwrap())?;
-    let root = arguments.next().unwrap();
-    let context = arguments
-        .next()
-        .unwrap_or_else(|| moxy::template! { "log length fits in i64" });
+pub fn epoch_log_view(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let ([name_tokens, root], context) = if let Ok(pair) = argument_array(input.clone()) {
+        (pair, moxy::template! { "log length fits in i64" })
+    } else {
+        let [name_tokens, root, context] = argument_array(input)?;
+        ([name_tokens, root], context)
+    };
+    let name = name(name_tokens)?;
     Ok(moxy::template! {
         impl {{ root }}::LogView for {{ name }} {
             fn end_offset(&self) -> i64 {

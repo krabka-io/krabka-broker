@@ -26,7 +26,7 @@ use {
 
 /// A borrowed view of `[break_glass]`, with the questions the workflow asks.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BreakGlassPolicy<'a> {
+pub struct BreakGlassPolicy<'a> {
     config: &'a BreakGlassConfig,
 }
 

@@ -1,4 +1,5 @@
 //! What `#[derive(EnumStr)]` names, parses, lists and encodes.
+#![cfg(test)]
 
 use {
     assert2::assert,

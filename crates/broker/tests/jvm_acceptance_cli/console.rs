@@ -55,27 +55,30 @@ async fn rust_producer_to_console_consumer() {
     create_console_topic(KAFKA_IMAGE, &[], TOPIC, 1, 1);
 
     // 2. Build a Rust producer pointed at the host broker and produce 3 records.
-    let producer = Producer::builder()
-        .bootstrap(broker0_advertised().to_string())
-        .enable_idempotence(true)
-        .acks(Acks::All)
-        .compression(Compression::Lz4)
-        .build()
-        .await
-        .expect("producer");
-    for v in ["x", "y", "z"] {
-        let fut = producer
-            .send(ProducerRecord {
-                topic: TOPIC.into(),
-                value: Some(bytes::Bytes::from(v)),
-                ..Default::default()
-            })
-            .await;
-        let m = fut.expect("ack");
-        assert!(m.partition == 0);
+    {
+        let producer = Producer::builder()
+            .bootstrap(broker0_advertised().to_owned())
+            .enable_idempotence(true)
+            .acks(Acks::All)
+            .compression(Compression::Lz4)
+            .build()
+            .await
+            .expect("producer");
+        for v in ["x", "y", "z"] {
+            let fut = producer
+                .send(ProducerRecord {
+                    topic: TOPIC.into(),
+                    value: Some(bytes::Bytes::from(v)),
+                    ..Default::default()
+                })
+                .await;
+            let m = fut.expect("ack");
+            assert!(m.partition == 0);
+        }
+        producer.flush().await.expect("flush");
+        producer.close().await
     }
-    producer.flush().await.expect("flush");
-    producer.close().await.expect("close");
+    .expect("close");
 
     // 3. Consume via kafka-console-consumer --partition 0.
     let consumer_out = consume_console_partition(TOPIC, 3, 20000, &[]);

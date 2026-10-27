@@ -25,7 +25,7 @@ use {
         path::PathBuf,
         sync::{Arc, Mutex},
     },
-    tokio::sync::oneshot,
+    tokio::{sync::oneshot, time},
     tokio_util::sync::CancellationToken,
     tracing::{debug, warn},
 };
@@ -49,7 +49,7 @@ pub(super) struct ReplicatorTask {
 async fn wait_retry_or_cancel(cancel: &CancellationToken, backoff: krabka_units::Time) -> bool {
     tokio::select! {
         () = cancel.cancelled() => true,
-        () = tokio::time::sleep(backoff.to_std()) => false,
+        () = time::sleep(backoff.to_std()) => false,
     }
 }
 
@@ -156,7 +156,7 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
             .writer_tx
             .send(WriterMessage::SwapFutureLog {
                 target_log_dir: target_log_dir.clone(),
-                future_log: future_log.clone(),
+                future_log: Arc::clone(&future_log),
                 future_path: future_path.clone(),
                 target_partition_path: target_partition_path.clone(),
                 ack: ack_tx,
@@ -220,20 +220,21 @@ mod tests {
         assert2::assert,
         krabka_log::LogConfig,
         krabka_units::mebibytes,
-        std::{sync::atomic::AtomicU64, time::Duration},
+        std::{fs, path::Path, sync::atomic::AtomicU64, time::Duration},
         tempfile::tempdir,
+        tokio::{task, time},
     };
 
     async fn resume_and_wait(
         part: &Arc<Partition>,
         partitions: &Arc<PartitionRegistry>,
         future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
-        target: &std::path::Path,
+        target: &Path,
         wait: Duration,
         expectation: &str,
     ) {
         let future_path = log_dir::future_partition_dir(target, "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
+        fs::create_dir_all(&future_path).unwrap();
         resume_move(
             partitions,
             future_logs,
@@ -244,14 +245,14 @@ mod tests {
             test_policy(),
         )
         .expect("resume should spawn a future-log move");
-        tokio::time::timeout(wait, async {
+        time::timeout(wait, async {
             loop {
                 if canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target)
                     && future_logs.is_empty()
                 {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -262,9 +263,9 @@ mod tests {
         part: &Arc<Partition>,
         future_log: Arc<Mutex<Log>>,
         future_path: PathBuf,
-        target: &std::path::Path,
+        target: &Path,
     ) {
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(10),
             replicator_loop(ReplicatorTask {
                 part: Arc::clone(part),
@@ -328,7 +329,7 @@ mod tests {
                 .value_size(400 * 1024)
                 .call();
         }
-        partitions.insert("t".into(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), Arc::clone(&part));
 
         resume_and_wait(
             &part,
@@ -345,10 +346,7 @@ mod tests {
 
     /// A partition of `t-0` holding five one-record batches of ten bytes, and
     /// a future log that is a full copy of it.
-    fn partition_with_copied_future_log(
-        primary: &std::path::Path,
-        target: &std::path::Path,
-    ) -> CopiedFuture {
+    fn partition_with_copied_future_log(primary: &Path, target: &Path) -> CopiedFuture {
         let part = fixture_partition(primary, "t", PartitionIndex(0));
         for _ in 0..5 {
             append_value_batch().part(&part).value_size(10).call();
@@ -425,7 +423,7 @@ mod tests {
         part: &Arc<Partition>,
         future_log: Arc<Mutex<Log>>,
         future_path: PathBuf,
-        target: &std::path::Path,
+        target: &Path,
     ) {
         finish_move(part, future_log, future_path, target).await;
         assert!(canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target));

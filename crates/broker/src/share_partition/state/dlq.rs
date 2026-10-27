@@ -19,6 +19,7 @@
 use {
     super::{AcquisitionState, InFlightBatch, RecordState},
     krabka_log::Offset,
+    std::mem,
 };
 
 /// Why a record goes to the dead-letter queue: Kafka's
@@ -122,7 +123,7 @@ impl AcquisitionState {
     /// Hands out the `Archiving` runs whose dead-letter write has not
     /// started, and forgets them. The caller writes each run to the queue and
     /// then calls [`Self::finish_archiving`].
-    pub fn take_pending_dlq(&mut self) -> Vec<DlqRange> { std::mem::take(&mut self.pending_dlq) }
+    pub fn take_pending_dlq(&mut self) -> Vec<DlqRange> { mem::take(&mut self.pending_dlq) }
 
     /// The second phase: moves every `Archiving` record in `[first, last]` to
     /// `Archived`, counts it as terminal, marks the state dirty and advances

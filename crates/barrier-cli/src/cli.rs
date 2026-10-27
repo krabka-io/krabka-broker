@@ -9,7 +9,7 @@
 
 use {
     clap::{Parser, Subcommand},
-    krabka_units::Time,
+    krabka_units::{Time, parse},
 };
 
 /// The tool's command line.
@@ -106,9 +106,7 @@ pub enum Command {
 /// A number with no unit is refused, and only `0` is exempt. That is the units
 /// crate's rule and it is the right one here: `--timeout 30` from someone who
 /// meant milliseconds would otherwise wait thirty seconds without complaining.
-fn parse_time(raw: &str) -> Result<Time, String> {
-    krabka_units::parse::time(raw).map_err(|e| e.to_string())
-}
+fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
 
 #[cfg(test)]
 mod tests {

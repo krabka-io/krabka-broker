@@ -23,11 +23,11 @@ use {
         synthetic::{clean_run, inject_missing_record},
         verdict::{judge, judge_self_check},
     },
-    std::{path::Path, process::ExitCode},
+    std::{fs, path::Path, process::ExitCode},
 };
 
 fn load(path: &Path) -> Result<Contract, String> {
-    let yaml = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let yaml = fs::read_to_string(path).map_err(|error| error.to_string())?;
     Contract::from_yaml(&yaml).map_err(|error| format!("{} does not load: {error}", path.display()))
 }
 
@@ -72,8 +72,12 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
             );
             // A checkpoint that loses one record fails the run, so the
             // per-transition reconciliation cannot pass vacuously.
-            let mut lost = clean.clone();
-            let read = &mut lost.checkpoints[0].records[0];
+            let mut lost = clean;
+            let read = lost
+                .checkpoints
+                .first_mut()
+                .and_then(|checkpoint| checkpoint.records.first_mut())
+                .ok_or("a lifecycle contract leaves a checkpoint with a record")?;
             let first = read.acknowledged.iter().next().unwrap_or_default();
             read.reader.seen.remove(first);
             read.reader.latest_by_key.clear();
@@ -87,7 +91,7 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
                 verdict.recovery.is_some(),
                 "a drill is judged for its recovery"
             );
-            let mut lost = clean.clone();
+            let mut lost = clean;
             for reader in &mut lost.readers {
                 reader.seen.remove(0);
             }
@@ -99,8 +103,15 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args = libtest_mimic::Arguments::from_args();
+    let paths = match corpus::yaml_files("soak") {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut trials = Vec::new();
-    for path in corpus::yaml_files("soak") {
+    for path in paths {
         let file = path
             .file_name()
             .map_or_default(|name| name.to_string_lossy().into_owned());

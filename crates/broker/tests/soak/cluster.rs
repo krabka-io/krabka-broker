@@ -47,7 +47,7 @@
 //!
 //! [`process_kill_durability`]: ../process_kill_durability.rs
 
-pub(crate) use crate::support::docker;
+pub use crate::support::docker;
 use {
     crate::support::{
         diskless::broker_principal,
@@ -60,12 +60,13 @@ use {
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_broker::NodeId,
     std::{
-        io,
+        env, fs, io,
         net::{SocketAddr, ToSocketAddrs as _},
         path::{Path, PathBuf},
-        process::Command,
+        process::{self, Command},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The name every node advertises, and the one the test's own clients dial.
@@ -124,18 +125,18 @@ const CONFIG_FILE: &str = "broker.toml";
 const INTER_BROKER_LISTENER: &str = "INTER_BROKER";
 
 /// The TLS listener a node binds when the cluster is given [`TlsFiles`].
-pub(crate) const TLS_LISTENER: &str = "TLS";
+pub const TLS_LISTENER: &str = "TLS";
 
 /// Where a node's TLS files are, relative to the mount, and inside the
 /// container.
-pub(crate) const TLS_DIR: &str = "tls";
-pub(crate) const CONTAINER_TLS_DIR: &str = "/var/lib/krabka/tls";
+pub const TLS_DIR: &str = "tls";
+pub const CONTAINER_TLS_DIR: &str = "/var/lib/krabka/tls";
 
 /// The certificate chain, the PKCS#8 key and the trusted CAs a node's TLS
 /// listener starts with, all PEM. Every node is given the same files: the
 /// certificate names `host.docker.internal`, which is every node's address.
 #[derive(Debug, Clone)]
-pub(crate) struct TlsFiles {
+pub struct TlsFiles {
     pub(crate) cert: String,
     pub(crate) key: String,
     pub(crate) truststore: String,
@@ -147,21 +148,21 @@ impl TlsFiles {
     /// in one file as a dynamic PEM keystore holds them.
     pub(crate) fn write(&self, root: &Path) -> io::Result<()> {
         let dir = root.join(TLS_DIR);
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("cert.pem"), &self.cert)?;
-        std::fs::write(dir.join("key.pem"), &self.key)?;
-        std::fs::write(
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join("cert.pem"), &self.cert)?;
+        fs::write(dir.join("key.pem"), &self.key)?;
+        fs::write(
             dir.join("keystore.pem"),
             format!("{}{}", self.key, self.cert),
         )?;
-        std::fs::write(dir.join("truststore.pem"), &self.truststore)
+        fs::write(dir.join("truststore.pem"), &self.truststore)
     }
 }
 
 /// The `docker run` arguments that start one node, around its image: what a
 /// roll uses to start the node again, on the same data, from another image.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Launch {
+pub struct Launch {
     before_image: Vec<String>,
     after_image: Vec<String>,
 }
@@ -200,12 +201,12 @@ const CLEANER_INTERVAL: &str = "1s";
 const RETENTION_CHECK_INTERVAL: &str = "1s";
 
 /// The image tag to run.
-pub(crate) fn image() -> String {
-    std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
+pub fn image() -> String {
+    env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
 }
 
 /// One broker of the cluster.
-pub(crate) struct SoakBroker {
+pub struct SoakBroker {
     /// Container name, and the label its samples are reported under.
     pub(crate) name: String,
     pub(crate) node_id: u32,
@@ -313,7 +314,7 @@ impl SoakBroker {
     /// the end, where TOML allows each.
     fn write_config(&self, voters: &str, extras: &NodeExtras) {
         let quorum = self.inter_broker_port.map(|port| {
-            std::fs::write(
+            fs::write(
                 self.host_root().join(TOKEN_FILE),
                 inter_broker_token(self.node_id),
             )
@@ -353,7 +354,7 @@ impl SoakBroker {
             root = extras.root_toml,
             tables = extras.tables_toml,
         );
-        std::fs::write(self.host_root().join(CONFIG_FILE), toml)
+        fs::write(self.host_root().join(CONFIG_FILE), toml)
             .expect("write the broker configuration file");
     }
 
@@ -548,7 +549,7 @@ struct NodeExtras {
 }
 
 /// Three brokers, formatted into one quorum and running.
-pub(crate) struct SoakCluster {
+pub struct SoakCluster {
     pub(crate) brokers: Vec<SoakBroker>,
 }
 
@@ -588,7 +589,7 @@ impl SoakCluster {
         let cluster_id = uuid::Uuid::new_v4().to_string();
         let mut brokers: Vec<SoakBroker> = (1..=brokers)
             .map(|node_id| SoakBroker {
-                name: format!("krabka-soak-{}-{node_id}", std::process::id()),
+                name: format!("krabka-soak-{}-{node_id}", process::id()),
                 node_id,
                 client_port: free_port(),
                 controller_port: free_port(),
@@ -667,7 +668,7 @@ impl SoakCluster {
                     broker.name,
                     broker.container_log()
                 );
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                time::sleep(Duration::from_millis(500)).await;
             }
         }
     }
@@ -687,10 +688,7 @@ const CREATE_TOPICS_TIMEOUT: Duration = Duration::from_secs(180);
 ///
 /// Returns the last answer when the cluster has not accepted every topic
 /// within [`CREATE_TOPICS_TIMEOUT`].
-pub(crate) async fn create_topics(
-    bootstrap: &str,
-    topics: &[CreatableTopic],
-) -> Result<(), String> {
+pub async fn create_topics(bootstrap: &str, topics: &[CreatableTopic]) -> Result<(), String> {
     let deadline = Instant::now() + CREATE_TOPICS_TIMEOUT;
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -714,7 +712,7 @@ pub(crate) async fn create_topics(
                 Err(error) => last = format!("{error}"),
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     Err(last)
 }
@@ -730,6 +728,11 @@ mod tests {
         assert2::check,
         krabka_broker::config::{BrokerConfig, InterBrokerCredentials},
         krabka_security::{ListenerProtocol, SaslMechanism, UnsecuredJwsValidator},
+        std::{
+            fs,
+            io::{self, Error},
+            net::SocketAddr,
+        },
     };
 
     /// The node file's diskless-quorum parts, around the minimum that parses,
@@ -737,7 +740,7 @@ mod tests {
     fn applied(node_id: u32, port: u16) -> BrokerConfig {
         let dir = tempfile::TempDir::new().expect("token directory");
         let token = dir.path().join("token");
-        std::fs::write(&token, inter_broker_token(node_id)).expect("write the token");
+        fs::write(&token, inter_broker_token(node_id)).expect("write the token");
         let toml = diskless_quorum_toml(node_id, port, &token.display().to_string());
         let text = format!(
             "broker_id = {node_id}\n{root}\n\
@@ -803,13 +806,13 @@ mod tests {
             None
         },
         unresolved = {
-            Err(std::io::Error::other("failed to lookup address information")),
+            Err(Error::other("failed to lookup address information")),
             Some("does not resolve on this host")
         },
         elsewhere = { Ok(vec!["10.0.0.5:0".parse().unwrap()]), Some("not to loopback") },
     )]
     fn the_host_gateway_name_must_reach_loopback(
-        resolved: std::io::Result<Vec<std::net::SocketAddr>>,
+        resolved: io::Result<Vec<SocketAddr>>,
         problem: Option<&str>,
     ) {
         let found = host_gateway_problem(resolved);

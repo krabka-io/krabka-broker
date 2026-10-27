@@ -32,7 +32,7 @@ pub(super) fn error_message(error_code: i16) -> Option<String> {
         codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED => "Transactional Id authorization failed.",
         _ => return None,
     };
-    Some(message.to_string())
+    Some(message.to_owned())
 }
 
 /// A row with `Node.noNode()` in place of the coordinator.

@@ -12,7 +12,7 @@ use {
         replica_state::ReplicaState,
     },
     krabka_protocol::owned::produce_response::LeaderIdAndEpoch,
-    std::sync::Arc,
+    std::sync::{Arc, atomic},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,14 +167,11 @@ pub(super) fn diskless_role_ready(
     partition: &Partition,
     record: &krabka_metadata::PartitionRecord,
 ) -> bool {
-    krabka_metadata::NodeId(
-        partition
-            .current_leader
-            .load(std::sync::atomic::Ordering::Acquire),
-    ) == record.leader
+    krabka_metadata::NodeId(partition.current_leader.load(atomic::Ordering::Acquire))
+        == record.leader
         && partition
             .current_leader_epoch
-            .load(std::sync::atomic::Ordering::Acquire)
+            .load(atomic::Ordering::Acquire)
             == record.leader_epoch.0
 }
 
@@ -224,6 +221,7 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{BrokerConfigRecord, MetadataImage, MetadataRecord, PartitionRecord},
+        std::time::Instant,
         uuid::Uuid,
     };
 
@@ -263,7 +261,7 @@ mod tests {
         ));
 
         assert!(!replication_target_matches_image(
-            &crate::partition::ReplicationTarget {
+            &ReplicationTarget {
                 leader_epoch: krabka_metadata::LeaderEpoch(record.leader_epoch.0 + 1),
                 ..current
             },
@@ -354,12 +352,7 @@ mod tests {
         let mut state = ReplicaState::new();
         assert!(!replica_state_matches_image(&state, record));
 
-        state.install_isr(
-            &record.isr,
-            &record.replicas,
-            record.leader,
-            std::time::Instant::now(),
-        );
+        state.install_isr(&record.isr, &record.replicas, record.leader, Instant::now());
         assert!(replica_state_matches_image(&state, record));
 
         state.current_leader_epoch = krabka_ids::LeaderEpoch(record.leader_epoch.0 + 1);
@@ -488,7 +481,7 @@ mod tests {
         assert!(
             refused
                 == Some(PartitionGateError {
-                    code: crate::codes::NOT_ENOUGH_REPLICAS,
+                    code: NOT_ENOUGH_REPLICAS,
                     current_leader: None
                 }),
             "got {refused:?}"
@@ -677,7 +670,7 @@ mod tests {
                 2,
                 false,
                 false,
-                refused.clone(),
+                refused,
             ),
         ] {
             let got = produce_gate(&image, krabka_audit::NodeId(node_id), is_witness, diskless);

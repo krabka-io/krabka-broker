@@ -2,6 +2,7 @@
 //! up-conversion and lands on disk as a v2 `RecordBatch`. A fetch back through
 //! the typed client, at whatever version it negotiates, must return the key and
 //! value that the test sent.
+#![cfg(test)]
 
 use {
     crate::support::{fetch::single_partition_fetch, topics::create_named_topic_request},
@@ -86,7 +87,7 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let mut stream = TcpStream::connect(addr)
         .await
         .expect("connect for v0 Produce");
-    stream.set_nodelay(true).ok();
+    let _ = stream.set_nodelay(true);
 
     // 3. Build the v0 MessageSet with key="k", value="v".
     let messageset_bytes = build_v0_messageset(&[KeyValue {
@@ -99,7 +100,7 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
         acks: 1,
         timeout_ms: 5_000,
         topic_data: vec![LegacyTopicProduceData {
-            name: "legacy_v0".to_string(),
+            name: "legacy_v0".to_owned(),
             partition_data: vec![LegacyPartitionProduceData {
                 index: 0,
                 records: Some(RecordsPayload::Legacy(messageset_bytes)),

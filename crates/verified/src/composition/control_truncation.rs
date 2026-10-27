@@ -77,8 +77,14 @@ pub(super) fn whole_batch_truncation_bounds_controls(
     #[invariant(physical_start@ <= end@ && end@ <= cut@)]
     #[invariant(forall<i: Int> 0 <= i && i < kept@ ==> ends@[i]@ <= cut@)]
     #[variant(ends@.len() - kept@)]
-    while kept < ends.len() && truncation_batch_retained(ends[kept] - 1, cut) {
-        end = ends[kept];
+    while kept < ends.len() {
+        let Some(&batch_end) = ends.get(kept) else {
+            break;
+        };
+        if !truncation_batch_retained(batch_end - 1, cut) {
+            break;
+        }
+        end = batch_end;
         kept += 1;
     }
     proof_assert!(forall<i: Int> kept@ <= i && i < ends@.len() ==> cut@ < ends@[i]@);

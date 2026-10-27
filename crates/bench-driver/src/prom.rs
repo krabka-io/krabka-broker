@@ -1,7 +1,8 @@
-//! Prometheus query client. The driver issues a small set of instant
-//! queries at scenario end to capture resource usage on the broker pods.
-//! For Strimzi only, it also captures JVM heap and non-heap from the JMX
-//! exporter.
+//! Prometheus query client.
+//!
+//! The driver issues a small set of instant queries at scenario end to capture
+//! resource usage on the broker pods. For Strimzi only, it also captures JVM
+//! heap and non-heap from the JMX exporter.
 
 use {
     crate::{
@@ -34,7 +35,7 @@ impl PromClient {
             .build()
             .context("build reqwest client")?;
         Ok(Self {
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
             http,
         })
     }
@@ -376,10 +377,11 @@ fn join_resource_series(
 
     Ok(cpu
         .into_iter()
-        .map(|(ts_ms, cpu_cores)| BrokerSample {
+        .zip(mem.into_values())
+        .map(|((ts_ms, cpu_cores), mem_bytes)| BrokerSample {
             t_offset_ms: TimeOffsetMs(ts_ms.saturating_sub(range_start_ms)),
             cpu_cores,
-            mem_working_set: ByteSize::from_bytes(mem[&ts_ms]),
+            mem_working_set: ByteSize::from_bytes(mem_bytes),
         })
         .collect())
 }
@@ -412,11 +414,9 @@ struct PromResult {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, tokio::task::JoinHandle};
 
-    async fn local_prometheus(
-        responses: Vec<(u16, &'static str)>,
-    ) -> (PromClient, tokio::task::JoinHandle<()>) {
+    async fn local_prometheus(responses: Vec<(u16, &'static str)>) -> (PromClient, JoinHandle<()>) {
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpListener,

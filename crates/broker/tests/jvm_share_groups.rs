@@ -27,6 +27,7 @@
 //! `jvm_acceptance.rs`. The broker binds `0.0.0.0:9092` and advertises
 //! `host.docker.internal:9092`. The container reaches it through
 //! `--add-host=host.docker.internal:host-gateway`.
+#![cfg(test)]
 
 mod support;
 
@@ -35,6 +36,10 @@ use {
     krabka_broker::BrokerHandle,
     krabka_client_core::Client,
     krabka_protocol::records::{Record, RecordBatch},
+    std::{
+        process::Output,
+        time::{SystemTime, UNIX_EPOCH},
+    },
 };
 
 /// Port that the broker binds on the host, and that the container reaches
@@ -100,8 +105,8 @@ async fn bootstrap_share_state(broker: &BrokerHandle, client: &Client, key: &str
 /// Wall-clock milliseconds, the unit a record timestamp carries.
 fn now_ms() -> i64 {
     i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_millis(),
     )
@@ -153,14 +158,9 @@ async fn produce_at(
 /// Runs a docker container against the host broker and returns its output. The
 /// share consumer exits with a non-zero status on an idle timeout, even after
 /// it consumed records, so callers check stdout and not the exit status.
-fn docker_run(args: &[&str]) -> std::process::Output { support::jvm_docker_run(KAFKA_IMAGE, args) }
+fn docker_run(args: &[&str]) -> Output { support::jvm_docker_run(KAFKA_IMAGE, args) }
 
-fn run_share_consumer(
-    bootstrap: &str,
-    topic: &str,
-    group: &str,
-    max_messages: usize,
-) -> std::process::Output {
+fn run_share_consumer(bootstrap: &str, topic: &str, group: &str, max_messages: usize) -> Output {
     docker_run(&[
         "bash",
         "-c",

@@ -62,82 +62,85 @@ async fn read_committed_latest_stops_at_an_open_transaction() {
         // Two ordinary records first, so the transaction does not start at
         // offset 0 and the `read_committed` answer below cannot be confused
         // with the log start offset.
-        let plain = Producer::builder()
-            .bootstrap(bootstrap.clone())
-            .build()
-            .await
-            .expect("plain producer build");
-        for value in ["settled-a", "settled-b"] {
-            send_ok(&plain, &topic, value).await;
-        }
-        wait_for_settled_log(&p.broker, &topic, 2).await;
+        {
+            let plain = Producer::builder()
+                .bootstrap(bootstrap.clone())
+                .build()
+                .await
+                .expect("plain producer build");
+            for value in ["settled-a", "settled-b"] {
+                send_ok(&plain, &topic, value).await;
+            }
+            wait_for_settled_log(&p.broker, &topic, 2).await;
 
-        // With no transaction anywhere on the partition the two isolation
-        // levels must already agree. This is the control reading: it separates
-        // "the last stable offset holds a `read_committed` client back" from
-        // "the `read_committed` answer is broken".
-        check!(
-            end_of_partition(&p.client, &topic).await
-                == EndOfPartition {
-                    read_uncommitted: latest_row(2),
-                    read_committed: latest_row(2),
-                },
-            "{label}: a partition with no transaction on it has one end"
-        );
+            // With no transaction anywhere on the partition the two isolation
+            // levels must already agree. This is the control reading: it separates
+            // "the last stable offset holds a `read_committed` client back" from
+            // "the `read_committed` answer is broken".
+            check!(
+                end_of_partition(&p.client, &topic).await
+                    == EndOfPartition {
+                        read_uncommitted: latest_row(2),
+                        read_committed: latest_row(2),
+                    },
+                "{label}: a partition with no transaction on it has one end"
+            );
 
-        let producer = Producer::builder()
-            .bootstrap(bootstrap.clone())
-            .transactional_id(format!("list-offsets-isolation-{label}-tid"))
-            .build()
-            .await
-            .expect("transactional producer build");
-        producer
-            .init_transactions()
-            .await
-            .expect("init_transactions");
-        let txn = producer
-            .begin_transaction()
-            .await
-            .expect("begin_transaction");
-        for value in ["open-c", "open-d"] {
-            send_ok(&producer, &topic, value).await;
-        }
-        wait_for_settled_log(&p.broker, &topic, 4).await;
+            {
+                let producer = Producer::builder()
+                    .bootstrap(bootstrap.clone())
+                    .transactional_id(format!("list-offsets-isolation-{label}-tid"))
+                    .build()
+                    .await
+                    .expect("transactional producer build");
+                producer
+                    .init_transactions()
+                    .await
+                    .expect("init_transactions");
+                let txn = producer
+                    .begin_transaction()
+                    .await
+                    .expect("begin_transaction");
+                for value in ["open-c", "open-d"] {
+                    send_ok(&producer, &topic, value).await;
+                }
+                wait_for_settled_log(&p.broker, &topic, 4).await;
 
-        // The transaction is open. `read_uncommitted` sees the whole log, and
-        // `read_committed` stops at offset 2, the first record the transaction
-        // wrote. This is the reading the bug got wrong: it answered 4 to both.
-        check!(
-            end_of_partition(&p.client, &topic).await
-                == EndOfPartition {
-                    read_uncommitted: latest_row(4),
-                    read_committed: latest_row(2),
-                },
-            "{label}: an open transaction holds read_committed at its first record"
-        );
+                // The transaction is open. `read_uncommitted` sees the whole log, and
+                // `read_committed` stops at offset 2, the first record the transaction
+                // wrote. This is the reading the bug got wrong: it answered 4 to both.
+                check!(
+                    end_of_partition(&p.client, &topic).await
+                        == EndOfPartition {
+                            read_uncommitted: latest_row(4),
+                            read_committed: latest_row(2),
+                        },
+                    "{label}: an open transaction holds read_committed at its first record"
+                );
 
-        match resolution {
-            Resolution::Commit => txn.commit().await.expect("commit"),
-            Resolution::Abort => txn.abort().await.expect("abort"),
-        }
+                match resolution {
+                    Resolution::Commit => txn.commit().await.expect("commit"),
+                    Resolution::Abort => txn.abort().await.expect("abort"),
+                }
 
-        // The marker is the fifth record on the partition, and it releases the
-        // last stable offset. Both isolation levels are back to one answer.
-        wait_for_settled_log(&p.broker, &topic, 5).await;
-        check!(
-            end_of_partition(&p.client, &topic).await
-                == EndOfPartition {
-                    read_uncommitted: latest_row(5),
-                    read_committed: latest_row(5),
-                },
-            "{label}: a resolved transaction releases read_committed"
-        );
+                // The marker is the fifth record on the partition, and it releases the
+                // last stable offset. Both isolation levels are back to one answer.
+                wait_for_settled_log(&p.broker, &topic, 5).await;
+                check!(
+                    end_of_partition(&p.client, &topic).await
+                        == EndOfPartition {
+                            read_uncommitted: latest_row(5),
+                            read_committed: latest_row(5),
+                        },
+                    "{label}: a resolved transaction releases read_committed"
+                );
 
-        producer
-            .close()
-            .await
+                producer.close().await
+            }
             .expect("transactional producer close");
-        plain.close().await.expect("plain producer close");
+            plain.close().await
+        }
+        .expect("plain producer close");
     }
 
     p.broker.shutdown().await;

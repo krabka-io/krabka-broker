@@ -15,7 +15,13 @@ use {
     },
     bytes::BytesMut,
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
-    krabka_protocol::{Decode, Encode, owned as protocol},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            self as protocol, create_delegation_token_request, describe_delegation_token_request,
+            expire_delegation_token_request, renew_delegation_token_request,
+        },
+    },
     std::io,
     tokio::{
         io::{AsyncRead, AsyncWrite},
@@ -43,13 +49,12 @@ type RenewResponse = protocol::renew_delegation_token_response::RenewDelegationT
 /// Newest `CreateDelegationToken` that Krabka supports: Apache Kafka v3,
 /// flexible. `MAX_VERSION` here exercises the same wire shape that the JVM
 /// admin client uses against a modern broker.
-const CREATE_DT_VERSION: i16 = krabka_protocol::owned::create_delegation_token_request::MAX_VERSION;
-const RENEW_DT_VERSION: i16 = krabka_protocol::owned::renew_delegation_token_request::MAX_VERSION;
-const EXPIRE_DT_VERSION: i16 = krabka_protocol::owned::expire_delegation_token_request::MAX_VERSION;
-const DESCRIBE_DT_VERSION: i16 =
-    krabka_protocol::owned::describe_delegation_token_request::MAX_VERSION;
+const CREATE_DT_VERSION: i16 = create_delegation_token_request::MAX_VERSION;
+const RENEW_DT_VERSION: i16 = renew_delegation_token_request::MAX_VERSION;
+const EXPIRE_DT_VERSION: i16 = expire_delegation_token_request::MAX_VERSION;
+const DESCRIBE_DT_VERSION: i16 = describe_delegation_token_request::MAX_VERSION;
 
-pub(crate) async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unpin>(
+pub async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     corr_id: i32,
     req: &CreateRequest,
@@ -73,7 +78,7 @@ pub(crate) async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unp
         .map_err(|e| io::Error::other(format!("CreateDelegationToken decode: {e}")))
 }
 
-pub(crate) async fn send_renew_delegation_token(
+pub async fn send_renew_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
     req: &RenewRequest,
@@ -97,7 +102,7 @@ pub(crate) async fn send_renew_delegation_token(
         .map_err(|e| io::Error::other(format!("RenewDelegationToken decode: {e}")))
 }
 
-pub(crate) async fn send_expire_delegation_token(
+pub async fn send_expire_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
     req: &ExpireRequest,
@@ -121,7 +126,7 @@ pub(crate) async fn send_expire_delegation_token(
         .map_err(|e| io::Error::other(format!("ExpireDelegationToken decode: {e}")))
 }
 
-pub(crate) async fn send_describe_delegation_token(
+pub async fn send_describe_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
     req: &DescribeRequest,

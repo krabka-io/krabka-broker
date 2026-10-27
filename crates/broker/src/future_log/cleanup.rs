@@ -9,7 +9,10 @@ use {
     super::{FutureLogState, MoveError},
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    std::sync::Arc,
+    std::{
+        fs,
+        sync::{Arc, PoisonError},
+    },
     tokio::task::JoinHandle,
 };
 
@@ -22,7 +25,7 @@ pub(super) async fn cancel_move(
     let task = existing
         .task
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .take();
     if let Some(task) = task {
         task.abort();
@@ -32,7 +35,7 @@ pub(super) async fn cancel_move(
     let future_path = existing.future_path.clone();
     drop(existing);
     if future_path.exists() {
-        std::fs::remove_dir_all(&future_path)?;
+        fs::remove_dir_all(&future_path)?;
     }
     Ok(())
 }
@@ -54,7 +57,7 @@ fn take_move_tasks(
             state
                 .task
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take()
         })
         .collect()
@@ -63,9 +66,7 @@ fn take_move_tasks(
 /// Cancel and await every in-progress log-directory move. Broker shutdown
 /// calls this after it has stopped accepting requests and before it stops the
 /// partition writers that the move tasks use.
-pub(crate) async fn shutdown_moves(
-    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
-) {
+pub async fn shutdown_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
     let tasks = take_move_tasks(future_logs);
     for task in &tasks {
         task.abort();
@@ -77,7 +78,7 @@ pub(crate) async fn shutdown_moves(
 
 /// Best-effort synchronous counterpart used when a
 /// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
-pub(crate) fn abort_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
+pub fn abort_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
     for task in take_move_tasks(future_logs) {
         task.abort();
     }
@@ -91,6 +92,7 @@ mod tests {
         assert2::assert,
         krabka_log::{Log, LogConfig},
         std::{
+            future,
             sync::{
                 Mutex,
                 atomic::{AtomicU64, Ordering},
@@ -98,6 +100,7 @@ mod tests {
             time::Duration,
         },
         tempfile::tempdir,
+        tokio::{task, time},
         tokio_util::sync::CancellationToken,
     };
 
@@ -138,7 +141,7 @@ mod tests {
         tokio::spawn(async move {
             let _drop_counter = DropCounter(dropped);
             started.fetch_add(1, Ordering::SeqCst);
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         })
     }
 
@@ -157,7 +160,7 @@ mod tests {
             let cancel = CancellationToken::new();
             let task = pending_move(&started, &dropped);
             future_logs.insert(
-                ("t".to_string(), partition),
+                ("t".to_owned(), partition),
                 Arc::new(FutureLogState {
                     target_log_dir: dir.path().to_path_buf(),
                     future_path: dir.path().to_path_buf(),
@@ -171,12 +174,9 @@ mod tests {
 
         wait_tasks_started(|| started.load(Ordering::SeqCst) == 2, "move tasks start").await;
 
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            shutdown_moves(&future_logs),
-        )
-        .await
-        .expect("move task shutdown completes");
+        time::timeout(Duration::from_secs(1), shutdown_moves(&future_logs))
+            .await
+            .expect("move task shutdown completes");
 
         assert!(future_logs.is_empty());
         assert!(cancels.iter().all(CancellationToken::is_cancelled));
@@ -195,7 +195,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = pending_move(&started, &dropped);
         future_logs.insert(
-            ("t".to_string(), PartitionIndex(0)),
+            ("t".to_owned(), PartitionIndex(0)),
             Arc::new(FutureLogState {
                 target_log_dir: dir.path().to_path_buf(),
                 future_path: dir.path().to_path_buf(),
@@ -205,9 +205,9 @@ mod tests {
             }),
         );
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while started.load(Ordering::SeqCst) != 1 {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -217,9 +217,9 @@ mod tests {
 
         assert!(future_logs.is_empty());
         assert!(cancel.is_cancelled());
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while dropped.load(Ordering::SeqCst) != 1 {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

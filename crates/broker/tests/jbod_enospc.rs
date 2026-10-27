@@ -6,6 +6,7 @@
 //! partial JBOD failover and continued service, then fills the primary and
 //! requires the all-directories-offline shutdown. Freeing both filesystems and
 //! restarting must rebuild the replicas and preserve every acknowledged record.
+#![cfg(test)]
 
 mod support;
 
@@ -17,26 +18,33 @@ use {
             FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
         },
         producer::{no_retry_acks_all_producer, producer_record},
-        remove_container_with_volumes,
+        remove_container_with_volumes, topics,
     },
     assert2::assert,
     bytes::Bytes,
     krabka_broker::codes::NOT_CONTROLLER,
     krabka_client_core::Client,
     krabka_client_producer::{Producer, ProducerRecord},
-    krabka_protocol::owned::{
-        assign_replicas_to_dirs_request::{
-            AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+    krabka_protocol::{
+        owned::{
+            assign_replicas_to_dirs_request::{
+                AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+            },
+            create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
+            describe_log_dirs_request::DescribeLogDirsRequest,
+            describe_log_dirs_response::DescribeLogDirsResponse,
+            fetch_request::FetchRequest,
         },
-        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
-        describe_log_dirs_request::DescribeLogDirsRequest,
-        fetch_request::FetchRequest,
+        primitives::uuid::Uuid,
     },
     std::{
         collections::BTreeSet,
-        process::Command,
+        env, fs,
+        net::TcpListener,
+        process::{self, Command},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 const BROKER_IMAGE: &str = "docker.io/krabka-io/krabka-broker:dev";
@@ -48,9 +56,7 @@ const TOPIC: &str = "jbod-real-enospc";
 const PARTITIONS: i32 = 12;
 const READY: Duration = Duration::from_secs(120);
 
-fn image() -> String {
-    std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| BROKER_IMAGE.to_owned())
-}
+fn image() -> String { env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| BROKER_IMAGE.to_owned()) }
 
 fn docker(args: &[&str]) -> String {
     let output = Command::new("docker")
@@ -68,7 +74,7 @@ fn docker(args: &[&str]) -> String {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
+    TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
         .local_addr()
         .expect("ephemeral address")
@@ -182,7 +188,7 @@ impl BrokerProcess {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            let metadata = std::fs::metadata(self.root.path()).expect("stat broker root");
+            let metadata = fs::metadata(self.root.path()).expect("stat broker root");
             format!("{}:{}", metadata.uid(), metadata.gid())
         }
         #[cfg(not(unix))]
@@ -239,7 +245,7 @@ impl BrokerProcess {
     }
 
     fn write_config(&self, voters: &str) {
-        std::fs::create_dir_all(self.root.path().join("extra")).expect("create extra log dir");
+        fs::create_dir_all(self.root.path().join("extra")).expect("create extra log dir");
         let extra = if self.node_id == 1 {
             EXTRA
         } else {
@@ -260,7 +266,7 @@ impl BrokerProcess {
             id = self.node_id,
             client = self.client_port,
         );
-        std::fs::write(self.root.path().join("broker.toml"), config).expect("write broker config");
+        fs::write(self.root.path().join("broker.toml"), config).expect("write broker config");
     }
 
     fn run(&self, cluster_id: &str, primary: Option<&TinyFs>, extra: Option<&TinyFs>) {
@@ -347,7 +353,7 @@ struct Cluster {
 
 impl Cluster {
     fn start() -> Self {
-        let stem = format!("krabka-jbod-enospc-{}", std::process::id());
+        let stem = format!("krabka-jbod-enospc-{}", process::id());
         let primary = TinyFs::create(&format!("{stem}-primary"), "32m");
         let extra = TinyFs::create(&format!("{stem}-extra"), "16m");
         let cluster_id = uuid::Uuid::new_v4().to_string();
@@ -411,7 +417,7 @@ async fn create_topic(bootstrap: &str) {
             match client
                 .send(CreateTopicsRequest {
                     topics: vec![
-                        crate::support::topics::creatable_topic_with_configs()
+                        topics::creatable_topic_with_configs()
                             .name(TOPIC.into())
                             .partitions(PARTITIONS)
                             .replicas(3)
@@ -432,14 +438,12 @@ async fn create_topic(bootstrap: &str) {
                 Err(error) => last = error.to_string(),
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     panic!("could not create {TOPIC} within {READY:?}: {last}");
 }
 
-async fn describe(
-    bootstrap: &str,
-) -> krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResponse {
+async fn describe(bootstrap: &str) -> DescribeLogDirsResponse {
     connect_with_context(bootstrap, None, "describe client")
         .await
         .send(DescribeLogDirsRequest {
@@ -450,10 +454,7 @@ async fn describe(
         .expect("DescribeLogDirs")
 }
 
-fn partitions_in(
-    response: &krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResponse,
-    dir: &str,
-) -> Vec<i32> {
+fn partitions_in(response: &DescribeLogDirsResponse, dir: &str) -> Vec<i32> {
     response
         .results
         .iter()
@@ -492,7 +493,7 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         .expect("assignment Metadata");
     let topic_id = metadata.topics[0].topic_id;
     let directory = |id: uuid::Uuid, partitions: &[i32]| DirectoryData {
-        id: krabka_protocol::primitives::uuid::Uuid(id.into_bytes()),
+        id: Uuid(id.into_bytes()),
         topics: vec![TopicData {
             topic_id,
             partitions: partitions
@@ -538,7 +539,7 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
             Instant::now() < deadline,
             "no broker answered as the active controller"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     };
     assert!(
         response.error_code == 0
@@ -587,7 +588,7 @@ async fn wait_isr(bootstrap: &str, partition: i32, expected: usize) {
             Instant::now() < deadline,
             "partition {partition} did not reach ISR size {expected}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -614,7 +615,7 @@ async fn wait_metric(url: &str, expected: f64, broker: &BrokerProcess) {
         {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
     panic!(
         "{} did not report offline_log_dirs={expected}: {}",
@@ -632,7 +633,7 @@ async fn wait_exited(broker: &BrokerProcess) {
             broker.name,
             broker.logs()
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -714,7 +715,7 @@ async fn wait_keys(cluster: &Cluster, partitions: &[i32], expected: &BTreeSet<St
             Instant::now() < deadline,
             "acknowledged records did not become visible: {missing:?}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -738,7 +739,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
             Instant::now() < deadline,
             "replicas did not spread across both node-1 dirs"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     };
     let before = leaders(&node1.bootstrap()).await;
     let doomed = *tiny_partitions
@@ -787,6 +788,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
             .is_ok(),
         "a partition on node 1's healthy directory must remain writable"
     );
+    drop(healthy_producer);
     acked.insert(healthy_key);
 
     let primary_fill = producer(&bootstrap).await;
@@ -805,7 +807,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
             Instant::now() < deadline,
             "leaders for exhausted node-1 partitions did not move off node 1: {now:?}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 
     wait_keys(&cluster, &[doomed, healthy], &acked).await;
@@ -838,7 +840,7 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
             Instant::now() < deadline,
             "node 1 did not rebuild replicas on both recovered directories"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
     wait_isr(&bootstrap, doomed, 3).await;
     wait_isr(&bootstrap, healthy, 3).await;
@@ -860,7 +862,7 @@ async fn fill_partition(
         {
             Ok(_) => {
                 acked.insert(key);
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
             _ => break,
         }

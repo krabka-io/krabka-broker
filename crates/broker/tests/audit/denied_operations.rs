@@ -12,7 +12,7 @@ use {
         fetch::{FetchByteLimit, FetchLimits, RequestWaitMillis, single_partition_fetch},
         topics::{creatable_topic, create_topic_request},
     },
-    krabka_broker::coordinator::AUDIT_TOPIC,
+    krabka_broker::{codes, coordinator::AUDIT_TOPIC},
 };
 
 /// Verifies that the authorizer-decorator path denies an unauthorized
@@ -64,7 +64,7 @@ async fn denied_operation_returns_topic_authorization_failed() {
     let denied = resp
         .topics
         .iter()
-        .any(|t| t.error_code == krabka_broker::codes::TOPIC_AUTHORIZATION_FAILED);
+        .any(|t| t.error_code == codes::TOPIC_AUTHORIZATION_FAILED);
     assert2::check!(denied, "expected CreateTopics to be denied; resp: {resp:?}");
 
     // Verify the broker is still alive by checking the audit topic is reachable.

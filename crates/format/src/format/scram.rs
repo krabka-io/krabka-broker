@@ -23,14 +23,15 @@ pub(super) fn parse_scram_spec(s: &str) -> Result<ScramSpec, String> {
     let body = body.strip_suffix(']').ok_or("must end with ]")?;
     let mut name = None;
     let mut password = None;
-    let mut iterations = u32::try_from(MIN_SCRAM_ITERATIONS).expect("SCRAM minimum is positive");
+    // The minimum is positive, so its magnitude is the minimum itself.
+    let mut iterations = MIN_SCRAM_ITERATIONS.unsigned_abs();
     for attr in body.split(',') {
         let (k, v) = attr
             .split_once('=')
             .ok_or_else(|| format!("malformed attr: {attr}"))?;
         match k.trim() {
-            "name" => name = Some(v.trim().to_string()),
-            "password" => password = Some(v.trim().to_string()),
+            "name" => name = Some(v.trim().to_owned()),
+            "password" => password = Some(v.trim().to_owned()),
             "iterations" => {
                 iterations = v.trim().parse().map_err(|e| format!("iterations: {e}"))?;
             }
@@ -57,8 +58,8 @@ mod tests {
         assert2::assert!(
             spec == ScramSpec {
                 mechanism: SaslMechanism::ScramSha512,
-                name: "alice".to_string(),
-                password: "hunter2".to_string(),
+                name: "alice".to_owned(),
+                password: "hunter2".to_owned(),
                 iterations: 8192,
             }
         );

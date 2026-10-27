@@ -49,7 +49,10 @@ pub(super) fn constructed_wal_placement_is_installable(
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> nodes@[j] == selected@[j].0)]
     #[variant(selected@.len() - i@)]
     while i < selected.len() {
-        nodes.push(selected[i].0);
+        let Some(&(node, _)) = selected.get(i) else {
+            break;
+        };
+        nodes.push(node);
         i += 1;
     }
     let installed = wal_voter_set_valid(&nodes, local_node, requested);
@@ -108,14 +111,17 @@ pub(super) fn wal_placement_survives_one_rack_loss(
             && survivors@[j] == selected@[a].0 && survivors@[k] == selected@[b].0 ==> a < b)]
     #[variant(selected@.len() - i@)]
     while i < selected.len() {
-        if selected[i].1 == failed_rack {
+        let (Some(&(_, rack)), Some(&node)) = (selected.get(i), nodes.get(i)) else {
+            break;
+        };
+        if rack == failed_rack {
             proof_assert!(removed == None);
             #[cfg(creusot)]
             {
                 removed = Some(i);
             }
         } else {
-            survivors.push(nodes[i]);
+            survivors.push(node);
         }
         i += 1;
     }

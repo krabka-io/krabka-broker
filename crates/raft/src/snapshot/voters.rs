@@ -99,7 +99,7 @@ mod tests {
         assert2::assert!(decoded == set);
 
         // min > max must fail
-        let mut inverted = wire.clone();
+        let mut inverted = wire;
         inverted.voters[0]
             .k_raft_version_feature
             .min_supported_version = 2;

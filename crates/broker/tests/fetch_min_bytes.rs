@@ -15,6 +15,7 @@
 //! carries an explicit `#[path]` onto the sibling `fetch_min_bytes/`
 //! directory; `support` is a `tests/<name>/mod.rs` helper, which the crate-root
 //! rule already resolves.
+#![cfg(test)]
 
 mod support;
 #[path = "fetch_min_bytes/wire.rs"]

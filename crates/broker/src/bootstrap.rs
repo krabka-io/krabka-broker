@@ -16,7 +16,11 @@ use {
     krabka_format::{ClusterId, DirectoryId, META_PROPERTIES, MetaProperties},
     krabka_metadata::MetadataRecord,
     serde_wincode::SerdeCompat,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        io::{self, ErrorKind},
+        path::{Path, PathBuf},
+    },
     wincode::Deserialize,
 };
 
@@ -42,7 +46,7 @@ pub fn read_meta_properties(log_dir: &Path) -> Result<MetaProperties, BrokerErro
         Ok(Some(meta)) => Ok(meta),
         Ok(None) => Err(BrokerError::BootstrapFile {
             path,
-            source: std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+            source: io::Error::from(ErrorKind::NotFound).into(),
         }),
         Err(error) => Err(BrokerError::BootstrapFile {
             path,
@@ -76,9 +80,11 @@ struct DirMeta {
     meta: MetaProperties,
 }
 
-/// Kafka's `KafkaRaftServer.initializeLogDirs`: reads the `meta.properties`
-/// of the metadata log directory and of every data directory, checks that
-/// they belong to this node, and gives each directory an id that it keeps.
+/// Kafka's `KafkaRaftServer.initializeLogDirs`.
+///
+/// It reads the `meta.properties` of the metadata log directory and of every
+/// data directory, checks that they belong to this node, and gives each
+/// directory an id that it keeps.
 ///
 /// The steps and their messages are Kafka's:
 ///
@@ -213,7 +219,7 @@ pub fn initialize_log_dirs(
                 %directory_id,
                 "Rewriting meta.properties"
             );
-            std::fs::create_dir_all(&dir)?;
+            fs::create_dir_all(&dir)?;
             meta.write(&dir)?;
         }
         if dir == metadata_log_dir {
@@ -237,7 +243,7 @@ pub fn initialize_log_dirs(
 /// Returns [`BrokerError::Startup`] with Kafka's message when a directory of
 /// `log_dirs` other than `metadata_log_dir` holds `__cluster_metadata-0`.
 pub fn check_metadata_location(
-    log_dirs: &[std::path::PathBuf],
+    log_dirs: &[PathBuf],
     metadata_log_dir: &Path,
 ) -> Result<(), BrokerError> {
     for log_dir in log_dirs
@@ -343,7 +349,7 @@ pub fn load_bootstrap_records(log_dir: &Path) -> Result<Vec<MetadataRecord>, Bro
     if !path.exists() {
         return Ok(vec![]);
     }
-    let bytes = std::fs::read(&path).map_err(|e| BrokerError::BootstrapFile {
+    let bytes = fs::read(&path).map_err(|e| BrokerError::BootstrapFile {
         path: path.clone(),
         source: Box::new(e),
     })?;
@@ -362,28 +368,27 @@ pub fn load_bootstrap_records(log_dir: &Path) -> Result<Vec<MetadataRecord>, Bro
     }
     let mut out = Vec::new();
     while !cur.is_empty() {
-        if cur.len() < 4 {
+        let Some((prefix, rest)) = cur.split_first_chunk::<4>() else {
             return Err(BrokerError::BootstrapFile {
                 path,
                 source: "truncated length prefix".into(),
             });
-        }
-        let len = u32::from_le_bytes([cur[0], cur[1], cur[2], cur[3]]) as usize;
-        cur = &cur[4..];
-        if cur.len() < len {
+        };
+        let len = u32::from_le_bytes(*prefix) as usize;
+        let Some((body, rest)) = rest.split_at_checked(len) else {
             return Err(BrokerError::BootstrapFile {
                 path,
                 source: "truncated record body".into(),
             });
-        }
-        let rec = <SerdeCompat<MetadataRecord>>::deserialize(&cur[..len]).map_err(|e| {
+        };
+        let rec = <SerdeCompat<MetadataRecord>>::deserialize(body).map_err(|e| {
             BrokerError::BootstrapFile {
                 path: path.clone(),
-                source: Box::new(std::io::Error::other(format!("decode: {e}"))),
+                source: Box::new(io::Error::other(format!("decode: {e}"))),
             }
         })?;
         out.push(rec);
-        cur = &cur[len..];
+        cur = rest;
     }
     Ok(out)
 }
@@ -396,6 +401,7 @@ mod tests {
         assert2::{assert, check},
         krabka_metadata::ScramCredentialRecord,
         krabka_security::SaslMechanism,
+        std::{collections::HashSet, iter},
     };
 
     /// The metadata partition may sit in the metadata log directory, whether
@@ -447,10 +453,8 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let log_dirs = vec![root.path().join("data-a"), root.path().join("data-b")];
             for dir in holding {
-                std::fs::create_dir_all(krabka_raft::metadata_partition_dir(
-                    &root.path().join(dir),
-                ))
-                .unwrap();
+                fs::create_dir_all(krabka_raft::metadata_partition_dir(&root.path().join(dir)))
+                    .unwrap();
             }
             let metadata_log_dir = root.path().join(metadata);
             let want = refused.map(|dir| {
@@ -573,7 +577,7 @@ mod tests {
         ];
         for (what, text) in cases {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join(META_PROPERTIES), text).unwrap();
+            fs::write(dir.path().join(META_PROPERTIES), text).unwrap();
             check!(
                 read_meta_properties(dir.path()).ok()
                     == Some(kafka_meta(2, Some("U-hCdTzaSPyFB3swwc7Qdw"))),
@@ -740,18 +744,17 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let meta_dir = root.path().join("meta");
             let data_dirs = vec![root.path().join("data-a"), root.path().join("data-b")];
-            for (dir, holds) in
-                std::iter::once((&meta_dir, metadata)).chain(data_dirs.iter().zip(data))
+            for (dir, holds) in iter::once((&meta_dir, metadata)).chain(data_dirs.iter().zip(data))
             {
                 match holds {
                     Holds::Nothing => {}
                     Holds::File(text) => {
-                        std::fs::create_dir_all(dir).unwrap();
-                        std::fs::write(dir.join(META_PROPERTIES), text).unwrap();
+                        fs::create_dir_all(dir).unwrap();
+                        fs::write(dir.join(META_PROPERTIES), text).unwrap();
                     }
                     Holds::FileAndMetadataLog(text) => {
-                        std::fs::create_dir_all(krabka_raft::metadata_partition_dir(dir)).unwrap();
-                        std::fs::write(dir.join(META_PROPERTIES), text).unwrap();
+                        fs::create_dir_all(krabka_raft::metadata_partition_dir(dir)).unwrap();
+                        fs::write(dir.join(META_PROPERTIES), text).unwrap();
                     }
                 }
             }
@@ -761,11 +764,11 @@ mod tests {
                 // Every directory now records this node and an id of its own,
                 // and the metadata log directory's id is the one returned.
                 let identity = got.unwrap_or_else(|e| panic!("{what}: {e}"));
-                let metas: Vec<MetaProperties> = std::iter::once(&meta_dir)
+                let metas: Vec<MetaProperties> = iter::once(&meta_dir)
                     .chain(&data_dirs)
                     .map(|dir| read_meta_properties(dir).unwrap())
                     .collect();
-                let ids: std::collections::HashSet<DirectoryId> =
+                let ids: HashSet<DirectoryId> =
                     metas.iter().filter_map(|meta| meta.directory_id).collect();
                 check!(ids.len() == metas.len(), "{what}: {metas:?}");
                 check!(
@@ -791,7 +794,7 @@ mod tests {
                     && text == NODE_2
                 {
                     check!(
-                        std::fs::read_to_string(meta_dir.join(META_PROPERTIES)).unwrap() == text,
+                        fs::read_to_string(meta_dir.join(META_PROPERTIES)).unwrap() == text,
                         "{what}: a file with a directory id is left alone"
                     );
                 }
@@ -805,7 +808,7 @@ mod tests {
     }
 
     fn write_records_file(dir: &Path, bytes: &[u8]) {
-        std::fs::write(dir.join(BOOTSTRAP_RECORDS_FILE), bytes).unwrap();
+        fs::write(dir.join(BOOTSTRAP_RECORDS_FILE), bytes).unwrap();
     }
 
     /// The records the golden file holds.

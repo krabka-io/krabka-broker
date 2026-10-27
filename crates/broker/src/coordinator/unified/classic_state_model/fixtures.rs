@@ -30,10 +30,10 @@ pub(super) fn at(clock: i64) -> Instant {
 
 pub(super) fn mk_member(mid: &str, iid: Option<&str>, clock: i64) -> Member {
     let mut m = Member::new(mid, "c", "h", SESSION, Duration::from_secs(10), vec![(
-        "range".to_string(),
+        "range".to_owned(),
         Bytes::new(),
     )])
-    .with_instance_id(iid.map(str::to_string));
+    .with_instance_id(iid.map(str::to_owned));
     m.last_heartbeat = at(clock);
     m
 }

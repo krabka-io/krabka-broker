@@ -1,6 +1,6 @@
 use {
     super::{ProducerDecision, RetainedSequenceRange, rotation_marker_bounds_identity_retry},
-    crate::transaction::InitProducerIdIdentityDecision,
+    crate::{producer, transaction::InitProducerIdIdentityDecision},
     assert2::assert,
     proptest::prelude::*,
 };
@@ -38,7 +38,7 @@ fn marker_fences_aliases_and_the_next_bump_retires_the_old_identity_retry() {
             let aliases = vec![
                 Some(RetainedSequenceRange {
                     base_sequence: base,
-                    last_sequence: crate::producer::increment_sequence(base, delta),
+                    last_sequence: producer::increment_sequence(base, delta),
                 });
                 5
             ];

@@ -18,7 +18,7 @@ struct Options {
     audits_in_process: bool,
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let meta: Meta = moxy::parse!({
         moxy::template! { config_alter_handler({{ input }}) }
     })?;

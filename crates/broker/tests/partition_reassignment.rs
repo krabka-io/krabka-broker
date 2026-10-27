@@ -1,10 +1,4 @@
-// rustc 1.95 clippy ICEs on this file in the same places as elect_leaders.rs:
-//
-// 1. `clippy::pedantic` lints — annotate-snippets upstream bug.
-// 2. `clippy::unnecessary_unwrap` — UnwrappableVariablesVisitor ICE.
-//
-// Both are suppressed locally; the rest of the workspace still enforces the
-// full lint gate.
+#![cfg(test)]
 
 //! Broker-side integration tests for `AlterPartitionReassignments`
 //! (`api_key` 45) and `ListPartitionReassignments` (`api_key` 46).

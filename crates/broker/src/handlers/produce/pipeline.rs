@@ -40,7 +40,8 @@ use {
         BatchIndexAndErrorMessage, PartitionProduceResponse,
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::Arc,
+    std::sync::{Arc, atomic},
+    tokio::sync::OwnedRwLockReadGuard,
 };
 
 /// Per-partition produce input, held apart so that the call site can time the
@@ -261,7 +262,9 @@ pub(super) async fn verify_admitted(
         )
         .await;
         for (checked, code) in partitions.into_iter().zip(answered) {
-            answers[checked.index] = Some(code);
+            if let Some(answer) = answers.get_mut(checked.index) {
+                *answer = Some(code);
+            }
         }
     }
     answers
@@ -302,9 +305,9 @@ async fn ready_transition(
     image: &krabka_metadata::MetadataImage,
     topic_name: &str,
     idx: i32,
-) -> Option<tokio::sync::OwnedRwLockReadGuard<ReplicationTarget>> {
+) -> Option<OwnedRwLockReadGuard<ReplicationTarget>> {
     let transition = part.lock_produce_transition().await;
-    let record = image.partition(topic_name, idx).expect("gate checked");
+    let record = image.partition(topic_name, idx)?;
     let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
     if !replication_target_matches_image(&transition, topic_id, record)
         || (part.diskless && !diskless_role_ready(part, record))
@@ -352,7 +355,8 @@ pub(super) async fn process_partition(
     services: PartitionServices<'_>,
 ) -> Result<PartitionOutcome, BrokerError> {
     let transaction = input.transaction;
-    let batch = match admit_partition(input, services).await? {
+    let admission = admit_partition(input, services).await?;
+    let batch = match admission {
         Admission::Done(row) => return Ok(PartitionOutcome::Done(row)),
         Admission::Admitted(batch) => batch,
     };
@@ -559,9 +563,8 @@ pub(super) async fn admit_partition(
     // the log end offset exactly where it found them.
     let stored_config = matches!(prepared.source, super::prepare::PreparedSource::Owned(_))
         .then(|| {
-            partitions
-                .get(topic_name, krabka_ids::PartitionIndex(idx))
-                .and_then(|part| part.log.lock().ok().map(|log| log.config_snapshot()))
+            let part = partitions.get(topic_name, krabka_ids::PartitionIndex(idx))?;
+            part.log.lock().ok().map(|log| log.config_snapshot())
         })
         .flatten();
     if let Some(stored) = prepared.stored_len(topic_compression, stored_config.as_ref())
@@ -623,8 +626,9 @@ pub(super) async fn admit_partition(
 
     if !local_replica_is_ready(&part, image, topic_name, idx).await {
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-        out.current_leader =
-            current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
+        if let Some(record) = image.partition(topic_name, idx) {
+            out.current_leader = current_leader_hint(record);
+        }
         return Ok(Admission::Done(out));
     }
 
@@ -744,13 +748,12 @@ pub(super) async fn complete_partition(
     // repeat the local readiness proof before admitting any stateful gate.
     let Some(transition) = ready_transition(&part, image, topic_name, idx).await else {
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-        out.current_leader =
-            current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
+        if let Some(record) = image.partition(topic_name, idx) {
+            out.current_leader = current_leader_hint(record);
+        }
         return Ok(PartitionOutcome::Done(out));
     };
-    let leader_epoch = part
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
 
     // ── segment.bytes ────────────────────────────────────────────────
     // Kafka's `UnifiedLog.append` refuses a record set larger than the topic's

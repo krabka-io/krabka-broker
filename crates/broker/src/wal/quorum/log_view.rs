@@ -3,13 +3,13 @@
 use {
     krabka_kraft_core::{Epoch, LogOffsetMetadata, LogView},
     krabka_log::Log,
-    krabka_raft::kraft::log::latest_epoch_in,
-    std::sync::{Arc, Mutex, MutexGuard},
+    krabka_raft::kraft::{log, log::latest_epoch_in},
+    std::sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 /// A durable WAL-replica log exposed through [`LogView`].
 #[derive(Debug, Clone)]
-pub(crate) struct ShardLog {
+pub struct ShardLog {
     log: Arc<Mutex<Log>>,
 }
 
@@ -18,9 +18,7 @@ impl ShardLog {
     pub(crate) fn new(log: Arc<Mutex<Log>>) -> Self { Self { log } }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Log> {
-        self.log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.log.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[must_use]
@@ -36,11 +34,7 @@ impl LogView for ShardLog {
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         let log = self.lock();
-        krabka_raft::kraft::log::end_offset_for_epoch_in(
-            log.epoch_checkpoint(),
-            log.log_end_offset(),
-            epoch,
-        )
+        log::end_offset_for_epoch_in(log.epoch_checkpoint(), log.log_end_offset(), epoch)
     }
 }
 

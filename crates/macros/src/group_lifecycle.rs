@@ -62,7 +62,7 @@ was still at the epoch that armed it, and returns the removed ids,
 sorted. This is the fence of Kafka's
 `scheduleStreamsGroupRebalanceTimeout`.";
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let args = item.parse_meta::<LifecycleArgs>("group_lifecycle")?.ok_or_else(|| {
         ParseError::new(item.ident.span(), "`GroupLifecycle` needs `#[group_lifecycle(protocol = \"consumer\" | \"share\" | \"streams\")]`")
     })?;
@@ -165,13 +165,14 @@ mod tests {
         super::expand,
         moxy::{
             ast::{Fields, GenericParam, ImplItem, ItemImpl, ItemStruct, WherePredicate},
-            token::LitStr,
+            token::{LitStr, Span},
         },
+        std::mem,
     };
 
     fn declaration(protocol: &str) -> ItemStruct {
         let input = moxy::template! {
-            #[group_lifecycle(protocol = {{ LitStr::new(protocol, moxy::token::Span::call_site()) }})]
+            #[group_lifecycle(protocol = {{ LitStr::new(protocol, Span::call_site()) }})]
             struct State<T> where T: Clone {
                 group_epoch: i32,
                 members: HashMap<String, Member>,
@@ -231,9 +232,7 @@ mod tests {
         let Fields::Named(fields) = &mut item.fields else {
             panic!("named state fixture")
         };
-        let mut members: Vec<_> = std::mem::take(&mut fields.fields.inner)
-            .into_iter()
-            .collect();
+        let mut members: Vec<_> = mem::take(&mut fields.fields.inner).into_iter().collect();
         let position = members
             .iter()
             .position(|field| field.ident.as_ref().is_some_and(|ident| ident == missing))

@@ -17,9 +17,12 @@ use {
             discovery::topic_metadata_request, poll::retry_response, topics::metadata_topic,
         },
     },
-    krabka_protocol::owned::{
-        join_group_response::JoinGroupResponse, metadata_response::MetadataResponse,
-        produce_response::ProduceResponse,
+    krabka_protocol::{
+        owned::{
+            join_group_response::JoinGroupResponse, metadata_response::MetadataResponse,
+            produce_response::ProduceResponse,
+        },
+        primitives::uuid::Uuid,
     },
     std::{io, net::SocketAddr},
 };
@@ -74,12 +77,7 @@ pub async fn retry_metadata_until_topic_visible(
     let req = topic_metadata_request(req_topics.as_ref().map(|names| {
         names
             .iter()
-            .map(|n| {
-                metadata_topic(
-                    Some(n.clone()),
-                    krabka_protocol::primitives::uuid::Uuid::default(),
-                )
-            })
+            .map(|n| metadata_topic(Some(n.clone()), Uuid::default()))
             .collect()
     }));
     retry_response()
@@ -108,7 +106,7 @@ pub async fn named_metadata_as_alice(addr: SocketAddr, topic: &str) -> MetadataR
         "alice",
         b"wonderland",
         topic,
-        Some(vec![topic.to_string()]),
+        Some(vec![topic.to_owned()]),
     )
     .await
     .expect("Metadata must round-trip")

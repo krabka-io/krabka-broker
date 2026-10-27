@@ -22,11 +22,14 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
+    krabka_protocol::records::{Record, RecordBatch},
     krabka_raft::ControllerHandle,
     std::{
+        path::PathBuf,
         sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time::timeout,
 };
 
 /// One record of a replayed log: its key, and its value or `None` for a
@@ -58,7 +61,7 @@ pub(super) struct ReplayedCoordinator<T> {
 
 /// Start a controller, wait until it reports a leader, and return the
 /// handle.
-pub(super) async fn controller_with_leader(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
+pub(super) async fn controller_with_leader(log_dir: PathBuf) -> Arc<ControllerHandle> {
     let cfg = krabka_raft::ControllerConfig {
         election_timeout: krabka_units::millis(200),
         heartbeat_interval: Some(krabka_units::millis(50)),
@@ -70,7 +73,7 @@ pub(super) async fn controller_with_leader(log_dir: std::path::PathBuf) -> Arc<C
     let deadline = Instant::now() + Duration::from_secs(5);
     while rx.borrow().is_none() {
         assert!(Instant::now() < deadline, "no leader elected in 5s");
-        let _ = tokio::time::timeout(Duration::from_millis(100), rx.changed()).await;
+        let _ = timeout(Duration::from_millis(100), rx.changed()).await;
     }
     handle
 }
@@ -80,12 +83,12 @@ pub(super) fn test_coordinator(
     partitions: &Arc<PartitionRegistry>,
 ) -> Arc<GroupCoordinator> {
     let offsets_log: Arc<dyn OffsetsLog> = Arc::new(ProductionOffsetsLog::new(
-        partitions.clone(),
-        controller.clone(),
+        Arc::clone(partitions),
+        Arc::clone(controller),
         krabka_raft::NodeId(1),
     ));
     default_coordinator(
-        Arc::new(ImageMetadataProvider::new(controller.clone())),
+        Arc::new(ImageMetadataProvider::new(Arc::clone(controller))),
         offsets_log,
     )
 }
@@ -193,7 +196,7 @@ pub(super) fn replay_stream(
 ) -> super::replay::Replayed {
     use super::replay::{Replayed, apply_record, apply_tombstone};
     let mut replayed = Replayed::default();
-    let batch = krabka_protocol::records::RecordBatch::default();
+    let batch = RecordBatch::default();
     for LogRecord { key, value } in stream {
         let key = parse_key(&key).unwrap();
         match value {
@@ -250,15 +253,11 @@ pub(super) async fn assert_classic_replayed(coordinator: &GroupCoordinator) {
 }
 
 /// Build a persisted commit with a distinct offset per partition.
-pub(super) fn commit_record(partition: i32, offset: i64) -> krabka_protocol::records::Record {
+pub(super) fn commit_record(partition: i32, offset: i64) -> Record {
     commit_record_for_group("g", partition, offset)
 }
 
-pub(super) fn commit_record_for_group(
-    group: &str,
-    partition: i32,
-    offset: i64,
-) -> krabka_protocol::records::Record {
+pub(super) fn commit_record_for_group(group: &str, partition: i32, offset: i64) -> Record {
     offset_record()
         .group(group)
         .partition(partition)

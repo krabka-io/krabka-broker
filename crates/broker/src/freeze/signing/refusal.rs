@@ -12,7 +12,7 @@ use crate::codes;
 /// Every variant answers with the same wire code. The variant decides the
 /// message alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SignatureRefusal {
+pub enum SignatureRefusal {
     /// No `[[operator_keys]]` entry carries the `key_id` the record names.
     UnknownKeyId,
     /// The record claims an author that is not the principal bound to the key.
@@ -31,7 +31,7 @@ pub(crate) enum SignatureRefusal {
 
 /// A [`SignatureRefusal`] as a response carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WireRefusal {
+pub struct WireRefusal {
     pub(crate) code: i16,
     pub(crate) message: &'static str,
 }
@@ -47,20 +47,20 @@ impl SignatureRefusal {
     /// The `error_message` that names the check that failed.
     pub(crate) fn message(self) -> &'static str {
         match self {
-            SignatureRefusal::UnknownKeyId => "no operator key is configured under that key_id",
-            SignatureRefusal::AuthorIsNotTheKeyPrincipal => {
+            Self::UnknownKeyId => "no operator key is configured under that key_id",
+            Self::AuthorIsNotTheKeyPrincipal => {
                 "the record names an author that the signing key does not speak for"
             }
-            SignatureRefusal::AuthorIsNotTheConnectionPrincipal => {
+            Self::AuthorIsNotTheConnectionPrincipal => {
                 "the record names an author that is not the principal on this connection"
             }
-            SignatureRefusal::TimestampOutsideSkewWindow => {
+            Self::TimestampOutsideSkewWindow => {
                 "set_at_ms is outside the signature skew window of this broker"
             }
-            SignatureRefusal::TimestampNotNewerThanTheEntryItReplaces => {
+            Self::TimestampNotNewerThanTheEntryItReplaces => {
                 "set_at_ms is not newer than the entry this record replaces"
             }
-            SignatureRefusal::SignatureDidNotVerify => {
+            Self::SignatureDidNotVerify => {
                 "the signature does not verify over the canonical bytes of this record"
             }
         }

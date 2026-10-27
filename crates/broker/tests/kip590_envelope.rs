@@ -13,6 +13,7 @@
 //! flexible from 0, with `messageType.listeners() == [CONTROLLER]`, and
 //! `DefaultKafkaPrincipalBuilder.serialize(new KafkaPrincipal("User",
 //! "alice"))` is the byte string [`JVM_USER_ALICE`] holds.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -22,23 +23,29 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
+    krabka_broker::api_catalog::UnstableApiVersions,
     krabka_protocol::owned::{
         allocate_producer_ids_request::{self, AllocateProducerIdsRequest},
-        allocate_producer_ids_response::AllocateProducerIdsResponse,
+        allocate_producer_ids_response::{self, AllocateProducerIdsResponse},
         api_versions_response::ApiVersionsResponse,
         create_delegation_token_request::{self, CreateDelegationTokenRequest},
-        create_delegation_token_response::CreateDelegationTokenResponse,
-        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+        create_delegation_token_response::{self, CreateDelegationTokenResponse},
+        create_topics_request,
+        create_topics_response::{self, CreatableTopicResult, CreateTopicsResponse},
         envelope_request::{self, EnvelopeRequest},
         envelope_response::EnvelopeResponse,
-        produce_request::ProduceRequest,
-        sasl_authenticate_request::SaslAuthenticateRequest,
+        produce_request::{self, ProduceRequest},
+        sasl_authenticate_request::{self, SaslAuthenticateRequest},
         sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_request::{self, SaslHandshakeRequest},
         sasl_handshake_response::SaslHandshakeResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes},
-    tokio::io::{AsyncReadExt as _, AsyncWriteExt as _},
+    std::{collections::HashSet, iter, net::SocketAddr, sync::Arc},
+    tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::TcpStream,
+    },
 };
 
 mod support;
@@ -94,8 +101,8 @@ async fn start_broker_with(customize: impl FnOnce(&mut BrokerConfig)) -> Envelop
 /// Let the plaintext forwarding peer pass the outer gate, preserving inner-principal authorization.
 async fn start_forwarder() -> EnvelopeBroker {
     start_broker_with(|config| {
-        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
-            std::iter::once("ANONYMOUS".to_owned()).collect(),
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+            iter::once("ANONYMOUS".to_owned()).collect(),
         ));
     })
     .await
@@ -124,7 +131,7 @@ fn embedded_request_frame(api_key: i16, api_version: i16, body: &[u8]) -> Bytes 
         api_key: krabka_ids::ApiKey(api_key),
         api_version: krabka_ids::ApiVersion(api_version),
         correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some("adminclient-1".as_bytes()),
+        client_id: Some(b"adminclient-1"),
         tagged: Some(&[0]),
         body,
     })
@@ -139,16 +146,14 @@ fn encode<T: Encode>(message: &T, version: i16) -> Bytes {
 
 /// Send one request frame and return the response frame with its length
 /// prefix stripped, so the caller sees `correlation_id` first.
-async fn round_trip(addr: std::net::SocketAddr, frame: Bytes) -> Bytes {
-    let mut stream = tokio::net::TcpStream::connect(addr)
-        .await
-        .expect("connect listener");
+async fn round_trip(addr: SocketAddr, frame: Bytes) -> Bytes {
+    let mut stream = TcpStream::connect(addr).await.expect("connect listener");
     exchange(&mut stream, frame).await
 }
 
 /// The same exchange on a connection the caller already holds, for the tests
 /// that send more than one request down one authenticated connection.
-async fn exchange(stream: &mut tokio::net::TcpStream, frame: Bytes) -> Bytes {
+async fn exchange(stream: &mut TcpStream, frame: Bytes) -> Bytes {
     stream.write_all(&frame).await.expect("write request");
     stream.flush().await.expect("flush request");
 
@@ -168,10 +173,8 @@ async fn exchange(stream: &mut tokio::net::TcpStream, frame: Bytes) -> Bytes {
 
 /// Send an `Envelope` at v0 to the controller listener on a fresh connection
 /// and decode the `EnvelopeResponse` out of the reply.
-async fn send_envelope(addr: std::net::SocketAddr, envelope: &EnvelopeRequest) -> EnvelopeResponse {
-    let mut stream = tokio::net::TcpStream::connect(addr)
-        .await
-        .expect("connect listener");
+async fn send_envelope(addr: SocketAddr, envelope: &EnvelopeRequest) -> EnvelopeResponse {
+    let mut stream = TcpStream::connect(addr).await.expect("connect listener");
     send_envelope_on(&mut stream, envelope).await
 }
 
@@ -182,16 +185,13 @@ async fn send_envelope(addr: std::net::SocketAddr, envelope: &EnvelopeRequest) -
 /// so four bytes of correlation id are followed by one tagged-fields byte
 /// before the body starts. Both are checked here rather than skipped, since a
 /// missing or extra byte would shift the whole body.
-async fn send_envelope_on(
-    stream: &mut tokio::net::TcpStream,
-    envelope: &EnvelopeRequest,
-) -> EnvelopeResponse {
+async fn send_envelope_on(stream: &mut TcpStream, envelope: &EnvelopeRequest) -> EnvelopeResponse {
     const ENVELOPE_CORRELATION_ID: i32 = 99;
 
     let frame = request_frame(RequestFrameSetup {
         api_key: krabka_ids::ApiKey(envelope_request::API_KEY),
         correlation_id: FrameCorrelationId(ENVELOPE_CORRELATION_ID),
-        client_id: Some("forwarding-broker".as_bytes()),
+        client_id: Some(b"forwarding-broker"),
         tagged: Some(&[0]),
         body: &encode(envelope, 0),
         ..Default::default()
@@ -213,7 +213,7 @@ async fn send_envelope_on(
 /// Build the `request_data` a forwarding broker would copy out of the client's
 /// connection: the client's own request header followed by its body.
 fn embedded_create_topics(topic: &str) -> Bytes {
-    let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
+    let version = create_topics_request::MAX_VERSION;
     let body = encode(
         &create_topic_request(creatable_topic().name(topic.into()).call()),
         version,
@@ -222,8 +222,8 @@ fn embedded_create_topics(topic: &str) -> Bytes {
     // — KIP-590 wraps the header and body only.
     let setup = RequestFrameSetup {
         body: &body,
-        client_id: Some("adminclient-1".as_bytes()),
-        api_key: krabka_ids::ApiKey(krabka_protocol::owned::create_topics_request::API_KEY),
+        client_id: Some(b"adminclient-1"),
+        api_key: krabka_ids::ApiKey(create_topics_request::API_KEY),
         api_version: krabka_ids::ApiVersion(version),
         correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
         tagged: Some(&[0]),
@@ -289,7 +289,7 @@ async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_byt
 
     let mut body = served_embedded_body(&response, &[0x5A, 0x5A, 0x12, 0x34, 0x00], "");
 
-    let version = krabka_protocol::owned::create_topics_response::MAX_VERSION;
+    let version = create_topics_response::MAX_VERSION;
     assert!(let Ok(created) = CreateTopicsResponse::decode(&mut body, version));
     check!(
         body.is_empty(),
@@ -329,15 +329,12 @@ async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
     let addr = broker.controller_addr();
 
     let produce = request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(krabka_protocol::owned::produce_request::API_KEY),
-        api_version: krabka_ids::ApiVersion(krabka_protocol::owned::produce_request::MAX_VERSION),
+        api_key: krabka_ids::ApiKey(produce_request::API_KEY),
+        api_version: krabka_ids::ApiVersion(produce_request::MAX_VERSION),
         correlation_id: FrameCorrelationId(7),
-        client_id: Some("adminclient-1".as_bytes()),
+        client_id: Some(b"adminclient-1"),
         tagged: Some(&[0]),
-        body: &encode(
-            &ProduceRequest::default(),
-            krabka_protocol::owned::produce_request::MAX_VERSION,
-        ),
+        body: &encode(&ProduceRequest::default(), produce_request::MAX_VERSION),
     })
     .slice(4..);
 
@@ -374,9 +371,9 @@ async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
 /// v0 is deliberate: its request header is v1 and its response header is v0,
 /// so neither carries a tagged-fields byte and the reply starts with the
 /// correlation id followed straight by the body.
-async fn advertised_api_versions(addr: std::net::SocketAddr) -> ApiVersionsResponse {
+async fn advertised_api_versions(addr: SocketAddr) -> ApiVersionsResponse {
     let frame = request_frame(RequestFrameSetup {
-        client_id: Some("probe".as_bytes()),
+        client_id: Some(b"probe"),
         ..Default::default()
     });
     let response = round_trip(addr, frame).await;
@@ -422,7 +419,7 @@ async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
 fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsResponse {
     decode_embedded(
         response,
-        krabka_protocol::owned::create_topics_response::MAX_VERSION,
+        create_topics_response::MAX_VERSION,
         "decode the embedded CreateTopicsResponse",
     )
 }
@@ -578,7 +575,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
         api_key: krabka_ids::ApiKey(allocate_producer_ids_request::API_KEY),
         api_version: krabka_ids::ApiVersion(version),
         correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some("forwarding-broker".as_bytes()),
+        client_id: Some(b"forwarding-broker"),
         tagged: Some(&[0]),
         body: &encode(
             &AllocateProducerIdsRequest {
@@ -618,7 +615,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
 
         let allocated = AllocateProducerIdsResponse::decode(
             &mut body,
-            krabka_protocol::owned::allocate_producer_ids_response::MAX_VERSION,
+            allocate_producer_ids_response::MAX_VERSION,
         )
         .expect("decode the embedded AllocateProducerIdsResponse");
         check!(
@@ -647,9 +644,8 @@ async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
     const TOPIC: &str = "envelope-no-cluster-action";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
-        config.super_users = std::collections::HashSet::new();
-        config.authorizer =
-            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+        config.super_users = HashSet::new();
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
     })
     .await;
 
@@ -676,16 +672,16 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
-    let beyond = krabka_protocol::owned::create_topics_request::MAX_VERSION + 1;
+    let beyond = create_topics_request::MAX_VERSION + 1;
     let request_data = request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(krabka_protocol::owned::create_topics_request::API_KEY),
+        api_key: krabka_ids::ApiKey(create_topics_request::API_KEY),
         api_version: krabka_ids::ApiVersion(beyond),
         correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some("adminclient-1".as_bytes()),
+        client_id: Some(b"adminclient-1"),
         tagged: Some(&[0]),
         body: &encode(
             &create_topic_request(creatable_topic().name(TOPIC.into()).call()),
-            krabka_protocol::owned::create_topics_request::MAX_VERSION,
+            create_topics_request::MAX_VERSION,
         ),
     })
     .slice(4..);
@@ -712,13 +708,13 @@ async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_enve
     const TOPIC: &str = "envelope-after-refusals";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-    let create_topics_version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
+    let create_topics_version = create_topics_request::MAX_VERSION;
     let embedded = |api_key: i16, version: i16, body: &[u8]| {
         request_frame(RequestFrameSetup {
             api_key: krabka_ids::ApiKey(api_key),
             api_version: krabka_ids::ApiVersion(version),
             correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-            client_id: Some("adminclient-1".as_bytes()),
+            client_id: Some(b"adminclient-1"),
             tagged: Some(&[0]),
             body,
         })
@@ -754,7 +750,7 @@ async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_enve
         ),
     ];
 
-    let mut stream = tokio::net::TcpStream::connect(broker.controller_addr())
+    let mut stream = TcpStream::connect(broker.controller_addr())
         .await
         .expect("connect controller listener");
     for (case, request_data, want) in cases {
@@ -792,10 +788,7 @@ async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_e
         self, UnregisterControllerRequest,
     };
 
-    for unstable in [
-        krabka_broker::api_catalog::UnstableApiVersions::Disabled,
-        krabka_broker::api_catalog::UnstableApiVersions::Enabled,
-    ] {
+    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
         let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
             config.features.unstable_api_versions = unstable;
         })
@@ -816,7 +809,7 @@ async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_e
             &envelope_for(request_data, Some(JVM_USER_ALICE)),
         )
         .await;
-        let served = unstable == krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        let served = unstable == UnstableApiVersions::Enabled;
         if served {
             check!(response.error_code == 0, "{unstable:?}: {response:?}");
             check!(response.response_data.is_some(), "{unstable:?}");
@@ -864,7 +857,7 @@ fn embedded_create_delegation_token_response(
 ) -> CreateDelegationTokenResponse {
     decode_embedded(
         response,
-        krabka_protocol::owned::create_delegation_token_response::MAX_VERSION,
+        create_delegation_token_response::MAX_VERSION,
         "decode the embedded CreateDelegationTokenResponse",
     )
 }
@@ -897,13 +890,13 @@ fn decode_embedded<R: for<'de> krabka_protocol::Decode<'de>>(
 /// stream, which is why neither appears in the listener's `ApiVersions`
 /// table. v1 is not flexible and v2 is, so their reply headers differ by the
 /// one tagged-fields byte checked below.
-async fn sasl_plain(stream: &mut tokio::net::TcpStream, user: &str, password: &str) {
+async fn sasl_plain(stream: &mut TcpStream, user: &str, password: &str) {
     let handshake = exchange(
         stream,
         request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(krabka_protocol::owned::sasl_handshake_request::API_KEY),
+            api_key: krabka_ids::ApiKey(sasl_handshake_request::API_KEY),
             api_version: krabka_ids::ApiVersion(1),
-            client_id: Some("forwarding-broker".as_bytes()),
+            client_id: Some(b"forwarding-broker"),
             body: &encode(
                 &SaslHandshakeRequest {
                     mechanism: "PLAIN".to_owned(),
@@ -938,10 +931,10 @@ async fn sasl_plain(stream: &mut tokio::net::TcpStream, user: &str, password: &s
     let authenticate = exchange(
         stream,
         request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(krabka_protocol::owned::sasl_authenticate_request::API_KEY),
+            api_key: krabka_ids::ApiKey(sasl_authenticate_request::API_KEY),
             api_version: krabka_ids::ApiVersion(2),
             correlation_id: FrameCorrelationId(2),
-            client_id: Some("forwarding-broker".as_bytes()),
+            client_id: Some(b"forwarding-broker"),
             tagged: Some(&[0]),
             body: &encode(
                 &SaslAuthenticateRequest {
@@ -1019,7 +1012,7 @@ async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
     })
     .await;
 
-    let mut stream = tokio::net::TcpStream::connect(broker.controller_addr())
+    let mut stream = TcpStream::connect(broker.controller_addr())
         .await
         .expect("connect controller listener");
     sasl_plain(&mut stream, FORWARDER.user, FORWARDER.password).await;

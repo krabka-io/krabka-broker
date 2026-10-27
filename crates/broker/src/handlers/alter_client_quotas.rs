@@ -39,9 +39,11 @@ use {
         codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
         quota::parse_ip_literal,
     },
+    krabka_client_core::transport,
+    krabka_protocol::owned::alter_client_quotas_response::EntryData,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterClientQuotasRequest,
     _version: ApiVersion,
@@ -128,7 +130,7 @@ async fn resolve_ip_names(req: &AlterClientQuotasRequest) -> HashSet<String> {
             }
             // A literal address never reaches this lookup. A host name is
             // unresolvable on a platform without name resolution, WASI.
-            if krabka_client_core::transport::resolve(&format!("{name}:0"))
+            if transport::resolve(&format!("{name}:0"))
                 .await
                 .is_ok_and(|addrs| !addrs.is_empty())
             {
@@ -145,9 +147,7 @@ async fn resolve_ip_names(req: &AlterClientQuotasRequest) -> HashSet<String> {
 /// and a `None` name is the default entity for that type — what
 /// `kafka-configs --entity-type users --entity-default` sets. `<default>` is
 /// the spelling the JVM tools print for it.
-fn quota_entity_name(
-    entry: &krabka_protocol::owned::alter_client_quotas_response::EntryData,
-) -> String {
+fn quota_entity_name(entry: &EntryData) -> String {
     entry
         .entity
         .iter()

@@ -1,9 +1,9 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection};
 
 proptest! {
     #[test]
     fn sparse_timestamp_composition_matches_full_record_oracle(
-        records in proptest::collection::btree_map(any::<u32>(), any::<i64>(), 0..32),
+        records in collection::btree_map(any::<u32>(), any::<i64>(), 0..32),
         target in any::<i64>(),
         step in 1usize..8,
         span in 0usize..5,
@@ -26,8 +26,8 @@ proptest! {
         requested in 0i64..=i64::MAX,
         wal in 0i64..=i64::MAX,
         local in 0i64..=i64::MAX,
-        applied in proptest::collection::vec(any::<bool>(), 0..32),
-        snapshots in proptest::collection::vec(any::<i64>(), 0..16),
+        applied in collection::vec(any::<bool>(), 0..32),
+        snapshots in collection::vec(any::<i64>(), 0..16),
     ) {
         let frontier = requested.max(wal).max(local);
         let completed = applied.iter().filter(|applied| **applied).count();
@@ -52,7 +52,7 @@ proptest! {
 proptest! {
     #[test]
     fn checked_wal_copy_matches_independent_extent_and_byte_oracles(
-        frames in proptest::collection::vec((0i32..8, proptest::collection::vec(any::<u8>(), 1..16)), 0..12),
+        frames in collection::vec((0i32..8, collection::vec(any::<u8>(), 1..16)), 0..12),
         start in 0i64..64,
         position in any::<u64>(),
         capacity in 0u64..128,
@@ -106,17 +106,16 @@ proptest! {
             batch.0 + i64::from(batch.1) + 1 > start.max(prior)).collect();
         let mut stored = source.clone();
         if divergent && !stored.is_empty() { stored[0].2[0] ^= 1; }
-        let copied_base = source.first().map_or(start.max(prior), |batch| batch.0);
+        let copied_base = source.first().map_or_else(|| start.max(prior), |batch| batch.0);
         let requested = physical - 1 + i64::from(request_seed) % (target - physical + 3);
         let total = u64::try_from(source.len()).unwrap() * 2;
         let file_end = position.saturating_add(total).saturating_sub(shortfall);
-        let expected = if prior <= target && source == stored
-            && position.checked_add(total).is_some_and(|end| end <= file_end) {
+        let expected = (prior <= target && source == stored && position.checked_add(total).is_some_and(|end| end <= file_end)).then(|| {
             let selected = (requested >= start.max(prior) && requested < target)
                 .then(|| source.iter().position(|batch| batch.0 <= requested
                     && requested < batch.0 + i64::from(batch.1) + 1).unwrap());
-            Some((copied_base, position + total, selected))
-        } else { None };
+            (copied_base, position + total, selected)
+        });
         assert!(covering_copy_preserves_logical_fetch(&source, &stored, (start, prior), target,
             position, file_end, requested) == expected);
     }
@@ -172,11 +171,8 @@ proptest! {
         let mut end = physical_start;
         let ends: Vec<_> = widths.into_iter().map(|width| { end += width; end }).collect();
         let floor = physical_start + i64::from(floor_seed) % (end - physical_start + 1);
-        let expected = if floor <= start && start <= cut && cut <= end
-            && (start == cut || ends.contains(&cut)) {
-            Some((if start == cut { 0 } else { ends.iter().filter(|next| **next <= cut).count() },
-                hw.min(lso).min(deliverable).min(cut)))
-        } else { None };
+        let expected = (floor <= start && start <= cut && cut <= end && (start == cut || ends.contains(&cut))).then(|| (if start == cut { 0 } else { ends.iter().filter(|next| **next <= cut).count() },
+                hw.min(lso).min(deliverable).min(cut)));
         assert!(checkpoint_truncation_bounds_fetch(&ends, physical_start,
             FetchWatermarks { log_start: floor, log_end: end, hw, lso, deliverable }, start, cut) == expected);
     }

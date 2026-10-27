@@ -31,9 +31,10 @@ use {
     },
     std::{
         collections::HashMap,
+        mem,
         sync::{Arc, Mutex, MutexGuard, PoisonError},
     },
-    tokio::sync::oneshot,
+    tokio::{sync::oneshot, task::yield_now},
 };
 
 /// The `timeout.ms` of the produce request: Kafka's
@@ -113,12 +114,7 @@ impl<T: ProduceTransport> Coalescer<T> {
     /// other ranges too, and answers with that request's response.
     pub(super) async fn produce(&self, node: NodeId, produce: Produce) -> Answer {
         let (done, answer) = oneshot::channel();
-        let start = {
-            let mut queues = self.inner.queues();
-            let queue = queues.entry(node).or_default();
-            queue.waiting.push(Pending { produce, done });
-            !std::mem::replace(&mut queue.sending, true)
-        };
+        let start = enqueue(&mut self.inner.queues(), node, Pending { produce, done });
         if start {
             tokio::spawn(Arc::clone(&self.inner).drain(node));
         }
@@ -177,7 +173,7 @@ impl<T: ProduceTransport> Inner<T> {
         };
         loop {
             // The writers that are ready to send get to join the request.
-            tokio::task::yield_now().await;
+            yield_now().await;
             let Some(Packed { request, answers }) = self.take(node) else {
                 guard.finished = true;
                 return;
@@ -193,17 +189,27 @@ impl<T: ProduceTransport> Inner<T> {
 
     /// The next request of `node`, or `None` when nothing waits, which ends
     /// the drain. A round that did not fit stays for the request after it.
-    fn take(&self, node: NodeId) -> Option<Packed> {
-        let mut queues = self.queues();
-        let queue = queues.entry(node).or_default();
-        let PackedRounds { packed, deferred } = pack(std::mem::take(&mut queue.waiting));
-        queue.waiting = deferred;
-        if packed.answers.is_empty() {
-            queue.sending = false;
-            return None;
-        }
-        Some(packed)
+    fn take(&self, node: NodeId) -> Option<Packed> { take_packed(&mut self.queues(), node) }
+}
+
+/// Queues `pending` for `node`, and returns whether no drain sends for
+/// `node` yet, so the caller starts one.
+fn enqueue(queues: &mut HashMap<NodeId, Queue>, node: NodeId, pending: Pending) -> bool {
+    let queue = queues.entry(node).or_default();
+    queue.waiting.push(pending);
+    !mem::replace(&mut queue.sending, true)
+}
+
+/// The body of [`Inner::take`], under the caller's lock of `queues`.
+fn take_packed(queues: &mut HashMap<NodeId, Queue>, node: NodeId) -> Option<Packed> {
+    let queue = queues.entry(node).or_default();
+    let PackedRounds { packed, deferred } = pack(mem::take(&mut queue.waiting));
+    queue.waiting = deferred;
+    if packed.answers.is_empty() {
+        queue.sending = false;
+        return None;
     }
+    Some(packed)
 }
 
 /// A produce request, and where the answer for each round in it goes.
@@ -491,6 +497,15 @@ mod tests {
         assert2::assert,
         bytes::Bytes,
         futures_util::future::join_all,
+        std::{
+            array,
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        },
+        tokio::{
+            task::{JoinHandle, yield_now},
+            time::timeout,
+        },
     };
 
     /// A `max.message.bytes` that leaves room for any round of these tests.
@@ -559,16 +574,16 @@ mod tests {
     /// A round, with a count of the requests that took it as it stands.
     struct Counted {
         produce: Produce,
-        count: Arc<std::sync::atomic::AtomicUsize>,
+        count: Arc<AtomicUsize>,
     }
 
     /// `produce`, with a count of the requests that took it as it stands.
     fn counted(produce: Produce) -> Counted {
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::new(AtomicUsize::new(0));
         let admitted = Arc::clone(&count);
         let produce = Produce {
             admitted: Arc::new(move || {
-                admitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                admitted.fetch_add(1, Ordering::SeqCst);
             }),
             ..produce
         };
@@ -654,7 +669,7 @@ mod tests {
     /// Releases the transport and joins these rounds in their original order.
     async fn release_and_join(
         broker: &FakeBroker,
-        [first, second, third]: [tokio::task::JoinHandle<Answer>; 3],
+        [first, second, third]: [JoinHandle<Answer>; 3],
     ) -> [Answer; 3] {
         broker.release();
         [
@@ -668,7 +683,7 @@ mod tests {
         coalescer: &Arc<Coalescer<FakeBroker>>,
         partition: i32,
         value: &'static str,
-    ) -> tokio::task::JoinHandle<Answer> {
+    ) -> JoinHandle<Answer> {
         let coalescer = Arc::clone(coalescer);
         tokio::spawn(async move {
             coalescer
@@ -683,7 +698,7 @@ mod tests {
     /// Lets every task that can run, run.
     async fn settle() {
         for _ in 0..20 {
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
     }
 
@@ -882,24 +897,24 @@ mod tests {
         });
         let coalescer = Arc::new(Coalescer::new(broker.clone()));
         let send = |partition, value| spawn_round(&coalescer, partition, value);
-        let limit = std::time::Duration::from_secs(60);
+        let limit = Duration::from_secs(60);
 
         let in_flight = send(0, "a0");
         settle().await;
         let waiting = send(1, "b0");
         settle().await;
         broker.release();
-        let stopped = tokio::time::timeout(limit, async {
+        let stopped = timeout(limit, async {
             [in_flight.await.unwrap(), waiting.await.unwrap()]
         })
         .await;
-        let next = tokio::time::timeout(
+        let next = timeout(
             limit,
             coalescer.produce(NodeId(1), round().partition(2).values(&["c0"]).call()),
         )
         .await;
 
-        assert!(stopped == Ok(std::array::from_fn(|_| Err(STOPPED.to_owned()))));
+        assert!(stopped == Ok(array::from_fn(|_| Err(STOPPED.to_owned()))));
         assert!(next == Ok(Ok(reached())));
         assert!(broker.sent().len() == 2);
     }
@@ -923,10 +938,10 @@ mod tests {
             .iter()
             .map(|counted| Arc::clone(&counted.count))
             .collect();
-        let read = |counts: &[Arc<std::sync::atomic::AtomicUsize>]| -> Vec<usize> {
+        let read = |counts: &[Arc<AtomicUsize>]| -> Vec<usize> {
             counts
                 .iter()
-                .map(|count| count.load(std::sync::atomic::Ordering::SeqCst))
+                .map(|count| count.load(Ordering::SeqCst))
                 .collect()
         };
         // What the rounds count at the moment each request is answered.

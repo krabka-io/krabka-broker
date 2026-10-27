@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        meta::{ItemBody, compact, edit_native_body, is_plain_sync, item_body},
+        meta::{ItemBody, body_group, compact, edit_native_body, is_plain_sync, item_body},
         value_framing::decode_method,
     },
     moxy::{
@@ -29,9 +29,7 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
     if body + 1 != tokens.len() {
         return Err(ParseError::new(item.span(), "expected one inherent impl"));
     }
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     // Parse signatures only. The original native method bodies are returned unchanged.
     let mut members = group.tokens.clone().into_inner();
     for token in &mut members {
@@ -77,7 +75,7 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
                         "encode_fields needs self or &self",
                     ));
                 }
-                let FnParam::Typed(buffer) = inputs.last().expect("two parameters") else {
+                let Some(FnParam::Typed(buffer)) = inputs.last() else {
                     return Err(ParseError::new(
                         signature.span(),
                         "expected buf: &mut BytesMut",
@@ -141,7 +139,7 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

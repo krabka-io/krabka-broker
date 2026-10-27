@@ -14,8 +14,11 @@ use {
         host_port::HostPort,
         metadata_source::MetadataSource,
     },
-    krabka_protocol::owned::assign_replicas_to_dirs_request::{
-        AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+    krabka_protocol::{
+        owned::assign_replicas_to_dirs_request::{
+            AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     std::{collections::BTreeMap, sync::Arc},
 };
@@ -25,7 +28,7 @@ use {
 /// registration has landed in the image). `check_broker_epoch` treats it as
 /// "skip the fence", the same KIP-903 convention `AlterPartition`'s ISR
 /// eligibility check uses.
-pub(crate) const UNKNOWN_BROKER_EPOCH: i64 = -1;
+pub const UNKNOWN_BROKER_EPOCH: i64 = -1;
 
 /// Groups flat `(topic_id, partition, dir_uuid)` assignments into the nested
 /// `AssignReplicasToDirs` wire shape, which is `directories[]`, then
@@ -40,7 +43,7 @@ pub(crate) const UNKNOWN_BROKER_EPOCH: i64 = -1;
 /// controller's `check_broker_epoch` fence actually has something to check
 /// against a stale or restarted broker. Pass `UNKNOWN_BROKER_EPOCH` only when
 /// that lookup comes back empty.
-pub(crate) fn build_request(
+pub fn build_request(
     broker_id: i32,
     broker_epoch: i64,
     assignments: &[(uuid::Uuid, i32, uuid::Uuid)], // (topic_id, partition, dir_uuid)
@@ -65,7 +68,7 @@ pub(crate) fn build_request(
                 .map(|(topic_bytes, mut partitions)| {
                     partitions.sort_unstable();
                     TopicData {
-                        topic_id: krabka_protocol::primitives::uuid::Uuid(topic_bytes),
+                        topic_id: WireUuid(topic_bytes),
                         partitions: partitions
                             .into_iter()
                             .map(|p| PartitionData {
@@ -78,7 +81,7 @@ pub(crate) fn build_request(
                 })
                 .collect();
             DirectoryData {
-                id: krabka_protocol::primitives::uuid::Uuid(dir_bytes),
+                id: WireUuid(dir_bytes),
                 topics,
                 ..Default::default()
             }
@@ -115,7 +118,7 @@ pub(crate) fn build_request(
 /// - the connection failed
 /// - the send or the receive failed
 /// - the response carries a non-zero `error_code`
-pub(crate) async fn send_assignments(
+pub async fn send_assignments(
     controller: &Arc<dyn MetadataSource>,
     dialer: &ControllerDialer,
     client_id: &str,
@@ -148,11 +151,9 @@ pub(crate) async fn send_assignments(
     validate_assign_response(resp.error_code, leader_id, current_leader)
 }
 
-pub(crate) fn assign_dirs_connection_options(
-    client_id: &str,
-) -> krabka_client_core::ConnectionOptions {
+pub fn assign_dirs_connection_options(client_id: &str) -> krabka_client_core::ConnectionOptions {
     krabka_client_core::ConnectionOptions {
-        client_id: client_id.to_string(),
+        client_id: client_id.to_owned(),
         ..Default::default()
     }
 }
@@ -322,7 +323,7 @@ mod tests {
         }
     }
 
-    fn voter_only_source(controller_addr: std::net::SocketAddr) -> Arc<dyn MetadataSource> {
+    fn voter_only_source(controller_addr: SocketAddr) -> Arc<dyn MetadataSource> {
         Arc::new(
             FakeMetadataSource::builder()
                 .image(voter_only_image(NodeId(1), controller_addr))

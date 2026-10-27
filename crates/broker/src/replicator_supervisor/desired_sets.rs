@@ -21,10 +21,7 @@ use {
 /// `leader != node_id`. For each such pair the broker should run a follower
 /// replicator task. This is a single O(P) walk. It runs on every
 /// metadata-image change, so it must stay proportional to total partitions.
-pub(crate) fn desired_follower_set(
-    node_id: NodeId,
-    image: &MetadataImage,
-) -> HashSet<TopicPartition> {
+pub fn desired_follower_set(node_id: NodeId, image: &MetadataImage) -> HashSet<TopicPartition> {
     image
         .all_partitions()
         .filter(|p| p.replicas.contains(&node_id) && p.leader != node_id)
@@ -37,7 +34,7 @@ pub(crate) fn desired_follower_set(
 /// broker hosts partition data on disk and must materialize the
 /// on-disk `Partition` locally. This is a single O(P) walk, the same as
 /// [`desired_follower_set`].
-pub(crate) fn desired_local_set(node_id: NodeId, image: &MetadataImage) -> HashSet<TopicPartition> {
+pub fn desired_local_set(node_id: NodeId, image: &MetadataImage) -> HashSet<TopicPartition> {
     image
         .all_partitions()
         .filter(|p| p.replicas.contains(&node_id))
@@ -48,7 +45,7 @@ pub(crate) fn desired_local_set(node_id: NodeId, image: &MetadataImage) -> HashS
 /// WAL voter placement for every diskless partition in one metadata image.
 /// The partition leader is first, then rack-distinct registered brokers are
 /// preferred by the placement policy.
-pub(crate) fn desired_wal_placements(
+pub fn desired_wal_placements(
     image: &MetadataImage,
     voter_count: usize,
 ) -> HashMap<ShardId, WalPlacement> {
@@ -98,7 +95,7 @@ mod tests {
         let img = three_replica_image(NodeId(1), krabka_metadata::LeaderEpoch(0));
         let cases = [
             // Self is a follower replica → included.
-            (NodeId(2), HashSet::from_iter([("t".to_string(), 0)])),
+            (NodeId(2), HashSet::from_iter([("t".to_owned(), 0)])),
             // Self is the leader → excluded.
             (NodeId(1), HashSet::new()),
             // Self is not a replica at all → excluded.
@@ -138,9 +135,9 @@ mod tests {
         assert!(
             local
                 == HashSet::from_iter([
-                    ("a".to_string(), 0),
-                    ("a".to_string(), 1),
-                    ("c".to_string(), -1),
+                    ("a".to_owned(), 0),
+                    ("a".to_owned(), 1),
+                    ("c".to_owned(), -1),
                 ])
         );
     }
@@ -187,10 +184,10 @@ mod tests {
 
         assert!(placements.len() == 1);
         assert!(
-            placements.get(&crate::wal::quorum::registry::ShardId {
+            placements.get(&ShardId {
                 topic_id,
                 partition: PartitionIndex(0),
-            }) == Some(&crate::wal::quorum::registry::WalPlacement {
+            }) == Some(&WalPlacement {
                 voters: vec![NodeId(2), NodeId(1), NodeId(3)],
                 leader_epoch: 0,
             })
@@ -208,7 +205,7 @@ mod tests {
         ]);
         let d = desired_follower_set(NodeId(2), &img);
         // b/1 is excluded: self is leader for it.
-        assert!(d == HashSet::from_iter([("a".to_string(), 0), ("b".to_string(), 0)]));
+        assert!(d == HashSet::from_iter([("a".to_owned(), 0), ("b".to_owned(), 0)]));
         assert!(d.contains(&("a".into(), 0)));
         assert!(d.contains(&("b".into(), 0)));
         assert!(!d.contains(&("b".into(), 1))); // self is leader for b/1

@@ -66,7 +66,7 @@ impl SequenceContext {
 /// decision is a separate function so that the tests can exhaustively test and
 /// property-test it in isolation. See `producer_state_model.rs`.
 #[cfg(test)]
-pub(crate) fn check_pure(
+pub fn check_pure(
     entry: Option<&ProducerEntry>,
     producer_epoch: i16,
     base_sequence: i32,
@@ -90,7 +90,7 @@ pub(crate) fn check_pure(
 /// hands it the entry's epoch, last sequence and retained sequence ranges and
 /// the partition's [`SequenceContext`], and maps a duplicate's index back to
 /// the retained batch it names.
-pub(crate) fn check_retained(
+pub fn check_retained(
     entry: Option<&ProducerEntry>,
     context: SequenceContext,
     producer_epoch: i16,
@@ -122,9 +122,15 @@ pub(crate) fn check_retained(
     ) {
         ProducerDecision::Append => Decision::Append,
         ProducerDecision::Duplicate { retained } => {
-            let batch = batches.get(retained).copied().flatten().expect(
-                "producer_decision proves a duplicate index names an occupied retained slot",
-            );
+            // `producer_decision` proves that a duplicate index names an
+            // occupied retained slot. Without one there is no offset to answer
+            // with, and the batch is refused rather than appended twice.
+            let Some(batch) = batches.get(retained).copied().flatten() else {
+                return Checked {
+                    decision: Decision::OutOfOrder,
+                    duplicate: None,
+                };
+            };
             return Checked {
                 decision: Decision::Duplicate {
                     base_offset: batch.base_offset,
@@ -194,7 +200,7 @@ impl ProducerState {
 mod fuzz {
     use {
         super::{Decision, ProducerEntry, check_pure},
-        proptest::prelude::*,
+        proptest::{collection, prelude::*},
         std::collections::HashMap,
     };
 
@@ -208,7 +214,7 @@ mod fuzz {
         /// `base_seq` 0..200, and up to 400 ops.
         #[test]
         fn idempotent_log_invariants(
-            ops in proptest::collection::vec(
+            ops in collection::vec(
                 (0i16..6, 0i32..200), // (producer_epoch, base_sequence)
                 0..400usize,
             )

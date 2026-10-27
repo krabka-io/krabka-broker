@@ -19,10 +19,12 @@
 //! [`PeerSender`](crate::kraft::transport::PeerSender) implementation itself in
 //! `peer_sender`.
 
-pub(crate) mod addressing;
+pub mod addressing;
 mod dialer;
-pub(crate) mod negotiation;
+pub mod negotiation;
 mod peer_sender;
 
-pub use self::dialer::{OutboundDialer, PlaintextDialer};
-pub(crate) use self::peer_sender::RealPeerSender;
+pub use self::{
+    dialer::{OutboundDialer, PlaintextDialer},
+    peer_sender::RealPeerSender,
+};

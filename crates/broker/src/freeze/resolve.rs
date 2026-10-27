@@ -27,7 +27,7 @@ use {
 ///
 /// This is the whole of the produce-path gate's read. The registry is bounded
 /// by configuration, and the fold allocates nothing.
-pub(crate) fn resolve_topic_freeze<'a>(
+pub fn resolve_topic_freeze<'a>(
     image: &'a MetadataImage,
     topic: &str,
 ) -> Option<&'a TopicFreezeRecord> {
@@ -49,7 +49,7 @@ pub(crate) fn resolve_topic_freeze<'a>(
 /// The frozen variant is the only one that carries registry detail. This
 /// keeps an unauthorized caller from observing a matching scope or reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FreezeMutationResolution<'a> {
+pub enum FreezeMutationResolution<'a> {
     AuthorizationDenied,
     Frozen(&'a TopicFreezeRecord),
     Admit,
@@ -59,7 +59,7 @@ pub(crate) enum FreezeMutationResolution<'a> {
 ///
 /// An unauthorized call does not inspect the freeze registry. Authorized
 /// calls use the same scope resolver as every other freeze-aware path.
-pub(crate) fn resolve_freeze_mutation<'a>(
+pub fn resolve_freeze_mutation<'a>(
     image: &'a MetadataImage,
     topic: &str,
     authorized: bool,
@@ -81,15 +81,15 @@ pub(crate) fn resolve_freeze_mutation<'a>(
         FreezeMutationDecision::AuthorizationDenied => {
             unreachable!("an authorized freeze decision cannot deny authorization")
         }
-        FreezeMutationDecision::Frozen => match freeze {
-            Some(record) => FreezeMutationResolution::Frozen(record),
-            None => unreachable!("a frozen decision must have a matching freeze record"),
-        },
+        FreezeMutationDecision::Frozen => freeze.map_or_else(
+            || unreachable!("a frozen decision must have a matching freeze record"),
+            FreezeMutationResolution::Frozen,
+        ),
         FreezeMutationDecision::Admit => FreezeMutationResolution::Admit,
     }
 }
 
-pub(crate) fn mutation_is_frozen(
+pub fn mutation_is_frozen(
     image: Option<&MetadataImage>,
     topic: &str,
     kind: FreezeMutationKind,
@@ -122,7 +122,7 @@ fn scope_rank(record: &TopicFreezeRecord, topic: &str) -> FreezeScopeRank {
 /// partition, so a partition of a frozen topic builds its message and nothing
 /// more. A partition of an unfrozen topic never sees one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FreezeVerdict {
+pub struct FreezeVerdict {
     /// The registry scope that matched the topic.
     pub scope: String,
     /// The pattern type of that scope.
@@ -183,7 +183,7 @@ impl From<&TopicFreezeRecord> for FreezeVerdict {
 ///
 /// This is [`resolve_topic_freeze`] plus the message build, for a caller that
 /// wants the finished verdict rather than the record.
-pub(crate) fn resolve_freeze_verdict(image: &MetadataImage, topic: &str) -> Option<FreezeVerdict> {
+pub fn resolve_freeze_verdict(image: &MetadataImage, topic: &str) -> Option<FreezeVerdict> {
     resolve_topic_freeze(image, topic).map(FreezeVerdict::from)
 }
 

@@ -58,9 +58,13 @@ mod tests {
                 activate_dynamic_membership, decoded, quorum_request, single_voter_engine,
                 test_engine_with_voters, voter, wait_for_leader,
             },
+            voter_requests::{self, VOTER_NOT_FOUND},
         },
         assert2::check,
-        krabka_protocol::Decode,
+        krabka_protocol::{
+            Decode, owned::describe_quorum_response, primitives::uuid::Uuid as WireUuid,
+        },
+        tokio::sync::oneshot,
         uuid::Uuid,
     };
 
@@ -132,11 +136,8 @@ mod tests {
         .await
         .expect("an answer");
         let decoded =
-            krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse::decode(
-                &mut &answered[..],
-                version,
-            )
-            .expect("decode");
+            describe_quorum_response::DescribeQuorumResponse::decode(&mut &answered[..], version)
+                .expect("decode");
         check!(decoded.topics[0].partitions[0].error_code == 6);
     }
 
@@ -196,7 +197,7 @@ mod tests {
             replica_directory_id: Uuid::from_u128(99),
         };
         let req_bytes = req.try_encode().expect("encode fetch");
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         engine
             .deliver(Inbound::Fetch {
                 version: FETCH_VERSION,
@@ -253,9 +254,7 @@ mod tests {
         let remove = RemoveRaftVoterRequest {
             cluster_id: Some(engine.current_image().cluster_id().to_string()),
             voter_id: 1,
-            voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                *Uuid::from_u128(1).as_bytes(),
-            ),
+            voter_directory_id: WireUuid(*Uuid::from_u128(1).as_bytes()),
             ..Default::default()
         };
         let mut request_body = bytes::BytesMut::new();
@@ -270,10 +269,10 @@ mod tests {
         check!(
             response
                 == RemoveRaftVoterResponse {
-                    error_code: crate::voter_requests::VOTER_NOT_FOUND,
+                    error_code: VOTER_NOT_FOUND,
                     error_message: Some(format!(
                         "Cannot remove voter {} from the set of voters",
-                        crate::voter_requests::replica_key(1, remove.voter_directory_id)
+                        voter_requests::replica_key(1, remove.voter_directory_id)
                     )),
                     ..Default::default()
                 }

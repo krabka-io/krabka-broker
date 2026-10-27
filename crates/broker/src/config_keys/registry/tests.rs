@@ -3,12 +3,18 @@
 
 use {
     super::*,
-    crate::throttle::{
-        ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY,
-        FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY, LEADER_THROTTLED_REPLICAS_KEY,
+    crate::{
+        config::{DEFAULT_TXN_ID_EXPIRATION, DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL},
+        throttle::{
+            ALTER_LOG_DIRS_THROTTLED_RATE_KEY, FOLLOWER_THROTTLED_RATE_KEY,
+            FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_RATE_KEY,
+            LEADER_THROTTLED_REPLICAS_KEY,
+        },
     },
     assert2::{assert, check},
+    krabka_protocol::records::TimestampType,
     krabka_units::convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _},
+    std::collections::HashSet,
 };
 
 #[test]
@@ -190,7 +196,7 @@ fn topic_defaults_agree_with_the_log_config_a_partition_runs_on() {
             == Some(log.min_cleanable_dirty_ratio.as_f64().to_string().as_str())
     );
     check!(
-        log.message_timestamp_type == krabka_protocol::records::TimestampType::CreateTime
+        log.message_timestamp_type == TimestampType::CreateTime
             && default_of(MESSAGE_TIMESTAMP_TYPE) == Some("CreateTime")
     );
     check!(log.compression_type.is_none() && default_of(COMPRESSION_TYPE) == Some("producer"));
@@ -206,7 +212,7 @@ fn topic_defaults_agree_with_the_log_config_a_partition_runs_on() {
 
 #[test]
 fn every_row_is_unique_in_its_scope_and_carries_documentation() {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for row in CONFIG_KEYS {
         check!(
             seen.insert((row.scope, row.name)),
@@ -280,17 +286,12 @@ fn transactional_id_expiry_defaults_agree_with_the_broker_config() {
 
     check!(
         default_of(TRANSACTIONAL_ID_EXPIRATION_MS)
-            == Some(
-                crate::config::DEFAULT_TXN_ID_EXPIRATION
-                    .millis_i64()
-                    .to_string()
-                    .as_str()
-            )
+            == Some(DEFAULT_TXN_ID_EXPIRATION.millis_i64().to_string().as_str())
     );
     check!(
         default_of(TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS)
             == Some(
-                crate::config::DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL
+                DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL
                     .millis_i64()
                     .to_string()
                     .as_str()

@@ -6,6 +6,7 @@
 //! BUILD file hands the suite the Rust toolchain's own `cargo`, `rustc` and
 //! standard library as runfiles; see [`toolchain_cargo`]. It needs no network:
 //! the fixture has no dependencies.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -17,6 +18,7 @@ use {
     },
     std::{
         collections::BTreeMap,
+        env,
         ffi::OsString,
         fs,
         path::{Path, PathBuf},
@@ -52,7 +54,7 @@ fn revision(dir: &Path, side: &str) {
 
 /// The runfiles-relative paths Bazel passes in, resolved against the test's
 /// working directory, which is the runfiles root.
-fn runfile(relative: &str) -> PathBuf { std::env::current_dir().unwrap().join(relative) }
+fn runfile(relative: &str) -> PathBuf { env::current_dir().unwrap().join(relative) }
 
 /// The sysroot that holds the standard library among `stdlib`, Bazel's
 /// space-separated runfiles paths of its files. It is the directory above
@@ -71,9 +73,9 @@ fn stdlib_sysroot(stdlib: &str) -> PathBuf {
 /// standard library from the runfiles, with a scratch `CARGO_HOME`, because a
 /// test has no writable home. `None` outside Bazel.
 fn toolchain_cargo() -> Option<Command> {
-    let cargo = std::env::var("KRABKA_TEST_CARGO").ok()?;
-    let rustc = std::env::var("KRABKA_TEST_RUSTC").unwrap();
-    let stdlib = std::env::var("KRABKA_TEST_RUST_STDLIB").unwrap();
+    let cargo = env::var("KRABKA_TEST_CARGO").ok()?;
+    let rustc = env::var("KRABKA_TEST_RUSTC").unwrap();
+    let stdlib = env::var("KRABKA_TEST_RUST_STDLIB").unwrap();
     let mut command = Command::new(runfile(&cargo));
     command
         .env("RUSTC", runfile(&rustc))
@@ -81,14 +83,14 @@ fn toolchain_cargo() -> Option<Command> {
             "RUSTFLAGS",
             format!("--sysroot={}", stdlib_sysroot(&stdlib).display()),
         )
-        .env("CARGO_HOME", std::env::temp_dir().join("cargo-home"));
+        .env("CARGO_HOME", env::temp_dir().join("cargo-home"));
     Some(command)
 }
 
 fn cargo(source: &Path, target: &Path, extra: &[&str]) -> Output {
     let output = toolchain_cargo()
         .unwrap_or_else(|| {
-            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+            Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
         })
         .current_dir(source)
         .env("CARGO_TARGET_DIR", target)
@@ -128,10 +130,10 @@ fn measure(
 
 fn summary(commit: &str, executables: Vec<BenchExecutable>) -> BenchmarkSummary {
     BenchmarkSummary {
-        suite: "isolation-review".to_string(),
-        commit: commit.to_string(),
-        timestamp: "2026-10-22T00:00:00Z".to_string(),
-        benchmarks: BTreeMap::from([("latency".to_string(), BenchmarkMetric {
+        suite: "isolation-review".to_owned(),
+        commit: commit.to_owned(),
+        timestamp: "2026-10-22T00:00:00Z".to_owned(),
+        benchmarks: BTreeMap::from([("latency".to_owned(), BenchmarkMetric {
             ns_per_iter: 100.0,
             variance_ns: 1.0,
         })]),

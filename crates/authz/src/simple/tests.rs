@@ -15,6 +15,7 @@ use {
     },
     krabka_metadata::{AclOperation, MetadataRecord, PatternType},
     krabka_security::Principal,
+    std::net::SocketAddr,
 };
 
 fn prefixed_topic_write_allowed_when(denial: AclSetup) {
@@ -62,7 +63,7 @@ fn check_resource_auth_context(
         &krabka_metadata::MetadataImage,
         &SimpleAclAuthorizer,
         &Principal,
-        &std::net::SocketAddr,
+        &SocketAddr,
     ) -> AuthorizationResult,
 ) {
     let (image, authorizer) = resource_auth_context(entries, flag);
@@ -180,8 +181,8 @@ fn multi_super_user_all_bypass() {
     let h = addr();
     let supers = {
         let mut s = HashSet::new();
-        s.insert("admin".to_string());
-        s.insert("ops-bot".to_string());
+        s.insert("admin".to_owned());
+        s.insert("ops-bot".to_owned());
         s
     };
     let admin = Principal {
@@ -227,6 +228,7 @@ mod authorize_by_resource_type {
     use {
         super::*,
         krabka_metadata::{AclOperation, PatternType, ResourceType},
+        std::iter,
     };
 
     #[test]
@@ -353,7 +355,7 @@ mod authorize_by_resource_type {
                 .name(name)
                 .call()
         });
-        let image = acl_image(std::iter::once(grant).chain(denies));
+        let image = acl_image(iter::once(grant).chain(denies));
         let caller = AliceAuthorizer::default();
         assert2::check!(caller.authorize(&image, witness, AclOperation::Write) == expected);
         assert2::check!(

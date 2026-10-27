@@ -40,9 +40,11 @@ use {
     crate::{error::RemoteStorageError, storage_manager::IndexType},
     std::{
         collections::{BTreeMap, HashMap},
+        fs,
+        io::ErrorKind,
         path::{Path, PathBuf},
         sync::{
-            Mutex, MutexGuard,
+            Mutex, MutexGuard, PoisonError,
             atomic::{AtomicU64, Ordering},
         },
     },
@@ -172,12 +174,12 @@ impl RemoteIndexCache {
     /// emptied or created.
     pub fn new(log_dir: &Path, max_bytes: u64) -> Result<Self, RemoteStorageError> {
         let root = log_dir.join(REMOTE_INDEX_CACHE_DIR);
-        if let Err(e) = std::fs::remove_dir_all(&root)
-            && e.kind() != std::io::ErrorKind::NotFound
+        if let Err(e) = fs::remove_dir_all(&root)
+            && e.kind() != ErrorKind::NotFound
         {
             return Err(RemoteStorageError::Io(e));
         }
-        std::fs::create_dir_all(&root).map_err(RemoteStorageError::Io)?;
+        fs::create_dir_all(&root).map_err(RemoteStorageError::Io)?;
         Ok(Self::empty(Some(root), max_bytes))
     }
 
@@ -211,12 +213,8 @@ impl RemoteIndexCache {
     /// This is Kafka's `RemoteIndexCache.resizeCacheSize`, which sets the
     /// Caffeine maximum weight and so evicts down to the new size at once. A
     /// grow evicts nothing. A disabled cache only records the new budget.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cache lock was poisoned by a panic inside the cache.
     pub fn resize(&self, max_bytes: u64) {
-        let mut state = self.state.lock().expect("remote index cache lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.max_bytes.store(max_bytes, Ordering::Relaxed);
         let evicted = state.evict_while(|held| held > max_bytes);
         self.discard(state, &evicted);
@@ -238,13 +236,9 @@ impl RemoteIndexCache {
     }
 
     /// The counters the broker publishes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cache lock was poisoned by a panic inside the cache.
     #[must_use]
     pub fn stats(&self) -> IndexCacheStats {
-        let state = self.state.lock().expect("remote index cache lock poisoned");
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         IndexCacheStats {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
@@ -268,10 +262,6 @@ impl RemoteIndexCache {
     /// Returns whatever `fetch` returns on a miss. A cache-directory failure
     /// is not an error: the fetched bytes are returned and the entry is
     /// simply not stored.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cache lock was poisoned by a panic inside the cache.
     pub fn get_or_fetch<F>(
         &self,
         segment_id: Uuid,
@@ -290,7 +280,7 @@ impl RemoteIndexCache {
         };
         let path = entry_path(root, key);
         if self.claim_hit(key) {
-            match std::fs::read(&path) {
+            match fs::read(&path) {
                 Ok(bytes) => {
                     self.hits.fetch_add(1, Ordering::Relaxed);
                     return Ok((bytes, IndexCacheOutcome::Hit));
@@ -319,10 +309,6 @@ impl RemoteIndexCache {
     /// The `RemoteLogManager` calls this when a segment enters
     /// `DeleteSegmentStarted`, so the deleted segment's bytes stop counting
     /// against the budget.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cache lock was poisoned by a panic inside the cache.
     pub fn remove_segment(&self, segment_id: Uuid) {
         let Some(root) = self.root.as_ref() else {
             return;
@@ -340,7 +326,7 @@ impl RemoteIndexCache {
     /// when it does. The read that follows is what settles whether the file is
     /// really there.
     fn claim_hit(&self, key: CacheKey) -> bool {
-        let mut state = self.state.lock().expect("remote index cache lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if !state.entries.contains_key(&key) {
             return false;
         }
@@ -350,7 +336,7 @@ impl RemoteIndexCache {
 
     /// Removes one entry from the map and from the directory.
     fn drop_entry(&self, key: CacheKey, path: &Path) {
-        let mut state = self.state.lock().expect("remote index cache lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.forget(key).is_some() {
             remove_quietly(path);
         }
@@ -369,14 +355,14 @@ impl RemoteIndexCache {
         // may already be reading. Keep publication and eviction serialized
         // so an old eviction cannot unlink a newly inserted entry.
         let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-        if let Err(error) = std::fs::write(&temporary, bytes) {
+        if let Err(error) = fs::write(&temporary, bytes) {
             remove_quietly(&temporary);
             tracing::debug!(error = %error, path = %path.display(),
                 "remote index cache: temporary entry not stored");
             return;
         }
-        let mut state = self.state.lock().expect("remote index cache lock poisoned");
-        let published = std::fs::rename(&temporary, path);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let published = fs::rename(&temporary, path);
         if let Err(error) = published {
             remove_quietly(&temporary);
             tracing::debug!(
@@ -426,9 +412,9 @@ fn entry_path(root: &Path, key: CacheKey) -> PathBuf {
 /// over: the entry is already gone from the map, so the file is at worst
 /// stale bytes that no lookup can reach.
 fn remove_quietly(path: &Path) {
-    match std::fs::remove_file(path) {
+    match fs::remove_file(path) {
         Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => tracing::debug!(
             error = %error,
             path = %path.display(),

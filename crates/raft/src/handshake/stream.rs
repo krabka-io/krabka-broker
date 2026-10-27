@@ -13,7 +13,10 @@ use {
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::{net::TcpStream, time::Instant},
+    tokio::{
+        net::TcpStream,
+        time::{self, Instant},
+    },
 };
 
 /// An accepted controller-listener connection, handed to
@@ -105,7 +108,7 @@ impl ActivityClock {
 
 /// The listener's side of a [`HandshakeStream`]: it expires once the window
 /// passes in silence, and dropping it disarms the stream's clock.
-pub(crate) struct IdleWatch {
+pub struct IdleWatch {
     clock: Arc<ActivityClock>,
     window: Duration,
 }
@@ -115,9 +118,7 @@ impl IdleWatch {
     /// is re-armed from the last progress each time it fires early, so the
     /// stream records progress without touching a timer.
     pub(crate) async fn expired(&self) {
-        let mut timer = pin!(tokio::time::sleep_until(
-            self.clock.last_progress() + self.window
-        ));
+        let mut timer = pin!(time::sleep_until(self.clock.last_progress() + self.window));
         loop {
             timer.as_mut().await;
             let deadline = self.clock.last_progress() + self.window;

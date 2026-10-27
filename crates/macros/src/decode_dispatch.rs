@@ -6,7 +6,7 @@ use {
     },
     moxy::{
         ast::{FromMeta, Meta, Parse, ParseError, Parser, PatIdent, Path},
-        token::{Spanner, TokenStream},
+        token::{Span, Spanner, TokenStream},
     },
     proc_macro::{Delimiter, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
 };
@@ -88,14 +88,18 @@ fn prefix(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseEr
             "request binding must differ from dispatch parameters",
         ));
     }
-    let version = names[1];
-    let bytes = names[names.len() - 2];
+    let &[_, version, .., bytes, _] = names.as_slice() else {
+        return Err(ParseError::new(
+            function.span(),
+            "expected broker, version, bytes and context parameters",
+        ));
+    };
     Ok(moxy::template! {
         let {{ binding }} = crate::handlers::decode_request::<{{ request }}>({{ bytes }}, {{ version }})?;
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -105,11 +109,11 @@ pub(crate) fn expand(
     }))
 }
 
-pub(crate) fn expand_function(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand_function(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let mut tokens: Vec<_> = input.into_iter().collect();
     let Some(NativeTokenTree::Group(body)) = tokens.pop() else {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected a decoded dispatch body",
         ));
     };

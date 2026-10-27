@@ -31,12 +31,15 @@ mod telemetry;
 #[path = "broker/test_support.rs"]
 mod test_support;
 
-use self::startup::broker_main;
+use {
+    self::startup::broker_main,
+    std::{error::Error, thread},
+};
 
 const BROKER_MAIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let result = std::thread::Builder::new()
+fn main() -> Result<(), Box<dyn Error>> {
+    let result = thread::Builder::new()
         .name("krabka-broker-main".into())
         .stack_size(BROKER_MAIN_STACK_BYTES)
         .spawn(|| broker_main().map_err(|error| error.to_string()))?

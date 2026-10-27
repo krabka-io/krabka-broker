@@ -11,6 +11,7 @@
 use {
     crate::{
         config::LogConfig,
+        error::LogError,
         io::LogIo,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
         producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
@@ -23,15 +24,18 @@ use {
     std::{
         collections::{BTreeMap, HashMap, VecDeque},
         path::PathBuf,
+        sync::{Arc, RwLock},
+        time::{Instant, SystemTime},
     },
 };
 
 mod active_producers;
 mod append;
 mod compaction;
-pub(crate) mod control;
+pub mod control;
 mod delivery;
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod direct_writes;
 #[cfg(test)]
 mod faults;
@@ -82,9 +86,13 @@ struct RollJitter {
 #[derive(Debug, Clone)]
 struct PendingDelete {
     /// The instant from which the files may be deleted.
-    deadline: std::time::SystemTime,
+    deadline: SystemTime,
     paths: Vec<PathBuf>,
 }
+
+/// The error for a log with no active segment. [`Log::open`] makes one and
+/// every roll replaces it, so an open log always has one.
+fn no_active_segment() -> LogError { LogError::Corrupt("the log has no active segment".into()) }
 
 /// A Kafka-format log: a sorted collection of [`Segment`]s plus a single
 /// active segment that accepts appends.
@@ -95,15 +103,15 @@ struct PendingDelete {
 #[derive(Debug)]
 pub struct Log {
     dir: PathBuf,
-    config: std::sync::Arc<std::sync::RwLock<LogConfig>>,
-    io: std::sync::Arc<dyn LogIo>,
+    config: Arc<RwLock<LogConfig>>,
+    io: Arc<dyn LogIo>,
     segments: Vec<Segment>,
     active: Option<Segment>,
     dir_sync_needed: bool,
     rollover_flusher: rollover_flush::Flusher,
     /// The one compaction job this log allows at a time, and the fence's
     /// hold on its build. See [`Log::prepare_compaction`].
-    compaction_gate: std::sync::Arc<compaction::CompactionGate>,
+    compaction_gate: Arc<compaction::CompactionGate>,
     /// Set by [`Log::fence`] when the partition is being removed: every
     /// append from then on fails with [`LogError::Fenced`].
     fenced: bool,
@@ -111,7 +119,7 @@ pub struct Log {
     /// here on in the active segment are ones this process wrote.
     opened_end: Offset,
     unflushed_messages: u64,
-    last_flush: std::time::Instant,
+    last_flush: Instant,
     /// Bytes appended through the page cache since the last background sync
     /// of the active segment started, and the syncs still running, oldest
     /// first. See [`LogConfig::writeback_window`] and `Log::pace_writeback`.
@@ -123,7 +131,7 @@ pub struct Log {
     #[cfg(not(target_os = "wasi"))]
     writeback_handed: u64,
     #[cfg(not(target_os = "wasi"))]
-    writeback_jobs: std::collections::VecDeque<rollover_flush::FlushTicket>,
+    writeback_jobs: VecDeque<rollover_flush::FlushTicket>,
     roll_jitter: Option<RollJitter>,
     pending_deletes: Vec<PendingDelete>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
@@ -167,7 +175,7 @@ pub struct Log {
     /// When the start that retention moved is due in
     /// `log-start-offset-checkpoint`, or `None` when the file is current. See
     /// [`Log::checkpoint_log_start_if_due`].
-    start_checkpoint_due: Option<std::time::Instant>,
+    start_checkpoint_due: Option<Instant>,
 
     /// How many of the leading sealed segments are a *clean* prefix, because
     /// a compaction pass produced them and nothing has appended to the log's
@@ -246,7 +254,7 @@ pub struct Log {
     /// all wire-exact bytes stay exactly as they are without a stamp.
     /// [`Log::set_stamp_source`] sets this field. The broker shares one tenant
     /// source across all hosted partitions when internal stamping is enabled.
-    stamp_source: Option<std::sync::Arc<dyn StampSource>>,
+    stamp_source: Option<Arc<dyn StampSource>>,
 
     /// Open `.stampindex` sidecars keyed by segment base offset. Transactional
     /// data can commit after its segment rolls, so the log keeps sealed

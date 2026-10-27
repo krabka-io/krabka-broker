@@ -4,6 +4,7 @@
 use {
     super::{INVALID_OFFSET, framing::FramedTopic},
     crate::handlers::map_partition_rows,
+    krabka_protocol::owned::produce_response,
 };
 
 /// Build a topic-level error response for the KIP-516 id-resolution failures
@@ -15,7 +16,7 @@ use {
 pub(super) fn build_topic_error_response(
     topic: &FramedTopic,
     code: i16,
-) -> krabka_protocol::owned::produce_response::TopicProduceResponse {
+) -> produce_response::TopicProduceResponse {
     use krabka_protocol::owned::produce_response::{
         PartitionProduceResponse, TopicProduceResponse,
     };
@@ -45,6 +46,7 @@ mod tests {
         },
         assert2::assert,
         bytes::Bytes,
+        krabka_protocol::primitives::uuid::Uuid,
     };
 
     #[test]
@@ -52,7 +54,7 @@ mod tests {
         use krabka_protocol::owned::produce_response::{
             LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse,
         };
-        let topic_id = krabka_protocol::primitives::uuid::Uuid([7; 16]);
+        let topic_id = Uuid([7; 16]);
         let topic = FramedTopic {
             name: "orders".into(),
             topic_id,
@@ -73,7 +75,7 @@ mod tests {
         let error_partition = |index: i32| {
             krabka_macros::tagged_wire!(PartitionProduceResponse {
                 index,
-                error_code: crate::codes::UNKNOWN_TOPIC_ID,
+                error_code: UNKNOWN_TOPIC_ID,
                 base_offset: -1,
                 log_append_time_ms: -1,
                 log_start_offset: -1,
@@ -86,7 +88,7 @@ mod tests {
             })
         };
         let expected = krabka_macros::tagged_wire!(TopicProduceResponse {
-            name: "orders".to_string(),
+            name: "orders".to_owned(),
             topic_id,
             partition_responses: vec![error_partition(0), error_partition(4)],
         });

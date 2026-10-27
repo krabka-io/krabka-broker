@@ -144,14 +144,15 @@ pub(super) fn producer_partition() -> (tempfile::TempDir, Arc<ProducerState>, Ar
     let state = Arc::new(ProducerState::new());
     let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
     let partition = spawn_partition(
-        TOPIC.to_string(),
+        TOPIC.to_owned(),
         PARTITION,
         directory.path().to_path_buf(),
         log,
         LogDirRegistry::default(),
         Arc::clone(&state),
         false,
-    );
+    )
+    .unwrap();
     (directory, state, partition)
 }
 

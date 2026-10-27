@@ -30,7 +30,8 @@ use {
         owned::list_offsets_response::ListOffsetsPartitionResponse,
         records::{Attributes, Record, RecordBatch},
     },
-    std::sync::atomic::Ordering,
+    std::{sync::atomic::Ordering, time::Duration},
+    tokio::{task, time},
 };
 
 const TOPIC: &str = "list-offsets-record-limit";
@@ -104,7 +105,7 @@ async fn set_cluster_limit(broker: &BrokerHandle, limit: &str, generation: u32) 
         .submit_change(records)
         .await
         .expect("submit the broker configs");
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    time::timeout(Duration::from_secs(10), async {
         loop {
             if broker
                 .partition_log_config_for_test(TOPIC, 0)
@@ -112,7 +113,7 @@ async fn set_cluster_limit(broker: &BrokerHandle, limit: &str, generation: u32) 
             {
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await

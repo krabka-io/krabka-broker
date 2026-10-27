@@ -92,6 +92,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            api_catalog,
             coordinator::unified::streams::config::{
                 KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
             },
@@ -99,6 +100,7 @@ mod tests {
                 RESOURCE_TYPE_GROUP,
                 test_support::{Handled, make_scoped_resource, make_set_cfg},
             },
+            test_support::string_pairs,
         },
         assert2::assert,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
@@ -160,7 +162,7 @@ mod tests {
             records
                 == vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
                     group_id: "g".into(),
-                    configs: crate::test_support::string_pairs(&keys),
+                    configs: string_pairs(&keys),
                 })]
         );
     }
@@ -299,7 +301,7 @@ mod tests {
                     &resource,
                     &MetadataImage::new(uuid::Uuid::nil()),
                     &GroupBounds::default(),
-                    crate::api_catalog::UnstableApiVersions::Enabled,
+                    api_catalog::UnstableApiVersions::Enabled,
                 ) == want,
                 "{name:?} {configs:?}"
             );

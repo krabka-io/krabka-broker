@@ -84,7 +84,7 @@ fn parse_initial_controller(spec: &str, listener_name: &str) -> Result<Voter, St
         directory_id: dir,
         endpoints: vec![VoterEndpoint {
             name: listener_name.to_owned(),
-            host: host.to_string(),
+            host: host.to_owned(),
             port,
         }],
         kraft_version: KRaftVersionRange::default(),
@@ -124,7 +124,7 @@ pub(super) fn build_initial_voters(
             directory_id: directory_id.into(),
             endpoints: vec![VoterEndpoint {
                 name: args.controller_listener_name.clone(),
-                host: host.to_string(),
+                host: host.to_owned(),
                 port,
             }],
             kraft_version: KRaftVersionRange::default(),
@@ -178,8 +178,8 @@ mod tests {
                 id: krabka_metadata::NodeId(3),
                 directory_id: Uuid::from_u128(3),
                 endpoints: vec![VoterEndpoint {
-                    name: "CONTROLLER".to_string(),
-                    host: "host".to_string(),
+                    name: "CONTROLLER".to_owned(),
+                    host: "host".to_owned(),
                     port: 9093,
                 }],
                 kraft_version: KRaftVersionRange { min: 0, max: 1 },

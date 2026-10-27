@@ -1,6 +1,7 @@
 //! What `#[derive(RegisterMetrics)]` constructs and registers, read back from
 //! the text exposition of the registry it registers into. `prometheus-client`
 //! ends every help text with a period of its own.
+#![cfg(test)]
 
 use {
     assert2::assert,

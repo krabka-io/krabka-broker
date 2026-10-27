@@ -29,7 +29,7 @@ use {
     bytes::Bytes,
     krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicRecord},
     krabka_protocol::owned::produce_response::PartitionProduceResponse,
-    std::sync::Arc,
+    std::{fs, sync::Arc},
     uuid::Uuid,
 };
 
@@ -138,18 +138,19 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
 
     for topic in ["frozen", "control"] {
         let part_dir = partition_dir(dir.path(), topic, 0);
-        std::fs::create_dir_all(&part_dir).expect("partition directory");
+        fs::create_dir_all(&part_dir).expect("partition directory");
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
             .expect("open the log");
         let part = spawn_partition(
-            topic.to_string(),
+            topic.to_owned(),
             krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
             fixture.log_dir_status.clone(),
             Arc::clone(&fixture.producer_state),
             false,
-        );
+        )
+        .unwrap();
         let topic_id = image.topic(topic).expect("topic").topic_id;
         let record = image.partition(topic, 0).expect("partition");
         part.install_replication_target(Some(topic_id), record.leader.0, record.leader_epoch.0)

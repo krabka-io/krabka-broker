@@ -13,7 +13,9 @@ use {
     std::{
         fmt::Write as _,
         fs,
+        io::ErrorKind,
         path::{Path, PathBuf},
+        str::{FromStr, SplitWhitespace},
     },
 };
 
@@ -22,7 +24,7 @@ use {
 ///
 /// It is part of the 1.x on-disk contract, and it is Kafka's number too:
 /// `LeaderEpochCheckpointFile.CURRENT_VERSION` is 0.
-pub(crate) const LEADER_EPOCH_CHECKPOINT_VERSION: i32 = 0;
+pub const LEADER_EPOCH_CHECKPOINT_VERSION: i32 = 0;
 
 /// The artifact name the version errors carry, the file's own name.
 const ARTIFACT: &str = "leader-epoch-checkpoint";
@@ -39,7 +41,7 @@ impl LeaderEpochCheckpoint {
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
         let entries = match fs::read_to_string(&path) {
             Ok(s) => Self::parse(&path, &s)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(LogError::Io(e)),
         };
         tracing::Span::current().record("entries", entries.len());
@@ -126,10 +128,7 @@ impl LeaderEpochCheckpoint {
     }
 }
 
-fn parse_column<T: std::str::FromStr>(
-    parts: &mut std::str::SplitWhitespace<'_>,
-    line: &str,
-) -> Result<T, LogError> {
+fn parse_column<T: FromStr>(parts: &mut SplitWhitespace<'_>, line: &str) -> Result<T, LogError> {
     parts
         .next()
         .and_then(|token| token.parse().ok())
@@ -144,6 +143,7 @@ mod tests {
             leader_epoch_checkpoint::test_support::{TempCheckpoint, checkpoint, entry, fresh},
             test_support::TempPath,
         },
+        std::fs,
     };
 
     /// The golden file: Kafka's text layout, version line `0` first.
@@ -165,14 +165,14 @@ mod tests {
             dir: _d,
             checkpoint: c,
         } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
-        let s = std::fs::read_to_string(&c.path).unwrap();
+        let s = fs::read_to_string(&c.path).unwrap();
         assert2::assert!(s == GOLDEN);
     }
 
     #[test]
     fn the_golden_file_decodes_to_its_entries() {
         let TempPath { dir: _d, path } = fresh();
-        std::fs::write(&path, GOLDEN).unwrap();
+        fs::write(&path, GOLDEN).unwrap();
         assert2::assert!(LeaderEpochCheckpoint::open(path).unwrap().entries() == golden_entries());
     }
 
@@ -184,7 +184,7 @@ mod tests {
     )]
     fn a_file_that_ends_early_has_no_entries(contents: &str) {
         let TempPath { dir: _d, path } = fresh();
-        std::fs::write(&path, contents).unwrap();
+        fs::write(&path, contents).unwrap();
         let c = LeaderEpochCheckpoint::open(path).unwrap();
         assert2::assert!(c.entries() == &[][..], "{contents:?}");
     }
@@ -203,7 +203,7 @@ mod tests {
     )]
     fn open_refuses_an_unknown_or_missing_version(contents: &str, found: Option<i64>) {
         let TempPath { dir: _d, path } = fresh();
-        std::fs::write(&path, contents).unwrap();
+        fs::write(&path, contents).unwrap();
         let error = LeaderEpochCheckpoint::open(path.clone()).unwrap_err();
         let got = match error {
             LogError::UnsupportedFormatVersion {
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn open_rejects_out_of_order_checkpoint_rows() {
         let TempPath { dir: _d, path } = fresh();
-        std::fs::write(&path, "0\n4\n0 0\n5 100\n2 50\n4 80\n").unwrap();
+        fs::write(&path, "0\n4\n0 0\n5 100\n2 50\n4 80\n").unwrap();
 
         let error = LeaderEpochCheckpoint::open(path).unwrap_err();
         assert2::assert!(matches!(error, LogError::Corrupt(_)));

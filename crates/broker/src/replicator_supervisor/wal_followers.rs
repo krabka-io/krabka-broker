@@ -174,6 +174,7 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::MetadataRecord,
+        std::fs,
         tokio_util::sync::CancellationToken,
         uuid::Uuid,
     };
@@ -319,8 +320,8 @@ mod tests {
             Some(topic_id),
             PartitionIndex(0),
         );
-        std::fs::create_dir_all(follower_shard.join("voter-2")).unwrap();
-        std::fs::write(follower_shard.join("voter-2/checkpoint"), b"durable").unwrap();
+        fs::create_dir_all(follower_shard.join("voter-2")).unwrap();
+        fs::write(follower_shard.join("voter-2/checkpoint"), b"durable").unwrap();
 
         let empty = MetadataImage::new(Uuid::nil());
         let desired = supervisor.desired_wal_followers(&empty, &HashMap::new());

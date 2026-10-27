@@ -7,6 +7,8 @@
 //! because each is a whole-broker singleton that `apply_to` writes exactly
 //! once, after the values they may depend on are already resolved.
 
+#[cfg(not(target_family = "wasm"))]
+use krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW;
 use {
     super::{
         AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
@@ -181,9 +183,7 @@ fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
 /// Resolve the `[gssapi]` section into the accept-path configuration.
 #[cfg(not(target_family = "wasm"))]
 fn gssapi_config(gssapi: FileGssapiConfig) -> Result<GssapiConfig, FileConfigError> {
-    let max_time_skew = gssapi
-        .max_time_skew
-        .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+    let max_time_skew = gssapi.max_time_skew.unwrap_or(DEFAULT_GSSAPI_MAX_TIME_SKEW);
     if max_time_skew < Time::ZERO {
         return Err(FileConfigError::InvalidConfig(
             "gssapi.max_time_skew must be non-negative".to_owned(),

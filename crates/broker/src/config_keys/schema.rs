@@ -7,20 +7,20 @@ use crate::schema_validation::SchemaGate;
 /// key on this topic. A record that fails the check is rejected with
 /// `INVALID_RECORD` (87). Default `false`. This key does not reach
 /// [`krabka_log::LogConfig`].
-pub(crate) const SCHEMA_VALIDATION_KEY: &str = "schema.validation.key";
+pub const SCHEMA_VALIDATION_KEY: &str = "schema.validation.key";
 
 /// KFC-7: when `true`, the produce path validates the schema of every record
 /// value on this topic. It is the same check that [`SCHEMA_VALIDATION_KEY`]
 /// asks for, on the other half of the record. Default `false`.
-pub(crate) const SCHEMA_VALIDATION_VALUE: &str = "schema.validation.value";
+pub const SCHEMA_VALIDATION_VALUE: &str = "schema.validation.value";
 
 /// KFC-7: how much of a record the schema check reads. `id`, the default,
 /// reads the five-byte Confluent header alone. `full` also decodes the body
 /// against the schema that the header names. This key alone turns nothing on:
 /// a topic that sets the mode and leaves both booleans `false` runs no check.
-pub(crate) const SCHEMA_VALIDATION_MODE: &str = "schema.validation.mode";
-pub(crate) const SCHEMA_VALIDATION_MODE_ID: &str = "id";
-pub(crate) const SCHEMA_VALIDATION_MODE_FULL: &str = "full";
+pub const SCHEMA_VALIDATION_MODE: &str = "schema.validation.mode";
+pub const SCHEMA_VALIDATION_MODE_ID: &str = "id";
+pub const SCHEMA_VALIDATION_MODE_FULL: &str = "full";
 
 /// Resolve the KFC-7 schema-validation gate for `topic`. `None` means the
 /// topic asks for no check, and no schema-validation code then runs on its
@@ -31,7 +31,7 @@ pub(crate) const SCHEMA_VALIDATION_MODE_FULL: &str = "full";
 /// `schema.validation.mode` alone does not turn the check on, so a topic that
 /// sets only the mode still resolves to `None`.
 #[must_use]
-pub(crate) fn resolve_schema_validation(
+pub fn resolve_schema_validation(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<SchemaGate> {
@@ -139,9 +139,9 @@ mod tests {
         // All three keys are enforced on the produce path, so none of them may
         // reach the log's own config.
         let overrides = maplit::btreemap! {
-        SCHEMA_VALIDATION_KEY.to_string() => "true".to_string(),
-        SCHEMA_VALIDATION_VALUE.to_string() => "true".to_string(),
-        SCHEMA_VALIDATION_MODE.to_string() => SCHEMA_VALIDATION_MODE_FULL.to_string()};
+        SCHEMA_VALIDATION_KEY.to_owned() => "true".to_owned(),
+        SCHEMA_VALIDATION_VALUE.to_owned() => "true".to_owned(),
+        SCHEMA_VALIDATION_MODE.to_owned() => SCHEMA_VALIDATION_MODE_FULL.to_owned()};
         assert!(apply_to_log_config(&overrides, &LogConfig::default()) == LogConfig::default());
     }
 

@@ -61,12 +61,14 @@
 //! failed and the code does not, because a code that separates them tells an
 //! attacker which check they got past.
 
-pub(crate) use self::{
-    canonical_bytes::freeze_signing_bytes,
-    refusal::{SignatureRefusal, WireRefusal},
-    verify::{FreezeSignatureCheck, verify_freeze_signature},
+pub use {
+    self::{
+        canonical_bytes::freeze_signing_bytes,
+        refusal::{SignatureRefusal, WireRefusal},
+        verify::{FreezeSignatureCheck, verify_freeze_signature},
+    },
+    krabka_audit::{FreezeSigningInput, freeze_signing_input},
 };
-pub use krabka_audit::{FreezeSigningInput, freeze_signing_input};
 
 mod canonical_bytes;
 mod refusal;

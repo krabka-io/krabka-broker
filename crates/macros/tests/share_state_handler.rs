@@ -1,4 +1,5 @@
 //! ACL denial preserves request rows; allowed requests reach the operation once.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -6,27 +7,27 @@ use {
 };
 
 mod codes {
-    pub(crate) const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+    pub const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 }
 
 mod error {
-    pub(crate) type BrokerError = &'static str;
+    pub type BrokerError = &'static str;
 }
 
 mod broker {
     use super::{AtomicUsize, Ordering};
 
     #[derive(Default)]
-    pub(crate) struct Coordinator {
+    pub struct Coordinator {
         pub(crate) calls: AtomicUsize,
     }
 
     #[derive(Default)]
-    pub(crate) struct Controller {
+    pub struct Controller {
         pub(crate) snapshots: AtomicUsize,
     }
 
-    pub(crate) struct Image {
+    pub struct Image {
         pub(crate) generation: usize,
     }
 
@@ -39,29 +40,29 @@ mod broker {
     }
 
     #[derive(Default)]
-    pub(crate) struct Broker {
+    pub struct Broker {
         pub(crate) share_coordinator: Coordinator,
         pub(crate) controller: Controller,
     }
 }
 
 mod protocol {
-    pub(crate) struct Request {
+    pub struct Request {
         pub(crate) group_id: String,
         pub(crate) topics: Vec<RequestTopic>,
     }
 
-    pub(crate) struct RequestTopic {
+    pub struct RequestTopic {
         pub(crate) topic_id: u8,
         pub(crate) partitions: Vec<RequestPartition>,
     }
 
-    pub(crate) struct RequestPartition {
+    pub struct RequestPartition {
         pub(crate) partition: i32,
     }
 
     #[derive(Debug, PartialEq, Eq, krabka_macros::FieldDefaults)]
-    pub(crate) struct Response {
+    pub struct Response {
         pub(crate) results: Vec<TopicRow>,
         pub(crate) group_id: String,
         pub(crate) observed_snapshot: usize,
@@ -70,7 +71,7 @@ mod protocol {
     }
 
     #[derive(Debug, PartialEq, Eq, krabka_macros::FieldDefaults)]
-    pub(crate) struct TopicRow {
+    pub struct TopicRow {
         pub(crate) topic_id: u8,
         pub(crate) partitions: Vec<PartitionRow>,
         #[default(73)]
@@ -78,7 +79,7 @@ mod protocol {
     }
 
     #[derive(Debug, PartialEq, Eq, krabka_macros::FieldDefaults)]
-    pub(crate) struct PartitionRow {
+    pub struct PartitionRow {
         pub(crate) partition: i32,
         pub(crate) error_code: i16,
         #[default(Some("default message".into()))]
@@ -91,7 +92,7 @@ mod protocol {
 mod handlers {
     use {crate::broker::Broker, assert2::assert};
 
-    pub(crate) struct RequestContext<'a> {
+    pub struct RequestContext<'a> {
         pub(crate) principal: &'a str,
         pub(crate) denied: bool,
     }
@@ -104,11 +105,14 @@ mod handlers {
         ctx.denied
     }
 
-    pub(crate) mod operation {
-        use crate::{
-            Ordering,
-            broker::{Coordinator, Image},
-            protocol,
+    pub mod operation {
+        use {
+            crate::{
+                Ordering,
+                broker::{Coordinator, Image},
+                protocol,
+            },
+            tokio::task,
         };
 
         krabka_macros::share_state_handler!(
@@ -124,7 +128,7 @@ mod handlers {
             image: &Image,
             request: protocol::Request,
         ) -> protocol::Response {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             coordinator.calls.fetch_add(1, Ordering::SeqCst);
             protocol::Response {
                 group_id: request.group_id,

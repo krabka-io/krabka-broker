@@ -4,10 +4,17 @@
 use {
     super::{LogLevel, LogLevelController, ROOT_LOGGER},
     assert2::{assert, check},
-    std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+    std::{
+        mem,
+        sync::{
+            Arc, Mutex, PoisonError,
+            atomic::{AtomicBool, Ordering},
+            mpsc::{self, RecvTimeoutError},
+        },
+        thread,
+        time::Duration,
     },
+    tracing::dispatcher,
     tracing_subscriber::{Layer, layer::SubscriberExt as _},
 };
 
@@ -36,11 +43,7 @@ fn capturing_dispatch(controller: &LogLevelController) -> CapturingDispatch {
 
 /// Everything the capture holds, drained.
 fn drain(captured: &Captured) -> Vec<String> {
-    std::mem::take(
-        &mut *captured
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
+    mem::take(&mut *captured.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
 #[yare::parameterized(
@@ -92,7 +95,7 @@ fn a_target_level_covers_the_targets_below_it() {
     let CapturingDispatch { dispatch, .. } = capturing_dispatch(&controller);
     drop(filter);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::info!(target: "seed_parent::child", "register the callsite");
     });
     assert!(controller.level("seed_parent::child") == Some(LogLevel::Info));
@@ -107,17 +110,17 @@ fn raising_a_level_enables_a_callsite_the_old_filter_had_disabled() {
     let (controller, _filter) = LogLevelController::new("info");
     let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "raise_target", "before");
     });
     assert!(drain(&captured) == Vec::<String>::new());
 
     controller.set_level("raise_target", LogLevel::Debug);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "raise_target", "after");
     });
-    assert!(drain(&captured) == vec!["raise_target:DEBUG".to_string()]);
+    assert!(drain(&captured) == vec!["raise_target:DEBUG".to_owned()]);
 
     // The describe surface reports the same level the events prove.
     assert!(controller.level("raise_target") == Some(LogLevel::Debug));
@@ -128,14 +131,14 @@ fn fatal_silences_a_target_and_reads_back_as_fatal() {
     let (controller, _filter) = LogLevelController::new("trace");
     let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::error!(target: "silence_target", "before");
     });
-    assert!(drain(&captured) == vec!["silence_target:ERROR".to_string()]);
+    assert!(drain(&captured) == vec!["silence_target:ERROR".to_owned()]);
 
     controller.set_level("silence_target", LogLevel::Fatal);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::error!(target: "silence_target", "after");
     });
     assert!(drain(&captured) == Vec::<String>::new());
@@ -147,14 +150,14 @@ fn clearing_a_level_puts_a_target_back_on_the_root() {
     let (controller, _filter) = LogLevelController::new("info,clear_target=debug");
     let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "clear_target", "before");
     });
-    assert!(drain(&captured) == vec!["clear_target:DEBUG".to_string()]);
+    assert!(drain(&captured) == vec!["clear_target:DEBUG".to_owned()]);
 
     assert!(controller.clear_level("clear_target"));
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "clear_target", "after");
     });
     assert!(drain(&captured) == Vec::<String>::new());
@@ -187,12 +190,12 @@ fn a_span_directive_survives_a_level_change() {
 
     controller.set_level("unrelated_target", LogLevel::Warn);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("carried_span");
         let _entered = span.enter();
         tracing::debug!(target: "inside_span_target", "still on");
     });
-    assert!(drain(&captured).contains(&"inside_span_target:DEBUG".to_string()));
+    assert!(drain(&captured).contains(&"inside_span_target:DEBUG".to_owned()));
 }
 
 #[test]
@@ -203,7 +206,7 @@ fn a_span_open_before_a_level_change_keeps_its_directive() {
     let (controller, _filter) = LogLevelController::new("off,[open_span]=debug");
     let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("open_span");
         let _entered = span.enter();
         tracing::debug!(target: "inside_open_span", "before");
@@ -211,7 +214,7 @@ fn a_span_open_before_a_level_change_keeps_its_directive() {
         tracing::debug!(target: "inside_open_span", "after");
     });
 
-    assert!(drain(&captured) == vec!["inside_open_span:DEBUG".to_string(); 2]);
+    assert!(drain(&captured) == vec!["inside_open_span:DEBUG".to_owned(); 2]);
 }
 
 #[yare::parameterized(
@@ -250,15 +253,15 @@ fn a_numeric_directive_does_not_outrank_a_later_alteration() {
     let (controller, _filter) = LogLevelController::new("info,lower_target=4");
     let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "lower_target", "before");
     });
-    assert!(drain(&captured) == vec!["lower_target:DEBUG".to_string()]);
+    assert!(drain(&captured) == vec!["lower_target:DEBUG".to_owned()]);
     assert!(controller.level("lower_target") == Some(LogLevel::Debug));
 
     controller.set_level("lower_target", LogLevel::Warn);
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "lower_target", "after");
     });
     assert!(drain(&captured) == Vec::<String>::new());
@@ -275,13 +278,13 @@ fn a_level_change_is_one_update_of_the_model_and_the_filter() {
     let (controller, _filter) = LogLevelController::new("info");
     let install_blocked = super::write(&controller.shared.filter);
 
-    let altering = std::thread::spawn({
+    let altering = thread::spawn({
         let controller = controller.clone();
         move || controller.set_level("serialized_target", LogLevel::Debug)
     });
     let stop = Arc::new(AtomicBool::new(false));
-    let (reported, observed) = std::sync::mpsc::channel();
-    let describing = std::thread::spawn({
+    let (reported, observed) = mpsc::channel();
+    let describing = thread::spawn({
         let controller = controller.clone();
         let stop = Arc::clone(&stop);
         move || {
@@ -294,14 +297,14 @@ fn a_level_change_is_one_update_of_the_model_and_the_filter() {
                     let _ = reported.send(());
                     return;
                 }
-                std::thread::yield_now();
+                thread::yield_now();
             }
         }
     });
 
-    let seen = observed.recv_timeout(std::time::Duration::from_secs(2));
+    let seen = observed.recv_timeout(Duration::from_secs(2));
     check!(
-        seen == Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        seen == Err(RecvTimeoutError::Timeout),
         "a describe reported DEBUG while the filter carrying it could not be installed"
     );
 

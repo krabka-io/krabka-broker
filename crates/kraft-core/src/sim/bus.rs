@@ -46,7 +46,9 @@ impl Sim {
     }
 
     fn advance_simulated_watermark(&mut self, id: NodeId, hwm: i64) {
-        let node = self.nodes.get_mut(&id).unwrap();
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return;
+        };
         node.high_watermark = hwm;
         let eligible_peers: Vec<_> = self
             .all_node_ids()
@@ -54,9 +56,9 @@ impl Sim {
             .filter(|&peer| peer != id && !self.partitioned.contains(&peer))
             .collect();
         for peer in eligible_peers {
-            let target = self.nodes.get_mut(&peer).unwrap();
-            let capped = hwm.min(target.log.end_offset());
-            target.high_watermark = capped;
+            if let Some(target) = self.nodes.get_mut(&peer) {
+                target.high_watermark = hwm.min(target.log.end_offset());
+            }
         }
     }
 
@@ -64,12 +66,19 @@ impl Sim {
         if !self.can_replicate(follower, leader) {
             return;
         }
-        let leader_hwm = match self.nodes[&leader].machine.role() {
-            Role::Leader { high_watermark, .. } => *high_watermark,
-            _ => self.nodes[&leader].high_watermark,
+        let Some(leader_node) = self.nodes.get(&leader) else {
+            return;
         };
-        let mut follower_node = self.nodes.remove(&follower).expect("follower exists");
-        follower_node.log.replicate_from(&self.nodes[&leader].log);
+        let leader_hwm = match leader_node.machine.role() {
+            Role::Leader { high_watermark, .. } => *high_watermark,
+            _ => leader_node.high_watermark,
+        };
+        let Some(mut follower_node) = self.nodes.remove(&follower) else {
+            return;
+        };
+        if let Some(leader_node) = self.nodes.get(&leader) {
+            follower_node.log.replicate_from(&leader_node.log);
+        }
         follower_node.high_watermark = leader_hwm.min(follower_node.log.end_offset());
         self.nodes.insert(follower, follower_node);
     }
@@ -96,12 +105,11 @@ impl Sim {
     /// monotonic epochs and offsets. This method returns `true` if a message
     /// was available to duplicate.
     pub(super) fn deliver_front_twice(&mut self) -> bool {
-        let Some(msg) = self.queue.front().cloned() else {
+        let Some(msg) = self.queue.pop_front() else {
             return false;
         };
         // Deliver the genuine copy.
-        let first = self.queue.pop_front().expect("front exists");
-        self.deliver(&first);
+        self.deliver(&msg);
         // Deliver the duplicate of the same message.
         self.deliver(&msg);
         true

@@ -45,10 +45,13 @@
 //! opinion about them, and each carries broker state that no application should
 //! read as a data topic.
 
-use crate::{
-    BrokerError, barrier::STATE_TOPIC, config::BrokerConfig, coordinator::bootstrap::OFFSETS_TOPIC,
-    diskless::index_log::DISKLESS_WAL_INDEX_TOPIC, share_coordinator::bootstrap::TOPIC,
-    txn::bootstrap::TOPIC as TXN_TOPIC,
+use {
+    crate::{
+        BrokerError, barrier::STATE_TOPIC, config::BrokerConfig,
+        coordinator::bootstrap::OFFSETS_TOPIC, diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+        share_coordinator::bootstrap::TOPIC, txn::bootstrap::TOPIC as TXN_TOPIC,
+    },
+    krabka_log::topic_name,
 };
 
 /// The broker-owned topics whose names are fixed, each named by the constant
@@ -61,7 +64,7 @@ use crate::{
 /// The constant is `pub(crate)` rather than private so that tests elsewhere in
 /// the crate — the freeze registry's, in particular — can hold their own rules
 /// against the whole set instead of against a copy of it.
-pub(crate) const INTERNAL_TOPICS: [&str; 5] = [
+pub const INTERNAL_TOPICS: [&str; 5] = [
     OFFSETS_TOPIC,
     TXN_TOPIC,
     TOPIC,
@@ -78,10 +81,10 @@ pub(crate) const INTERNAL_TOPICS: [&str; 5] = [
 /// rather than for set membership, because a freeze has to be refused on a
 /// scope that merely *reaches* an internal topic, not only on one that names
 /// it.
-pub(crate) const INTERNAL_TOPIC_PREFIX: &str = "__";
+pub const INTERNAL_TOPIC_PREFIX: &str = "__";
 
 /// Whether Kafka clients should treat this topic as owned by the broker.
-pub(crate) fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
+pub fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
     INTERNAL_TOPICS.contains(&name) || name == config.audit_topic
 }
 
@@ -98,7 +101,7 @@ pub(crate) fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
 /// therefore not a bypass any of those subsystems take; it exists only so a
 /// client Produce request with this exact `client_id` (Kafka's own admin
 /// tooling) is not refused by [`produce_internal_topics_allowed`].
-pub(crate) const PRODUCE_ADMIN_CLIENT_ID: &str = "__admin_client";
+pub const PRODUCE_ADMIN_CLIENT_ID: &str = "__admin_client";
 
 /// The `client_id` prefix the broker's own diskless WAL index writer
 /// connects with, one connection per broker
@@ -112,12 +115,12 @@ pub(crate) const PRODUCE_ADMIN_CLIENT_ID: &str = "__admin_client";
 /// client's Produce reaches this broker. Without this exception the
 /// flusher's own writes are refused by the gate meant for everyone *else*,
 /// and the diskless flush loop can never advance.
-pub(crate) const DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX: &str = "krabka-diskless-index-broker-";
+pub const DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX: &str = "krabka-diskless-index-broker-";
 
 /// Whether a Produce request naming `client_id` may append directly to an
 /// internal topic. See [`PRODUCE_ADMIN_CLIENT_ID`] and
 /// [`DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX`].
-pub(crate) fn produce_internal_topics_allowed(client_id: &str) -> bool {
+pub fn produce_internal_topics_allowed(client_id: &str) -> bool {
     client_id == PRODUCE_ADMIN_CLIENT_ID
         || client_id.starts_with(DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX)
 }
@@ -137,8 +140,8 @@ pub(crate) fn produce_internal_topics_allowed(client_id: &str) -> bool {
 /// ([`krabka_log::topic_name::validate_topic_name`]), because the broker
 /// creates a partition directory from it, or when `name` does not start with
 /// [`INTERNAL_TOPIC_PREFIX`].
-pub(crate) fn validate_audit_topic_name(name: &str) -> Result<(), BrokerError> {
-    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(name) {
+pub fn validate_audit_topic_name(name: &str) -> Result<(), BrokerError> {
+    if let Err(invalid) = topic_name::validate_topic_name(name) {
         return Err(BrokerError::InvalidRuntimeConfig(format!(
             "audit_topic {name:?}: {invalid}"
         )));
@@ -154,12 +157,17 @@ pub(crate) fn validate_audit_topic_name(name: &str) -> Result<(), BrokerError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::config::DEFAULT_AUDIT_TOPIC, assert2::check, std::path::PathBuf};
+    use {
+        super::*,
+        crate::{config::DEFAULT_AUDIT_TOPIC, freeze},
+        assert2::check,
+        std::path::PathBuf,
+    };
 
     /// A config whose audit topic is `name`, for driving [`is_internal_topic`].
     fn config_auditing_to(name: &str) -> BrokerConfig {
         let mut config = BrokerConfig::for_tests(PathBuf::from("/nonexistent"));
-        config.audit_topic = name.to_string();
+        config.audit_topic = name.to_owned();
         config
     }
 
@@ -262,11 +270,11 @@ mod tests {
         for name in [DEFAULT_AUDIT_TOPIC, "__house_audit"] {
             check!(validate_audit_topic_name(name).is_ok(), "{name}");
             check!(
-                crate::freeze::scope_covers_internal_topic(PatternType::Literal, name),
+                freeze::scope_covers_internal_topic(PatternType::Literal, name),
                 "literal {name}"
             );
             check!(
-                crate::freeze::scope_covers_internal_topic(PatternType::Prefixed, name),
+                freeze::scope_covers_internal_topic(PatternType::Prefixed, name),
                 "prefixed {name}"
             );
         }

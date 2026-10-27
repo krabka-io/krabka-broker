@@ -40,7 +40,7 @@ use {
 ///
 /// Returns [`LogError::RecordTooLarge`] for the first record among those read
 /// whose body is larger than `limit`.
-pub(crate) fn check_records_read(
+pub fn check_records_read(
     batch: &RecordBatch,
     read: usize,
     limit: Option<ByteSize>,

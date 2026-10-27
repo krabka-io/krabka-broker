@@ -2,7 +2,7 @@
 //! high-watermark advance opens, and the half-open ranges a fetch may read
 //! from. They are free functions so each rule can be checked without an engine.
 
-use {crate::error::RaftError, krabka_ids::Offset};
+use {crate::error::RaftError, krabka_ids::Offset, krabka_verified::raft, std::cmp::Ordering};
 
 pub fn assigned_record_offset(assign_base: Offset, delta: i64) -> i64 {
     assign_base.0.saturating_add(delta)
@@ -48,7 +48,7 @@ pub fn leader_alone_is_majority(majority: usize, leader_is_voter: bool) -> bool 
 }
 
 pub fn batch_base_in_apply_window(base_offset: i64, prev_hwm: Offset, applied_hwm: Offset) -> bool {
-    krabka_verified::raft::in_half_open_window(base_offset, prev_hwm.0, applied_hwm.0)
+    raft::in_half_open_window(base_offset, prev_hwm.0, applied_hwm.0)
 }
 
 pub fn committed_records_since_snapshot(hwm: Offset, last_snapshot_end_offset: Offset) -> u64 {
@@ -59,7 +59,7 @@ pub fn snapshot_interval_reached(advanced: u64, snapshot_interval_records: u64) 
     snapshot_interval_records != 0
         && matches!(
             advanced.cmp(&snapshot_interval_records),
-            std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
+            Ordering::Equal | Ordering::Greater
         )
 }
 
@@ -76,37 +76,37 @@ pub fn snapshot_time_reached(elapsed_ms: u64, max_snapshot_interval_ms: u64) -> 
 }
 
 pub fn expected_hwm_after_advance(prev_hwm: Offset, new_hwm: Offset, log_end: Offset) -> Offset {
-    Offset(krabka_verified::raft::advance_high_watermark(
+    Offset(raft::advance_high_watermark(
         prev_hwm.0, new_hwm.0, log_end.0,
     ))
 }
 
 pub fn hwm_advanced_as_expected(applied_hwm: Offset, expected_hwm: Offset) -> bool {
-    krabka_verified::raft::frontier_reaches(applied_hwm.0, expected_hwm.0)
+    raft::frontier_reaches(applied_hwm.0, expected_hwm.0)
 }
 
 pub fn hwm_reaches_waiter(hwm: Offset, need_offset: Offset) -> bool {
-    krabka_verified::raft::frontier_reaches(hwm.0, need_offset.0)
+    raft::frontier_reaches(hwm.0, need_offset.0)
 }
 
 pub fn metadata_fetch_offset_in_committed_window(
     fetch_offset: Offset,
     high_watermark: Offset,
 ) -> bool {
-    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, high_watermark.0)
+    raft::in_half_open_window(fetch_offset.0, 0, high_watermark.0)
 }
 
 /// Whether an observer's metadata fetch has fallen below the retained log, so
 /// the records it asks for are gone and it must install a snapshot instead.
 /// The window is half-open: a fetch *at* `log_start` still reads from the log.
 pub fn metadata_fetch_offset_below_log_start(fetch_offset: Offset, log_start: Offset) -> bool {
-    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, log_start.0)
+    raft::in_half_open_window(fetch_offset.0, 0, log_start.0)
 }
 
 pub fn fetch_batch_committed_before_hwm(base_offset: i64, high_watermark: Offset) -> bool {
-    krabka_verified::raft::in_half_open_window(base_offset, i64::MIN, high_watermark.0)
+    raft::in_half_open_window(base_offset, i64::MIN, high_watermark.0)
 }
 
 pub fn fetch_offset_has_records(fetch_offset: Offset, log_end: Offset) -> bool {
-    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, log_end.0)
+    raft::in_half_open_window(fetch_offset.0, 0, log_end.0)
 }

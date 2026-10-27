@@ -62,6 +62,8 @@
 //! `offsets.retention.minutes=10080` -- Kafka's own default -- answers
 //! `synonyms={STATIC_BROKER_CONFIG:...=10080, DEFAULT_CONFIG:...=10080}`.
 
+#[cfg(test)]
+use std::sync::OnceLock;
 use {
     super::super::{
         entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -80,6 +82,7 @@ use {
         Time,
         convert::{ByteSizeExt as _, TimeExt as _},
     },
+    std::{collections::BTreeMap, path::PathBuf},
 };
 
 /// One static broker setting as this node holds it: the value it runs with,
@@ -132,11 +135,10 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     /// The `listener.name.<name>.connections.max.idle.ms` overrides, keyed by
     /// listener name. Each is a key per listener rather than a registry row.
     pub(in crate::handlers::describe_configs) connections_max_idle_overrides:
-        &'a std::collections::BTreeMap<String, Time>,
+        &'a BTreeMap<String, Time>,
     /// The other `KafkaConfig` keys this process runs with a static value
     /// for, by Kafka key. See [`static_settings`].
-    pub(in crate::handlers::describe_configs) settings:
-        &'a std::collections::BTreeMap<&'static str, String>,
+    pub(in crate::handlers::describe_configs) settings: &'a BTreeMap<&'static str, String>,
 }
 
 /// The `KafkaConfig` keys krabka can state a static value of, for the
@@ -170,10 +172,8 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 ///
 /// A key absent here is reported at its Kafka default, which is what an
 /// operator who never wrote it gets from Kafka too.
-pub(crate) fn static_settings(
-    config: &BrokerConfig,
-) -> std::collections::BTreeMap<&'static str, String> {
-    let join_paths = |dirs: Vec<std::path::PathBuf>| {
+pub fn static_settings(config: &BrokerConfig) -> BTreeMap<&'static str, String> {
+    let join_paths = |dirs: Vec<PathBuf>| {
         dirs.iter()
             .map(|dir| dir.display().to_string())
             .collect::<Vec<_>>()
@@ -187,7 +187,7 @@ pub(crate) fn static_settings(
             NodeRole::Broker | NodeRole::Witness => "broker",
         })
         .collect();
-    let mut settings = std::collections::BTreeMap::from([
+    let mut settings = BTreeMap::from([
         ("log.dirs", join_paths(config.all_log_dirs())),
         ("process.roles", roles.join(",")),
     ]);
@@ -540,14 +540,12 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker()
 /// The empty static-settings map [`kafka_default_static_broker`] borrows: a
 /// process that names none of the keys [`static_settings`] states.
 #[cfg(test)]
-static NO_SETTINGS: std::sync::OnceLock<std::collections::BTreeMap<&'static str, String>> =
-    std::sync::OnceLock::new();
+static NO_SETTINGS: OnceLock<BTreeMap<&'static str, String>> = OnceLock::new();
 
 /// The empty override map [`kafka_default_static_broker`] borrows, so the
 /// helper can hand back a `'static` view without each caller owning a map.
 #[cfg(test)]
-static NO_IDLE_OVERRIDES: std::sync::OnceLock<std::collections::BTreeMap<String, Time>> =
-    std::sync::OnceLock::new();
+static NO_IDLE_OVERRIDES: OnceLock<BTreeMap<String, Time>> = OnceLock::new();
 
 #[cfg(test)]
 mod tests;

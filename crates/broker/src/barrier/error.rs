@@ -9,7 +9,7 @@ use {crate::error::BrokerError, krabka_ids::PartitionIndex, thiserror::Error};
 /// A barrier control-plane or injection failure.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub(crate) enum BarrierError {
+pub enum BarrierError {
     /// The state partition of the group has another leader, so this broker
     /// must not allocate an epoch for it.
     #[error("this broker does not coordinate barrier group {group}")]

@@ -5,7 +5,12 @@
 //! reconciler records. Both halves share the `ready_targets` map and the
 //! HWM-unknown sentinel, so they belong in one module.
 
-use {super::TopicBasedRemoteLogMetadataManager, crate::log::PartitionStart, tracing::warn};
+use {
+    super::TopicBasedRemoteLogMetadataManager,
+    crate::log::PartitionStart,
+    std::{collections::HashMap, sync::PoisonError},
+    tracing::warn,
+};
 
 #[cfg(test)]
 mod tests;
@@ -67,7 +72,7 @@ impl TopicBasedRemoteLogMetadataManager {
         let target = self
             .ready_targets
             .lock()
-            .expect("ready_targets poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&mp)
             .copied();
         // Not assigned: this broker neither leads nor follows any
@@ -86,7 +91,7 @@ impl TopicBasedRemoteLogMetadataManager {
         let index = usize::try_from(mp).ok()?;
         self.applied
             .lock()
-            .expect("applied mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(index)
             .copied()
     }
@@ -101,13 +106,11 @@ impl TopicBasedRemoteLogMetadataManager {
     /// The metadata partitions this manager is currently assigned (tracked
     /// for readiness). Sorted ascending.
     #[must_use]
-    /// # Panics
-    /// Panics if the assignment-readiness mutex is poisoned.
     pub fn assigned_metadata_partitions(&self) -> Vec<i32> {
         let mut v: Vec<i32> = self
             .ready_targets
             .lock()
-            .expect("ready_targets poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .keys()
             .copied()
             .collect();
@@ -143,18 +146,16 @@ impl TopicBasedRemoteLogMetadataManager {
     /// It is async because it reads the log's high-water marks. The broker
     /// calls it from its reconciler task on the runtime, never from a
     /// `spawn_blocking` thread.
-    /// # Panics
-    /// Panics if the assignment-readiness mutex is poisoned.
     pub async fn reconcile_assignment(&self, desired: &[i32]) {
         use std::collections::HashSet;
         let want: HashSet<i32> = desired.iter().copied().collect();
         // Snapshot the current per-partition targets so we can both diff the
         // assigned set and find partitions still carrying the HWM-unknown
         // sentinel (which need a refresh). Lock released before the `.await`.
-        let current: std::collections::HashMap<i32, i64> = self
+        let current: HashMap<i32, i64> = self
             .ready_targets
             .lock()
-            .expect("ready_targets poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let have: HashSet<i32> = current.keys().copied().collect();
 
@@ -186,20 +187,30 @@ impl TopicBasedRemoteLogMetadataManager {
         // A failed fetch (`None`) or a missing per-partition entry both yield
         // the sentinel so the gate stays NotReady — never fail open to 0.
         let target_for = |mp: i32| -> i64 {
-            match &hwms {
-                Some(h) => usize::try_from(mp)
-                    .ok()
-                    .and_then(|i| h.get(i).copied())
-                    .unwrap_or(HWM_UNKNOWN),
-                None => HWM_UNKNOWN,
-            }
+            hwms.as_ref()
+                .and_then(|h| {
+                    let i = usize::try_from(mp).ok()?;
+                    h.get(i).copied()
+                })
+                .unwrap_or(HWM_UNKNOWN)
         };
 
         for mp in needs_add {
             // `committed_offset` is `-1` when there is no committed event
             // (full replay), so `+ 1` lands on the resume start offset (0).
-            let start_offset = Self::resume_start_offset(self.committed_offset(mp))
-                .expect("snapshot committed offsets were validated before manager startup");
+            // Startup validated the snapshot's committed offsets, so this
+            // cannot fail; were one invalid, the partition replays in full
+            // from offset 0, as a startup with an invalid snapshot does.
+            let start_offset = match Self::resume_start_offset(self.committed_offset(mp)) {
+                Ok(start_offset) => start_offset,
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        mp, "topic-based RLMM: invalid committed offset; replaying in full"
+                    );
+                    0
+                }
+            };
             self.assignment.add(PartitionStart {
                 partition: mp,
                 start_offset,
@@ -209,7 +220,7 @@ impl TopicBasedRemoteLogMetadataManager {
             // return Ok(None). The sentinel makes the gate return NotReady.
             self.ready_targets
                 .lock()
-                .expect("ready_targets poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .insert(mp, target_for(mp));
         }
         // Replace the sentinel for already-assigned partitions whose HWM is
@@ -217,7 +228,10 @@ impl TopicBasedRemoteLogMetadataManager {
         for mp in needs_refresh {
             let target = target_for(mp);
             if target != HWM_UNKNOWN {
-                let mut guard = self.ready_targets.lock().expect("ready_targets poisoned");
+                let mut guard = self
+                    .ready_targets
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 // Only refresh if still assigned with the sentinel (a
                 // concurrent remove would have dropped it — see the
                 // single-task contract above).
@@ -234,7 +248,7 @@ impl TopicBasedRemoteLogMetadataManager {
                 self.assignment.remove(mp);
                 self.ready_targets
                     .lock()
-                    .expect("ready_targets poisoned")
+                    .unwrap_or_else(PoisonError::into_inner)
                     .remove(&mp);
             });
         }

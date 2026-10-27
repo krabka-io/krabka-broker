@@ -68,7 +68,7 @@ pub fn producer_decision(
             ==> !retained_matches(retained@[j], base_sequence, last_offset_delta))]
         #[variant(retained@.len() - i@)]
         while i < retained.len() {
-            if let Some(range) = retained[i]
+            if let Some(&Some(range)) = retained.get(i)
                 && range.base_sequence == base_sequence
                 && range.last_sequence == last_sequence
             {

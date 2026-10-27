@@ -19,8 +19,11 @@ use {
     krabka_protocol::records::{Attributes, RecordBatch},
     krabka_units::prelude::mebibytes,
     std::{
+        fs,
+        io::{self, ErrorKind},
         path::Path,
         sync::atomic::{AtomicUsize, Ordering},
+        time::{Duration, SystemTime},
     },
     tempfile::tempdir,
 };
@@ -64,7 +67,7 @@ fn transactional_keyed(
 
 /// A compacted log with one batch per sealed segment, and a final append that
 /// stays in the active segment.
-fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>) -> Log {
+fn log_with_a_batch_per_segment(dir: &Path, batches: Vec<RecordBatch>) -> Log {
     let cfg = compacting_segments();
     let mut log = Log::open(dir, cfg).unwrap();
     for mut batch in batches {
@@ -77,7 +80,7 @@ fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>
     }]);
     log.append(&mut tail).unwrap();
     // The pass groups by `segment.bytes`; widen it so this pass merges them.
-    set_segment_size(&mut log, mebibytes(1));
+    set_segment_size(&log, mebibytes(1));
     log
 }
 
@@ -138,7 +141,7 @@ fn committed_and_aborted_batches(tail: [RecordBatch; 2]) -> Vec<RecordBatch> {
 }
 
 /// A committed value followed by a newer aborted write under the same key.
-fn committed_then_aborted(dir: &std::path::Path) -> Log {
+fn committed_then_aborted(dir: &Path) -> Log {
     log_with_a_batch_per_segment(
         dir,
         committed_and_aborted_batches([
@@ -201,8 +204,8 @@ fn an_abort_marker_and_its_index_entry_age_out_once_the_aborted_data_is_gone() {
     // The third pass runs after the delete horizon of the first two.
     let delete_retention_ms = LogConfig::default().delete_retention.millis_i64_trunc();
     let horizon_passed = CompactionContext {
-        now: std::time::SystemTime::UNIX_EPOCH
-            + std::time::Duration::from_millis(u64::try_from(delete_retention_ms).unwrap() + 1_000),
+        now: SystemTime::UNIX_EPOCH
+            + Duration::from_millis(u64::try_from(delete_retention_ms).unwrap() + 1_000),
         ..compaction_ctx()
     };
     let passes = [compaction_ctx(), compaction_ctx(), horizon_passed];
@@ -265,11 +268,11 @@ fn an_aborted_batch_is_dropped_when_its_marker_lies_beyond_the_consumed_range() 
 struct CountedMissingRenames(AtomicUsize);
 
 impl LogIo for CountedMissingRenames {
-    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
         let renamed = FileIo.rename(target, from, to);
         if renamed
             .as_ref()
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            .is_err_and(|error| error.kind() == ErrorKind::NotFound)
         {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
@@ -279,13 +282,13 @@ impl LogIo for CountedMissingRenames {
 
 /// The `.txnindex` files in `dir`, live or retired.
 fn txn_index_files(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
+    let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|name| name.contains(".txnindex"))
-        .map(|name| match name.find(".txnindex.") {
+        .map(|name| match name.split_once(".txnindex.") {
             // A retired file's name carries a generation number.
-            Some(at) => format!("{}.txnindex.deleted", &name[..at]),
+            Some((stem, _)) => format!("{stem}.txnindex.deleted"),
             None => name,
         })
         .collect();
@@ -300,7 +303,7 @@ fn a_pass_retires_only_the_transaction_indexes_that_exist() {
     let dir = tempdir().unwrap();
     let mut log = committed_then_aborted(dir.path());
     let io = Arc::new(CountedMissingRenames::default());
-    log.test_set_io(io.clone());
+    log.test_set_io(Arc::<CountedMissingRenames>::clone(&io));
 
     log.compact(&compaction_ctx()).unwrap();
 

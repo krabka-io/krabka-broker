@@ -16,11 +16,9 @@ pub struct Request(OffsetFetchSelection);
 impl Request {
     #[must_use]
     pub fn new(requested: usize) -> Self {
-        let keys = (0..requested)
-            .map(|partition| {
-                let partition = i32::try_from(partition).expect("benchmark partition fits i32");
-                (format!("topic-{partition}"), partition)
-            })
+        let keys = (0_i32..)
+            .take(requested)
+            .map(|partition| (format!("topic-{partition}"), partition))
             .collect::<HashSet<_>>();
         Self(OffsetFetchSelection::Keys(keys))
     }
@@ -30,8 +28,7 @@ impl Fixture {
     #[must_use]
     pub fn new(stored: usize) -> Self {
         let mut group = CoordinatorGroup::new_classic("bench");
-        for partition in 0..stored {
-            let partition = i32::try_from(partition).expect("benchmark partition fits i32");
+        for partition in (0_i32..).take(stored) {
             let key = (format!("topic-{partition}"), partition);
             group.committed_offsets.insert(key.clone(), OffsetEntry {
                 offset: Offset(i64::from(partition)),
@@ -47,10 +44,12 @@ impl Fixture {
     }
 
     /// Run exactly the state projection performed synchronously by dispatch.
+    ///
+    /// It counts `(0, 0)` when the group refuses the fetch, which a classic
+    /// group does not do for an admin fetch.
     #[must_use]
     pub fn actor_turn(&self, request: &Request) -> (usize, usize) {
-        let offsets = self
-            .0
+        self.0
             .offsets_for_member(
                 &OffsetFetchMember {
                     member_id: None,
@@ -58,8 +57,9 @@ impl Fixture {
                 },
                 &request.0,
             )
-            .expect("classic group accepts an admin fetch");
-        (offsets.committed.len(), offsets.pending_txn.len())
+            .map_or((0, 0), |offsets| {
+                (offsets.committed.len(), offsets.pending_txn.len())
+            })
     }
 
     /// The previous actor turn, which cloned all state before handler filtering.

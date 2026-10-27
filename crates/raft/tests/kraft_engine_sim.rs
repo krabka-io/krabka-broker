@@ -20,6 +20,7 @@
 //! This root only declares the parts. The in-memory network lives in `sim_net`,
 //! the engine builders and convergence waits in `harness`, and each acceptance
 //! sits in the module named for the behaviour it drives.
+#![cfg(test)]
 
 #[path = "kraft_engine_sim/election.rs"]
 mod election;

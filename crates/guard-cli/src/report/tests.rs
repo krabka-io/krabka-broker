@@ -1,7 +1,7 @@
 //! Tests for the exit code one broker error code becomes, and for the words the
 //! tool prints beside it.
 
-use {super::*, assert2::check, krabka_broker::codes};
+use {super::*, crate::broker_codes, assert2::check, krabka_broker::codes};
 
 /// A runbook branches on `$?`, so each number has to mean one thing. The
 /// three codes that get their own number are the three an operator acts on
@@ -56,16 +56,11 @@ fn a_private_code_reads_as_more_than_a_number() {
 
 #[test]
 fn cli_private_code_values_match_the_broker_wire_contract() {
-    check!(
-        crate::broker_codes::BREAK_GLASS_APPROVAL_REQUIRED == codes::BREAK_GLASS_APPROVAL_REQUIRED
-    );
-    check!(
-        crate::broker_codes::BREAK_GLASS_DUPLICATE_APPROVER
-            == codes::BREAK_GLASS_DUPLICATE_APPROVER
-    );
-    check!(crate::broker_codes::BREAK_GLASS_NOT_AN_APPROVER == codes::BREAK_GLASS_NOT_AN_APPROVER);
-    check!(crate::broker_codes::OPERATOR_SIGNATURE_INVALID == codes::OPERATOR_SIGNATURE_INVALID);
-    check!(crate::broker_codes::OPERATOR_SIGNATURE_REQUIRED == codes::OPERATOR_SIGNATURE_REQUIRED);
-    check!(crate::broker_codes::FREEZE_SCOPE_INVALID == codes::FREEZE_SCOPE_INVALID);
-    check!(crate::broker_codes::FREEZE_LIMIT_EXCEEDED == codes::FREEZE_LIMIT_EXCEEDED);
+    check!(broker_codes::BREAK_GLASS_APPROVAL_REQUIRED == codes::BREAK_GLASS_APPROVAL_REQUIRED);
+    check!(broker_codes::BREAK_GLASS_DUPLICATE_APPROVER == codes::BREAK_GLASS_DUPLICATE_APPROVER);
+    check!(broker_codes::BREAK_GLASS_NOT_AN_APPROVER == codes::BREAK_GLASS_NOT_AN_APPROVER);
+    check!(broker_codes::OPERATOR_SIGNATURE_INVALID == codes::OPERATOR_SIGNATURE_INVALID);
+    check!(broker_codes::OPERATOR_SIGNATURE_REQUIRED == codes::OPERATOR_SIGNATURE_REQUIRED);
+    check!(broker_codes::FREEZE_SCOPE_INVALID == codes::FREEZE_SCOPE_INVALID);
+    check!(broker_codes::FREEZE_LIMIT_EXCEEDED == codes::FREEZE_LIMIT_EXCEEDED);
 }

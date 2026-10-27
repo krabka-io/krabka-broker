@@ -34,7 +34,7 @@ pub async fn wait_partition_record_known(
         .expect("partition present implies leader known");
     // Reconstruct the record from the accessors we have.
     PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
         leader: krabka_broker::NodeId(leader),
         // We don't have a direct `replicas` accessor, but the

@@ -3,6 +3,8 @@
 //! the deferred bootstrap tasks, and returns the [`BrokerHandle`]. It is its
 //! own module because it is the one place that names every phase at once.
 
+#[cfg(any(test, feature = "test-helpers"))]
+use std::sync::atomic::AtomicU64;
 use {
     crate::{
         auto_topic_creation::AutoTopicCreation,
@@ -37,8 +39,17 @@ use {
     krabka_ids::PartitionIndex,
     krabka_raft::ConnectionLimiter,
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
-    std::sync::{Arc, atomic::AtomicBool},
-    tokio::{net::TcpListener, task::JoinHandle},
+    std::{
+        sync::{Arc, atomic::AtomicBool},
+        time::Duration,
+    },
+    tokio::{
+        net::TcpListener,
+        runtime::Handle,
+        sync::{Mutex, Semaphore},
+        task::JoinHandle,
+        time,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -99,7 +110,7 @@ pub(super) async fn finish_broker_startup(
     )
     .await?;
     let connections = ConnectionLimiter::new(config.max_connections, config.max_connections_per_ip);
-    let queued_requests_sem = Arc::new(tokio::sync::Semaphore::new(config.queued_max_requests));
+    let queued_requests_sem = Arc::new(Semaphore::new(config.queued_max_requests));
     let queued_request_bytes = config
         .queued_max_request_bytes
         .map(|budget| RequestByteBudget::of(budget.bytes_usize()));
@@ -119,9 +130,9 @@ pub(super) async fn finish_broker_startup(
         barrier_coordinator: coordinators.barrier_coordinator,
         auto_topic_creation: coordinators.auto_topic_creation,
         supervisor_shutdown: runtime.supervisor_shutdown,
-        supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
-        disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
-        remote_log_manager_handle: tokio::sync::Mutex::new(runtime.remote_log_manager_handle),
+        supervisor_handle: Mutex::new(Some(runtime.supervisor_handle)),
+        disk_scanner_handle: Mutex::new(runtime.disk_scanner_handle),
+        remote_log_manager_handle: Mutex::new(runtime.remote_log_manager_handle),
         liveness: runtime.liveness_services.liveness,
         tls_dynamic: transport.tls_dynamic,
         listener_tls: ListenerTlsCache::default(),
@@ -147,9 +158,9 @@ pub(super) async fn finish_broker_startup(
         log_dir_status: storage.log_dir_status,
         client_metrics: runtime.client_metrics,
         #[cfg(any(test, feature = "test-helpers"))]
-        offset_for_leader_epoch_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        offset_for_leader_epoch_requests: Arc::new(AtomicU64::new(0)),
         audit_log: runtime.audit_log,
-        audit_writer_handle: tokio::sync::Mutex::new(runtime.audit_writer_handle),
+        audit_writer_handle: Mutex::new(runtime.audit_writer_handle),
         handlers: build_registry(),
     });
     // Publish the startup kTLS probe. It is a constant of the running process,
@@ -214,11 +225,11 @@ async fn emit_broker_started(broker: &Broker, audit_partition: Option<PartitionI
     };
     let topic = broker.config.audit_topic.clone();
     let partitions = Arc::clone(&broker.partitions);
-    let _ = tokio::time::timeout(
+    let _ = time::timeout(
         broker.config.audit_partition_wait_timeout.to_std(),
         async move {
             while !partitions.contains(&topic, partition_index) {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         },
     )
@@ -242,7 +253,7 @@ fn spawn_rlmm_bootstrap(
     let future = bootstrap_topic_rlmm(
         Arc::clone(swap),
         kickoff.clone(),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         broker.metrics.clone(),
         broker.config.node_id,
         broker.controller.watch_image(),

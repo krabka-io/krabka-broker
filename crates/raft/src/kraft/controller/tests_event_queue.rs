@@ -28,7 +28,7 @@ async fn measured_three_voter_leader()
 -> (KraftController, tempfile::TempDir, Arc<RecordingEventQueue>) {
     let recorder = Arc::new(RecordingEventQueue::default());
     let (ctrl, dir) = build()
-        .event_queue_recorder(Arc::clone(&recorder) as _)
+        .event_queue_recorder(Arc::<RecordingEventQueue>::clone(&recorder))
         .call();
     elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
     (ctrl, dir, recorder)

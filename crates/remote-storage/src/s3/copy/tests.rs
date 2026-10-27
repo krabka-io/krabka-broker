@@ -24,8 +24,14 @@ use {
     krabka_object_store::{ObjectOps, ObjectStoreError},
     krabka_units::prelude::{ByteSizeExt as _, kibibytes, mebibytes},
     object_store::{memory::InMemory, path::Path as ObjectPath},
-    std::{io::Write, path::PathBuf, sync::Arc},
+    std::{
+        fs::File,
+        io::Write,
+        path::{Path, PathBuf},
+        sync::Arc,
+    },
     tempfile::TempDir,
+    tokio::task,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -61,9 +67,9 @@ fn assert_manifest_absent(store: &S3RemoteStorage, metadata: &RemoteLogSegmentMe
     ));
 }
 
-fn write_log_segment(dir: &std::path::Path, len: usize) -> PathBuf {
+fn write_log_segment(dir: &Path, len: usize) -> PathBuf {
     let p = dir.join("00.log");
-    let mut f = std::fs::File::create(&p).unwrap();
+    let mut f = File::create(&p).unwrap();
     // Deterministic, position-sensitive bytes so the round-trip
     // assertion catches both reordering bugs and truncation.
     let bytes: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
@@ -89,7 +95,7 @@ async fn put_path_uses_multipart_above_threshold_and_round_trips() {
     let md = sample_metadata(uuid::Uuid::from_u128(40));
     let mut data = multipart_data(src.path(), seg_len);
     data.producer_snapshot_index = Some(write_file(src.path(), "00.snapshot", b"SNAP"));
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let fetched = copied_segment(&store, &md, &data, seg_len);
         for (i, b) in fetched.iter().enumerate() {
             assert!(*b == u8::try_from(i % 251).unwrap(), "byte mismatch at {i}");
@@ -99,7 +105,7 @@ async fn put_path_uses_multipart_above_threshold_and_round_trips() {
     .unwrap();
 }
 
-fn multipart_data(directory: &std::path::Path, len: usize) -> LogSegmentData {
+fn multipart_data(directory: &Path, len: usize) -> LogSegmentData {
     LogSegmentData {
         log_segment: write_log_segment(directory, len),
         offset_index: write_file(directory, "00.index", b"OFFSET-IDX"),
@@ -123,7 +129,7 @@ async fn multipart_flushes_partial_tail_chunk() {
     let src = TempDir::new().unwrap();
     let md = sample_metadata(uuid::Uuid::from_u128(41));
     let data = multipart_data(src.path(), seg_len);
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let fetched = copied_segment(&store, &md, &data, seg_len);
         assert!(
             fetched.last().copied() == Some(u8::try_from((seg_len - 1) % 251).unwrap()),
@@ -147,7 +153,7 @@ async fn put_path_stays_on_single_put_below_threshold() {
     let src = TempDir::new().unwrap();
     let md = sample_metadata(uuid::Uuid::from_u128(42));
     let data = multipart_data(src.path(), 10);
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         store.copy_log_segment_data(&md, &data).unwrap();
         let fetched = store.fetch_log_segment(&md, 0, None).unwrap();
         assert!(fetched.len() == 10);
@@ -194,11 +200,11 @@ fn expected_entry(
         e_tag,
     } = setup;
     ObjectEntry {
-        suffix: suffix.to_string(),
+        suffix: suffix.to_owned(),
         key: key.to_string(),
         size_bytes: u64::try_from(body.len()).unwrap(),
         sha256: Sha256Digest::of(body),
-        e_tag: Some(e_tag.to_string()),
+        e_tag: Some(e_tag.to_owned()),
         version_id: None,
         create_precondition: true,
     }
@@ -327,7 +333,7 @@ async fn worm_manifest_omits_objects_the_copy_did_not_write() {
         producer_snapshot_index: None,
         leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
     };
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         store.copy_log_segment_data(&md, &data).unwrap();
         let suffixes: Vec<String> = read_manifest(&store, &md)
             .body
@@ -351,10 +357,10 @@ async fn worm_copy_returns_a_receipt_with_the_new_head() {
         .sequence(3)
         .previous_head(prev_head)
         .call();
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         assert!(let
             Ok(Some(custom)) =
-                store.copy_log_segment_data(&md, &sample_data(src.path(), crate::test_support::TransactionIndex::Omitted))
+                store.copy_log_segment_data(&md, &sample_data(src.path(), TransactionIndex::Omitted))
         );
         assert!(let Ok(receipt) = WormChainRecord::from_custom_metadata(&custom));
 
@@ -383,7 +389,7 @@ async fn worm_multipart_copy_refuses_replay() {
     let md = stamped_metadata()
         .segment_id(uuid::Uuid::from_u128(54))
         .call();
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let data = sample_data(src.path(), TransactionIndex::Present);
         store.copy_log_segment_data(&md, &data).unwrap();
         let first = read_manifest(&store, &md);
@@ -424,7 +430,7 @@ async fn non_worm_copy_writes_no_manifest_and_returns_none() {
     let store = rsm(None);
     let src = TempDir::new().unwrap();
     let md = sample_metadata(uuid::Uuid::from_u128(57));
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let data = sample_data(src.path(), TransactionIndex::Present);
         check!(store.copy_log_segment_data(&md, &data).unwrap().is_none());
         assert_manifest_absent(&store, &md);
@@ -441,9 +447,9 @@ async fn worm_copy_without_a_chain_stamp_is_refused() {
     let WormArchive { keys: _keys, store } = memory_worm_archive();
     // No `with_custom_metadata`: the broker did not stamp this segment.
     let md = sample_metadata(uuid::Uuid::from_u128(58));
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         assert!(let
-            Err(err) = store.copy_log_segment_data(&md, &sample_data(src.path(), crate::test_support::TransactionIndex::Omitted))
+            Err(err) = store.copy_log_segment_data(&md, &sample_data(src.path(), TransactionIndex::Omitted))
         );
         check!(matches!(
             err,

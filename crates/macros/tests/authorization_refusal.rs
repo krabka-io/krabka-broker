@@ -1,4 +1,5 @@
 //! Refusals compile against real Kafka responses and preserve native message evaluation.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -22,7 +23,7 @@ fn with_message(version: i16, evaluated: &Cell<usize>) -> Result<Bytes, Protocol
     let mut output = BytesMut::new();
     krabka_macros::authorization_refusal!(AddRaftVoterResponse, output, version, DENIED, {
         evaluated.set(evaluated.get() + 1);
-        Some("native refusal".to_string())
+        Some("native refusal".to_owned())
     });
     Ok(output.freeze())
 }

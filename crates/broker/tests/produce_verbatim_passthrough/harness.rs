@@ -15,6 +15,7 @@ use {
         },
         produce::{SinglePartitionProduceSetup, single_partition_produce},
         records::value_record,
+        topics,
     },
     assert2::assert,
     bytes::Bytes,
@@ -79,11 +80,11 @@ pub async fn create_topic_with_configs(
     name: &str,
     configs: Vec<CreatableTopicConfig>,
 ) {
-    let client = connect_client(bootstrap.to_string(), None).await;
+    let client = connect_client(bootstrap.to_owned(), None).await;
     let resp = client
         .send(CreateTopicsRequest {
             topics: vec![
-                crate::support::topics::creatable_topic_with_configs()
+                topics::creatable_topic_with_configs()
                     .name(name.into())
                     .configs(configs)
                     .call(),

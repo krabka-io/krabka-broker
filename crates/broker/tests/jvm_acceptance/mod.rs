@@ -30,7 +30,7 @@
 // same arrangement as `tests/support/mod.rs`.
 #![allow(dead_code)]
 
-pub(crate) mod break_glass;
+pub mod break_glass;
 mod broker;
 mod delegation_tokens;
 mod docker;
@@ -49,7 +49,7 @@ mod wait;
 // one statement carries the `unused_imports` allow: the same reason the module
 // carries `allow(dead_code)`.
 #[allow(unused_imports)]
-pub(crate) use self::{
+pub use self::{
     broker::{
         host_broker_config, start_console_broker, start_console_group, start_host_broker,
         start_host_broker_in, start_host_broker_jbod, start_host_broker_with,

@@ -1,4 +1,5 @@
 //! Flat codec declarations preserve the caller's version and context contracts.
+#![cfg(test)]
 
 extern crate self as krabka_security;
 
@@ -79,7 +80,7 @@ mod test_support {
         assert, handlers::RequestContext,
     };
 
-    pub(crate) fn encode_request(request: &Message, version: i16) -> Bytes {
+    pub fn encode_request(request: &Message, version: i16) -> Bytes {
         DELEGATIONS.with_borrow_mut(|calls| calls.push(Delegation::Encode(version)));
         let mut output = BytesMut::with_capacity(request.encoded_len(version));
         request
@@ -88,7 +89,7 @@ mod test_support {
         output.freeze()
     }
 
-    pub(crate) fn decode_response(input: &Bytes, version: i16) -> Message {
+    pub fn decode_response(input: &Bytes, version: i16) -> Message {
         DELEGATIONS.with_borrow_mut(|calls| calls.push(Delegation::Decode(version)));
         let mut remaining = input.as_ref();
         let decoded = Message::decode(&mut remaining, version).expect("decode response");
@@ -96,7 +97,7 @@ mod test_support {
         decoded
     }
 
-    pub(crate) fn request_context<'a>(
+    pub fn request_context<'a>(
         principal: &'a Principal,
         peer: &'a SocketAddr,
         client: &'a str,
@@ -116,7 +117,7 @@ mod test_support {
 mod handlers {
     use super::{Principal, SocketAddr};
 
-    pub(crate) struct RequestContext<'a> {
+    pub struct RequestContext<'a> {
         pub principal: &'a Principal,
         pub peer: &'a SocketAddr,
         pub client_id: Option<&'a str>,

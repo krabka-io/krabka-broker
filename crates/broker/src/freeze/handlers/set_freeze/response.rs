@@ -72,10 +72,9 @@ pub(super) fn respond(
         // the event carries the stamp the caller presented: that is the value
         // their signature covers, and an auditor re-checking a refused
         // signature needs the same bytes the broker checked.
-        set_at_ms: match outcome {
-            Ok(accepted) => accepted.record.set_at_ms,
-            Err(_) => req.set_at_ms,
-        },
+        set_at_ms: outcome
+            .as_ref()
+            .map_or(req.set_at_ms, |accepted| accepted.record.set_at_ms),
         reason,
     };
     audit_freeze(

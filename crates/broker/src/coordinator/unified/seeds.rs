@@ -6,25 +6,28 @@
 //! because both the replay paths and the registry that spawns the actors
 //! depend on them.
 
-use super::{
-    persistence_next_gen::{
-        CurrentMemberAssignmentValue, MemberMetadataValue, RegularExpressionValue,
-        TargetAssignmentMemberValue,
-    },
-    share::{
-        self,
-        persistence::{
-            ShareGroupCurrentMemberAssignmentValue, ShareGroupMemberMetadataValue,
-            ShareGroupTargetAssignmentMemberValue,
+use {
+    super::{
+        persistence_next_gen::{
+            CurrentMemberAssignmentValue, MemberMetadataValue, RegularExpressionValue,
+            TargetAssignmentMemberValue,
+        },
+        share::{
+            self,
+            persistence::{
+                ShareGroupCurrentMemberAssignmentValue, ShareGroupMemberMetadataValue,
+                ShareGroupTargetAssignmentMemberValue,
+            },
+        },
+        streams::{
+            self,
+            persistence::{
+                StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+                StreamsGroupTargetAssignmentMemberValue, StreamsGroupTopologyValue,
+            },
         },
     },
-    streams::{
-        self,
-        persistence::{
-            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
-            StreamsGroupTargetAssignmentMemberValue, StreamsGroupTopologyValue,
-        },
-    },
+    std::collections::{BTreeMap, HashMap},
 };
 
 /// Hydration seed that the bootstrap replayer passes into a freshly-spawned
@@ -33,7 +36,7 @@ use super::{
 /// All fields come directly from records decoded out of `__consumer_offsets`.
 ///
 /// [`actor::GroupActorHandle`]: super::actor::GroupActorHandle
-#[derive(Debug, Default, Clone, PartialEq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "consumer")]
 pub struct GroupSeed {
     pub group_epoch: i32,
@@ -43,13 +46,13 @@ pub struct GroupSeed {
     /// The `AssignmentTimestamp` of the last target assignment metadata
     /// record, 0 when unknown.
     pub assignment_timestamp_ms: i64,
-    pub members: std::collections::HashMap<String, MemberMetadataValue>,
-    pub target_per_member: std::collections::HashMap<String, TargetAssignmentMemberValue>,
-    pub current_per_member: std::collections::HashMap<String, CurrentMemberAssignmentValue>,
+    pub members: HashMap<String, MemberMetadataValue>,
+    pub target_per_member: HashMap<String, TargetAssignmentMemberValue>,
+    pub current_per_member: HashMap<String, CurrentMemberAssignmentValue>,
     /// The `ConsumerGroupRegularExpression` records: what each regular
     /// expression that the members subscribe to resolved to, by regular
     /// expression.
-    pub resolved_regexes: std::collections::HashMap<String, RegularExpressionValue>,
+    pub resolved_regexes: HashMap<String, RegularExpressionValue>,
     /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`: the log holds a
     /// deprecated `ConsumerGroupPartitionMetadata` value (key v4) that no
     /// tombstone has removed yet.
@@ -60,7 +63,7 @@ pub struct GroupSeed {
 ///
 /// All fields come from share-group records decoded out of
 /// `__consumer_offsets`.
-#[derive(Debug, Default, Clone, PartialEq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "share")]
 pub struct ShareGroupSeed {
     pub group_epoch: i32,
@@ -70,10 +73,9 @@ pub struct ShareGroupSeed {
     /// The `AssignmentTimestamp` of the last target assignment metadata
     /// record, 0 when unknown.
     pub assignment_timestamp_ms: i64,
-    pub members: std::collections::HashMap<String, ShareGroupMemberMetadataValue>,
-    pub target_per_member: std::collections::HashMap<String, ShareGroupTargetAssignmentMemberValue>,
-    pub current_per_member:
-        std::collections::HashMap<String, ShareGroupCurrentMemberAssignmentValue>,
+    pub members: HashMap<String, ShareGroupMemberMetadataValue>,
+    pub target_per_member: HashMap<String, ShareGroupTargetAssignmentMemberValue>,
+    pub current_per_member: HashMap<String, ShareGroupCurrentMemberAssignmentValue>,
     /// KIP-932 `ShareGroupStatePartitionMetadata`, key v15. It holds the
     /// `(topic_id, partition)` share-states this group has already
     /// initialized, and the topic ids whose share-state the broker deletes.
@@ -87,7 +89,7 @@ pub struct ShareGroupSeed {
 ///
 /// All fields come from streams-group records decoded out of
 /// `__consumer_offsets`.
-#[derive(Debug, Default, Clone, PartialEq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "streams")]
 pub struct StreamsGroupSeed {
     pub group_epoch: i32,
@@ -98,7 +100,7 @@ pub struct StreamsGroupSeed {
     pub validated_topology_epoch: i32,
     /// The `LastAssignmentConfigs` of the last group metadata record, by key;
     /// empty for a null list.
-    pub last_assignment_configs: std::collections::BTreeMap<String, String>,
+    pub last_assignment_configs: BTreeMap<String, String>,
     /// The KIP-1331 description epochs (Kafka trunk's tags 2 and 3) of the
     /// last group metadata record, -1 each when it carried none. A replay
     /// keeps them whatever mode the broker writes in.
@@ -108,11 +110,9 @@ pub struct StreamsGroupSeed {
     /// record, 0 when unknown.
     pub assignment_timestamp_ms: i64,
     pub topology: Option<StreamsGroupTopologyValue>,
-    pub members: std::collections::HashMap<String, StreamsGroupMemberMetadataValue>,
-    pub target_per_member:
-        std::collections::HashMap<String, StreamsGroupTargetAssignmentMemberValue>,
-    pub current_per_member:
-        std::collections::HashMap<String, StreamsGroupCurrentMemberAssignmentValue>,
+    pub members: HashMap<String, StreamsGroupMemberMetadataValue>,
+    pub target_per_member: HashMap<String, StreamsGroupTargetAssignmentMemberValue>,
+    pub current_per_member: HashMap<String, StreamsGroupCurrentMemberAssignmentValue>,
 }
 
 impl GroupSeed {

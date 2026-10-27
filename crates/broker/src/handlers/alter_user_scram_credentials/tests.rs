@@ -8,14 +8,20 @@
 use {
     super::*,
     crate::{
-        handlers::alter_user_scram_credentials::test_support::{
-            deletion, expected_response, expected_result, low_metadata_version, start_broker,
-            test_context, valid_upsertion,
+        handlers::{
+            alter_user_scram_credentials::test_support::{
+                deletion, expected_response, expected_result, low_metadata_version, start_broker,
+                test_context, valid_upsertion,
+            },
+            test_support::metadata_version_gated,
         },
         test_support::wait_for_controller_leader,
     },
     assert2::assert,
-    krabka_protocol::owned::alter_user_scram_credentials_request::ScramCredentialDeletion,
+    krabka_protocol::owned::{
+        alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
+        alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
+    },
     krabka_security::{SaslMechanism, scram::MIN_SCRAM_ITERATIONS},
 };
 
@@ -26,10 +32,7 @@ fn valid_request(user: &str) -> AlterUserScramCredentialsRequest {
     }
 }
 
-fn denied_user(
-    user: &str,
-) -> krabka_protocol::owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResult
-{
+fn denied_user(user: &str) -> AlterUserScramCredentialsResult {
     expected_result(
         user,
         codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -51,8 +54,7 @@ fn scram_gate_permits_unknown_and_at_or_above_level() {
     ];
     for (level, want_err) in cases {
         assert!(
-            crate::handlers::test_support::metadata_version_gated(level, SCRAM_MIN_LEVEL)
-                == want_err,
+            metadata_version_gated(level, SCRAM_MIN_LEVEL) == want_err,
             "level {level:?}"
         );
     }
@@ -160,11 +162,7 @@ async fn denied_invalid_rows(use_low_metadata_version: bool) {
     broker_handle.shutdown().await;
 }
 
-async fn check_unsupported_users(
-    upsertions: impl FnOnce() -> Vec<
-        krabka_protocol::owned::alter_user_scram_credentials_request::ScramCredentialUpsertion,
-    >,
-) {
+async fn check_unsupported_users(upsertions: impl FnOnce() -> Vec<ScramCredentialUpsertion>) {
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker] allow_all;

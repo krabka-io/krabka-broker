@@ -1,4 +1,5 @@
 //! Constants remain public while guard tables preserve declaration order.
+#![cfg(test)]
 
 use assert2::assert;
 

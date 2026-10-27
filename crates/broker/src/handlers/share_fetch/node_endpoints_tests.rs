@@ -18,8 +18,8 @@ use {
         },
         share_partition::session::{FetchPartitions, ShareFetchSessionRequest},
         test_support::{
-            decode_response, encode_request, initialize_share_state, peer, principal,
-            request_context, try_dispatch_context,
+            broker_registration, decode_response, encode_request, initialize_share_state, peer,
+            principal, request_context, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -32,8 +32,8 @@ use {
     krabka_protocol::{
         owned::{
             share_acknowledge_request::{
-                AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
-                ShareAcknowledgeRequest,
+                API_KEY, AcknowledgePartition, AcknowledgeTopic,
+                AcknowledgementBatch as AcknowledgeBatch, ShareAcknowledgeRequest,
             },
             share_acknowledge_response::{self, ShareAcknowledgeResponse},
             share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
@@ -45,6 +45,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordsPayload,
     },
+    std::collections::HashSet,
 };
 
 const GROUP: &str = "endpoints-group";
@@ -101,7 +102,7 @@ fn partition(topic: &str, partition: i32, leader: i32, epoch: i32) -> MetadataRe
 async fn seed_remote_leaders(broker: &BrokerHandle) {
     let listener = request_context(&principal("x"), &peer(), "x")
         .connection_listener_name
-        .to_string();
+        .to_owned();
     broker
         .broker_arc_for_test()
         .controller
@@ -117,7 +118,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                     port: 9192,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
-                ..crate::test_support::broker_registration(krabka_raft::NodeId(2))
+                ..broker_registration(krabka_raft::NodeId(2))
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),
@@ -279,7 +280,7 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
                 .epoch(0)
                 .partitions(FetchPartitions {
                     requested: &[],
-                    forgotten: &std::collections::HashSet::new(),
+                    forgotten: &HashSet::new(),
                 })
                 .build(),
         )
@@ -314,7 +315,7 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
     let version = share_acknowledge_response::MAX_VERSION;
     let response = try_dispatch_context(
         &shared,
-        krabka_protocol::owned::share_acknowledge_request::API_KEY,
+        API_KEY,
         version,
         &encode_request(&request, version),
         &ctx,

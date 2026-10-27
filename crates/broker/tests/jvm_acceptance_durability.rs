@@ -19,6 +19,7 @@
 //! file. Each child therefore carries an explicit `#[path]` onto the sibling
 //! `jvm_acceptance_durability/` directory. `jvm_acceptance` and `support` are
 //! `tests/<name>/mod.rs` helpers, which the crate-root rule already resolves.
+#![cfg(test)]
 
 #[path = "jvm_acceptance_durability/acks_all.rs"]
 mod acks_all;
@@ -34,6 +35,18 @@ mod support;
 mod transactional_eos;
 #[path = "jvm_acceptance_durability/transactional_tv2.rs"]
 mod transactional_tv2;
+
+/// A three-broker Krabka cluster on `client_ports` and `controller_ports`,
+/// each broker's config passed through `adjust`, with this suite's tracing
+/// installed first.
+async fn durability_cluster(
+    client_ports: [u16; 3],
+    controller_ports: [u16; 3],
+    adjust: impl Fn(&mut krabka_broker::BrokerConfig),
+) -> Vec<(krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    support::init_jvm_tracing("krabka_broker=debug,info");
+    support::start_jvm_cluster(client_ports, controller_ports, adjust).await
+}
 
 /// Create the fully replicated workload topic before exercising failures or disk bytes.
 async fn prepare_replication_topic(

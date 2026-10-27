@@ -30,11 +30,11 @@ pub(super) const CONFIG_SOURCE_DYNAMIC_GROUP: i8 = 8;
 /// `org.apache.kafka.common.config.ConfigResource.Type` enum. Every config
 /// handler (`DescribeConfigs`, `AlterConfigs`, `IncrementalAlterConfigs`,
 /// `ListConfigResources`) shares this one set.
-pub(crate) const RESOURCE_TYPE_TOPIC: i8 = 2;
-pub(crate) const RESOURCE_TYPE_BROKER: i8 = 4;
-pub(crate) const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
-pub(crate) const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-pub(crate) const RESOURCE_TYPE_GROUP: i8 = 32;
+pub const RESOURCE_TYPE_TOPIC: i8 = 2;
+pub const RESOURCE_TYPE_BROKER: i8 = 4;
+pub const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
+pub const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
+pub const RESOURCE_TYPE_GROUP: i8 = 32;
 
 #[cfg(test)]
 mod tests {

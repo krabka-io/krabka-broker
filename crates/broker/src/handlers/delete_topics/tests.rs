@@ -32,7 +32,8 @@ use {
     krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType},
     krabka_protocol::{
         owned::{
-            delete_topics_request::DeleteTopicsRequest,
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+            delete_topics_request::{API_KEY, DeleteTopicState, DeleteTopicsRequest},
             delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
         },
         primitives::uuid::Uuid as WireUuid,
@@ -73,7 +74,7 @@ fn sorted(mut resp: DeleteTopicsResponse) -> DeleteTopicsResponse {
 
 /// One response row.
 fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopicResult {
-    wire::delete_topic_result(name.map(str::to_string), topic_id, error_code)
+    wire::delete_topic_result(name.map(str::to_owned), topic_id, error_code)
 }
 
 fn response(rows: Vec<DeletableTopicResult>) -> DeleteTopicsResponse {
@@ -244,20 +245,16 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
         .await
         .expect("client build");
     let created = client
-        .send(
-            krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-                topics: vec![
-                    krabka_protocol::owned::create_topics_request::CreatableTopic {
-                        name: TOPIC.to_string(),
-                        num_partitions: 1,
-                        replication_factor: 1,
-                        ..Default::default()
-                    },
-                ],
-                timeout_ms: 5_000,
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: TOPIC.to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
                 ..Default::default()
-            },
-        )
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
@@ -278,13 +275,13 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 
     let invalid = |name: Option<&str>, id, message: &str| {
         krabka_macros::tagged_wire!(DeletableTopicResult {
-            name: name.map(str::to_string),
+            name: name.map(str::to_owned),
             topic_id: id,
             error_code: codes::INVALID_REQUEST,
-            error_message: Some(message.to_string()),
+            error_message: Some(message.to_owned()),
         })
     };
-    let both = krabka_protocol::owned::delete_topics_request::DeleteTopicState {
+    let both = DeleteTopicState {
         name: Some(TOPIC.into()),
         topic_id,
         ..Default::default()
@@ -768,14 +765,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
             request(vec![named_state(TOPIC)])
         };
         let ctx = test_context(&p, &peer);
-        let resp: DeleteTopicsResponse = dispatch_wire(
-            &broker,
-            krabka_protocol::owned::delete_topics_request::API_KEY,
-            version,
-            &req,
-            &ctx,
-        )
-        .await;
+        let resp: DeleteTopicsResponse = dispatch_wire(&broker, API_KEY, version, &req, &ctx).await;
         let still_there = broker.controller.current_image().topic(TOPIC).is_some();
         actual.push(((enabled, version), resp, still_there));
 

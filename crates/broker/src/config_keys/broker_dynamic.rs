@@ -32,16 +32,16 @@ use {
             LEADER_THROTTLED_RATE_KEY,
         },
     },
-    krabka_metadata::NodeId,
+    krabka_metadata::{NodeId, metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL},
     std::{collections::BTreeMap, path::PathBuf},
 };
 
 /// The live facts used by either broker-configuration mutation API.
 #[derive(Clone, Copy)]
-pub(crate) struct BrokerConfigContext<'a> {
+pub struct BrokerConfigContext<'a> {
     pub image: &'a krabka_metadata::MetadataImage,
     pub serving: NodeId,
-    pub log_dirs: &'a [std::path::PathBuf],
+    pub log_dirs: &'a [PathBuf],
     pub unstable: UnstableApiVersions,
 }
 
@@ -59,7 +59,7 @@ impl BrokerConfigContext<'_> {
 /// that sets the cluster-wide default of each topic key, for the topic keys
 /// krabka carries. `DynamicLogConfig.RECONFIGURABLE_CONFIGS` is exactly this
 /// set, so each of them is dynamic.
-pub(crate) const TOPIC_DEFAULT_SYNONYMS: &[(&str, &str)] = &[
+pub const TOPIC_DEFAULT_SYNONYMS: &[(&str, &str)] = &[
     ("log.segment.bytes", "segment.bytes"),
     ("log.roll.ms", "segment.ms"),
     ("log.roll.jitter.ms", "segment.jitter.ms"),
@@ -122,7 +122,7 @@ fn served_topic_default(name: &str, unstable: UnstableApiVersions) -> Option<&'s
 
 /// The broker keys that set a topic key's default on a broker serving
 /// `unstable`.
-pub(crate) fn served_topic_default_synonyms(
+pub fn served_topic_default_synonyms(
     unstable: UnstableApiVersions,
 ) -> impl Iterator<Item = &'static str> {
     TOPIC_DEFAULT_SYNONYMS
@@ -133,7 +133,7 @@ pub(crate) fn served_topic_default_synonyms(
 
 /// One broker synonym of a topic key, with Kafka's broker default for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BrokerSynonym {
+pub struct BrokerSynonym {
     pub(crate) name: &'static str,
     pub(crate) default: Option<&'static str>,
 }
@@ -147,7 +147,7 @@ const fn synonym(name: &'static str, default: Option<&'static str>) -> BrokerSyn
 /// topic keys have a family of broker keys, and only the least preferred of
 /// each family carries a default; every other topic key has one broker key,
 /// whose default is the topic key's own.
-pub(crate) fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
+pub fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
     match topic_key {
         "retention.ms" => vec![
             synonym("log.retention.ms", None),
@@ -188,14 +188,11 @@ pub(crate) fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
 /// `unstable`, or, for a `KafkaConfig` key krabka has no row for, the one
 /// [`kafka_broker`] states. `None` is a name Kafka does not define, which
 /// Kafka reports untyped and withholds the value of.
-pub(crate) fn broker_key_row(
-    name: &str,
-    unstable: UnstableApiVersions,
-) -> Option<registry::ConfigKey> {
+pub fn broker_key_row(name: &str, unstable: UnstableApiVersions) -> Option<registry::ConfigKey> {
     registry::lookup(ConfigScope::Broker, name)
         .or_else(|| {
-            served_topic_default(name, unstable)
-                .and_then(|topic| registry::lookup(ConfigScope::Topic, topic))
+            let topic = served_topic_default(name, unstable)?;
+            registry::lookup(ConfigScope::Topic, topic)
         })
         .copied()
         .or_else(|| kafka_broker::resolve(name).map(kafka_broker::KafkaBrokerConfig::row))
@@ -203,7 +200,7 @@ pub(crate) fn broker_key_row(
 
 /// The dynamic configs `node_id`'s resource stores, less the
 /// controller-managed keys the alter paths stand outside.
-pub(crate) fn stored_dynamic_configs(
+pub fn stored_dynamic_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: NodeId,
 ) -> BTreeMap<String, String> {
@@ -226,7 +223,7 @@ const THROTTLE_RATES: [&str; 3] = [
 
 /// Kafka's `SslConfigs.RECONFIGURABLE_CONFIGS`: dynamic only per listener,
 /// under a `listener.name.<listener>.` prefix.
-pub(crate) const DYNAMIC_SECURITY_CONFIGS: &[&str] = &[
+pub const DYNAMIC_SECURITY_CONFIGS: &[&str] = &[
     "ssl.keystore.type",
     "ssl.keystore.location",
     "ssl.keystore.password",
@@ -260,7 +257,7 @@ fn is_per_broker(name: &str) -> bool {
 /// What krabka knows of a broker key, for `IncrementalAlterConfigs`'
 /// APPEND and SUBTRACT, which Kafka allows on a `LIST` key alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrokerKeyKind {
+pub enum BrokerKeyKind {
     /// A key Kafka types `LIST`.
     List,
     /// A key Kafka defines with another type.
@@ -271,7 +268,7 @@ pub(crate) enum BrokerKeyKind {
 
 /// The kind of a broker key on a broker serving `unstable`, for the APPEND
 /// and SUBTRACT checks.
-pub(crate) fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> BrokerKeyKind {
+pub fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> BrokerKeyKind {
     if let Some(row) = registry::lookup(ConfigScope::Broker, name)
         && row.config_type == registry::ConfigType::List
     {
@@ -308,10 +305,7 @@ pub(crate) fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> Brok
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message for a name that is not an
 /// integer, or that names another node.
-pub(crate) fn broker_resource_node(
-    resource_name: &str,
-    serving: NodeId,
-) -> Result<NodeId, (i16, String)> {
+pub fn broker_resource_node(resource_name: &str, serving: NodeId) -> Result<NodeId, (i16, String)> {
     if resource_name.is_empty() {
         return Ok(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID);
     }
@@ -395,7 +389,7 @@ fn check_broker_value(
 /// per-broker key on the cluster-default resource, then an assignment interval
 /// outside the broker's bounds, which Kafka's `GroupCoordinatorConfig` refuses
 /// when `processReconfiguration` builds the new `KafkaConfig`.
-pub(crate) fn validate_dynamic_broker_configs(
+pub fn validate_dynamic_broker_configs(
     props: &BTreeMap<String, String>,
     per_broker: bool,
     unstable: UnstableApiVersions,
@@ -445,7 +439,7 @@ pub(crate) fn validate_dynamic_broker_configs(
 /// Kafka's `ConfigurationControlManager` ELR rules for one broker config
 /// write: while ELR is on, no named broker may carry `min.insync.replicas`,
 /// and the cluster-level value may not be removed.
-pub(crate) fn elr_min_isr_error(
+pub fn elr_min_isr_error(
     image: &krabka_metadata::MetadataImage,
     node: NodeId,
     name: &str,
@@ -484,7 +478,7 @@ pub(crate) fn elr_min_isr_error(
 ///
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message.
-pub(crate) fn cordoned_log_dirs_error(
+pub fn cordoned_log_dirs_error(
     props: &BTreeMap<String, String>,
     log_dirs: &[PathBuf],
 ) -> Result<(), (i16, String)> {
@@ -509,13 +503,13 @@ pub(crate) fn cordoned_log_dirs_error(
 /// Kafka's `ConfigurationControlManager.isCordonedLogDirsDisabled`: below
 /// `metadata.version` `4.3-IV0` the controller refuses every write of
 /// `cordoned.log.dirs` to a broker resource, a deletion included.
-pub(crate) fn cordoned_log_dirs_disabled_error(
+pub fn cordoned_log_dirs_disabled_error(
     image: &krabka_metadata::MetadataImage,
     name: &str,
 ) -> Option<(i16, String)> {
-    let supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
-    });
+    let supported = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= CORDONED_LOG_DIRS_MIN_LEVEL);
     (name == CORDONED_LOG_DIRS && !supported).then(|| {
         (
             codes::INVALID_CONFIG,
@@ -529,7 +523,7 @@ pub(crate) fn cordoned_log_dirs_disabled_error(
 
 /// krabka's own KIP-966 strategy key, which the controller reads from the
 /// cluster-default resource alone, so a named broker may not hold it.
-pub(crate) const CLUSTER_DEFAULT_ONLY: &[&str] = &[UNCLEAN_RECOVERY_STRATEGY];
+pub const CLUSTER_DEFAULT_ONLY: &[&str] = &[UNCLEAN_RECOVERY_STRATEGY];
 
 #[cfg(test)]
 mod tests {

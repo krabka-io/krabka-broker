@@ -21,7 +21,7 @@ use {
 /// It returns the `(prepare, complete)` states on success, or the Kafka error
 /// code to return. The function is pure, and the caller persists `entry`
 /// afterwards.
-pub(crate) fn decide_phase1_transition(
+pub fn decide_phase1_transition(
     entry: &mut TxnEntry,
     committed: bool,
 ) -> Result<(TxnState, TxnState), i16> {
@@ -49,7 +49,7 @@ pub(crate) fn decide_phase1_transition(
 /// prepare, because Kafka's table is wider than `Ongoing` at transaction
 /// version 2: an abort is accepted from `Empty`, `CompleteCommit` and
 /// `CompleteAbort` as well.
-pub(crate) fn apply_end_txn_prepare(entry: &mut TxnEntry, committed: bool) -> (TxnState, TxnState) {
+pub fn apply_end_txn_prepare(entry: &mut TxnEntry, committed: bool) -> (TxnState, TxnState) {
     let (prepare, complete) = if committed {
         (TxnState::PrepareCommit, TxnState::CompleteCommit)
     } else {
@@ -61,7 +61,7 @@ pub(crate) fn apply_end_txn_prepare(entry: &mut TxnEntry, committed: bool) -> (T
 
 /// Outcome of [`decide_end_txn_completion`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompletionDecision {
+pub enum CompletionDecision {
     /// Finalise the transaction: write `next_state`, and return the identity
     /// to the producer. That identity may carry a bumped epoch.
     Proceed {
@@ -85,7 +85,7 @@ pub(crate) enum CompletionDecision {
 /// Phase 3 of `EndTxn`: after marker fan-out, revalidate the entry and decide
 /// whether to adopt the completion identity that was persisted during Phase 1.
 /// The decision does not allocate or increment an identity.
-pub(crate) fn decide_end_txn_completion(
+pub fn decide_end_txn_completion(
     entry: &TxnEntry,
     expected_pid: ProducerId,
     expected_epoch: i16,

@@ -103,6 +103,7 @@
 //! wall clock because a sibling suite in the same shard had pushed this one's
 //! output past GitHub's log-API truncation point; streaming is what stops that
 //! from happening again, since truncation drops the tail.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -128,12 +129,12 @@ use {
     std::{
         fmt::{self, Debug, Display},
         io::{Read, Write},
-        process::{Child, Command, ExitStatus, Stdio},
+        process::{self, Child, Command, ExitStatus, Stdio},
         sync::{Arc, Mutex},
         thread::{self, JoinHandle},
         time::Duration,
     },
-    tokio::time::Instant,
+    tokio::{time, time::Instant},
 };
 
 /// The image, built here and named in the `sarama_conformance` entry of the
@@ -420,7 +421,7 @@ fn metadata_lists_topic() {
     // NAME, PARTITIONS, REPLICAS -- the last from the length of partition 0's
     // replica list, which is the replication factor the topic was created at.
     assert!(
-        row == vec![TOPIC.to_string(), PARTITIONS.to_string(), "1".to_string()],
+        row == vec![TOPIC.to_owned(), PARTITIONS.to_string(), "1".to_owned()],
         "kaf topics did not list {TOPIC} as krabka created it: {listing}"
     );
 }
@@ -623,7 +624,7 @@ impl Display for GroupShape {
 async fn describe_group(client: &Client) -> DescribeGroupsResponse {
     client
         .send(DescribeGroupsRequest {
-            groups: vec![GROUP.to_string()],
+            groups: vec![GROUP.to_owned()],
             ..Default::default()
         })
         .await
@@ -675,7 +676,7 @@ async fn await_group_member(
                  question is whether the broker recorded the member it thinks it has."
             ));
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -729,7 +730,7 @@ async fn await_committed_offsets(
                  above for the fetch that did not decode; the commit is downstream of it."
             ));
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -836,7 +837,7 @@ fn group_describe_shows_commit(offsets: &[CommittedOffset]) {
             partition.to_string(),
             offset.to_string(),
             offset.to_string(),
-            "0".to_string(),
+            "0".to_owned(),
         ];
         assert!(
             rows.contains(&expected),
@@ -855,7 +856,7 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
         .expect("admin client");
     admin
         .create_topics(
-            &[topic_spec(TOPIC.to_string(), PARTITIONS, 1)],
+            &[topic_spec(TOPIC.to_owned(), PARTITIONS, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
@@ -870,7 +871,7 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
     metadata_lists_topic();
     produce_lands();
 
-    let container = format!("krabka-sarama-consumer-{}", std::process::id());
+    let container = format!("krabka-sarama-consumer-{}", process::id());
     let mut consumer = GroupConsumer::spawn(&container);
     let outcome = observe_group_consumer(&client, &mut admin, &mut consumer).await;
     // Stop and log the container before asserting, so the client's own account
@@ -894,7 +895,7 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
     assert!(
         offsets
             == [CommittedOffset {
-                topic: TOPIC.to_string(),
+                topic: TOPIC.to_owned(),
                 partition: 0,
                 offset: 1,
             }],

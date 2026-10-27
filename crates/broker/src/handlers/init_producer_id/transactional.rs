@@ -26,7 +26,7 @@ use {
         },
     },
     krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
-    krabka_verified::transaction::InitProducerIdIdentityDecision,
+    krabka_verified::{transaction, transaction::InitProducerIdIdentityDecision},
     std::sync::Arc,
 };
 
@@ -67,7 +67,7 @@ pub(super) async fn handle_transactional(
         None => {
             // Fresh tid — allocate a new producer id.
             let (pid, epoch) = coord.producer_ids.allocate().await?;
-            let entry = TxnEntry::new_empty(tid.to_string(), pid, epoch, txn_timeout, now_ms);
+            let entry = TxnEntry::new_empty(tid.to_owned(), pid, epoch, txn_timeout, now_ms);
             // Kafka's `putTransactionStateIfNotExists` creates the metadata
             // under the state lock and hands a racing caller the winner's
             // object. That caller runs `prepareInitProducerIdTransit` on it:
@@ -322,7 +322,7 @@ pub(super) async fn handle_transactional(
                 epoch: new_epoch,
             } = next_init_producer_identity(&e3, &coord.producer_ids).await?;
             let mut staged =
-                TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
+                TxnEntry::new_empty(tid.to_owned(), new_pid, new_epoch, txn_timeout, now_ms);
             // The transition keeps the transaction version of the record before
             // it (Kafka's `TransitionData` defaults to it).
             staged.client_transaction_version = e3.client_transaction_version;
@@ -371,7 +371,7 @@ fn identity_decision(
     request_identity: RequestedIdentity,
 ) -> InitProducerIdIdentityDecision {
     let (entry_pid, entry_epoch) = client_producer_identity(entry);
-    krabka_verified::transaction::init_producer_id_identity_decision(
+    transaction::init_producer_id_identity_decision(
         entry_pid.get(),
         entry_epoch,
         entry.last_producer_epoch,
@@ -484,12 +484,17 @@ mod tests {
             partition_registry::PartitionRegistry,
             producer_id_manager::ProducerIdManager,
             test_support::{open_partition, spawn_standalone_partition},
-            txn::{bootstrap, state::TopicPartition, version::TxnVersion},
+            txn::{
+                bootstrap, coordinator::completion::CompletionAttempt, state::TopicPartition,
+                version::TxnVersion,
+            },
         },
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
         krabka_log::{Log, LogConfig, ProducerId},
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
+        std::{fs, path::Path},
+        tokio::{task, task::JoinHandle},
     };
 
     /// A coordinator seeded with a transaction, and the partition that a test
@@ -591,7 +596,7 @@ mod tests {
 
         // Materialize a local partition for `__transaction_state`-style data.
         let part_dir = partition_dir(dir.path(), "orders", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
+        fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
         let part = spawn_standalone_partition()
             .log_dir(dir.path())
@@ -603,9 +608,9 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&part));
 
         // Build a txn entry that names this partition.
-        let mut entry = TxnEntry::new_empty("tx-1".to_string(), ProducerId(1000), 3, 60_000, 0);
+        let mut entry = TxnEntry::new_empty("tx-1".to_owned(), ProducerId(1000), 3, 60_000, 0);
         entry.partitions.insert(TopicPartition {
-            topic: "orders".to_string(),
+            topic: "orders".to_owned(),
             partition: PartitionIndex(0),
         });
 
@@ -634,9 +639,9 @@ mod tests {
             50,
             krabka_units::mebibytes(1),
         );
-        let mut entry = TxnEntry::new_empty("tx-2".to_string(), ProducerId(2000), 0, 60_000, 0);
+        let mut entry = TxnEntry::new_empty("tx-2".to_owned(), ProducerId(2000), 0, 60_000, 0);
         entry.partitions.insert(TopicPartition {
-            topic: "ghost".to_string(),
+            topic: "ghost".to_owned(),
             partition: PartitionIndex(0),
         });
         assert!(dispatch_abort_markers(&coord, &mut entry).await.is_err());
@@ -669,7 +674,7 @@ mod tests {
         #[builder(default)] identity: InitIdentity,
         #[builder(default)] scheduling: InitScheduling,
         #[builder(into, default = InitCallCount (2))] count: InitCallCount,
-    ) -> Vec<tokio::task::JoinHandle<Result<InitProducerIdResponse, BrokerError>>> {
+    ) -> Vec<JoinHandle<Result<InitProducerIdResponse, BrokerError>>> {
         let setup = ConcurrentInitSetup {
             tid,
             identity,
@@ -683,7 +688,7 @@ mod tests {
                 init_verified(&coordinator, setup.tid, setup.identity).await
             }));
             if matches!(setup.scheduling, InitScheduling::YieldAfterEach) {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         }
         calls
@@ -694,19 +699,16 @@ mod tests {
 
     /// A coordinator that leads the single `__transaction_state` partition,
     /// with one committed transactional id already persisted into it.
-    async fn coordinator_with_completed_transaction(
-        dir: &std::path::Path,
-        tid: &str,
-    ) -> SeededCoordinator {
+    async fn coordinator_with_completed_transaction(dir: &Path, tid: &str) -> SeededCoordinator {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: bootstrap::TOPIC.to_string(),
+            name: bootstrap::TOPIC.to_owned(),
             topic_id: uuid::Uuid::from_u128(1),
             partitions: 1,
             replication_factor: 1,
         }));
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: bootstrap::TOPIC.to_string(),
+            topic: bootstrap::TOPIC.to_owned(),
             partition: 0,
             leader: NodeId(1),
             replicas: vec![NodeId(1)],
@@ -734,7 +736,7 @@ mod tests {
             .finished()
             .await;
 
-        let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(1000), 3, 60_000, 0);
+        let mut entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(1000), 3, 60_000, 0);
         entry.state = TxnState::CompleteCommit;
         entry.last_update_ms = 0;
         coordinator
@@ -796,16 +798,13 @@ mod tests {
     /// A coordinator that leads `__transaction_state-0`, with one ongoing
     /// transaction at `(1000, 3)` over a local `orders-0` data partition. The
     /// data partition comes back so a test can read the abort marker.
-    async fn coordinator_with_ongoing_transaction(
-        dir: &std::path::Path,
-        tid: &str,
-    ) -> SeededCoordinator {
+    async fn coordinator_with_ongoing_transaction(dir: &Path, tid: &str) -> SeededCoordinator {
         let SeededCoordinator {
             coordinator,
             partition: _part,
         } = coordinator_with_completed_transaction(dir, tid).await;
         let data_dir = partition_dir(dir, "orders", 0);
-        std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
+        fs::create_dir_all(&data_dir).expect("create the data partition directory");
         let data = spawn_standalone_partition()
             .log_dir(dir)
             .log(Log::open(&data_dir, LogConfig::default()).expect("open the data log"))
@@ -820,7 +819,7 @@ mod tests {
             let mut entry = handle.lock().await;
             entry.state = TxnState::Ongoing;
             entry.partitions.insert(TopicPartition {
-                topic: "orders".to_string(),
+                topic: "orders".to_owned(),
                 partition: PartitionIndex(0),
             });
             entry.clone()
@@ -1261,7 +1260,7 @@ mod tests {
             .call()
             .await;
         for _ in 0..10 {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         drop(write_lock);
 
@@ -1318,10 +1317,10 @@ mod tests {
             // An ongoing transaction over a partition this broker does not
             // host yet: the abort marker cannot be delivered, so the fan-out
             // fails after the epoch fence is already persisted.
-            let mut ongoing = TxnEntry::new_empty(TID.to_string(), ProducerId(1000), 3, 60_000, 0);
+            let mut ongoing = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 3, 60_000, 0);
             ongoing.state = TxnState::Ongoing;
             ongoing.partitions.insert(TopicPartition {
-                topic: "ghost".to_string(),
+                topic: "ghost".to_owned(),
                 partition: PartitionIndex(0),
             });
             seed(&coordinator, ongoing).await;
@@ -1352,7 +1351,7 @@ mod tests {
             // The partition appears, and the completion task finishes the
             // abort.
             let ghost_dir = partition_dir(dir.path(), "ghost", 0);
-            std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
+            fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
             let ghost = spawn_standalone_partition()
                 .log_dir(dir.path())
                 .log(Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"))
@@ -1364,7 +1363,7 @@ mod tests {
                 .insert("ghost".into(), PartitionIndex(0), ghost);
             check!(
                 coordinator.complete_prepared_transaction(TID, txnv).await
-                    == crate::txn::coordinator::completion::CompletionAttempt::Completed,
+                    == CompletionAttempt::Completed,
                 "{txnv:?}"
             );
 
@@ -1422,7 +1421,7 @@ mod tests {
                     .await
             })
         };
-        tokio::task::yield_now().await;
+        task::yield_now().await;
 
         let init = {
             let coordinator = Arc::clone(&coordinator);
@@ -1430,13 +1429,13 @@ mod tests {
                 async move { init_verified(&coordinator, TID, InitIdentity::Anonymous).await },
             )
         };
-        tokio::task::yield_now().await;
+        task::yield_now().await;
 
         drop(guard);
         let expired = sweep.await.expect("sweep task");
         let response = init.await.expect("init task").expect("init responds");
 
-        check!(expired == vec![TID.to_string()]);
+        check!(expired == vec![TID.to_owned()]);
         check!(response == concurrent_transactions_response());
         // The id stays expired: nothing was published back into the map, and
         // the log ends at the tombstone the sweep appended.
@@ -1466,7 +1465,7 @@ mod tests {
         // own `prepare_completion_identities` rotates to a fresh producer id.
         let ongoing = TxnEntry {
             state: TxnState::Ongoing,
-            ..TxnEntry::new_empty(TID.to_string(), ProducerId(1000), i16::MAX - 1, 60_000, 0)
+            ..TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), i16::MAX - 1, 60_000, 0)
         };
         seed(&coordinator, ongoing).await;
 

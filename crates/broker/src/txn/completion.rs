@@ -18,20 +18,22 @@ use {
             version::resolve_txn_version,
         },
     },
+    futures_util::future::join_all,
     std::{collections::BTreeSet, sync::Arc, time::Duration},
+    tokio::time::sleep,
     tokio_util::sync::CancellationToken,
     tracing::info,
 };
 
 /// The wait before a failed completion runs again.
-pub(crate) const RETRY_BACKOFF: Duration = Duration::from_millis(500);
+pub const RETRY_BACKOFF: Duration = Duration::from_millis(500);
 
 /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
 // cargo-mutants: orchestration only. Every decision is in
 // `TxnCoordinator::complete_prepared_transaction` and its mutation-tested
 // helpers; this loop only waits and hands transactional ids to it.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn run(
+pub async fn run(
     coordinator: Arc<TxnCoordinator>,
     controller: Arc<dyn MetadataSource>,
     shutdown: CancellationToken,
@@ -46,7 +48,7 @@ pub(crate) async fn run(
         }
         tokio::select! {
             () = coordinator.completion_requested() => {}
-            () = tokio::time::sleep(RETRY_BACKOFF), if !retry.is_empty() => {}
+            () = sleep(RETRY_BACKOFF), if !retry.is_empty() => {}
             () = shutdown.cancelled() => {
                 info!("transaction completion task shutting down");
                 return;
@@ -63,7 +65,7 @@ pub(crate) async fn run(
 /// [`MARKER_COMMIT_TIMEOUT`](crate::txn::handlers::write_txn_markers::MARKER_COMMIT_TIMEOUT),
 /// so one transaction whose partition cannot commit does not hold back the
 /// others.
-pub(crate) async fn complete_once(
+pub async fn complete_once(
     coordinator: &Arc<TxnCoordinator>,
     controller: &dyn MetadataSource,
     queued: BTreeSet<String>,
@@ -73,7 +75,7 @@ pub(crate) async fn complete_once(
     // A load queues its own `Prepare*` transactions when it ends, so the task
     // does not wait for the loads it starts.
     drop(coordinator.refresh_leader_partitions(&image).await);
-    futures_util::future::join_all(queued.into_iter().map(|transactional_id| async move {
+    join_all(queued.into_iter().map(|transactional_id| async move {
         let attempt = coordinator
             .complete_prepared_transaction(&transactional_id, txnv)
             .await;

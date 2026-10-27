@@ -56,10 +56,11 @@ pub(super) fn authenticated_copy_vote(
     let end = if count == 0 {
         reference.1
     } else {
-        reference.0[count - 1].0 + i64::from(reference.0[count - 1].1) + 1
+        let last = reference.0.get(count - 1)?;
+        last.0 + i64::from(last.1) + 1
     };
     covering_copy_preserves_logical_fetch(
-        &reference.0[..count],
+        reference.0.get(..count)?,
         &observation.3,
         (reference.1, reference.1),
         end,

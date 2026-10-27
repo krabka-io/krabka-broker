@@ -19,6 +19,7 @@ use {
     krabka_client_core::Client,
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Create the suite's diskless topic and return its assigned id.
@@ -28,7 +29,7 @@ use {
 /// `wal::quorum::placement` from the racks, the second by `CreateTopics` --
 /// but the failover case needs a promoted broker that is in both, and rf=3 on
 /// a 3-broker cluster is the assignment that guarantees it.
-pub(crate) async fn create_diskless_topic(client: &Client) -> WireUuid {
+pub async fn create_diskless_topic(client: &Client) -> WireUuid {
     let response = client
         .send(diskless_topic_request(
             TOPIC,
@@ -58,7 +59,7 @@ pub(crate) async fn create_diskless_topic(client: &Client) -> WireUuid {
             Instant::now() <= deadline,
             "the metadata image never reported a topic id for {TOPIC}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -72,7 +73,7 @@ pub(crate) async fn create_diskless_topic(client: &Client) -> WireUuid {
 /// shard engine and the follower-fetcher count, so a produce that follows it
 /// cannot race asynchronous placement reconciliation and time out on a
 /// high-watermark that no follower is positioned to advance.
-pub(crate) async fn await_wal_quorum(cluster: &DisklessCluster) -> NodeId {
+pub async fn await_wal_quorum(cluster: &DisklessCluster) -> NodeId {
     for node in cluster.node_ids() {
         if let Some(broker) = cluster.handle_for_node(node) {
             broker.wait_until_partition_present(TOPIC, 0).await;
@@ -97,7 +98,7 @@ pub(crate) async fn await_wal_quorum(cluster: &DisklessCluster) -> NodeId {
     leader
 }
 
-pub(crate) async fn seed_workload(
+pub async fn seed_workload(
     cluster: &DisklessCluster,
 ) -> (Client, WireUuid, NodeId, Vec<bytes::Bytes>, Client) {
     let admin = support::sasl_client(
@@ -120,7 +121,7 @@ pub(crate) async fn seed_workload(
 }
 
 /// Seed the same acknowledged workload after the requested flush cadence is ready.
-pub(crate) async fn flushing_workload(
+pub async fn flushing_workload(
     interval: krabka_units::Time,
 ) -> (
     DisklessCluster,
@@ -137,7 +138,7 @@ pub(crate) async fn flushing_workload(
 }
 
 /// The live leader and the size of this suite's acknowledged seed prefix.
-pub(crate) fn seeded_leader(
+pub fn seeded_leader(
     cluster: &DisklessCluster,
     leader: NodeId,
 ) -> (&krabka_broker::BrokerHandle, i64) {

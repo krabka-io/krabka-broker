@@ -9,6 +9,7 @@ use {
     super::{LogOffset, corrupt_index},
     crate::error::RemoteStorageError,
     krabka_verified::remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision},
+    std::mem,
     zerocopy::{
         BigEndian, FromBytes, Immutable, KnownLayout, Unaligned,
         byteorder::{I16, I64},
@@ -18,7 +19,9 @@ use {
 /// The only aborted-transaction record version Kafka writes or accepts.
 const SUPPORTED_VERSION: i16 = 0;
 
-/// 34 bytes per entry: a big-endian i16 `version` (always 0), then
+/// One 34-byte aborted-transaction index entry.
+///
+/// The entry is a big-endian i16 `version` (always 0), then
 /// `producer_id` i64 BE, `start_offset` i64 BE, `last_offset` i64 BE, and
 /// `last_stable_offset` i64 BE. It mirrors
 /// `krabka_log::txn_index::AbortedTxnRaw`, so the remote-tier copy of a
@@ -40,12 +43,14 @@ pub struct AbortedTxnIndexEntry {
 }
 
 /// Byte length of one serialized aborted-transaction index entry.
-const TXN_INDEX_ENTRY_LEN: usize = std::mem::size_of::<AbortedTxnIndexEntry>();
+const TXN_INDEX_ENTRY_LEN: usize = mem::size_of::<AbortedTxnIndexEntry>();
 
 const _: [(); 34] = [(); TXN_INDEX_ENTRY_LEN];
 
 /// Borrows Kafka's transaction-index format as a zero-copy
-/// `&[AbortedTxnIndexEntry]`, at 34 bytes per entry: a big-endian i16
+/// `&[AbortedTxnIndexEntry]`.
+///
+/// Each entry is 34 bytes: a big-endian i16
 /// version (always 0), then `producer_id`, `start_offset`, `last_offset`,
 /// and `last_stable_offset`, each a big-endian i64. The result borrows from
 /// `bytes`.
@@ -84,7 +89,9 @@ pub fn parse_txn_index(bytes: &[u8]) -> Result<&[AbortedTxnIndexEntry], RemoteSt
 }
 
 /// Reports whether an aborted-transaction entry overlaps the inclusive offset
-/// range `[from_offset, to_offset]`. It mirrors the overlap test in
+/// range `[from_offset, to_offset]`.
+///
+/// It mirrors the overlap test in
 /// `TxnIndex::aborted_in_range` against an inclusive range: the entry's
 /// `[start, last]` intersects `[from, to]` if and only if
 /// `start <= to && last >= from`.

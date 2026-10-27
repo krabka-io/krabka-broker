@@ -26,7 +26,7 @@ use {
     },
     krabka_log::Offset,
     krabka_metadata::MetadataImage,
-    std::sync::Arc,
+    std::{cmp::Ordering, sync::Arc},
     tokio::sync::{Mutex, MutexGuard},
     tracing::{debug, warn},
 };
@@ -36,7 +36,7 @@ mod tests;
 
 /// One `__share_group_state` record value that an operation appends.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StateRecord {
+pub enum StateRecord {
     Snapshot(ShareSnapshotValue),
     Update(ShareUpdateValue),
 }
@@ -241,18 +241,30 @@ impl ShareCoordinator {
         if trunk && state_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
         }
-        let entry = self.entry(group, topic_id, partition);
-        let mut stored = match &entry {
-            Some(entry) => Some(entry.lock().await),
-            None => None,
+        let Some(entry) = self.entry(group, topic_id, partition) else {
+            check_topic_partition(image, topic_id, partition)?;
+            let snapshot = self.initial_snapshot(0, state_epoch, start_offset);
+            let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
+            let offset = self
+                .persist_record(term, key, Some(snapshot.encode()))
+                .await
+                .map_err(|e| {
+                    warn!(error = %e, "share initialize persist failed");
+                    e.share_error()
+                })?;
+            self.state.insert(
+                (group.to_owned(), topic_id, partition),
+                Arc::new(Mutex::new(SharePartitionState::from_snapshot(
+                    &snapshot, offset,
+                ))),
+            );
+            self.note_state_key_change(term.partition);
+            return Ok(());
         };
+        let mut st = entry.lock().await;
         // Kafka 4.3.1 reads a state epoch of -1 as "not supplied" and skips
         // the fence.
-        if state_epoch != -1
-            && stored
-                .as_ref()
-                .is_some_and(|st| st.fence_state_epoch > state_epoch)
-        {
+        if state_epoch != -1 && st.fence_state_epoch > state_epoch {
             return Err(ShareStateError::Refused {
                 code: codes::FENCED_STATE_EPOCH,
                 message: message::FENCED_STATE_EPOCH,
@@ -260,19 +272,35 @@ impl ShareCoordinator {
         }
         check_topic_partition(image, topic_id, partition)?;
         // Trunk only: Kafka 4.3.1 always writes a new snapshot.
-        if trunk
-            && stored.as_ref().is_some_and(|st| {
-                st.fence_state_epoch == state_epoch && st.start_offset == start_offset
-            })
-        {
+        if trunk && st.fence_state_epoch == state_epoch && st.start_offset == start_offset {
             return Ok(());
         }
+        let snapshot =
+            self.initial_snapshot(st.snapshot_epoch.wrapping_add(1), state_epoch, start_offset);
+        let appended = self
+            .append_state_record(
+                term,
+                &mut st,
+                group,
+                topic_id,
+                partition,
+                StateRecord::Snapshot(snapshot),
+            )
+            .await;
+        drop(st);
+        appended
+    }
 
+    /// The `ShareSnapshot` that an initialize writes, at `snapshot_epoch`.
+    fn initial_snapshot(
+        &self,
+        snapshot_epoch: i32,
+        state_epoch: StateEpoch,
+        start_offset: Offset,
+    ) -> ShareSnapshotValue {
         let now = self.now_ms();
-        let snapshot = ShareSnapshotValue {
-            snapshot_epoch: stored
-                .as_ref()
-                .map_or(0, |st| st.snapshot_epoch.wrapping_add(1)),
+        ShareSnapshotValue {
+            snapshot_epoch,
             state_epoch,
             leader_epoch: 0,
             start_offset,
@@ -284,35 +312,7 @@ impl ShareCoordinator {
             create_timestamp: now,
             write_timestamp: now,
             state_batches: Vec::new(),
-        };
-        if let Some(st) = stored.as_mut() {
-            return self
-                .append_state_record(
-                    term,
-                    st,
-                    group,
-                    topic_id,
-                    partition,
-                    StateRecord::Snapshot(snapshot),
-                )
-                .await;
         }
-        let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
-        let offset = self
-            .persist_record(term, key, Some(snapshot.encode()))
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "share initialize persist failed");
-                e.share_error()
-            })?;
-        self.state.insert(
-            (group.to_string(), topic_id, partition),
-            Arc::new(Mutex::new(SharePartitionState::from_snapshot(
-                &snapshot, offset,
-            ))),
-        );
-        self.note_state_key_change(term.partition);
-        Ok(())
     }
 
     /// The body of [`ShareCoordinator::write`], under the read guard of
@@ -364,8 +364,11 @@ impl ShareCoordinator {
             delivery_complete_count: request.delivery_complete_count,
             batches: &request.batches,
         });
-        self.append_state_record(term, &mut st, group, topic_id, partition, record)
-            .await
+        let appended = self
+            .append_state_record(term, &mut st, group, topic_id, partition, record)
+            .await;
+        drop(st);
+        appended
     }
 
     /// The body of [`ShareCoordinator::read`], under the read guard of
@@ -407,9 +410,11 @@ impl ShareCoordinator {
             delivery_complete_count: st.delivery_complete_count,
             batches: &[],
         });
-        self.append_state_record(term, &mut st, group, topic_id, partition, record)
-            .await?;
-        Ok(current)
+        let appended = self
+            .append_state_record(term, &mut st, group, topic_id, partition, record)
+            .await;
+        drop(st);
+        appended.map(|()| current)
     }
 
     /// The record of a write, as Kafka's `generateShareStateRecord` builds
@@ -564,8 +569,8 @@ impl ShareCoordinator {
         partition: i32,
     ) -> Option<Arc<Mutex<SharePartitionState>>> {
         self.state
-            .get(&(group.to_string(), topic_id, partition))
-            .map(|entry| entry.value().clone())
+            .get(&(group.to_owned(), topic_id, partition))
+            .map(|entry| Arc::clone(entry.value()))
     }
 
     /// Test-only: the in-memory state of a key, with no status check and no
@@ -599,8 +604,7 @@ impl ShareCoordinator {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self.active(state_partition).await?;
+        let active = self.active_for_key(group, &topic_id, partition).await?;
         let summary = self.summary(group, topic_id, partition).await;
         self.answer(active, Ok(summary))
             .await
@@ -662,7 +666,7 @@ impl ShareCoordinator {
         })?;
         if self
             .state
-            .remove(&(group.to_string(), topic_id, partition))
+            .remove(&(group.to_owned(), topic_id, partition))
             .is_some()
         {
             self.note_state_key_change(term.partition);
@@ -675,7 +679,7 @@ impl ShareCoordinator {
 fn state_key(record_type: i16, group: &str, topic_id: uuid::Uuid, partition: i32) -> ShareStateKey {
     ShareStateKey {
         record_type,
-        group_id: group.to_string(),
+        group_id: group.to_owned(),
         topic_id,
         partition,
     }
@@ -719,8 +723,8 @@ fn delivery_complete_count(
     request_count: i32,
 ) -> i32 {
     match request_start_offset.cmp(&stored.start_offset) {
-        std::cmp::Ordering::Equal => request_count.max(stored.delivery_complete_count),
-        std::cmp::Ordering::Less => stored.delivery_complete_count,
-        std::cmp::Ordering::Greater => request_count,
+        Ordering::Equal => request_count.max(stored.delivery_complete_count),
+        Ordering::Less => stored.delivery_complete_count,
+        Ordering::Greater => request_count,
     }
 }

@@ -28,7 +28,10 @@ use {
         TimestampType,
     },
     regex::Regex,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        str,
+    },
 };
 
 mod compile;
@@ -279,7 +282,7 @@ fn batch_frame(header: &RecordBatchHeader) -> krabka_verified::RestoreBatchFrame
 }
 
 /// Map the attributes' timestamp-type bit onto the kernel's enum.
-pub(crate) fn timestamp_type(attributes: Attributes) -> krabka_verified::RestoreTimestampType {
+pub fn timestamp_type(attributes: Attributes) -> krabka_verified::RestoreTimestampType {
     match attributes.timestamp_type() {
         TimestampType::CreateTime => krabka_verified::RestoreTimestampType::CreateTime,
         TimestampType::LogAppendTime => krabka_verified::RestoreTimestampType::LogAppendTime,
@@ -287,7 +290,7 @@ pub(crate) fn timestamp_type(attributes: Attributes) -> krabka_verified::Restore
 }
 
 /// One decoded record's absolute offset and the timestamp Kafka reports for it.
-pub(crate) struct RecordCoordinates {
+pub struct RecordCoordinates {
     /// The record's absolute offset.
     pub(crate) offset: Offset,
     /// The record's timestamp, in milliseconds.
@@ -305,7 +308,7 @@ struct ExcludedOffsets {
 /// Kafka reports for it at the verified boundary: `base_timestamp +
 /// timestamp_delta` under `CreateTime`, the batch `max_timestamp` under
 /// `LogAppendTime`.
-pub(crate) fn record_coordinates(
+pub fn record_coordinates(
     header: &RecordBatchHeader,
     record: &RecordBorrowed<'_>,
 ) -> Result<RecordCoordinates, RestoreError> {
@@ -330,5 +333,5 @@ pub(crate) fn record_coordinates(
 
 /// Whether `bytes` is valid UTF-8 and `pattern` matches the decoded text.
 fn matches_utf8(pattern: &Regex, bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok_and(|text| pattern.is_match(text))
+    str::from_utf8(bytes).is_ok_and(|text| pattern.is_match(text))
 }

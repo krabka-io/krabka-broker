@@ -1,6 +1,13 @@
 //! Record encoding and durable append precede an actor's visible cache update.
+#![cfg(test)]
 
-use {assert2::assert, std::cell::RefCell};
+use {
+    assert2::assert,
+    std::{
+        cell::RefCell,
+        future::{self, Ready},
+    },
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Failure {
@@ -32,10 +39,10 @@ struct Journal<'a> {
 }
 
 impl Journal<'_> {
-    fn append(&self, group: &str, batch: u8) -> std::future::Ready<Result<(), Failure>> {
+    fn append(&self, group: &str, batch: u8) -> Ready<Result<(), Failure>> {
         assert!(group == "group" && batch == 7);
         self.events.borrow_mut().push("append");
-        std::future::ready(if self.fails {
+        future::ready(if self.fails {
             Err(Failure::Append)
         } else {
             Ok(())

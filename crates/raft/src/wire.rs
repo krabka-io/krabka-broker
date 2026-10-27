@@ -87,9 +87,10 @@ pub const API_KEY_DELEGATION_TOKEN_MUTATION: i16 = PrivateRpc::DelegationTokenMu
 
 /// The version of every krabka-private API that a sender uses when it has no
 /// metadata image to read `krabka.version` from: v0, the krabka-broker 1.0.0
-/// formats, which every 1.x receiver serves. It is also what an image that has
-/// not finalized `krabka.version` negotiates, since that image reads as level
-/// 0.
+/// formats, which every 1.x receiver serves.
+///
+/// It is also what an image that has not finalized `krabka.version` negotiates,
+/// since that image reads as level 0.
 pub const PRIVATE_BASELINE_VERSION: i16 = 0;
 
 /// The lowest version of every krabka-private API that this build serves.
@@ -193,8 +194,11 @@ fn get_i32_len_prefixed_bytes(
     let len = buf.get_i32();
     let len = usize::try_from(len).map_err(|_| ProtocolError::InvalidValue(negative_len))?;
     require_remaining(buf, len)?;
-    let bytes = Bytes::copy_from_slice(&buf[..len]);
-    buf.advance(len);
+    let (bytes, rest) = buf
+        .split_at_checked(len)
+        .ok_or(ProtocolError::UnexpectedEof { needed: len })?;
+    let bytes = Bytes::copy_from_slice(bytes);
+    *buf = rest;
     Ok(bytes)
 }
 
@@ -405,7 +409,7 @@ impl KrabkaMetadataFetchResponse {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, assert2::check, std::fmt};
 
     /// The v0 `SubmitChange` request body that [`submit_request`] encodes to.
     const SUBMIT_REQUEST_V0: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
@@ -705,14 +709,14 @@ mod tests {
         check!(private_request_version(PrivateRpc::SubmitChange, None) == PRIVATE_BASELINE_VERSION);
     }
 
-    fn assert_unexpected_eof<T: std::fmt::Debug>(result: Result<T, ProtocolError>, want: usize) {
+    fn assert_unexpected_eof<T: fmt::Debug>(result: Result<T, ProtocolError>, want: usize) {
         match result {
             Err(ProtocolError::UnexpectedEof { needed }) => assert2::assert!(needed == want),
             other => panic!("expected UnexpectedEof {{ needed: {want} }}, got {other:?}"),
         }
     }
 
-    fn assert_invalid_value<T: std::fmt::Debug>(result: Result<T, ProtocolError>) {
+    fn assert_invalid_value<T: fmt::Debug>(result: Result<T, ProtocolError>) {
         match result {
             Err(ProtocolError::InvalidValue(_)) => {}
             other => panic!("expected InvalidValue, got {other:?}"),

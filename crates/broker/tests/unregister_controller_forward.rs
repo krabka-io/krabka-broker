@@ -2,16 +2,19 @@
 //! a broker listener with `forwardToController`. A krabka node that is not the
 //! active controller forwards it the same way, in a KIP-590 `Envelope`, and
 //! relays the controller's answer unchanged.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{
+        admin,
         client::connect_owned,
         configs::{controller_registration, feature_update},
         shutdown_cluster, start_n_node_with,
     },
     assert2::check,
+    krabka_broker::api_catalog::UnstableApiVersions,
     krabka_metadata::{
         NodeId as MetadataNodeId, metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
     },
@@ -28,8 +31,7 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
     // Both the RPC and the level are Kafka trunk's, so every node runs with
     // Kafka's two `unstable.*.enable` settings on.
     let cluster = start_n_node_with(2, |_, cfg| {
-        cfg.features.unstable_api_versions =
-            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        cfg.features.unstable_api_versions = UnstableApiVersions::Enabled;
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })
     .await
@@ -86,7 +88,7 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
 
     check!(
         answers
-            == crate::support::admin::unregister_controller_answers()
+            == admin::unregister_controller_answers()
                 .controller_id(7)
                 .call()
     );

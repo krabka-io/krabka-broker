@@ -20,7 +20,15 @@ use {
         test_support::segmented_log,
     },
     assert2::check,
+    krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{gibibytes, kibibytes, mebibytes},
+    std::{
+        fmt,
+        fs::{self, File},
+        path::Path,
+        sync::Arc,
+        time::SystemTime,
+    },
     tempfile::tempdir,
 };
 
@@ -154,7 +162,7 @@ fn log_read_raw_spans_multiple_segments() {
     let mut cur: &[u8] = &r.bytes;
     let mut bases = Vec::new();
     while !cur.is_empty() {
-        let b = krabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
+        let b = RecordBatch::decode(&mut cur).unwrap();
         bases.push(Offset(b.base_offset));
     }
     assert2::assert!(bases == expected_bases);
@@ -354,7 +362,7 @@ fn batch_bases(mut wire: &[u8]) -> Vec<i64> {
     bases
 }
 
-fn check_seam_reads<T: std::fmt::Debug + PartialEq>(
+fn check_seam_reads<T: fmt::Debug + PartialEq>(
     read: impl Fn(&Log, Offset, Offset, ByteSize) -> T,
     expect: impl Fn(Vec<i64>) -> T,
 ) {
@@ -558,8 +566,8 @@ fn configured_read_ahead_max_reaches_both_verbatim_reads() {
         });
         append_samples(&mut log, 40, 1);
         check!(log.active.as_ref().unwrap().size().bytes_u64() > 2 * budget.bytes_u64());
-        let advice = std::sync::Arc::new(RecordedAdvice::default());
-        log.test_set_io(advice.clone());
+        let advice = Arc::new(RecordedAdvice::default());
+        log.test_set_io(Arc::<RecordedAdvice>::clone(&advice));
         let end = log.log_end_offset();
 
         log.read_raw(Offset(0), end, budget).unwrap();
@@ -586,7 +594,7 @@ struct ColdFile {
 
 #[krabka_macros::sendfile_cfg]
 impl LogIo for ColdFile {
-    fn is_cached(&self, file: &std::fs::File, _offset: u64) -> Option<bool> {
+    fn is_cached(&self, file: &File, _offset: u64) -> Option<bool> {
         use std::os::unix::fs::MetadataExt;
         Some(file.metadata().unwrap().ino() != self.cold)
     }
@@ -594,9 +602,9 @@ impl LogIo for ColdFile {
 
 /// The inode of the `.log` file of the segment based at `base`.
 #[krabka_macros::sendfile_cfg]
-fn segment_inode(dir: &std::path::Path, base: i64) -> u64 {
+fn segment_inode(dir: &Path, base: i64) -> u64 {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(log_path(dir, base)).unwrap().ino()
+    fs::metadata(log_path(dir, base)).unwrap().ino()
 }
 
 #[krabka_macros::sendfile_cfg]
@@ -613,7 +621,7 @@ fn an_uncached_run_falls_back_to_one_large_read() {
     }
     let end = log.log_end_offset();
     let raw = log.read_raw(Offset(0), end, mebibytes(10)).unwrap();
-    log.test_set_io(std::sync::Arc::new(ColdFile {
+    log.test_set_io(Arc::new(ColdFile {
         cold: segment_inode(dir.path(), 0),
     }));
 
@@ -633,7 +641,7 @@ fn six_segments_one_cold(cold: impl Fn(&Log) -> i64) -> (tempfile::TempDir, Log)
         log.append(&mut test_batch_at(off)).unwrap();
     }
     let base = cold(&log);
-    log.test_set_io(std::sync::Arc::new(ColdFile {
+    log.test_set_io(Arc::new(ColdFile {
         cold: segment_inode(dir.path(), base),
     }));
     (dir, log)
@@ -717,13 +725,12 @@ fn gapped_log() -> GappedLog {
         }
     });
     // Compaction groups two one-batch segments into each rewritten segment.
-    set_segment_size(&mut log, bytes(150));
+    set_segment_size(&log, bytes(150));
     log.compact(&compaction_ctx()).unwrap();
     // Retention: a `DeleteRecords` to offset 2, and the tick that deletes the
     // segment wholly below it.
     log.set_log_start_offset(Offset(2)).unwrap();
-    log.tick(std::time::SystemTime::now(), log.log_end_offset())
-        .unwrap();
+    log.tick(SystemTime::now(), log.log_end_offset()).unwrap();
 
     let shape: Vec<(Offset, Offset)> = log
         .segments
@@ -803,7 +810,7 @@ fn the_first_segment_of_a_read_is_found_across_gaps_and_empty_segments() {
 /// Read [`gapped_log`] from every readable offset, under a budget that
 /// reaches the log end and under [`ONE_BATCH`], and check each read against
 /// the batches it must serve.
-fn check_gapped_reads<T: std::fmt::Debug + PartialEq>(
+fn check_gapped_reads<T: fmt::Debug + PartialEq>(
     log: &Log,
     read: impl Fn(&Log, Offset, Offset, ByteSize) -> T,
     expect: impl Fn(Vec<i64>) -> T,

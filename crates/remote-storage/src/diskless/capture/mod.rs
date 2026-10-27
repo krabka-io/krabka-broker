@@ -8,6 +8,7 @@ use {
     super::WalIndexEntry,
     crate::worm::{SegmentManifest, Sha256Digest},
     serde::{Deserialize, Serialize},
+    std::collections::HashSet,
     uuid::Uuid,
 };
 
@@ -110,7 +111,7 @@ impl DisklessWalCapture {
         if self.source_cutoffs.iter().any(|cutoff| *cutoff < 0) {
             return Err("negative diskless WAL source cutoff".to_owned());
         }
-        let mut partitions = std::collections::HashSet::new();
+        let mut partitions = HashSet::new();
         for partition in &self.partitions {
             if !valid_topic_name(&partition.topic)
                 || partition.partition < 0

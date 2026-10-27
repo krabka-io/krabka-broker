@@ -13,6 +13,7 @@ use {
         collections::BTreeSet,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The partition as an operator sees it, as one value.
@@ -63,7 +64,7 @@ pub async fn wait_for_leader_and_isr(handle: &BrokerHandle, what: &str, leader: 
                     return;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         }
     };
     within(what, poll).await;
@@ -79,6 +80,6 @@ pub async fn witness_never_leads(handle: &BrokerHandle, window: Duration) {
                 "the witness must never lead the partition: {view:?}"
             );
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }

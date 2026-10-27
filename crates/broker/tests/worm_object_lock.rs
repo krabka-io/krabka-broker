@@ -8,6 +8,7 @@
 //!
 //! The shared harness lives in [`jvm_acceptance`]; see it for the container
 //! networking these suites depend on.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -19,7 +20,14 @@ use {
     krabka_audit::signing::FileEd25519Signer,
     krabka_log::LogConfig,
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
-    std::process::Command,
+    std::{
+        fs,
+        net::SocketAddr,
+        path::Path,
+        process::{Command, Output},
+        time::Duration,
+    },
+    tokio::time,
 };
 
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
@@ -54,18 +62,18 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
     let key_dir = tempfile::tempdir().expect("tempdir for the signing key");
     let key_path = key_dir.path().join("worm-signing.pk8");
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate PKCS#8 key");
-    std::fs::write(&key_path, pkcs8.as_ref()).expect("write the signing key");
-    let public_key = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_string())
+    fs::write(&key_path, pkcs8.as_ref()).expect("write the signing key");
+    let public_key = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_owned())
         .expect("ring mints a valid PKCS#8 Ed25519 key")
         .public_key();
 
     let s3 = krabka_remote_storage::S3Config {
-        bucket: BUCKET.to_string(),
-        region: "us-east-1".to_string(),
+        bucket: BUCKET.to_owned(),
+        region: "us-east-1".to_owned(),
         prefix: None,
         endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
-        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
-        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
+        access_key_id: Some(MINIO_ACCESS_KEY.to_owned()),
+        secret_access_key: Some(MINIO_SECRET_KEY.to_owned()),
         allow_http: true,
         // A threshold well above the 2 KiB test segments keeps every object on
         // the single-PUT path, which is the only path `PutMode::Create` binds:
@@ -163,8 +171,7 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
     let store =
         krabka_object_store::build_object_store(&krabka_object_store::ObjectStoreConfig::S3(s3))
             .expect("build the verifier's object store");
-    let trusted =
-        krabka_remote_storage::TrustedManifestKeys::single(KEY_ID.to_string(), public_key);
+    let trusted = krabka_remote_storage::TrustedManifestKeys::single(KEY_ID.to_owned(), public_key);
     let request = krabka_remote_storage::VerifyRequest {
         depth: krabka_remote_storage::VerifyDepth::Deep,
         ..krabka_remote_storage::VerifyRequest::default()
@@ -202,15 +209,11 @@ struct WormBroker {
 /// [`krabka_broker::BrokerConfig::remote_storage_worm`], which that helper does
 /// not carry. The caller must keep the returned temp dir alive: it is the
 /// broker's `log.dir`.
-async fn start_worm_broker(
-    s3: krabka_remote_storage::S3Config,
-    key_path: &std::path::Path,
-) -> WormBroker {
+async fn start_worm_broker(s3: krabka_remote_storage::S3Config, key_path: &Path) -> WormBroker {
     init_tracing_with("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir for log.dir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
+    let listen_addr: SocketAddr = broker0_listen().parse().expect("allocated addr");
+    let controller_addr: SocketAddr = controller_addr_0().parse().expect("allocated addr");
     let config = krabka_broker::BrokerConfig {
         // `create_tiered_topic` sends no segment override — the JVM
         // `TopicCommand` in the image it uses cannot name a sub-1-MiB one —
@@ -222,7 +225,7 @@ async fn start_worm_broker(
         remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3)),
         remote_storage_worm: Some(krabka_remote_storage::WormConfig {
             signing_key_path: Some(key_path.to_path_buf()),
-            signing_key_id: Some(KEY_ID.to_string()),
+            signing_key_id: Some(KEY_ID.to_owned()),
             // The archive stays readable, so the consume assertion above
             // exercises the WORM backend's fetch path rather than its refusal.
             write_only: false,
@@ -275,7 +278,7 @@ async fn wait_for_sealed_manifests(bucket: &str, min_segments: usize) -> String 
         }
         // intentional: bounded poll of an external process, MinIO under
         // `mc ls`. No krabka metric reflects object arrival in the bucket.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     panic!(
         "the archive never sealed a manifest for every one of >={min_segments} segments. Bucket \
@@ -299,14 +302,14 @@ fn object_keys_with_extension(listing: &str, extension: &str) -> Vec<String> {
 /// line as a path reads the extension off the key. `wait_for_minio_segments`
 /// matches `.log` the same way.
 fn has_extension(line: &str, extension: &str) -> bool {
-    std::path::Path::new(line)
+    Path::new(line)
         .extension()
         .is_some_and(|found| found == extension)
 }
 
 /// The object key an `mc ls --recursive` line ends with.
 fn object_key(line: &str) -> Option<String> {
-    line.split_whitespace().next_back().map(str::to_string)
+    line.split_whitespace().next_back().map(str::to_owned)
 }
 
 /// `mc rm --versions --force local/<bucket>/<key>`, returning the raw output so
@@ -320,7 +323,7 @@ fn object_key(line: &str) -> Option<String> {
 /// This lives in the suite and not in the shared harness because it is the one
 /// thing this suite tests. A helper that removes objects is not something the
 /// other tiered suites should reach for.
-fn minio_rm_all_versions(bucket: &str, key: &str) -> std::process::Output {
+fn minio_rm_all_versions(bucket: &str, key: &str) -> Output {
     let minio_port = minio_port();
     let script = format!(
         "mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \

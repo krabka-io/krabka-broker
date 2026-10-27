@@ -17,6 +17,7 @@ use {
     assert2::assert,
     krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
     std::time::Duration,
+    tokio::time,
 };
 
 /// A stateful subtopology, that is, one with a state-changelog topic, drives
@@ -69,7 +70,7 @@ async fn stateful_member_triggers_internal_topic_creation() {
         // for active-task assignment plus clearing of the MISSING_INTERNAL_TOPICS
         // status. This convergence is coordinator-local; it has no metadata-image
         // signal or metric, so a bounded re-heartbeat loop is the only observer.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
         let active = request_active_tasks(&resp);
         // A heartbeat after the join carries no topology: Kafka refuses one.
         let hb = follow_up()

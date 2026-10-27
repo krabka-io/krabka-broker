@@ -30,6 +30,7 @@ use {
         quota::{quota_charge, quota_credit, quota_debt_cap, quota_refill},
         throttle::{AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume},
     },
+    std::time::Duration,
 };
 
 impl TokenBucket {
@@ -273,7 +274,7 @@ impl BucketState {
     /// or no cap without one.
     fn debt_cap(&self, max_wait: Option<Time>) -> u64 {
         max_wait.map_or(u64::MAX, |wait| {
-            let Ok(wait) = std::time::Duration::try_from_secs_f64(wait.secs_f64().max(0.0)) else {
+            let Ok(wait) = Duration::try_from_secs_f64(wait.secs_f64().max(0.0)) else {
                 return u64::MAX;
             };
             quota_debt_cap(wait.as_nanos(), self.micro_rate_per_sec)
@@ -305,11 +306,13 @@ mod tests {
         },
         qubit_clock::ManualMonotonicClock,
         std::{
+            iter,
             sync::{
                 Arc,
                 atomic::{AtomicBool, Ordering::Relaxed},
-                mpsc::RecvTimeoutError,
+                mpsc::{self, RecvTimeoutError},
             },
+            thread,
             time::Duration,
         },
     };
@@ -334,7 +337,9 @@ mod tests {
     /// instead of sleeping.
     fn manual_bucket() -> ManualBucket {
         let clock = ManualMonotonicClock::new_shared();
-        let bucket = Arc::new(TokenBucket::with_clock(clock.clone()));
+        let bucket = Arc::new(TokenBucket::with_clock(Arc::<ManualMonotonicClock>::clone(
+            &clock,
+        )));
         ManualBucket { bucket, clock }
     }
 
@@ -421,8 +426,8 @@ mod tests {
 
     fn try_consume_with_timeout(bucket: &Arc<TokenBucket>, requested: u64) -> u64 {
         let bucket = Arc::clone(bucket);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let handle = std::thread::spawn(move || {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
             let granted = bucket.try_consume(requested);
             let _ = tx.send(granted);
         });
@@ -912,9 +917,9 @@ mod tests {
             micro_refill_fraction: 0,
         };
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let worker_bucket = Arc::clone(&b);
-        let handle = std::thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let _ = tx.send(worker_bucket.try_consume(10));
         });
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -949,27 +954,29 @@ mod tests {
         check!(try_consume_with_timeout(&b, STEPS + 1) == STEPS + 1);
 
         let stop = Arc::new(AtomicBool::new(false));
-        let consumers: Vec<_> = (0..3)
-            .map(|_| {
-                let b = Arc::clone(&b);
-                let stop = Arc::clone(&stop);
-                std::thread::spawn(move || {
-                    let mut granted = 0;
-                    while !stop.load(Relaxed) {
-                        granted += b.try_consume(1);
-                    }
-                    granted
-                })
+        let mut consumers: Vec<_> = iter::repeat_with(|| {
+            let b = Arc::clone(&b);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                let mut granted = 0;
+                while !stop.load(Relaxed) {
+                    granted += b.try_consume(1);
+                }
+                granted
             })
-            .collect();
+        })
+        .take(3)
+        .collect();
 
         for _ in 0..STEPS {
             advance_clock(&clock, Duration::from_millis(1));
-            std::thread::yield_now();
+            thread::yield_now();
         }
         stop.store(true, Relaxed);
+        // Every consumer runs before the clock moves, so they are all spawned
+        // first and joined only here.
         let raced: u64 = consumers
-            .into_iter()
+            .drain(..)
             .map(|h| h.join().expect("consumer panicked"))
             .sum();
         let leftover = try_consume_with_timeout(&b, u64::MAX);
@@ -1004,13 +1011,13 @@ mod tests {
         let resetter = {
             let b = Arc::clone(&b);
             let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 for RateBurst { rate, burst } in CONFIGS.iter().cycle() {
                     if stop.load(Relaxed) {
                         break;
                     }
                     b.set_token_rate_with_burst(*rate, *burst);
-                    std::thread::yield_now();
+                    thread::yield_now();
                 }
             })
         };
@@ -1019,7 +1026,7 @@ mod tests {
         let observer = {
             let b = Arc::clone(&b);
             let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 let mut over_burst = None;
                 while !stop.load(Relaxed) && over_burst.is_none() {
                     let state = *b.lock_state();
@@ -1031,12 +1038,12 @@ mod tests {
             })
         };
 
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
         let mut consumer_handles = Vec::new();
         for requested in [0, 1, 128] {
             let b = Arc::clone(&b);
             let done_tx = done_tx.clone();
-            consumer_handles.push(std::thread::spawn(move || {
+            consumer_handles.push(thread::spawn(move || {
                 for _ in 0..5_000 {
                     let g = b.try_consume(requested);
                     if g > requested.min(MAX_BURST) {

@@ -7,20 +7,23 @@
 //! durable prefix a shard opens on, and `distributed` keeps the diskless
 //! voter-set quorum.
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use {
     bytes::Bytes,
     krabka_ids::{LeaderEpoch, Offset},
     krabka_kraft_core::{LogView as _, NodeId},
     krabka_log::{Log, VerbatimBatch},
+    krabka_raft::kraft::log,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
         collections::HashMap,
         sync::{
-            Arc, Mutex, OnceLock,
+            Arc, Mutex, OnceLock, PoisonError,
             atomic::{AtomicBool, AtomicI64, Ordering},
         },
     },
-    tokio::sync::Notify,
+    tokio::sync::{Notify, futures::Notified},
 };
 
 mod batches;
@@ -50,7 +53,7 @@ use {
 
 /// A single durable member of a WAL quorum.
 #[derive(Debug)]
-pub(crate) struct WalReplica {
+pub struct WalReplica {
     #[cfg(test)]
     pub(super) id: NodeId,
     log: ShardLog,
@@ -84,7 +87,7 @@ impl WalReplica {
 
 /// Drives the durable quorum frontier of a WAL shard.
 #[derive(Debug)]
-pub(crate) struct WalShardEngine {
+pub struct WalShardEngine {
     replicas: Vec<WalReplica>,
     expected_voters: usize,
     durable_watermark: AtomicI64,
@@ -115,7 +118,7 @@ pub(super) fn strict_majority(voter_count: usize) -> usize {
 
 /// One response from the leader-side WAL fetch path.
 #[derive(Debug)]
-pub(crate) struct WalFetchData {
+pub struct WalFetchData {
     pub(crate) high_watermark: Offset,
     pub(crate) log_end_offset: Offset,
     pub(crate) log_start_offset: Offset,
@@ -126,7 +129,7 @@ pub(crate) struct WalFetchData {
 
 #[derive(Debug, Clone, Copy)]
 #[cfg(test)]
-pub(crate) enum OpenMode {
+pub enum OpenMode {
     BootstrapFrom(NodeId),
     Recover,
 }
@@ -169,9 +172,7 @@ impl WalShardEngine {
             ));
         }
         let (log_start, local_durable) = {
-            let mut log = source
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut log = source.lock().unwrap_or_else(PoisonError::into_inner);
             let log_start = log.log_start_offset();
             log.sync()?;
             (log_start, log.log_end_offset())
@@ -215,7 +216,7 @@ impl WalShardEngine {
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn for_logs(logs: std::collections::BTreeMap<NodeId, Arc<Mutex<Log>>>) -> Self {
+    pub(crate) fn for_logs(logs: BTreeMap<NodeId, Arc<Mutex<Log>>>) -> Self {
         let replicas = logs
             .into_iter()
             .map(|(id, log)| WalReplica::for_test(id, log))
@@ -223,9 +224,7 @@ impl WalShardEngine {
         Self::new(replicas, OpenMode::Recover).expect("test WAL quorum recovers")
     }
 
-    pub(crate) fn fetch_progress_changed(&self) -> tokio::sync::futures::Notified<'_> {
-        self.durable_advanced.notified()
-    }
+    pub(crate) fn fetch_progress_changed(&self) -> Notified<'_> { self.durable_advanced.notified() }
 
     pub(crate) fn wake_fetches(&self) { self.durable_advanced.notify_waiters(); }
 
@@ -259,7 +258,7 @@ impl WalShardEngine {
         let distributed = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(quorum) = distributed.as_ref() {
             metrics.record_diskless_wal_watermark(
                 shard.topic_id,
@@ -298,7 +297,7 @@ impl WalShardEngine {
         let voters = self
             .distributed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map_or_else(Vec::new, |quorum| quorum.voters.clone());
         if let Some(ShardObservability { shard, metrics }) = self.observability.get() {
@@ -364,7 +363,7 @@ impl WalShardEngine {
         if target <= committed {
             return Ok(committed);
         }
-        let source = ShardLog::new(source.clone());
+        let source = ShardLog::new(Arc::clone(source));
         let source_end = Offset(source.end_offset());
         if target > source_end {
             return Err(BrokerError::Replication(format!(
@@ -388,7 +387,7 @@ impl WalShardEngine {
             let configured = self
                 .distributed
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .is_some();
             if !configured {
                 let error = BrokerError::Replication(
@@ -400,7 +399,7 @@ impl WalShardEngine {
             let Some(me) = self
                 .distributed
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .as_ref()
                 .map(|quorum| quorum.me)
             else {
@@ -422,7 +421,7 @@ impl WalShardEngine {
                 if self
                     .distributed
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .unwrap_or_else(PoisonError::into_inner)
                     .is_none()
                 {
                     let error = BrokerError::Replication(
@@ -528,21 +527,21 @@ impl WalShardEngine {
             if self
                 .distributed
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .is_none()
             {
                 return Err(BrokerError::Replication(
                     "diskless WAL broker placement is not available".into(),
                 ));
             }
-            return trim_log(ShardLog::new(source.clone()), new_start).await;
+            return trim_log(ShardLog::new(Arc::clone(source)), new_start).await;
         }
         // Trim replica copies before the partition source. If one copy fails,
         // the source remains available and a later flusher tick can retry.
-        for replica in &self.replicas[1..] {
+        for replica in self.replicas.iter().skip(1) {
             trim_log(replica.log.clone(), new_start).await?;
         }
-        trim_log(ShardLog::new(source.clone()), new_start).await
+        trim_log(ShardLog::new(Arc::clone(source)), new_start).await
     }
 }
 
@@ -565,7 +564,7 @@ fn fetch_divergence(
     last_fetched_epoch: u32,
     fetch_offset: Offset,
 ) -> Option<(LeaderEpoch, Offset)> {
-    let end = krabka_raft::kraft::log::end_offset_for_epoch_in(
+    let end = log::end_offset_for_epoch_in(
         log.epoch_checkpoint(),
         log.log_end_offset(),
         last_fetched_epoch,
@@ -676,12 +675,17 @@ mod tests {
 
         engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(3), NodeId(4)]);
 
-        let distributed = engine.distributed.lock().unwrap();
-        let quorum = distributed.as_ref().unwrap();
-        assert!(quorum.voters == [NodeId(1), NodeId(3), NodeId(4)]);
-        assert!(!quorum.durable_offsets.contains_key(&NodeId(2)));
-        assert!(quorum.durable_offsets.get(&NodeId(3)) == Some(&Offset(7)));
-        assert!(!quorum.durable_offsets.contains_key(&NodeId(4)));
+        let (voters, durable_offsets) = engine
+            .distributed
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|quorum| (quorum.voters.clone(), quorum.durable_offsets.clone()))
+            .unwrap();
+        assert!(voters == [NodeId(1), NodeId(3), NodeId(4)]);
+        assert!(!durable_offsets.contains_key(&NodeId(2)));
+        assert!(durable_offsets.get(&NodeId(3)) == Some(&Offset(7)));
+        assert!(!durable_offsets.contains_key(&NodeId(4)));
     }
 
     #[test]

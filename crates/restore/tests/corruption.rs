@@ -14,6 +14,7 @@
 //! [`RestoreError`] variant, the right exit code, the right object named, and
 //! -- under `--continue-on-corrupt` -- the right segment skipped while
 //! everything else restores intact.
+#![cfg(test)]
 
 #[path = "support/archive_fixture.rs"]
 mod archive_fixture;
@@ -29,7 +30,11 @@ use {
     krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch},
     krabka_remote_storage::{LocalTieredStorage, TopicIdPartition, kafka_uuid},
     krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore},
-    std::path::Path as StdPath,
+    std::{
+        fs,
+        fs::OpenOptions,
+        path::{self, Path as StdPath, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -153,8 +158,8 @@ fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> Re
 }
 
 /// Recursively collect every file under `dir`.
-fn collect_files(dir: &StdPath, out: &mut Vec<std::path::PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read_dir") {
+fn collect_files(dir: &StdPath, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).expect("read_dir") {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
             collect_files(&path, out);
@@ -168,7 +173,7 @@ fn collect_files(dir: &StdPath, out: &mut Vec<std::path::PathBuf>) {
 /// panic with a message naming how many matches were actually found. A
 /// non-unique match would make the corruption below ambiguous about which
 /// archived object it hits, so this refuses to guess.
-fn find_one_file(root: &StdPath, predicate: impl Fn(&StdPath) -> bool) -> std::path::PathBuf {
+fn find_one_file(root: &StdPath, predicate: impl Fn(&StdPath) -> bool) -> PathBuf {
     let mut files = Vec::new();
     collect_files(root, &mut files);
     let mut matches: Vec<_> = files.into_iter().filter(|p| predicate(p)).collect();
@@ -193,7 +198,7 @@ fn relative_key(archive_root: &StdPath, path: &StdPath) -> String {
         .expect("path is under the archive root")
         .to_str()
         .expect("archive paths are UTF-8")
-        .replace(std::path::MAIN_SEPARATOR, "/")
+        .replace(path::MAIN_SEPARATOR, "/")
 }
 
 /// Flip one byte inside a batch's CRC-covered region: at a fixed offset well
@@ -208,24 +213,24 @@ fn corrupt_crc_covered_byte(path: &StdPath) {
     assert!(CORRUPT_OFFSET >= CRC_COVERAGE_START);
     assert!(CORRUPT_OFFSET >= HEADER_LEN);
 
-    let mut bytes = std::fs::read(path).expect("read log file");
+    let mut bytes = fs::read(path).expect("read log file");
     assert!(
         bytes.len() > CORRUPT_OFFSET,
         "the test batch must be long enough to corrupt a body byte"
     );
     bytes[CORRUPT_OFFSET] ^= 0xFF;
-    std::fs::write(path, bytes).expect("write corrupted log file");
+    fs::write(path, bytes).expect("write corrupted log file");
 }
 
 /// Truncate a `.log` file to roughly half its length, landing inside the
 /// single batch it holds rather than on a batch boundary.
 fn truncate_log_mid_batch(path: &StdPath) {
-    let full_len = std::fs::metadata(path).expect("stat log file").len();
+    let full_len = fs::metadata(path).expect("stat log file").len();
     assert!(
         full_len > 20,
         "the test batch must be long enough to truncate meaningfully"
     );
-    let file = std::fs::OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .open(path)
         .expect("open log file for truncation");
@@ -305,7 +310,7 @@ async fn a_missing_timeindex_is_a_torn_copy_naming_the_right_artifact() {
     let segment = archive_segment(archive.path(), "orders", 0, Uuid::from_u128(3), segment_id);
 
     let time_index_path = find_one_file(archive.path(), |p| has_extension(p, "timeindex"));
-    std::fs::remove_file(&time_index_path).expect("remove the .timeindex artifact");
+    fs::remove_file(&time_index_path).expect("remove the .timeindex artifact");
 
     let args = restore_args(archive.path(), &target_parent.path().join("restored"), &[]);
     let error = restore(&args)

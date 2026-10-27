@@ -22,6 +22,7 @@ use {
         AuditCheckpointAdmission, AuditLossMarkerAdmission, ChainStep, audit_checkpoint_admission,
         audit_loss_marker_admission, chain_step,
     },
+    std::str,
 };
 
 pub(super) fn header<'a>(record: &'a Record, key: &str) -> Option<&'a [u8]> {
@@ -40,7 +41,7 @@ fn broke(state: &WalkState, offset: i64, seq: Option<Seq>, reason: &str) -> Veri
         first_break: Some(VerifyBreak {
             offset,
             seq,
-            reason: reason.to_string(),
+            reason: reason.to_owned(),
         }),
         losses: state.losses.clone(),
         // unanchored_records is 0 when ok=false; the count is not meaningful
@@ -141,11 +142,11 @@ pub(super) fn check_chained(
 ) -> Result<(), VerifyReport> {
     let value = rec.value.as_deref().unwrap_or_default();
     let seq = header(rec, HEADER_SEQ)
-        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|b| str::from_utf8(b).ok())
         .and_then(|s| s.parse::<u64>().ok())
         .map(Seq);
     let prev = header(rec, HEADER_PREV_HASH)
-        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|b| str::from_utf8(b).ok())
         .and_then(from_hex32);
     let (Some(seq), Some(prev)) = (seq, prev) else {
         return Err(broke(state, offset, seq, "missing/invalid chain headers"));

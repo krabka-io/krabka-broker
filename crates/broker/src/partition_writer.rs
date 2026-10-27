@@ -25,10 +25,16 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::{BuiltCompaction, Log},
     std::{
+        future,
         path::PathBuf,
         sync::{Arc, Mutex},
+        time::{Duration, SystemTime},
     },
-    tokio::sync::{Notify, mpsc},
+    tokio::{
+        sync,
+        sync::{Notify, mpsc, oneshot},
+        time,
+    },
 };
 
 mod append;
@@ -48,8 +54,8 @@ mod tests;
 // Only crate::wal's test modules reach the append helper through this path, so
 // the re-export is test-gated: in a normal build it would be dead.
 #[cfg(test)]
-pub(crate) use self::append::run_produce_append_batch;
-pub(crate) use self::storage::{flag_storage_failure, storage_failure_error};
+pub use self::append::run_produce_append_batch;
+pub use self::storage::{flag_storage_failure, storage_failure_error};
 use self::{
     compaction::{BuildingCompaction, finish_compaction, start_compaction},
     mutations::{
@@ -87,7 +93,7 @@ pub struct WriterStorage {
 /// Notifications, replica state, and scheduled-delivery handles used by the writer.
 pub struct WriterSignals {
     pub append_notify: Arc<Notify>,
-    pub replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub replica_state: Arc<sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,
     pub delivery: DeliveryHandles,
 }
@@ -163,10 +169,10 @@ async fn maintain_while_due(
     log: &Arc<Mutex<Log>>,
     gate: &WriterGate,
     storage_status: StorageStatus<'_>,
-) -> Option<std::time::Duration> {
+) -> Option<Duration> {
     loop {
-        let delay = lock_log(log).maintenance_delay(std::time::SystemTime::now());
-        if delay != Some(std::time::Duration::ZERO) {
+        let delay = lock_log(log).maintenance_delay(SystemTime::now());
+        if delay != Some(Duration::ZERO) {
             return delay;
         }
         // Maintenance mutates the log too, so it waits out an inline append.
@@ -175,7 +181,7 @@ async fn maintain_while_due(
         let result = storage::run_log_mutation(
             move || {
                 lock_log(&maintenance_log)
-                    .maintain_deferring_deletions(std::time::SystemTime::now())
+                    .maintain_deferring_deletions(SystemTime::now())
                     .map_err(BrokerError::from)
             },
             "log maintenance task panicked",
@@ -253,8 +259,8 @@ pub async fn run_gated(
         let msg = match pending.take() {
             Some(m) => m,
             None => match tokio::select! {
-                message = std::future::poll_fn(|cx| gate.poll_recv(&mut rx, cx)) => Wake::Message(message),
-                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => Wake::Again,
+                message = future::poll_fn(|cx| gate.poll_recv(&mut rx, cx)) => Wake::Message(message),
+                () = time::sleep(delay.unwrap_or(Duration::ZERO)), if delay.is_some() => Wake::Again,
                 // An inline append brought the next maintenance forward.
                 () = gate.nudged() => Wake::Again,
                 built = building_pass(&mut compaction), if compaction.is_some() => Wake::Built(built),
@@ -263,7 +269,10 @@ pub async fn run_gated(
                 Wake::Message(None) => break, // channel closed: every sender dropped
                 Wake::Again => continue,
                 Wake::Built(built) => {
-                    let building = compaction.take().expect("a pass was building");
+                    // The build arm runs only while a pass is building.
+                    let Some(building) = compaction.take() else {
+                        continue;
+                    };
                     // Installing mutates the log, so it waits out an inline
                     // append as a message does.
                     let _busy = gate.writer_busy().await;
@@ -459,11 +468,11 @@ enum Wake {
 async fn building_pass(
     compaction: &mut Option<BuildingCompaction>,
 ) -> Result<BuiltCompaction, BlockingError> {
-    compaction
-        .as_mut()
-        .expect("polled only while a pass is building")
-        .built()
-        .await
+    match compaction.as_mut() {
+        Some(building) => building.built().await,
+        // Never resolves: the writer loop polls this only while a pass builds.
+        None => future::pending().await,
+    }
 }
 
 /// Make the log prefix ending at `leo` durable: sync the WAL of a diskless
@@ -473,7 +482,7 @@ async fn sync_durable(
     leo: krabka_log::Offset,
     log: &Arc<Mutex<Log>>,
     storage_status: StorageStatus<'_>,
-    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    replica_state: &sync::Mutex<ReplicaState>,
     hw_advance_notify: &Notify,
     wal: Option<&SharedWal>,
 ) -> Result<(), BrokerError> {
@@ -493,7 +502,9 @@ async fn sync_durable(
     let mut state = replica_state.lock().await;
     let previous = state.hw;
     state.recompute_hw_for_wal_durable(durable);
-    if state.hw > previous {
+    let advanced = state.hw > previous;
+    drop(state);
+    if advanced {
         hw_advance_notify.notify_waiters();
     }
     Ok(())
@@ -503,7 +514,7 @@ async fn sync_durable(
 /// `partition`'s writer is idle, as the writer's `ReplicateVerbatim` arm
 /// would have, and hands them back when the writer is busy or has messages
 /// waiting.
-pub(crate) async fn replicate_inline(
+pub async fn replicate_inline(
     partition: &Partition,
     batches: Vec<ReplicatedBatch>,
     log_dir_status: &LogDirRegistry,
@@ -511,7 +522,7 @@ pub(crate) async fn replicate_inline(
     let Some(_busy) = partition.writer_gate.try_inline(partition) else {
         return Err(batches);
     };
-    let (ack, answer) = tokio::sync::oneshot::channel();
+    let (ack, answer) = oneshot::channel();
     mutations::handle_replicate_verbatim(
         &partition.log,
         &partition.log_dir,
@@ -540,7 +551,7 @@ pub(crate) async fn replicate_inline(
 /// the append goes away. So it is polled here once, which finishes it when
 /// nothing it locks is contended, and handed to a task of its own otherwise,
 /// never dropped half done.
-pub(crate) async fn produce_inline(
+pub async fn produce_inline(
     partition: &Partition,
     job: ProduceJob,
     log_dir_status: &LogDirRegistry,
@@ -600,7 +611,7 @@ pub(crate) async fn produce_inline(
 /// forward if the append made it due sooner.
 fn after_inline_mutation(partition: &Partition) {
     publish_delivery(&partition.log, &partition.delivery);
-    let delay = lock_log(&partition.log).maintenance_delay(std::time::SystemTime::now());
+    let delay = lock_log(&partition.log).maintenance_delay(SystemTime::now());
     partition.writer_gate.nudge_if_earlier(delay);
 }
 

@@ -75,7 +75,7 @@ async fn jvm_authorized_produce_consume() {
 
     // Produce 10 records via stdin.
 
-    let payload: String = numbered_payload("msg", 10);
+    let payload = numbered_payload("msg", 10);
     let producer_out = produce_console(
         KAFKA_IMAGE_TXN,
         &[&alice_mount],

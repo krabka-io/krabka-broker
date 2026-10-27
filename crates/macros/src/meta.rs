@@ -1,21 +1,25 @@
 //! Syntax and attribute helpers shared by the macros.
 
-use moxy::{
-    ast::{
-        Attributes, Cursor, Field, FnParam, ItemFn, ItemStruct, List, Parse, ParseError, Parser,
-        Path, PathArguments, Pattern, Signature, Token, Type, Visibility,
+use {
+    moxy::{
+        ast::{
+            Attributes, Cursor, Field, FnParam, FromMeta, ItemFn, ItemStruct, List, Meta,
+            MetaContent, Parse, ParseError, Parser, Path, PathArguments, Pattern, Signature, Token,
+            Type, Visibility,
+        },
+        token::{Group, Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
     },
-    token::{Group, Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
+    std::mem,
 };
 
-pub(crate) fn parse_skip<T: Parse>(cursor: Cursor<'_>) -> Option<Cursor<'_>> {
+pub fn parse_skip<T: Parse>(cursor: Cursor<'_>) -> Option<Cursor<'_>> {
     let parser = Parser::from_cursor(cursor);
     T::parse(&parser).ok()?;
     Some(parser.cursor())
 }
 
 /// The common broker request-handler signature, with explicit wire schemas.
-pub(crate) fn broker_handler_signature(request: &Path, response: &Path) -> TokenStream {
+pub fn broker_handler_signature(request: &Path, response: &Path) -> TokenStream {
     moxy::template! {
         pub(crate) async fn handle(
             broker: &crate::broker::Broker,
@@ -27,13 +31,13 @@ pub(crate) fn broker_handler_signature(request: &Path, response: &Path) -> Token
 }
 
 #[cfg(test)]
-pub(crate) struct RejectedStruct<'a> {
+pub struct RejectedStruct<'a> {
     pub(crate) label: &'a str,
     pub(crate) declaration: &'a str,
 }
 
 #[cfg(test)]
-pub(crate) fn assert_rejected_structs(
+pub fn assert_rejected_structs(
     cases: &[RejectedStruct<'_>],
     expand: impl Fn(ItemStruct) -> Result<TokenStream, ParseError>,
 ) {
@@ -44,12 +48,12 @@ pub(crate) fn assert_rejected_structs(
 }
 
 /// A safe, synchronous Rust signature without constness or generic parameters.
-pub(crate) fn is_plain_sync(signature: &Signature) -> bool {
+pub fn is_plain_sync(signature: &Signature) -> bool {
     signature.asyncness.is_none() && has_plain_qualifiers(signature)
 }
 
 /// An async signature without constness, unsafety, an ABI or generic parameters.
-pub(crate) fn is_plain_async(signature: &Signature) -> bool {
+pub fn is_plain_async(signature: &Signature) -> bool {
     signature.asyncness.is_some() && has_plain_qualifiers(signature)
 }
 
@@ -60,7 +64,7 @@ fn has_plain_qualifiers(signature: &Signature) -> bool {
         && signature.generics.params.is_empty()
 }
 
-pub(crate) fn first_missing_named_field<'a>(
+pub fn first_missing_named_field<'a>(
     fields: &List<Field, Token![,]>,
     required: &[&'a str],
 ) -> Option<&'a str> {
@@ -72,7 +76,7 @@ pub(crate) fn first_missing_named_field<'a>(
 }
 
 /// Read a nonempty external-schema table with the caller's domain error.
-pub(crate) fn nonempty_paths(
+pub fn nonempty_paths(
     input: &TokenStream,
     message: &str,
 ) -> Result<List<Path, Token![,]>, ParseError> {
@@ -84,10 +88,21 @@ pub(crate) fn nonempty_paths(
     Ok(paths)
 }
 
-pub(crate) fn parameter_ident<'a>(
-    parameter: &'a FnParam,
+/// The signature's parameter at `index`, or `message` at the signature.
+pub fn parameter_at<'a>(
+    signature: &'a Signature,
+    index: usize,
     message: &str,
-) -> Result<&'a Ident, ParseError> {
+) -> Result<&'a FnParam, ParseError> {
+    signature
+        .params
+        .inner
+        .inputs
+        .get(index)
+        .ok_or_else(|| ParseError::new(signature.span(), message))
+}
+
+pub fn parameter_ident<'a>(parameter: &'a FnParam, message: &str) -> Result<&'a Ident, ParseError> {
     if let FnParam::Typed(parameter) = parameter
         && let Pattern::Ident(name) = parameter.pat.as_ref()
         && name.ident.text() != "_"
@@ -101,7 +116,7 @@ pub(crate) fn parameter_ident<'a>(
 }
 
 /// Validate a concrete async declaration and return its named parameter types.
-pub(crate) fn named_async_parameter_types(
+pub fn named_async_parameter_types(
     signature: &Signature,
     names: &[&str],
     message: &str,
@@ -132,7 +147,7 @@ pub(crate) fn named_async_parameter_types(
 }
 
 /// Parse an ordinary function's header while keeping its operation body opaque.
-pub(crate) fn function_signature(item: &TokenStream) -> Result<Signature, ParseError> {
+pub fn function_signature(item: &TokenStream) -> Result<Signature, ParseError> {
     let parser = Parser::from_tokens(item);
     let _: Attributes = Parse::parse(&parser)?;
     let _: Visibility = Parse::parse(&parser)?;
@@ -142,11 +157,7 @@ pub(crate) fn function_signature(item: &TokenStream) -> Result<Signature, ParseE
 }
 
 /// Parse a complete path without generic arguments for a concrete type or constant.
-pub(crate) fn plain_path(
-    tokens: &TokenStream,
-    span: Span,
-    message: &str,
-) -> Result<Path, ParseError> {
+pub fn plain_path(tokens: &TokenStream, span: Span, message: &str) -> Result<Path, ParseError> {
     let parser = Parser::from_tokens(tokens);
     let path = Path::parse(&parser)?;
     if !parser.is_empty()
@@ -161,7 +172,7 @@ pub(crate) fn plain_path(
 }
 
 /// Consume the final native body without parsing its operations.
-pub(crate) fn finish_braced_body(parser: &Parser, message: &str) -> Result<(), ParseError> {
+pub fn finish_braced_body(parser: &Parser, message: &str) -> Result<(), ParseError> {
     if !parser
         .advance()
         .is_some_and(|token| token.as_group().is_some_and(|group| group.delim.is_brace()))
@@ -173,13 +184,13 @@ pub(crate) fn finish_braced_body(parser: &Parser, message: &str) -> Result<(), P
 }
 
 /// Split a complete declaration's trailing metadata and operation body as native tokens.
-pub(crate) struct BracketedFunction {
+pub struct BracketedFunction {
     pub(crate) header: proc_macro::TokenStream,
     pub(crate) metadata: proc_macro::TokenStream,
     pub(crate) body: proc_macro::Group,
 }
 
-pub(crate) fn bracketed_function(
+pub fn bracketed_function(
     input: proc_macro::TokenStream,
     macro_name: &str,
 ) -> Result<BracketedFunction, ParseError> {
@@ -218,7 +229,7 @@ pub(crate) fn bracketed_function(
 }
 
 /// Wrap generated statements as one native brace expression.
-pub(crate) fn native_expression(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn native_expression(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
     proc_macro::TokenStream::from_iter([proc_macro::TokenTree::Group(proc_macro::Group::new(
         proc_macro::Delimiter::Brace,
         body,
@@ -226,28 +237,32 @@ pub(crate) fn native_expression(body: proc_macro::TokenStream) -> proc_macro::To
 }
 
 /// Collect top-level native declaration bodies without traversing caller operations.
-pub(crate) fn native_braced_bodies(input: proc_macro::TokenStream) -> Vec<proc_macro::Group> {
+pub fn native_braced_bodies(input: proc_macro::TokenStream) -> Vec<proc_macro::Group> {
     native_groups(input)
         .filter(|group| group.delimiter() == proc_macro::Delimiter::Brace)
         .collect()
 }
 
 /// Yield top-level native groups without looking inside a caller's expressions.
-pub(crate) fn native_groups(
-    input: proc_macro::TokenStream,
-) -> impl Iterator<Item = proc_macro::Group> {
+pub fn native_groups(input: proc_macro::TokenStream) -> impl Iterator<Item = proc_macro::Group> {
     input.into_iter().filter_map(|token| match token {
         proc_macro::TokenTree::Group(group) => Some(group),
         _ => None,
     })
 }
 
+/// The next validated native group, or an error naming the missing `what`.
+pub fn next_group(
+    groups: &mut impl Iterator<Item = proc_macro::Group>,
+    what: &str,
+) -> Result<proc_macro::Group, ParseError> {
+    groups
+        .next()
+        .ok_or_else(|| ParseError::new(Span::call_site(), format!("expected {what}")))
+}
+
 /// Read a named declaration clause and retain its identifier span for errors.
-pub(crate) fn expect_name(
-    parser: &Parser,
-    expected: &str,
-    message: &str,
-) -> Result<Ident, ParseError> {
+pub fn expect_name(parser: &Parser, expected: &str, message: &str) -> Result<Ident, ParseError> {
     let name = Ident::parse(parser)?;
     if name != expected {
         return Err(ParseError::new(name.span(), message));
@@ -256,7 +271,7 @@ pub(crate) fn expect_name(
 }
 
 /// Read an opaque clause group; each caller validates its delimiter and emptiness.
-pub(crate) fn grouped_value(parser: &Parser, message: &str) -> Result<Group, ParseError> {
+pub fn grouped_value(parser: &Parser, message: &str) -> Result<Group, ParseError> {
     let token = parser.advance().ok_or_else(|| parser.error(message))?;
     token
         .as_group()
@@ -265,7 +280,7 @@ pub(crate) fn grouped_value(parser: &Parser, message: &str) -> Result<Group, Par
 }
 
 /// The named fields of a struct, or an error naming the derive.
-pub(crate) fn named_fields<'a>(
+pub fn named_fields<'a>(
     item: &'a ItemStruct,
     derive: &str,
 ) -> Result<&'a List<Field, Token![,]>, ParseError> {
@@ -281,7 +296,7 @@ pub(crate) fn named_fields<'a>(
 }
 
 /// A field's name, or an error naming the derive.
-pub(crate) fn field_ident<'a>(field: &'a Field, derive: &str) -> Result<&'a Ident, ParseError> {
+pub fn field_ident<'a>(field: &'a Field, derive: &str) -> Result<&'a Ident, ParseError> {
     field
         .ident
         .as_ref()
@@ -289,7 +304,7 @@ pub(crate) fn field_ident<'a>(field: &'a Field, derive: &str) -> Result<&'a Iden
 }
 
 /// The single field of a newtype, or an error naming the derive.
-pub(crate) fn inner_type(item: &ItemStruct, derive: &str) -> Result<Type, ParseError> {
+pub fn inner_type(item: &ItemStruct, derive: &str) -> Result<Type, ParseError> {
     item.fields
         .as_unnamed()
         .filter(|unnamed| unnamed.fields.len() == 1)
@@ -304,7 +319,7 @@ pub(crate) fn inner_type(item: &ItemStruct, derive: &str) -> Result<Type, ParseE
 }
 
 /// Token text with every whitespace character removed.
-pub(crate) fn compact(tokens: &(impl ToString + ?Sized)) -> String {
+pub fn compact(tokens: &(impl ToString + ?Sized)) -> String {
     tokens
         .to_string()
         .chars()
@@ -313,26 +328,23 @@ pub(crate) fn compact(tokens: &(impl ToString + ?Sized)) -> String {
 }
 
 /// The value of a `key = <expression>` argument, as the expression's tokens.
-pub(crate) struct Tokens {
+pub struct Tokens {
     pub(crate) tokens: TokenStream,
 }
 
-pub(crate) fn expression_tokens(
-    meta: &moxy::ast::Meta,
-    expected: &'static str,
-) -> Result<TokenStream, ParseError> {
+pub fn expression_tokens(meta: &Meta, expected: &'static str) -> Result<TokenStream, ParseError> {
     match &meta.content {
-        moxy::ast::MetaContent::Expr { expr, .. } => Ok(expr.clone()),
+        MetaContent::Expr { expr, .. } => Ok(expr.clone()),
         _ => Err(ParseError::new(meta.span(), expected)),
     }
 }
 
-pub(crate) fn parenthesized_list(
-    meta: &moxy::ast::Meta,
+pub fn parenthesized_list(
+    meta: &Meta,
     expected: &str,
     delimiter: &str,
 ) -> Result<(TokenStream, Span), ParseError> {
-    let moxy::ast::MetaContent::List(group) = &meta.content else {
+    let MetaContent::List(group) = &meta.content else {
         return Err(ParseError::new(meta.span(), expected));
     };
     if !group.delim.is_paren() {
@@ -341,23 +353,34 @@ pub(crate) fn parenthesized_list(
     Ok((group.tokens.clone(), group.span()))
 }
 
-impl moxy::ast::FromMeta for Tokens {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for Tokens {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         expression_tokens(meta, "expected `key = <expression>`").map(|tokens| Self { tokens })
     }
 }
 
 /// An item's complete tokens and the index of its brace-delimited body.
-pub(crate) struct ItemBody {
+pub struct ItemBody {
     pub(crate) tokens: Vec<TokenTree>,
     pub(crate) body_index: usize,
 }
 
+/// The braced body group that [`item_body`] located at `index`.
+pub fn body_group(tokens: &mut [TokenTree], index: usize) -> Result<&mut Group, ParseError> {
+    match tokens.get_mut(index) {
+        Some(TokenTree::Group(group)) => Ok(group),
+        _ => Err(ParseError::new(
+            Span::call_site(),
+            "expected a braced item body",
+        )),
+    }
+}
+
 /// Locate an item body while preserving attributes, visibility and generics.
-pub(crate) fn item_body(
+pub fn item_body(
     item: TokenStream,
     macro_name: &str,
-    is_kind: fn(&moxy::token::TokenTree) -> bool,
+    is_kind: fn(&TokenTree) -> bool,
 ) -> Result<ItemBody, ParseError> {
     let tokens: Vec<_> = item.into_iter().collect();
     let body = tokens
@@ -381,7 +404,7 @@ pub(crate) fn item_body(
     }
 }
 
-pub(crate) fn function_header(
+pub fn function_header(
     item: TokenStream,
     macro_name: &str,
     expected: &str,
@@ -394,19 +417,17 @@ pub(crate) fn function_header(
     if body + 1 != tokens.len() {
         return Err(ParseError::new(span, expected));
     }
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     group.tokens = TokenStream::new();
     moxy::parse!({ TokenStream::from(tokens) })
 }
 
-pub(crate) fn named_body(item: TokenStream, macro_name: &str) -> Result<ItemBody, ParseError> {
-    item_body(item, macro_name, moxy::token::TokenTree::is_keyword_struct)
+pub fn named_body(item: TokenStream, macro_name: &str) -> Result<ItemBody, ParseError> {
+    item_body(item, macro_name, TokenTree::is_keyword_struct)
 }
 
 /// Transform a named struct's brace-delimited body and preserve the item header.
-pub(crate) fn edit_named_body(
+pub fn edit_named_body(
     item: TokenStream,
     macro_name: &str,
     edit: impl FnOnce(TokenStream) -> Result<TokenStream, ParseError>,
@@ -415,15 +436,13 @@ pub(crate) fn edit_named_body(
         mut tokens,
         body_index: body,
     } = named_body(item, macro_name)?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     group.tokens = edit(group.tokens.clone())?;
     Ok(tokens.into())
 }
 
 /// Edit a validated item's final native body without rebuilding nested groups.
-pub(crate) fn edit_native_body(
+pub fn edit_native_body(
     item: proc_macro::TokenStream,
     edit: impl FnOnce(proc_macro::TokenStream) -> proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
@@ -438,10 +457,7 @@ pub(crate) fn edit_native_body(
 }
 
 /// Require a nonempty token argument without changing its tokens or error span.
-pub(crate) fn required_tokens(
-    tokens: TokenStream,
-    message: &str,
-) -> Result<TokenStream, ParseError> {
+pub fn required_tokens(tokens: TokenStream, message: &str) -> Result<TokenStream, ParseError> {
     if tokens.is_empty() {
         Err(ParseError::new(Span::call_site(), message))
     } else {
@@ -450,7 +466,7 @@ pub(crate) fn required_tokens(
 }
 
 /// Read one of the explicit modes accepted by a field-group attribute.
-pub(crate) fn mode<const N: usize>(
+pub fn mode<const N: usize>(
     tokens: TokenStream,
     modes: [&'static str; N],
 ) -> Result<&'static str, ParseError> {
@@ -470,7 +486,7 @@ pub(crate) fn mode<const N: usize>(
 }
 
 /// Select file/runtime documentation and attach it to the generated fields.
-pub(crate) fn mode_docs<const N: usize>(
+pub fn mode_docs<const N: usize>(
     meta: TokenStream,
     file: [&'static str; N],
     runtime: [&'static str; N],
@@ -484,7 +500,7 @@ pub(crate) fn mode_docs<const N: usize>(
 }
 
 /// Wrap generated members in the declaration's original generics and where clause.
-pub(crate) fn impl_block(
+pub fn impl_block(
     item: ItemStruct,
     trait_prefix: &TokenStream,
     members: &TokenStream,
@@ -499,15 +515,17 @@ pub(crate) fn impl_block(
 }
 
 /// Split nonempty top-level token arguments, preserving grouped expressions.
-pub(crate) fn arguments(input: TokenStream, count: usize) -> Result<Vec<TokenStream>, ParseError> {
-    let mut arguments = vec![TokenStream::new()];
+pub fn arguments(input: TokenStream, count: usize) -> Result<Vec<TokenStream>, ParseError> {
+    let mut arguments = Vec::new();
+    let mut current = TokenStream::new();
     for token in input {
         if token.is_punct_comma() {
-            arguments.push(TokenStream::new());
+            arguments.push(mem::take(&mut current));
         } else {
-            arguments.last_mut().expect("one argument").extend([token]);
+            current.extend([token]);
         }
     }
+    arguments.push(current);
     if arguments.len() != count || arguments.iter().any(TokenStream::is_empty) {
         return Err(ParseError::new(
             Span::call_site(),
@@ -517,8 +535,18 @@ pub(crate) fn arguments(input: TokenStream, count: usize) -> Result<Vec<TokenStr
     Ok(arguments)
 }
 
+/// Split exactly `N` nonempty top-level token arguments into an array.
+pub fn argument_array<const N: usize>(input: TokenStream) -> Result<[TokenStream; N], ParseError> {
+    arguments(input, N)?.try_into().map_err(|_| {
+        ParseError::new(
+            Span::call_site(),
+            format!("expected {N} nonempty comma-separated arguments"),
+        )
+    })
+}
+
 /// Reject arguments on an attribute macro that accepts only its annotated item.
-pub(crate) fn no_arguments(tokens: TokenStream, macro_name: &str) -> Result<(), ParseError> {
+pub fn no_arguments(tokens: TokenStream, macro_name: &str) -> Result<(), ParseError> {
     if let Some(token) = tokens.into_iter().next() {
         return Err(ParseError::new(
             token.span(),

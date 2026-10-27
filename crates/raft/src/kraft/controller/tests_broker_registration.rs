@@ -12,6 +12,9 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_protocol::records::metadata,
+    std::{collections::BTreeMap, time::Duration},
+    tokio::time,
 };
 
 #[test]
@@ -81,7 +84,7 @@ async fn broker_registration_epoch_equals_commit_offset() {
                 rack: None,
                 log_dirs: vec![],
                 endpoints: vec![],
-                features: std::collections::BTreeMap::new(),
+                features: BTreeMap::new(),
             },
         )]
     };
@@ -118,7 +121,7 @@ fn new_registration() -> krabka_metadata::BrokerRegistrationRecord {
         rack: None,
         endpoints: vec![],
         log_dirs: vec![uuid::Uuid::from_u128(0xD1)],
-        features: std::collections::BTreeMap::new(),
+        features: BTreeMap::new(),
     }
 }
 
@@ -195,7 +198,7 @@ async fn a_registration_change_waits_for_an_uncommitted_registration() {
     };
 
     let first = register();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    time::sleep(Duration::from_millis(20)).await;
     commit().await;
     first.await.unwrap().unwrap();
     let registered = ctrl.current_image().broker(NodeId(7)).cloned().unwrap();
@@ -205,7 +208,7 @@ async fn a_registration_change_waits_for_an_uncommitted_registration() {
     };
 
     let second = register();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    time::sleep(Duration::from_millis(20)).await;
     let while_uncommitted = ctrl
         .submit_change(vec![MetadataRecord::V1BrokerRegistration(
             stale_unfence.clone(),
@@ -235,7 +238,7 @@ async fn a_registration_change_waits_for_an_uncommitted_registration() {
 /// of the schema it was written at.
 #[derive(Debug, PartialEq)]
 struct KafkaRecord {
-    record: krabka_protocol::records::metadata::KraftMetadataRecord,
+    record: metadata::KraftMetadataRecord,
     version: i16,
 }
 
@@ -252,9 +255,8 @@ fn kafka_records_from(engine: &Engine, start: Offset) -> Vec<KafkaRecord> {
         .flat_map(|batch| batch.records.iter())
         .filter_map(|record| record.value.as_ref())
         .map(|value| {
-            let (record, version) =
-                krabka_protocol::records::metadata::KraftMetadataRecord::decode_value(value)
-                    .expect("a Kafka metadata record");
+            let (record, version) = metadata::KraftMetadataRecord::decode_value(value)
+                .expect("a Kafka metadata record");
             KafkaRecord { record, version }
         })
         .collect()

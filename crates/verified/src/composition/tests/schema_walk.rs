@@ -34,10 +34,9 @@ pub(super) fn oracle(
             let passed = !enabled
                 || field.empty
                 || (id.is_some()
-                    && match field.failure {
-                        None => field.checked,
-                        Some(kind) => open && kind == SchemaFailureKind::Transient,
-                    });
+                    && field.failure.map_or(field.checked, |kind| {
+                        open && kind == SchemaFailureKind::Transient
+                    }));
             (action, id, passed)
         })
         .collect();

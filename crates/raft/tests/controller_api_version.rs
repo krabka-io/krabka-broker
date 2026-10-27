@@ -1,4 +1,5 @@
 //! Request-derived controller ranges retain release gates and header framing.
+#![cfg(test)]
 
 use {
     assert2::assert,

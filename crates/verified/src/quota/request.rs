@@ -1,8 +1,10 @@
 use creusot_std::prelude::*;
 
-/// Convert a whole-token request to storage units, limited by the whole
-/// tokens the balance holds. Saturating the multiplication cannot grant a
-/// fractional token or reduce the largest representable whole-token grant.
+/// Convert a whole-token request to storage units, limited by the whole tokens
+/// the balance holds.
+///
+/// Saturating the multiplication cannot grant a fractional token or reduce the
+/// largest representable whole-token grant.
 ///
 /// # Panics
 /// Panics if `units_per_token` is zero.

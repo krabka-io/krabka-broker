@@ -134,7 +134,7 @@ fn entries_from_snapshot(
 fn earlier_from_log(earlier: &[krabka_log::ProducerBatchMetadata]) -> super::entry::EarlierBatches {
     let mut slots = super::NO_EARLIER_BATCHES;
     let skip = earlier.len().saturating_sub(slots.len());
-    for (slot, batch) in slots.iter_mut().zip(&earlier[skip..]) {
+    for (slot, batch) in slots.iter_mut().zip(earlier.iter().skip(skip)) {
         *slot = Some(RetainedBatch {
             base_sequence: krabka_verified::decrement_sequence(
                 batch.last_sequence,

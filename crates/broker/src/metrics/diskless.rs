@@ -115,7 +115,7 @@ impl BrokerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, prometheus_client::encoding::text};
 
     #[tokio::test]
     async fn diskless_metrics_encode_with_bounded_shard_labels() {
@@ -158,7 +158,7 @@ mod tests {
         metrics.remove_diskless_wal_shard(topic_id, partition, &[NodeId(9)]);
         body.clear();
         let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        text::encode(&mut body, &registry).unwrap();
         assert!(!body.contains("topic_id=\"00000000-0000-0000-0000-00000000002a\""));
     }
 }

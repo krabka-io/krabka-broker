@@ -14,6 +14,7 @@ use {
     krabka_ids::Offset,
     std::{
         fs::File,
+        io,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -24,7 +25,7 @@ use {
 /// The `.log` file of one sealed segment and the length it held when a
 /// compaction pass took it.
 #[derive(Debug, Clone)]
-pub(crate) struct SealedInput {
+pub struct SealedInput {
     base_offset: Offset,
     file: Arc<File>,
     len: u64,
@@ -39,11 +40,11 @@ impl SealedInput {
 
     /// The file's length now, which is the length the segment held when the
     /// input was taken unless something wrote past its end behind its back.
-    pub(crate) fn file_len(&self) -> std::io::Result<u64> { Ok(self.file.metadata()?.len()) }
+    pub(crate) fn file_len(&self) -> io::Result<u64> { Ok(self.file.metadata()?.len()) }
 
     /// Fill `buf` from byte `offset` of the file, and return how many bytes
     /// arrived: fewer than `buf.len()` only at the end of the file.
-    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         read_full_at(&self.file, offset, buf)
     }
 

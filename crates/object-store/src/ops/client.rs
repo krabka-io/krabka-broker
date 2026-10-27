@@ -21,10 +21,17 @@ use {
 #[cfg(test)]
 mod tests;
 
-use crate::{
-    error::ObjectStoreError,
-    ops::{ObjectOps, ObjectStream, PutOutcome, PutRequest},
-    read::read_capped,
+use {
+    crate::{
+        error::ObjectStoreError,
+        ops::{ObjectOps, ObjectStream, PutOutcome, PutRequest},
+        read::read_capped,
+    },
+    std::{
+        future,
+        io::{self, ErrorKind},
+    },
+    tokio::{fs, fs::File, runtime::Handle},
 };
 
 // Bound the payload retained by multipart tasks to eight chunks per upload.
@@ -54,17 +61,28 @@ impl AbortOnDrop {
         }
     }
 
-    fn upload(&mut self) -> &mut Box<dyn MultipartUpload> {
-        self.upload.as_mut().expect("upload is still active")
+    /// The upload, until it completes or aborts.
+    fn upload(&mut self) -> object_store::Result<&mut Box<dyn MultipartUpload>> {
+        self.upload
+            .as_mut()
+            .ok_or_else(|| object_store::Error::Generic {
+                store: "multipart upload",
+                source: "the upload already completed or aborted".into(),
+            })
     }
 }
 
 #[async_trait::async_trait]
 impl MultipartUpload for AbortOnDrop {
-    fn put_part(&mut self, data: PutPayload) -> UploadPart { self.upload().put_part(data) }
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        match self.upload() {
+            Ok(upload) => upload.put_part(data),
+            Err(error) => Box::pin(future::ready(Err(error))),
+        }
+    }
 
     async fn complete(&mut self) -> object_store::Result<PutResult> {
-        let result = self.upload().complete().await;
+        let result = self.upload()?.complete().await;
         if result.is_ok() {
             self.upload.take();
         }
@@ -97,7 +115,7 @@ impl Drop for AbortOnDrop {
             return;
         };
         let key = self.key.clone();
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        let Ok(runtime) = Handle::try_current() else {
             tracing::warn!(%key, "cannot abort multipart upload outside a Tokio runtime");
             return;
         };
@@ -120,16 +138,16 @@ impl ObjectStoreClient {
 impl ObjectOps for ObjectStoreClient {
     put_from_path!({
         if chunk_size == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
                 "multipart chunk size must be greater than zero",
             )
             .into());
         }
 
-        let len = tokio::fs::metadata(src).await?.len();
+        let len = fs::metadata(src).await?.len();
         if len < threshold {
-            return self.put(key, tokio::fs::read(src).await?.into(), req).await;
+            return self.put(key, fs::read(src).await?.into(), req).await;
         }
         // `req.mode` cannot reach multipart completion. Atomically reserve the
         // key with a retained empty version so only its winner may proceed.
@@ -145,7 +163,7 @@ impl ObjectOps for ObjectStoreClient {
         }
         let upload = Box::new(AbortOnDrop::new(self.inner.put_multipart(key).await?, key));
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
-        let mut file = tokio::fs::File::open(src).await?;
+        let mut file = File::open(src).await?;
         let mut buf = vec![0u8; chunk_size];
         let mut hasher = req.digest.then(Sha256::new);
         let mut size_bytes = 0u64;
@@ -155,11 +173,18 @@ impl ObjectOps for ObjectStoreClient {
             if n == 0 {
                 break;
             }
+            let Some(read) = buf.get(..n) else {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "a read reported more bytes than its buffer holds",
+                )
+                .into());
+            };
             if let Some(hasher) = hasher.as_mut() {
-                hasher.update(&buf[..n]);
+                hasher.update(read);
             }
             size_bytes += n as u64;
-            writer.write(&buf[..n]);
+            writer.write(read);
         }
         let result = writer.finish().await?;
         let expected_sha256 = hasher.map(|hasher| hasher.finalize().into());

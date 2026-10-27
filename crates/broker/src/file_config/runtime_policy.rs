@@ -21,7 +21,7 @@ use {
 
 impl RuntimeFileConfig {
     pub(super) fn apply_broker_policy(
-        &mut self,
+        &self,
         cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;

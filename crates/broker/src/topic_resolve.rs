@@ -17,7 +17,7 @@ use {
 ///   `INCONSISTENT_TOPIC_ID`
 /// - a zero `id` with a `name` that resolves takes the name path. An unknown
 ///   name gives `UNKNOWN_TOPIC_OR_PARTITION`.
-pub(crate) fn resolve<'a>(
+pub fn resolve<'a>(
     image: &'a MetadataImage,
     name: &str,
     id: WireUuid,

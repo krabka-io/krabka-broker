@@ -2,7 +2,7 @@ use {
     super::{FetchWatermarks, committed_fetch_excludes_unstable, stable_abort_sources_cover_fetch},
     crate::broker::FetchVisibility,
     assert2::assert,
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
     std::{collections::BTreeSet, vec},
 };
 
@@ -25,7 +25,7 @@ fn visibility_oracle(starts: &[i64], w: FetchWatermarks) -> Option<(i64, FetchVi
 proptest! {
     #[test]
     fn unstable_frontier_and_all_visibility_fields_match_independent_oracle(
-        starts in proptest::collection::vec(any::<i64>(), 0..16),
+        starts in collection::vec(any::<i64>(), 0..16),
         log_start in any::<i64>(), log_end in any::<i64>(), hw in any::<i64>(),
         inherited_lso in any::<i64>(), deliverable in any::<i64>(),
     ) {
@@ -35,9 +35,9 @@ proptest! {
 
     #[test]
     fn derived_stability_and_abort_sources_match_complete_interval_union(
-        starts in proptest::collection::vec(0_i64..=64, 0..12),
-        remote in proptest::collection::btree_map(0_i64..=128, (0_i64..=16, 0_i64..=128), 0..12),
-        local in proptest::collection::btree_map(0_i64..=128, (0_i64..=16, 0_i64..=128), 0..12),
+        starts in collection::vec(0_i64..=64, 0..12),
+        remote in collection::btree_map(0_i64..=128, (0_i64..=16, 0_i64..=128), 0..12),
+        local in collection::btree_map(0_i64..=128, (0_i64..=16, 0_i64..=128), 0..12),
         log_end in 0_i64..=64, hw in 0_i64..=64, inherited_lso in any::<i64>(),
         deliverable in 0_i64..=64, from in 0_i64..=64,
         cut in prop_oneof![0_i64..=64, Just(i64::MIN), Just(i64::MAX)],
@@ -101,7 +101,7 @@ fn abort_rows_follow_derived_stability_instead_of_stale_inherited_lso() {
     assert!(
         stable_abort_sources_cover_fetch(&[21], &remote, &remote, (owner, owner), w, 0, 20) == None
     );
-    let mut corrupt_tail = remote.clone();
+    let mut corrupt_tail = remote;
     corrupt_tail[1].producer_id = -1;
     assert!(
         stable_abort_sources_cover_fetch(&[3], &corrupt_tail, &[], (owner, owner), w, 0, 20)

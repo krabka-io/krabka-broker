@@ -3,15 +3,18 @@
 use {
     crate::{
         partition::{
-            Partition,
+            HwTimeout, Partition,
             test_support::{append_records, install_three_replica_isr, test_partition},
         },
         test_support::{PartitionRecordsSetup, RecordCount},
     },
     assert2::{assert, check},
     krabka_log::Offset,
-    std::sync::Arc,
-    tokio::sync::Notify,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::Notify, time},
 };
 
 async fn install_local_isr(partition: &Partition) {
@@ -30,7 +33,7 @@ async fn high_watermark_reads_cached_value() {
 async fn install_isr_populates_replica_state() {
     let (p, _dir) = test_partition(Arc::new(Notify::new()));
     install_three_replica_isr(&p).await;
-    let st = p.replica_state.lock().await;
+    let st = p.replica_state.lock().await.clone();
     check!(
         st.isr
             == [
@@ -48,7 +51,7 @@ async fn install_isr_populates_replica_state() {
 async fn install_isr_advances_and_notifies_only_synced_storage() {
     for diskless in [false, true] {
         let hw_advance_notify = Arc::new(Notify::new());
-        let (mut partition, _dir) = test_partition(hw_advance_notify.clone());
+        let (mut partition, _dir) = test_partition(Arc::clone(&hw_advance_notify));
         partition.diskless = diskless;
         append_records(&partition, PartitionRecordsSetup {
             count: RecordCount(3),
@@ -78,7 +81,7 @@ async fn install_isr_advances_and_notifies_only_synced_storage() {
 #[tokio::test]
 async fn install_isr_same_high_watermark_does_not_notify() {
     let hw_advance_notify = Arc::new(Notify::new());
-    let (p, _td) = test_partition(hw_advance_notify.clone());
+    let (p, _td) = test_partition(Arc::clone(&hw_advance_notify));
     append_records(&p, PartitionRecordsSetup {
         count: RecordCount(2),
         ..Default::default()
@@ -106,7 +109,7 @@ async fn install_isr_same_high_watermark_does_not_notify() {
 async fn await_hw_returns_immediately_if_already_satisfied() {
     let (p, _dir) = test_partition(Arc::new(Notify::new()));
     p.replica_state.lock().await.hw = Offset(100);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     p.await_hw_at_least(Offset(50), deadline)
         .await
         .expect("immediate");
@@ -115,15 +118,15 @@ async fn await_hw_returns_immediately_if_already_satisfied() {
 #[tokio::test]
 async fn await_hw_returns_timeout_when_unreached() {
     let (p, _dir) = test_partition(Arc::new(Notify::new()));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+    let deadline = Instant::now() + Duration::from_millis(50);
     let result = p.await_hw_at_least(Offset(100), deadline).await;
-    assert!(matches!(result, Err(crate::partition::HwTimeout)));
+    assert!(matches!(result, Err(HwTimeout)));
 }
 
 #[tokio::test]
 async fn set_follower_hw_clamps_advances_and_notifies() {
     let hw_advance_notify = Arc::new(Notify::new());
-    let (p, _dir) = test_partition(hw_advance_notify.clone());
+    let (p, _dir) = test_partition(Arc::clone(&hw_advance_notify));
 
     // Append a 3-record batch so log_end_offset() == 3.
     append_records(&p, PartitionRecordsSetup {
@@ -161,7 +164,7 @@ async fn set_follower_hw_clamps_advances_and_notifies() {
 #[tokio::test]
 async fn set_follower_hw_same_high_watermark_does_not_notify() {
     let hw_advance_notify = Arc::new(Notify::new());
-    let (p, _td) = test_partition(hw_advance_notify.clone());
+    let (p, _td) = test_partition(Arc::clone(&hw_advance_notify));
     assert!(p.high_watermark().await == 0);
 
     let notif_waiter = hw_advance_notify.notified();
@@ -183,14 +186,14 @@ async fn set_follower_hw_same_high_watermark_does_not_notify() {
 #[tokio::test]
 async fn await_hw_wakes_on_advance() {
     let hw_advance_notify = Arc::new(Notify::new());
-    let (p, _dir) = test_partition(hw_advance_notify.clone());
-    let replica_state = p.replica_state.clone();
+    let (p, _dir) = test_partition(Arc::clone(&hw_advance_notify));
+    let replica_state = Arc::clone(&p.replica_state);
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
         replica_state.lock().await.hw = Offset(100);
         hw_advance_notify.notify_waiters();
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     p.await_hw_at_least(Offset(50), deadline)
         .await
         .expect("woke on advance");

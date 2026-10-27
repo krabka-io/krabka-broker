@@ -167,6 +167,7 @@ mod tests {
         },
         assert2::assert,
         bytes::{BufMut, Bytes},
+        tokio::io,
     };
 
     fn request(api_key: i16, api_version: i16, correlation_id: i32, body: &[u8]) -> KafkaRequest {
@@ -305,7 +306,7 @@ mod tests {
             request_api_key: API_KEY_API_VERSIONS,
             request_api_version: 3,
             correlation_id: 44,
-            client_id: Some("c".to_string()),
+            client_id: Some("c".to_owned()),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![
                 krabka_protocol::UnknownTaggedField {
                     tag: 300,
@@ -385,7 +386,7 @@ mod tests {
         size: u32,
         refused: bool,
     ) {
-        let (mut client, mut server) = tokio::io::duplex(64);
+        let (mut client, mut server) = io::duplex(64);
         client
             .write_all(&size.to_be_bytes())
             .await
@@ -421,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_response_uses_expected_header_versions() {
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         let writer = tokio::spawn(async move {
             write_response(
                 &mut server,
@@ -439,7 +440,7 @@ mod tests {
         let expected: Vec<u8> = [77i32.to_be_bytes().as_slice(), &[0x00], &[0xaa, 0xbb]].concat();
         assert!(frame == expected);
 
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         let writer = tokio::spawn(async move {
             write_response(
                 &mut server,

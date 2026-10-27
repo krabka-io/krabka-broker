@@ -1,8 +1,13 @@
+#![cfg(test)]
+
 mod support;
 
 use {
     crate::support::client_admin::*,
+    krabka_client_admin::groups::ListGroupsOptions,
     krabka_client_consumer::{AutoOffsetReset, Consumer},
+    std::time::Duration,
+    tokio::time,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -30,18 +35,19 @@ async fn lists_groups_and_committed_offsets() {
         .await
         .unwrap();
     producer.flush().await.unwrap();
+    drop(producer);
 
     let mut consumer = Consumer::builder()
         .bootstrap(&bootstrap)
         .group_id("g1")
-        .subscribe(vec!["t1".to_string()])
+        .subscribe(vec!["t1".to_owned()])
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .build()
         .await
         .unwrap();
     // A timed-out poll can be empty while the group is still joining. Commit
     // only after the produced record has actually advanced the position.
-    let records = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let records = time::timeout(Duration::from_secs(30), async {
         loop {
             let records = consumer.poll(krabka_units::millis(500)).await.unwrap();
             if !records.is_empty() {
@@ -59,7 +65,7 @@ async fn lists_groups_and_committed_offsets() {
     consumer.commit_sync().await.unwrap();
 
     let groups = admin
-        .list_groups(&krabka_client_admin::groups::ListGroupsOptions::default())
+        .list_groups(&ListGroupsOptions::default())
         .await
         .unwrap()
         .all()
@@ -67,6 +73,6 @@ async fn lists_groups_and_committed_offsets() {
     assert2::assert!(groups.iter().any(|g| g.group_id == "g1"));
 
     let offsets = admin.list_consumer_group_offsets("g1").await.unwrap();
-    let committed = offsets.get(&("t1".to_string(), 0)).copied();
+    let committed = offsets.get(&("t1".to_owned(), 0)).copied();
     assert2::assert!(committed == Some(1));
 }

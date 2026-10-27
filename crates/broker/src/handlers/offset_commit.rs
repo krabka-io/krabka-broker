@@ -12,6 +12,8 @@
 //! where the decoder leaves it at its `-1` default, and `-1` at v2-v4 means
 //! the same thing: take the broker-wide retention.
 
+#[cfg(test)]
+use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
 use {
     self::response::ResponseBuilder,
     crate::{
@@ -48,7 +50,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch},
     },
-    std::sync::Arc,
+    std::{mem, sync::Arc},
 };
 
 mod response;
@@ -67,13 +69,11 @@ pub(super) fn test_topic_row(
     OffsetCommitRequestTopic {
         name,
         topic_id: WireUuid(topic_id),
-        partitions: vec![
-            krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: 42,
-                ..Default::default()
-            },
-        ],
+        partitions: vec![OffsetCommitRequestPartition {
+            partition_index: 0,
+            committed_offset: 42,
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
@@ -107,7 +107,7 @@ const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
 /// The error rows come first in the response and the committed rows follow,
 /// as `OffsetCommitResponse.Builder.merge` puts them. The handler writes no
 /// offset for a row that steps 2 to 4 refuse.
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     mut req: OffsetCommitRequest,
     version: ApiVersion,
@@ -155,7 +155,7 @@ pub(crate) async fn handle(
 
     let mut response = ResponseBuilder::new(use_topic_ids);
     let mut accepted = Vec::with_capacity(req.topics.len());
-    for (topic, allowed) in std::mem::take(&mut req.topics).into_iter().zip(allowed) {
+    for (topic, allowed) in mem::take(&mut req.topics).into_iter().zip(allowed) {
         if use_topic_ids && topic.name.is_empty() {
             response.add_topic(&topic, codes::UNKNOWN_TOPIC_ID);
         } else if !allowed {
@@ -191,7 +191,7 @@ fn existing_partitions(
         response.add_topic(&topic, codes::UNKNOWN_TOPIC_OR_PARTITION);
         return None;
     }
-    let (present, missing) = std::mem::take(&mut topic.partitions)
+    let (present, missing) = mem::take(&mut topic.partitions)
         .into_iter()
         .partition::<Vec<_>, _>(|partition| {
             image
@@ -405,10 +405,10 @@ async fn validate(
     } else {
         Some(codes::ILLEGAL_GENERATION)
     };
-    match code {
-        Some(code) => Err(code),
-        None => Ok(coordinator.get_or_create_group(&req.group_id, GroupKindTag::Classic)),
-    }
+    code.map_or_else(
+        || Ok(coordinator.get_or_create_group(&req.group_id, GroupKindTag::Classic)),
+        Err,
+    )
 }
 
 /// The `(topic id, partition)` of every partition `req` commits, with the
@@ -496,7 +496,7 @@ fn commit_records(
                     &topic.name,
                     part.partition_index,
                 )?),
-                value: Some(OffsetCommitValue::from(&entry).encode_value()),
+                value: Some(OffsetCommitValue::from(&entry).encode_value()?),
                 ..Default::default()
             });
             entries.push(((topic.name.clone(), part.partition_index), entry));

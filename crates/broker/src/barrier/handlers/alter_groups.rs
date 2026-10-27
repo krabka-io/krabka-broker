@@ -47,7 +47,7 @@ use {
     api = "AlterBarrierGroups",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterBarrierGroupsRequest,
     version: ApiVersion,
@@ -150,7 +150,10 @@ fn topic_list_fault(topics: &[String]) -> Option<String> {
         ));
     }
     for (index, topic) in topics.iter().enumerate() {
-        if topics[index + 1..].contains(topic) {
+        if topics
+            .get(index + 1..)
+            .is_some_and(|rest| rest.contains(topic))
+        {
             return Some(format!("a barrier group names topic {topic} twice"));
         }
     }

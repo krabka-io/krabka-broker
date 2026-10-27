@@ -143,6 +143,7 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::MetadataImage,
+        std::{path::Path, sync::Arc},
         uuid::Uuid,
     };
 
@@ -156,7 +157,7 @@ mod tests {
         })
     }
 
-    fn local_partition(dir: &std::path::Path) -> Arc<Partition> {
+    fn local_partition(dir: &Path) -> Arc<Partition> {
         let log = krabka_log::Log::open(
             partition_dir(dir, "orders", 0),
             krabka_log::LogConfig::default(),
@@ -204,7 +205,7 @@ mod tests {
         partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            partition.clone(),
+            Arc::clone(&partition),
         );
         HostedFixture {
             dir,
@@ -333,11 +334,7 @@ mod tests {
         let partitions = PartitionRegistry::new();
         let partition = local_partition(dir.path());
         partition.test_set_leader_epoch(3);
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            partition.clone(),
-        );
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), partition);
         let log_dir_status = LogDirRegistry::default();
         let ctx = partition_context(&log_dir_status, &partitions, &image);
 

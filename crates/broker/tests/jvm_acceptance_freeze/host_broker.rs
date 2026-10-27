@@ -21,7 +21,7 @@ use {
 };
 
 /// One broker on the host, addressed the two ways this suite needs.
-pub(super) struct JvmBroker {
+pub struct JvmBroker {
     /// Dropping the handle stops the broker, so the case owns it to the end.
     _handle: BrokerHandle,
     /// The log directory, which outlives the broker only by a moment.
@@ -43,7 +43,7 @@ pub(super) struct JvmBroker {
 /// `adjust` sees a config whose addresses are already filled in, which is what
 /// lets [`sasl_listener`] build a listener spec on the same bind and
 /// advertised addresses.
-pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> JvmBroker {
+pub async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> JvmBroker {
     support::init_tracing();
     let listeners = support::JvmListeners::allocate();
     let dir = tempfile::tempdir().expect("tempdir");
@@ -83,7 +83,7 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
 /// plaintext listener every connection authenticates as one anonymous
 /// principal, which can prove that the gate refuses and can never prove that
 /// two distinct people got past it.
-pub(super) fn sasl_listener(config: &mut BrokerConfig, users: &[(&str, &str)]) {
+pub fn sasl_listener(config: &mut BrokerConfig, users: &[(&str, &str)]) {
     config.listeners = vec![ListenerSpec {
         name: SASL_LISTENER.to_owned(),
         bind_addr: config.listen_addr,
@@ -110,10 +110,10 @@ pub(super) fn sasl_listener(config: &mut BrokerConfig, users: &[(&str, &str)]) {
 /// default names three actions, and this suite has no operator key material to
 /// sign with. What it asserts is what the JVM tool sees, and a signature
 /// changes nothing about that.
-pub(super) fn gate_on(config: &mut BrokerConfig) {
+pub fn gate_on(config: &mut BrokerConfig) {
     config.break_glass.approvers = approver_set();
     config.break_glass.signed_actions = Vec::new();
 }
 
 /// The JVM client properties for one PLAIN operator.
-pub(super) fn sasl_props(user: &str, pass: &str) -> String { plain_client_properties(user, pass) }
+pub fn sasl_props(user: &str, pass: &str) -> String { plain_client_properties(user, pass) }

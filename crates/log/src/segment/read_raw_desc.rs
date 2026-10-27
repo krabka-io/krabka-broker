@@ -13,7 +13,7 @@ use {
     },
     crate::{config::DEFAULT_READ_AHEAD_MAX, error::LogError},
     krabka_ids::Offset,
-    krabka_protocol::records::HEADER_LEN,
+    krabka_protocol::records::{FileRegion, HEADER_LEN},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::sync::{Arc, atomic::Ordering},
     tracing::instrument,
@@ -89,12 +89,12 @@ impl Segment {
         if self.cache_probe_unsupported.load(Ordering::Relaxed) {
             return true;
         }
-        if let Some(cached) = self.io.is_cached(&self.log_file, offset) {
-            cached
-        } else {
-            self.cache_probe_unsupported.store(true, Ordering::Relaxed);
-            true
-        }
+        self.io
+            .is_cached(&self.log_file, offset)
+            .unwrap_or_else(|| {
+                self.cache_probe_unsupported.store(true, Ordering::Relaxed);
+                true
+            })
     }
 
     /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
@@ -118,8 +118,6 @@ impl Segment {
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read_raw_desc(
         &self,
         fetch_offset: Offset,
@@ -218,7 +216,10 @@ impl Segment {
                 return Ok(None);
             }
             let start = pos - header_buf_start;
-            let batch = RawBatch::decode(&header_buf[start..start + HEADER_LEN])?;
+            let Some(header) = header_buf.get(start..start + HEADER_LEN) else {
+                return Ok(None);
+            };
+            let batch = RawBatch::decode(header)?;
             scan_window = if batch.len <= SMALL_BATCH_THRESHOLD {
                 HEADER_SCAN_WINDOW
             } else {
@@ -235,7 +236,7 @@ impl Segment {
         Ok(Some(RawSegmentDesc {
             start_offset: range.start_offset,
             last_offset: range.last_offset,
-            region: Some(krabka_protocol::records::FileRegion {
+            region: Some(FileRegion {
                 file: Arc::clone(&self.log_file),
                 offset: start_pos + range.positions.start as u64,
                 len: range.positions.len(),
@@ -268,6 +269,7 @@ mod tests {
         bytes::Bytes,
         krabka_protocol::records::{Record, RecordBatch},
         krabka_units::prelude::{bytes, mebibytes},
+        std::{fs::File, sync::Mutex},
     };
 
     /// Every positional read a fetch makes, as `(position, length)`.
@@ -278,14 +280,14 @@ mod tests {
     struct NothingCached;
 
     impl LogIo for NothingCached {
-        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> Option<bool> { Some(false) }
+        fn is_cached(&self, _file: &File, _offset: u64) -> Option<bool> { Some(false) }
     }
 
     #[derive(Debug)]
-    struct ChangingCache(std::sync::Mutex<Vec<Option<bool>>>);
+    struct ChangingCache(Mutex<Vec<Option<bool>>>);
 
     impl LogIo for ChangingCache {
-        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> Option<bool> {
+        fn is_cached(&self, _file: &File, _offset: u64) -> Option<bool> {
             self.0.lock().unwrap().remove(0)
         }
     }
@@ -296,7 +298,7 @@ mod tests {
             dir: _dir,
             segment: mut seg,
         } = test_segment();
-        seg.io = Arc::new(ChangingCache(std::sync::Mutex::new(vec![
+        seg.io = Arc::new(ChangingCache(Mutex::new(vec![
             Some(false),
             Some(true),
             Some(false),

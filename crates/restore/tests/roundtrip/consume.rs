@@ -56,12 +56,13 @@ use {
             },
             produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         },
-        records::{Attributes, Record, RecordBatch},
+        primitives::uuid::Uuid as WireUuid,
+        records::{Attributes, Record, RecordBatch, RecordsPayload},
     },
     krabka_raft::NodeId,
     krabka_restore::RestoreReport,
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
-    std::sync::Arc,
+    std::{fs, path::PathBuf, sync::Arc},
     uuid::Uuid,
 };
 
@@ -84,7 +85,7 @@ const PARTITION_MAX_BYTES: i32 = 1_048_576;
 struct RestoredCluster {
     fixture: Fixture,
     target: tempfile::TempDir,
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     controller: ControllerListener,
     broker: BrokerHandle,
     client: Client,
@@ -252,7 +253,7 @@ async fn fetch_from(
     );
     part.records
         .as_ref()
-        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(RecordsPayload::as_v2)
         .expect("a restored partition answers a Fetch with v2 batches")
         .to_vec()
 }
@@ -289,9 +290,7 @@ async fn end_offset_for_epoch(client: &Client, partition: &PartitionFixture, epo
 /// The archived `Uuid` as the 16 wire bytes a `Fetch` or `Produce` names a
 /// topic by. `krabka-protocol` keeps its own `Uuid` newtype and defines no
 /// conversion from the `uuid` crate's.
-fn wire_uuid(id: Uuid) -> krabka_protocol::primitives::uuid::Uuid {
-    krabka_protocol::primitives::uuid::Uuid(id.into_bytes())
-}
+fn wire_uuid(id: Uuid) -> WireUuid { WireUuid(id.into_bytes()) }
 
 /// A single-record batch to append through the restarted broker.
 fn one_record_batch(value: &str) -> RecordBatch {
@@ -379,7 +378,7 @@ async fn a_rotated_key_worm_archive_restores_boots_and_reads_original_offsets() 
         let signer =
             Arc::new(FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), id.to_owned()).unwrap());
         let path = keys.path().join(format!("{id}.pub"));
-        std::fs::write(&path, signer.public_key()).expect("write public key");
+        fs::write(&path, signer.public_key()).expect("write public key");
         signers.push(signer);
         key_paths.push(path.display().to_string());
     }
@@ -490,9 +489,7 @@ async fn a_restored_broker_restarts_and_appends_at_the_archived_end_offset() {
                 topic_id: wire_uuid(topic_id),
                 partition_data: vec![PartitionProduceData {
                     index: PARTITION,
-                    records: Some(krabka_protocol::records::RecordsPayload::V2(vec![
-                        one_record_batch("after-restore"),
-                    ])),
+                    records: Some(RecordsPayload::V2(vec![one_record_batch("after-restore")])),
                     ..Default::default()
                 }],
                 ..Default::default()

@@ -11,7 +11,7 @@ struct Schema {
     partition: Path,
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let mut rows = Vec::new();
     while !parser.is_empty() {

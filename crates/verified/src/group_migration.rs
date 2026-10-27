@@ -35,8 +35,10 @@ fn migration_epoch_matches(input: Int, output: Int) -> bool {
 }
 
 /// Admit a classic-to-consumer upgrade exactly when the protocol and every
-/// member subscription have a consumer representation. The returned epoch is
-/// the classic generation clamped to the first valid consumer epoch.
+/// member subscription have a consumer representation.
+///
+/// The returned epoch is the classic generation clamped to the first valid
+/// consumer epoch.
 #[ensures((result != None) == (consumer_protocol && every_subscription_decodable))]
 #[ensures(forall<epoch: i32> result == Some(epoch) ==>
     migration_epoch_matches(generation@, epoch@))]

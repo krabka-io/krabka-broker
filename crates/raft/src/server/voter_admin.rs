@@ -22,6 +22,7 @@ use {
     },
     bytes::{Bytes, BytesMut},
     krabka_metadata::VoterEndpoint,
+    krabka_protocol::{owned::add_raft_voter_request, primitives::uuid::Uuid},
 };
 
 #[cfg(test)]
@@ -31,7 +32,7 @@ mod tests;
 /// refuses it when it cannot answer or does not support the finalized
 /// `kraft.version`.
 async fn probe_voter_candidate(
-    request: &krabka_protocol::owned::add_raft_voter_request::AddRaftVoterRequest,
+    request: &add_raft_voter_request::AddRaftVoterRequest,
     finalized_version: u16,
     engine: &KraftController,
 ) -> Result<(), Refusal> {
@@ -40,7 +41,13 @@ async fn probe_voter_candidate(
         .iter()
         .find(|listener| listener.name.eq_ignore_ascii_case("CONTROLLER"))
         .or_else(|| request.listeners.first())
-        .expect("validated non-empty listeners");
+        .ok_or_else(|| {
+            candidate_unavailable_refusal(
+                request.voter_id,
+                request.voter_directory_id,
+                "the candidate names no listener",
+            )
+        })?;
     let address = format!("{}:{}", endpoint.host, endpoint.port);
     let supported = engine
         .probe_kraft_version(&address, finalized_version)
@@ -66,7 +73,7 @@ async fn probe_voter_candidate(
 /// The voter a checked request names. The checks refused a negative id.
 fn requested_voter(
     voter_id: i32,
-    voter_directory_id: krabka_protocol::primitives::uuid::Uuid,
+    voter_directory_id: Uuid,
     endpoints: impl IntoIterator<Item = krabka_metadata::VoterEndpoint>,
     kraft_version: krabka_metadata::KRaftVersionRange,
 ) -> krabka_metadata::Voter {

@@ -64,14 +64,13 @@ impl ToTokens for Gate {
             operation,
             resource_name,
         } = self;
-        let argument = if let Some(name) = resource_name {
-            moxy::template! { {{ name }} }
-        } else {
-            moxy::template! { acl_wire::CLUSTER_RESOURCE_NAME }
-        };
+        let argument = resource_name.as_ref().map_or_else(
+            || moxy::template! { acl_wire::CLUSTER_RESOURCE_NAME },
+            |name| moxy::template! { {{ name }} },
+        );
         output.extend(moxy::template! {
             {{ attrs }}
-            pub(crate) fn {{ name }}(
+            pub fn {{ name }}(
                 authorizer: &dyn Authorizer,
                 image: &MetadataImage,
                 ctx: &RequestContext<'_>,
@@ -84,7 +83,7 @@ impl ToTokens for Gate {
     }
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     if parser.is_empty() {
         return Err(parser.error("expected at least one gate declaration"));
@@ -113,7 +112,7 @@ mod tests {
             .parse()
             .unwrap();
         let output = compact(&expand(&input).unwrap());
-        assert!(output.contains("#[doc=\"group\"]pub(crate)fnread("));
+        assert!(output.contains("#[doc=\"group\"]pubfnread("));
         assert!(output.contains("group_id:&str,"));
         assert!(output.contains("ResourceType::Group,group_id,AclOperation::Read"));
         assert!(

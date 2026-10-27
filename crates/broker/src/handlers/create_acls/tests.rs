@@ -12,6 +12,7 @@ use {
     crate::{
         broker::{Broker, BrokerHandle},
         codes,
+        error::BrokerError,
         features::{CIDR_ACL_HOST_MIN_LEVEL, METADATA_VERSION},
         handlers::{
             create_acls::test_support::{
@@ -30,7 +31,14 @@ use {
         AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
         ResourceType,
     },
-    krabka_protocol::owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
+    krabka_protocol::owned::{
+        create_acls_request::CreateAclsRequest,
+        create_acls_response::{AclCreationResult, CreateAclsResponse},
+    },
+    std::{
+        cmp::Reverse,
+        time::{Duration, Instant},
+    },
 };
 
 /// The row Kafka's `AclApis.handleCreateAcls` sends for a committed
@@ -84,7 +92,7 @@ async fn handle_stores_long_resource_names_and_principals() {
             .call()
     };
     let mut acls = all_acls(&broker_handle);
-    acls.sort_by_key(|acl| std::cmp::Reverse(acl.resource_name.len()));
+    acls.sort_by_key(|acl| Reverse(acl.resource_name.len()));
     assert!(acls == vec![stored(&long_name, "User:a"), stored("r", &long_principal)]);
     broker_handle.shutdown().await;
 }
@@ -137,11 +145,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
     assert!(resp == expected);
 
     let acls = all_acls(&broker_handle);
-    let expected_acls = vec![
-        crate::test_support::allow_acl()
-            .resource_name("topic-a")
-            .call(),
-    ];
+    let expected_acls = vec![allow_acl().resource_name("topic-a").call()];
     assert!(acls == expected_acls);
     broker_handle.shutdown().await;
 }
@@ -233,7 +237,7 @@ async fn cidr_metadata_fixture(level: i16, label: &str) -> LiveBrokerFixture {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: METADATA_VERSION.to_string(),
+            name: METADATA_VERSION.to_owned(),
             level,
         })])
         .await
@@ -341,7 +345,7 @@ async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
 
     let result = handle(&broker, req, VERSION, &ctx).await;
 
-    assert!(let Err(crate::error::BrokerError::Protocol(_)) = result);
+    assert!(let Err(BrokerError::Protocol(_)) = result);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
 }
@@ -375,7 +379,7 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
     ]);
     assert!(resp == expected);
     let expected_acls = vec![
-        crate::test_support::allow_acl()
+        allow_acl()
             .resource_name("topic-a")
             .principal("Group:ops")
             .call(),
@@ -490,12 +494,12 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
         })
         .collect();
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let counted = super::count_new_acls(&image, &to_submit);
     let elapsed = started.elapsed();
 
     check!(counted == 10_000);
-    check!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+    check!(elapsed < Duration::from_secs(5), "{elapsed:?}");
 }
 
 async fn drive_cidr_request(broker: &Broker) -> CreateAclsResponse {
@@ -522,7 +526,7 @@ async fn check_cidr_refusal(broker_handle: &BrokerHandle) {
     assert!(all_acls(broker_handle).is_empty());
 }
 
-fn cidr_request() -> krabka_protocol::owned::create_acls_request::CreateAclsRequest {
+fn cidr_request() -> CreateAclsRequest {
     let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
     cidr_creation.host = "10.0.0.0/8".into();
     request(vec![cidr_creation])

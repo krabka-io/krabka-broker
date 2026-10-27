@@ -44,10 +44,10 @@ pub fn log_batch_kind(is_control: bool, key: &[u8]) -> LogBatchKind {
     if key.len() < 4 {
         return LogBatchKind::OtherControl;
     }
-    match (key[2], key[3]) {
-        (0, 0) => LogBatchKind::Abort,
-        (0, 1) => LogBatchKind::Commit,
-        (3, 232) => LogBatchKind::Barrier,
+    match (key.get(2), key.get(3)) {
+        (Some(0), Some(0)) => LogBatchKind::Abort,
+        (Some(0), Some(1)) => LogBatchKind::Commit,
+        (Some(3), Some(232)) => LogBatchKind::Barrier,
         _ => LogBatchKind::OtherControl,
     }
 }

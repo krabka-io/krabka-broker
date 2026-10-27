@@ -81,7 +81,7 @@ pub struct Boundary {
 }
 
 /// How one path came through the loss.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathRecovery {
     pub path: String,
     pub producer: String,
@@ -98,7 +98,7 @@ pub struct PathRecovery {
 }
 
 /// The recovery half of a drill's evidence.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryEvidence {
     pub capture_started_unix_ms: i64,
     pub disaster_unix_ms: i64,
@@ -167,7 +167,7 @@ pub fn path_recovery(
 }
 
 /// What the restored cluster served, after the loss.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoredReadings {
     pub readers: Vec<ReaderLedger>,
     /// Committed-offset checks of the restored cluster, each against the last

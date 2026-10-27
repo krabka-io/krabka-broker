@@ -16,7 +16,7 @@ use {
     proc_macro::TokenStream as NativeTokenStream,
 };
 
-pub(crate) fn expand(
+pub fn expand(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

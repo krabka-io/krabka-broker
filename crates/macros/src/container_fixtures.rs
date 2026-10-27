@@ -2,7 +2,7 @@
 
 use crate::{fixtures::name, prelude::*};
 
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         mod {{ name }} {

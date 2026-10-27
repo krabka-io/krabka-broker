@@ -36,14 +36,14 @@ use {
 };
 
 /// The `ttl_ms` value that asks for the configured lifetime.
-pub(crate) const TTL_CONFIGURED: i64 = 0;
+pub const TTL_CONFIGURED: i64 = 0;
 
 #[krabka_macros::extension_wire(
     name = "handle_propose_break_glass",
     api = "ProposeBreakGlass",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ProposeBreakGlassRequest,
     version: ApiVersion,
@@ -170,7 +170,7 @@ async fn propose(
 }
 
 /// What a caller asked to propose.
-pub(crate) struct ProposalRequest<'a> {
+pub struct ProposalRequest<'a> {
     /// The transition to gate.
     pub action: BreakGlassAction,
     /// What the transition applies to.
@@ -202,7 +202,7 @@ pub(crate) struct ProposalRequest<'a> {
 /// Returns [`Refusal`] with `BREAK_GLASS_NOT_AN_APPROVER` (1008) when the
 /// proposer is outside the approver set, and with `INVALID_REQUEST` (42) when
 /// the target is empty or the lifetime is negative.
-pub(crate) fn decide(
+pub fn decide(
     policy: BreakGlassPolicy<'_>,
     request: &ProposalRequest<'_>,
 ) -> Result<BreakGlassProposalRecord, Refusal> {

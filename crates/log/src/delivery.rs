@@ -39,7 +39,7 @@ pub struct DeliveryAdvance {
 /// The bound is added, never subtracted: if the clock reads `c` while true
 /// time lies in `[c - e, c + e]`, then `c >= activation + e` proves true time
 /// has reached the activation instant, so delivery is never early.
-pub(crate) fn visible_at_ms(activation_ms: i64, uncertainty_ms: i64) -> i64 {
+pub fn visible_at_ms(activation_ms: i64, uncertainty_ms: i64) -> i64 {
     activation_ms.saturating_add(uncertainty_ms)
 }
 
@@ -64,7 +64,7 @@ pub fn batch_is_deliverable(
 /// The walk produces them in ascending order, one per batch, so a single pass
 /// is enough. Adjacent batches merge because `[0, 4]` and `[5, 9]` describe
 /// one uninterrupted run of waiting records.
-pub(crate) fn coalesce_ranges(ranges: Vec<(Offset, Offset)>) -> Vec<(Offset, Offset)> {
+pub fn coalesce_ranges(ranges: Vec<(Offset, Offset)>) -> Vec<(Offset, Offset)> {
     let mut out: Vec<(Offset, Offset)> = Vec::with_capacity(ranges.len());
     for (low, high) in ranges {
         match out.last_mut() {

@@ -15,7 +15,10 @@ use {
     crate::{error::LogError, segment::SealedInput},
     krabka_protocol::records::{RecordBatch, header::HEADER_LEN},
     krabka_verified::compaction::{CompactionDecodeStep, compaction_decode_step},
-    std::io::{BufReader, Read},
+    std::{
+        io,
+        io::{BufReader, Read},
+    },
 };
 
 /// Byte offset of `batch_length` in the v2 batch header, after `base_offset`.
@@ -46,9 +49,10 @@ struct InputReader<'a> {
 }
 
 impl Read for InputReader<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.input.read_at(self.position, buf)?;
-        self.position += u64::try_from(read).expect("usize fits in u64");
+        // No supported target has a `usize` wider than a `u64`.
+        self.position += read as u64;
         Ok(read)
     }
 }
@@ -109,7 +113,7 @@ impl<'a> SegmentBatches<'a> {
     fn read_into_frame(&mut self, wanted: usize) -> Result<(), LogError> {
         let wanted = wanted.min(self.remaining);
         self.frame.reserve_exact(wanted);
-        let limit = u64::try_from(wanted).expect("usize fits in u64");
+        let limit = wanted as u64;
         let read = (&mut self.reader)
             .take(limit)
             .read_to_end(&mut self.frame)?;
@@ -129,14 +133,15 @@ impl<'a> SegmentBatches<'a> {
         // A short header, a bad magic byte or a negative length fails the
         // decoder on the header alone. Any other header gives the decoder the
         // body it declares, or as much of it as the input holds.
-        if self.frame.len() == HEADER_LEN {
-            let length_bytes: [u8; 4] = self.frame[BATCH_LENGTH_AT..LENGTH_PREFIX]
-                .try_into()
-                .expect("a four-byte slice");
-            if let Ok(batch_length) = usize::try_from(i32::from_be_bytes(length_bytes)) {
-                let body = (LENGTH_PREFIX + batch_length).saturating_sub(HEADER_LEN);
-                self.read_into_frame(body)?;
-            }
+        if self.frame.len() == HEADER_LEN
+            && let Some(length_bytes) = self
+                .frame
+                .get(BATCH_LENGTH_AT..LENGTH_PREFIX)
+                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            && let Ok(batch_length) = usize::try_from(i32::from_be_bytes(length_bytes))
+        {
+            let body = (LENGTH_PREFIX + batch_length).saturating_sub(HEADER_LEN);
+            self.read_into_frame(body)?;
         }
 
         let mut cursor: &[u8] = &self.frame;
@@ -194,9 +199,12 @@ mod tests {
         krabka_compression::CompressionType,
         krabka_ids::Offset,
         krabka_protocol::records::Attributes,
-        std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
+        std::{
+            fs,
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
         },
         tempfile::tempdir,
     };
@@ -247,7 +255,7 @@ mod tests {
     /// file holds `bytes`.
     fn stream(bytes: &[u8]) -> Result<Vec<RecordBatch>, LogError> {
         let dir = tempdir().unwrap();
-        std::fs::write(name::log_path(dir.path(), 0), bytes).unwrap();
+        fs::write(name::log_path(dir.path(), 0), bytes).unwrap();
         let mut segment = Segment::open_unscanned(dir.path(), Offset(0)).unwrap();
         segment.seal().unwrap();
         group_batches(&[segment.sealed_input()]).collect()

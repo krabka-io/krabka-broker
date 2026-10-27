@@ -15,11 +15,13 @@
 //! official Kafka tools in `jvm_bootstrap_controller` drive `DescribeConfigs`,
 //! `IncrementalAlterConfigs`, the three ACL RPCs and
 //! `ListPartitionReassignments`.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{
+        admin,
         configs::{controller_registration, feature_update},
         discovery::api_versions_request_for,
         sasl::{ScramAlgorithm, scram_upsertion},
@@ -28,8 +30,11 @@ use {
     },
     assert2::{assert, check},
     bytes::Bytes,
-    krabka_broker::{BrokerConfig, BrokerHandle, NodeId, config::NodeRole},
+    krabka_broker::{
+        BrokerConfig, BrokerHandle, NodeId, api_catalog::UnstableApiVersions, config::NodeRole,
+    },
     krabka_client_core::{Connection, ConnectionOptions},
+    krabka_metadata::metadata_version,
     krabka_protocol::{
         ProtocolRequest, UnknownTaggedFields,
         owned::{
@@ -75,6 +80,7 @@ use {
             delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
             delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
             describe_acls_request::DescribeAclsRequest,
+            describe_client_quotas_request,
             describe_configs_request::DescribeConfigsRequest,
             describe_delegation_token_request::DescribeDelegationTokenRequest,
             describe_user_scram_credentials_request::{
@@ -102,7 +108,11 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
-    std::time::Duration,
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        time::Duration,
+    },
+    tokio::time,
 };
 
 /// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which
@@ -178,8 +188,7 @@ async fn advertised_controller_versions(broker: &BrokerHandle) -> ApiVersionsRes
 }
 
 fn enable_trunk(config: &mut BrokerConfig) {
-    config.features.unstable_api_versions =
-        krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+    config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     config.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
 }
 
@@ -230,8 +239,8 @@ struct VersionRange {
 /// Every one of them is at the version range Kafka 4.3.1 serves, which is the
 /// vendored range, so the default and the trunk tables agree on them; trunk
 /// adds `UnregisterController`.
-fn expected_admin_versions(trunk: bool) -> std::collections::BTreeMap<i16, VersionRange> {
-    let mut versions = std::collections::BTreeMap::from(
+fn expected_admin_versions(trunk: bool) -> BTreeMap<i16, VersionRange> {
+    let mut versions = BTreeMap::from(
         [
             admin_range::<CreateTopicsRequest>(),
             admin_range::<DeleteTopicsRequest>(),
@@ -290,7 +299,7 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
         let response = advertised_controller_versions(&broker).await;
 
         let expected = expected_admin_versions(true);
-        let advertised: std::collections::BTreeMap<i16, VersionRange> = response
+        let advertised: BTreeMap<i16, VersionRange> = response
             .api_keys
             .iter()
             .filter(|api| expected.contains_key(&api.api_key))
@@ -308,8 +317,10 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
         );
         // Tagged `broker` only in Kafka, so a Kafka controller does not offer it.
         check!(
-            !response.api_keys.iter().any(|api| api.api_key
-                == krabka_protocol::owned::describe_client_quotas_request::API_KEY),
+            !response
+                .api_keys
+                .iter()
+                .any(|api| api.api_key == describe_client_quotas_request::API_KEY),
             "trunk {trunk}"
         );
         broker.shutdown().await;
@@ -330,10 +341,8 @@ async fn controller_listener_advertises_no_key_kafka_does_not() {
         let ControllerNode { broker, dir: _dir } = start_surface(trunk).await;
         let response = advertised_controller_versions(&broker).await;
 
-        let advertised: std::collections::BTreeSet<i16> =
-            response.api_keys.iter().map(|api| api.api_key).collect();
-        let mut kafka: std::collections::BTreeSet<i16> =
-            KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
+        let advertised: BTreeSet<i16> = response.api_keys.iter().map(|api| api.api_key).collect();
+        let mut kafka: BTreeSet<i16> = KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
         if trunk {
             kafka.extend(KAFKA_TRUNK_CONTROLLER_LISTENER_KEYS);
         }
@@ -686,7 +695,7 @@ async fn controller_listener_serves_unregister_controller() {
         .send(UpdateFeaturesRequest {
             feature_updates: vec![feature_update(
                 "metadata.version",
-                krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
                 1,
             )],
             ..Default::default()
@@ -711,7 +720,7 @@ async fn controller_listener_serves_unregister_controller() {
 
     check!(
         answers
-            == crate::support::admin::unregister_controller_answers()
+            == admin::unregister_controller_answers()
                 .controller_id(9)
                 .call()
     );
@@ -834,8 +843,7 @@ impl Registration {
                 .iter()
                 .filter(|(name, _)| {
                     self.with_metadata_version
-                        || name.as_str()
-                            != krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                        || name.as_str() != metadata_version::METADATA_VERSION_FEATURE
                 })
                 .map(|(name, level)| RegistrationFeature {
                     name: name.clone(),
@@ -990,7 +998,7 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
     {
         expected.push((what, outcome));
         if let Some(wait) = wait {
-            tokio::time::sleep(wait).await;
+            time::sleep(wait).await;
         }
         let image = broker.controller_image_for_test();
         let answer = connection

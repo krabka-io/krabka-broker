@@ -20,12 +20,12 @@ use {
 };
 
 /// Kafka's controller-assigned producer-ID block size.
-pub(crate) const PRODUCER_ID_BLOCK_SIZE: i32 = 1_000;
+pub const PRODUCER_ID_BLOCK_SIZE: i32 = 1_000;
 
-pub(crate) type ProducerIdBlock = krabka_verified::ProducerIdBlockPlan;
+pub type ProducerIdBlock = krabka_verified::ProducerIdBlockPlan;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ProducerIdAllocationError {
+pub enum ProducerIdAllocationError {
     #[error("broker {0} is not registered")]
     BrokerNotRegistered(NodeId),
     #[error("broker {broker_id} epoch is stale: requested {requested}, registered {registered}")]
@@ -86,7 +86,7 @@ impl From<ProducerIdAllocationError> for BrokerError {
 /// Concurrent brokers can observe the same candidate start. The controller
 /// serializes their metadata records; its monotonic validation accepts one and
 /// rejects the stale candidate. The loser observes the new image and retries.
-pub(crate) async fn allocate_block(
+pub async fn allocate_block(
     controller: &Arc<dyn MetadataSource>,
     broker_id: NodeId,
     broker_epoch: i64,

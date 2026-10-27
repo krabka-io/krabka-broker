@@ -4,6 +4,7 @@
 //! concern: topic administration, cluster discovery, the record round trip,
 //! the classic consumer group, the idempotent producer, and `InitProducerId`.
 //! A `tests/*.rs` file is a crate root, so every child names its path.
+#![cfg(test)]
 
 mod support;
 

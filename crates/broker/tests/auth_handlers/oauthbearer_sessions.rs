@@ -45,7 +45,8 @@ use {
         },
     },
     krabka_security::SaslMechanism,
-    tokio::{io::AsyncReadExt, net::TcpStream},
+    std::time::Duration,
+    tokio::{io::AsyncReadExt, net::TcpStream, time},
 };
 
 /// Sends one Metadata request on a session whose window has elapsed.
@@ -128,7 +129,7 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
         "session_lifetime_ms = {session_lifetime_ms}, expected ~300 (capped)"
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     send_metadata_on_expired_session(&mut stream).await;
 
     let n = read_session_end(&mut stream).await;
@@ -292,7 +293,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     // and the enabled list (the mechanism is enabled), moves to
     // REAUTH_BAD_MECHANISM, and fails the connection on the next frame.
     let sh_req = sasl_handshake_request::SaslHandshakeRequest {
-        mechanism: "SCRAM-SHA-512".to_string(),
+        mechanism: "SCRAM-SHA-512".to_owned(),
         ..Default::default()
     };
     let mut sh_body = BytesMut::new();
@@ -318,7 +319,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
         sh_resp
             == sasl_handshake_response::SaslHandshakeResponse {
                 error_code: 0,
-                mechanisms: vec!["OAUTHBEARER".to_string(), "SCRAM-SHA-512".to_string()],
+                mechanisms: vec!["OAUTHBEARER".to_owned(), "SCRAM-SHA-512".to_owned()],
                 ..Default::default()
             }
     );
@@ -366,7 +367,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
 
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+        .insert("alice".to_owned(), alice_password());
     let broker_stream = start_broker_stream(cfg).await;
     let handle = broker_stream.broker;
 
@@ -384,7 +385,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
         .expect("ApiVersions round-trip");
 
     let sh_req = sasl_handshake_request::SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
+        mechanism: "PLAIN".to_owned(),
         ..Default::default()
     };
     let mut sh_body = BytesMut::new();
@@ -421,9 +422,9 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     // Advance the tokio clock by an hour. The dispatch loop must NOT
     // have armed a per-connection timer for this non-OAuth session, so
     // the connection stays alive and serves further requests.
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_hours(1)).await;
-    tokio::time::resume();
+    time::pause();
+    time::advance(Duration::from_hours(1)).await;
+    time::resume();
 
     let md_req = metadata_request::MetadataRequest::default();
     let mut md_body = BytesMut::new();
@@ -452,7 +453,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
 
 async fn read_session_end(stream: &mut TcpStream) -> usize {
     let mut buf = [0_u8; 16];
-    tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+    time::timeout(Duration::from_secs(5), stream.read(&mut buf))
         .await
         .expect("read should not hang")
         .expect("read should not error")
@@ -461,8 +462,5 @@ async fn read_session_end(stream: &mut TcpStream) -> usize {
 async fn wait_past_expiration(expiration: i64) {
     let remaining = u64::try_from(expiration.saturating_sub(now_unix_secs()).max(0))
         .expect("a non-negative second count fits in u64");
-    tokio::time::sleep(
-        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
-    )
-    .await;
+    time::sleep(Duration::from_secs(remaining) + Duration::from_millis(500)).await;
 }

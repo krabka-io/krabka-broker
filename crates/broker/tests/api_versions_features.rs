@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! The KIP-584 write-side surface. `ApiVersions` v3 and above expose the
 //! feature surface that the JVM admin tooling reads. `supported_features`

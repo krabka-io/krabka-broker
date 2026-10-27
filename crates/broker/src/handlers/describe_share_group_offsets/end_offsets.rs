@@ -20,6 +20,7 @@ use {
         list_offsets_response::ListOffsetsResponse,
     },
     std::{collections::HashMap, time::Duration},
+    tokio::time::timeout,
 };
 
 /// A partition by topic name, as `ListOffsets` names it.
@@ -139,7 +140,7 @@ impl NetworkLatestOffsets<'_> {
             connection.close();
             response.ok()
         };
-        match tokio::time::timeout(LEADER_TIMEOUT, exchange).await {
+        match timeout(LEADER_TIMEOUT, exchange).await {
             Ok(Some(response)) => offsets_from(&response, &partitions),
             Ok(None) => failed(codes::NETWORK_EXCEPTION),
             Err(_) => failed(codes::REQUEST_TIMED_OUT),

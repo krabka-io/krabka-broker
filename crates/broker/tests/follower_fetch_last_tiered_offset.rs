@@ -24,6 +24,7 @@
 //! the flag is what decides whether the replica pulls them. The replica's
 //! first local segment backs it up for the flagged cases. It can only move up
 //! afterwards, so it cannot flatter a replica that started low.
+#![cfg(test)]
 
 mod support;
 
@@ -58,8 +59,10 @@ use {
     std::{
         collections::BTreeMap,
         path::Path,
+        sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The dynamic broker config under test.
@@ -206,7 +209,7 @@ async fn await_settled_leader(admin: &Client, leader_dir: &Path, topic: &str) ->
         );
         // intentional: the copy pass and local retention both run on the
         // broker's own 1s interval, and the object store is a directory.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -301,7 +304,7 @@ async fn await_caught_up(b3: &BrokerHandle, topic: &str, leader_end: i64) {
             b3.local_log_end_offset(topic, 0),
         );
         // intentional: replication has no in-process completion signal here.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -378,7 +381,7 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
             .metrics()
             .replication_bytes_in
             .get_or_create(&PartitionLabel {
-                topic: std::sync::Arc::from(case.topic),
+                topic: Arc::from(case.topic),
                 partition: 0,
             })
             .get();
