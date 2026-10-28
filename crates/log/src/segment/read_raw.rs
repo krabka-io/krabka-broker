@@ -186,6 +186,7 @@ impl Segment {
                     start_offset: range.start_offset,
                     last_offset: range.last_offset,
                     bytes,
+                    file_range: None,
                 });
             }
         }
@@ -208,10 +209,12 @@ impl Segment {
         else {
             return Ok(RawSegmentRead::empty());
         };
+        let file_range =
+            start_pos + range.positions.start as u64..start_pos + range.positions.end as u64;
         let bytes = if range.positions.end > buf.len() {
             let len = range.positions.len();
             let mut one = Vec::with_capacity(len);
-            self.read_log_range(start_pos + range.positions.start as u64, &mut one, len)?;
+            self.read_log_range(file_range.start, &mut one, len)?;
             if one.len() < len {
                 return Ok(RawSegmentRead::empty());
             }
@@ -224,6 +227,7 @@ impl Segment {
             start_offset: range.start_offset,
             last_offset: range.last_offset,
             bytes,
+            file_range: Some(file_range),
         })
     }
 }

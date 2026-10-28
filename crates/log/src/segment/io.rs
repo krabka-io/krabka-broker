@@ -161,6 +161,14 @@ impl Segment {
         }
     }
 
+    /// Drop the `len` bytes of the `.log` file from `offset` from the page
+    /// cache, in whole pages: [`LogIo::drop_cached`]. A fetch of bytes the
+    /// page-cache budget no longer holds calls this on the pages behind it,
+    /// so a consumer reading an old backlog leaves none in the cgroup.
+    pub(crate) fn drop_cached(&self, offset: u64, len: u64) {
+        self.io.drop_cached(&self.log_file, offset, len);
+    }
+
     pub(super) fn read_log_range(
         &self,
         start_pos: u64,

@@ -75,6 +75,11 @@ impl Segment {
     #[cfg(not(target_os = "wasi"))]
     pub(crate) fn log_file_handle(&self) -> Arc<File> { Arc::clone(&self.log_file) }
 
+    /// The `.log` file's shared handle, which the page-cache ledger records
+    /// its synced ranges against.
+    #[cfg(not(target_os = "wasi"))]
+    pub(crate) fn log_file(&self) -> &Arc<File> { &self.log_file }
+
     /// Mark this segment as sealed. No more appends.
     ///
     /// Sealing first writes the segment's final time-index entry, Kafka's
