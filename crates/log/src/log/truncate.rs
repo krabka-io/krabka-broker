@@ -12,7 +12,11 @@ use {
         txn_index::TxnIndex,
     },
     krabka_ids::Offset,
-    std::{collections::HashSet, sync::Arc, time::SystemTime},
+    std::{
+        collections::HashSet,
+        sync::{Arc, atomic::Ordering},
+        time::SystemTime,
+    },
     tracing::{field, instrument},
 };
 
@@ -63,6 +67,9 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
+        // Before any file changes: a read planned earlier and still running
+        // sees the count move and serves nothing, whatever it has copied.
+        self.truncations.fetch_add(1, Ordering::SeqCst);
         let log_end = self.log_end_offset();
         let empty_rolled_active_at_cut = offset == log_end
             && !self.segments.is_empty()

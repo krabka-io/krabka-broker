@@ -21,7 +21,13 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::{HEADER_LEN, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt, bytes},
-    std::{ops::Range, sync::PoisonError},
+    std::{
+        ops::Range,
+        sync::{
+            Arc, PoisonError,
+            atomic::{AtomicU64, Ordering},
+        },
+    },
     tracing::{field, instrument},
 };
 #[krabka_macros::sendfile_cfg]
@@ -252,6 +258,8 @@ impl Log {
             read_ahead_max,
             views: Vec::new(),
             may_block: self.read_may_block(fetch_offset),
+            truncations: Arc::clone(&self.truncations),
+            truncations_seen: self.truncations.load(Ordering::SeqCst),
         };
         if fetch_offset >= limit_offset {
             return Ok(plan);
@@ -280,6 +288,10 @@ impl Log {
                 break;
             }
         }
+        // The segment's own verdict knows the page cache and its direct-write
+        // tail, not the budget: pages of the active segment the budget has
+        // dropped are on the disk, and a read that starts in them waits.
+        plan.may_block |= plan.views.first().is_some_and(SegmentReadView::starts_cold);
         Ok(plan)
     }
 
@@ -472,6 +484,10 @@ pub struct RawReadPlan {
     read_ahead_max: ByteSize,
     views: Vec<SegmentReadView>,
     may_block: bool,
+    /// The log's truncation count, and its value when the plan was taken:
+    /// see `Log::truncations`.
+    truncations: Arc<AtomicU64>,
+    truncations_seen: u64,
 }
 
 impl RawReadPlan {
@@ -481,6 +497,28 @@ impl RawReadPlan {
     /// from it.
     #[must_use]
     pub fn may_block(&self) -> bool { self.may_block }
+
+    /// The offset the read cannot reach: the end of the last segment the plan
+    /// may walk, or the read's limit, whichever is lower; the read's own
+    /// offset when there is nothing to walk. A caller that needs the log's
+    /// view of the bytes the read may serve, such as the aborted transactions
+    /// a `read_committed` fetch reports beside them, takes it for this range
+    /// under the lock with the plan: bounded by the segment or two the read
+    /// may touch, not by the whole log behind it.
+    #[must_use]
+    pub fn offset_bound(&self) -> Offset {
+        self.views.last().map_or(self.fetch_offset, |view| {
+            (view.last() + 1).min(self.limit_offset)
+        })
+    }
+
+    /// Whether the log has cut a segment file since the plan was taken. The
+    /// bytes a read copied by then may mix what stood before the cut with
+    /// what was written after it, so the read serves nothing, and the next
+    /// fetch plans again against the log as it is now.
+    fn truncated_since(&self) -> bool {
+        self.truncations.load(Ordering::SeqCst) != self.truncations_seen
+    }
 
     /// Run the plan as [`Log::read_raw`] would have read.
     ///
@@ -510,6 +548,9 @@ impl RawReadPlan {
             }))
         })?;
 
+        if self.truncated_since() {
+            chunks.clear();
+        }
         let bytes = match chunks.len() {
             // No chunk is empty bytes, and one chunk is itself.
             0 | 1 => chunks.pop().unwrap_or_default(),
@@ -524,11 +565,16 @@ impl RawReadPlan {
         };
         let total = bytes.len();
         tracing::Span::current().record("total", total);
+        let served = total > 0;
         Ok(RawRead {
-            start_offset: cursor.start,
+            start_offset: if served {
+                cursor.start
+            } else {
+                self.fetch_offset
+            },
             bytes,
             total,
-            last_offset: cursor.last,
+            last_offset: cursor.last.filter(|_| served),
         })
     }
 
@@ -548,7 +594,7 @@ impl RawReadPlan {
         let stopped = Cell::new(false);
         let RawChunks {
             cursor,
-            chunks: regions,
+            chunks: mut regions,
         } = self.chunks(|view, next, remaining| {
             if stopped.get() {
                 return Ok(None);
@@ -575,12 +621,19 @@ impl RawReadPlan {
             }))
         })?;
 
+        if self.truncated_since() {
+            regions.clear();
+        }
         let total: usize = regions.iter().map(|r| r.len).sum();
         let span = tracing::Span::current();
         span.record("regions", regions.len());
         span.record("total", total);
         Ok(RawReadDesc {
-            start_offset: cursor.start,
+            start_offset: if regions.is_empty() {
+                self.fetch_offset
+            } else {
+                cursor.start
+            },
             regions,
             total,
         })

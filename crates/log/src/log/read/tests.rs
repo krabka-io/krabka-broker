@@ -1028,6 +1028,69 @@ fn a_plan_may_block_when_the_read_would() {
     );
 }
 
+/// A plan taken before a truncation reads nothing after it. A segment file
+/// cut and written again under a running read could hand it a batch header
+/// from before the cut with bytes from after, so the plan sees the log's
+/// truncation count move and serves nothing; the next fetch plans against
+/// the log as it is now.
+#[test]
+fn a_plan_taken_before_a_truncation_reads_nothing_after_it() {
+    let TempLog { dir: _dir, mut log } = test_log();
+    append_samples(&mut log, 4, 2);
+    let end = log.log_end_offset();
+    let plan = log.plan_raw_read(Offset(0), end, mebibytes(1)).unwrap();
+    let before_cut = plan.read_bytes().unwrap();
+    check!(!before_cut.bytes.is_empty());
+
+    log.truncate_to(Offset(2)).unwrap();
+    append_samples(&mut log, 1, 2);
+    let after_cut = plan.read_bytes().unwrap();
+
+    check!(after_cut.bytes.is_empty());
+    check!(after_cut.start_offset == Offset(0));
+    check!(after_cut.last_offset.is_none());
+    check!(described_lengths(&plan).is_empty());
+    let fresh = log
+        .read_raw(Offset(0), log.log_end_offset(), mebibytes(1))
+        .unwrap();
+    check!(!fresh.bytes.is_empty());
+}
+
+/// The offset a plan's read cannot reach follows the segments it may walk:
+/// the end of the last of them, the limit when that is lower, and the read's
+/// own offset when there is nothing to walk.
+#[test]
+fn a_plan_bounds_the_offsets_its_read_can_reach() {
+    let dir = tempdir().unwrap();
+    let log = one_batch_per_segment(dir.path(), 12);
+    let end = log.log_end_offset();
+
+    check!(
+        log.plan_raw_read(Offset(0), end, bytes(1))
+            .unwrap()
+            .offset_bound()
+            == Offset(1)
+    );
+    check!(
+        log.plan_raw_read(Offset(0), end, mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == end
+    );
+    check!(
+        log.plan_raw_read(Offset(0), Offset(5), mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == Offset(5)
+    );
+    check!(
+        log.plan_raw_read(end, end, mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == end
+    );
+}
+
 /// Planning stops once the views it holds can fill the budget, so a read
 /// of a few bytes from a log of many small segments views one or two
 /// segments, not all of them, and a read with no limit views what it needs.

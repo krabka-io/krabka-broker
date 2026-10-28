@@ -35,7 +35,7 @@ use {
         collections::{BTreeMap, BTreeSet, HashMap},
         fs,
         path::Path,
-        sync::{Arc, PoisonError, RwLock},
+        sync::{Arc, PoisonError, RwLock, atomic::AtomicU64},
         time::Instant,
     },
     tracing::{field, instrument},
@@ -234,6 +234,7 @@ impl Log {
             writeback_jobs: VecDeque::new(),
             #[cfg(not(target_os = "wasi"))]
             writeback_handed: 0,
+            truncations: Arc::new(AtomicU64::new(0)),
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,

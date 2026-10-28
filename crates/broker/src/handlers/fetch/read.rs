@@ -14,7 +14,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::Partition,
     },
-    krabka_log::{Log, LogError, Offset, RawReadPlan},
+    krabka_log::{AbortedTxn, Log, LogError, Offset, RawReadPlan},
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
         records::RecordsPayload,
@@ -335,10 +335,14 @@ async fn run_blocking_read(
     // Under the log mutex, the plan alone: index lookups and handle clones,
     // which never wait on storage, so it runs on the calling task whenever
     // the mutex is free and hands off only to wait for a holder.
-    let plan = run_page_cache_io(
+    let (plan, aborted) = run_page_cache_io(
         log,
         |_| true,
-        move |log| log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max),
+        move |log| {
+            let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
+            let aborted = aborted_candidates(log, &read, &plan);
+            Ok::<_, LogError>((plan, aborted))
+        },
     )
     .await
     .map_err(|error| read_task_panicked(&error))??;
@@ -354,17 +358,7 @@ async fn run_blocking_read(
     } else {
         run_read(&plan, &read)?
     };
-    let aborted = if read.read_committed_aborts {
-        run_page_cache_io(
-            log,
-            |_| true,
-            move |log| aborted_for(log, &read, served_upper_bound),
-        )
-        .await
-        .map_err(|error| read_task_panicked(&error))?
-    } else {
-        Vec::new()
-    };
+    let aborted = aborted_served(aborted, &read, served_upper_bound);
     let records = (records.payload_len() > 0).then_some(records);
     Ok(ServedRecords { records, aborted })
 }
@@ -381,26 +375,48 @@ fn read_task_panicked(cause: &impl fmt::Display) -> BrokerError {
 #[cfg(test)]
 fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError> {
     let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
+    let candidates = aborted_candidates(log, read, &plan);
     let (records, served_upper_bound) = run_read(&plan, read)?;
-    let aborted = aborted_for(log, read, served_upper_bound);
+    let aborted = aborted_served(candidates, read, served_upper_bound);
     Ok(RawServed { records, aborted })
 }
 
+/// The aborted transactions a `read_committed` fetch may have to report:
+/// every one that overlaps the range the read may serve, from `fetch_offset`
+/// to where the plan says the read cannot reach or the last stable offset,
+/// whichever is lower, taken under the log mutex together with the plan. The
+/// plan's files outlive a segment that retention removes while the read
+/// runs, but the segment's transaction index goes with it, so a scan after
+/// the read could miss aborted transactions in bytes the read serves. The
+/// plan's bound keeps the scan to the segment or two the read may touch: a
+/// small fetch into a long transactional backlog does not walk the backlog's
+/// indexes on every call. None for any other fetch.
+fn aborted_candidates(log: &Log, read: &BlockingRead, plan: &RawReadPlan) -> Vec<AbortedTxn> {
+    if !read.read_committed_aborts {
+        return Vec::new();
+    }
+    log.aborted_in_range(
+        read.fetch_offset,
+        plan.offset_bound().min(read.effective_lso),
+    )
+}
+
 /// The aborted transactions a `read_committed` fetch reports beside the
-/// bytes it served, which end at `served_upper_bound`; none for any other
-/// fetch.
+/// bytes it served, which end at `served_upper_bound`: the `candidates`
+/// narrowed to those that overlap the served offsets, which is what a scan
+/// bounded by them finds. None for any other fetch.
 ///
 /// `read_committed` does NO server-side batch filtering: verbatim bytes
 /// (including aborted/control batches) are returned and the consumer drops
 /// them client-side via `aborted_transactions`, matching Apache Kafka's
-/// behavior. The scan is bounded by the offset just past the bytes the read
-/// actually served, not by `effective_lso`: `partition_max_bytes` (or KFC-1's
-/// delivery watermark) can clip the read well short of the LSO, and Kafka's
+/// behavior. The bound is the offset just past the bytes the read actually
+/// served, not `effective_lso`: `partition_max_bytes` (or KFC-1's delivery
+/// watermark) can clip the read well short of the LSO, and Kafka's
 /// `LocalLog.addAbortedTransactions` bounds the same scan by
 /// `fetchUpperBoundOffset`, the position the read stopped at, for exactly
-/// that reason. A read that served nothing scans nothing.
-fn aborted_for(
-    log: &Log,
+/// that reason. A read that served nothing reports nothing.
+fn aborted_served(
+    candidates: Vec<AbortedTxn>,
     read: &BlockingRead,
     served_upper_bound: Option<Offset>,
 ) -> Vec<AbortedTransaction> {
@@ -409,8 +425,9 @@ fn aborted_for(
     }
     let upper_bound =
         served_upper_bound.map_or(read.fetch_offset, |served| served.min(read.effective_lso));
-    log.aborted_in_range(read.fetch_offset, upper_bound)
+    candidates
         .into_iter()
+        .filter(|txn| txn.overlaps(read.fetch_offset, upper_bound))
         .map(|e| AbortedTransaction {
             // Unwrap the log-layer `ProducerId` into the wire `i64` field.
             producer_id: e.producer_id.get(),
@@ -1028,45 +1045,82 @@ mod tests {
         );
     }
 
+    /// A log of two aborted transactions, the second appended after the
+    /// first's abort marker, with the raw bytes of the first alone.
+    fn two_aborted_transactions() -> (LogInDir, krabka_log::RawRead) {
+        const OTHER_PID: i64 = PID + 1;
+
+        let LogInDir { dir, mut log } = aborted_transaction_log();
+        let clip_at = log.log_end_offset();
+        log.append(&mut transactional_batch(ProducerId(OTHER_PID)))
+            .expect("append the second transaction's data");
+        log.append(&mut abort_marker(ProducerId(OTHER_PID)))
+            .expect("append the second transaction's abort marker");
+        // The exact byte length of the first transaction's two batches: a
+        // budget of this many bytes serves exactly them, whatever
+        // `limit_offset` or `effective_lso` ask for beyond that.
+        let clip = log
+            .read_raw(Offset(0), clip_at, UNBOUNDED)
+            .expect("read the first transaction alone");
+        (LogInDir { log, dir }, clip)
+    }
+
+    /// A `read_committed` read over both transactions of
+    /// [`two_aborted_transactions`] whose byte budget is the first
+    /// transaction's bytes, so only the first is served.
+    fn read_clipped_to(clip: &krabka_log::RawRead, full_end: Offset) -> super::BlockingRead {
+        super::BlockingRead {
+            fetch_offset: Offset(0),
+            limit_offset: full_end,
+            // Spans both transactions; only the byte budget clips the read to
+            // the first one.
+            effective_lso: full_end,
+            read_max: krabka_units::ByteSize::from_bytes(
+                u64::try_from(clip.total).unwrap_or(u64::MAX),
+            ),
+            read_committed_aborts: true,
+            sendfile_capable: false,
+            sendfile_min_bytes: 0,
+        }
+    }
+
+    /// The split read, planned under the mutex and run without it, reports
+    /// the same aborted transactions as the single call under the mutex: the
+    /// candidates it takes with the plan, narrowed to the bytes it served,
+    /// are what a scan bounded by those bytes finds. Here the budget clips
+    /// the read to the first of two aborted transactions.
+    #[test]
+    fn the_split_read_reports_the_aborted_ranges_the_single_call_reports() {
+        let (LogInDir { dir: _dir, log }, clip) = two_aborted_transactions();
+        let read = read_clipped_to(&clip, log.log_end_offset());
+        let log = Arc::new(Mutex::new(log));
+
+        let single = super::read_records(&log.lock().expect("log mutex"), &read)
+            .expect("the single-call read succeeds");
+        let split = Builder::new_current_thread()
+            .build()
+            .expect("build a current-thread runtime")
+            .block_on(super::run_blocking_read(&log, &read))
+            .expect("the split read succeeds");
+
+        assert!(single.aborted.len() == 1);
+        assert!(split.aborted == single.aborted);
+        assert!(split.records == Some(single.records));
+    }
+
     /// `partition_max_bytes` can clip a read well short of the last stable
     /// offset. The aborted-transaction scan has to stop at the bytes the
     /// response actually carries, not at the full LSO, or a response with one
     /// batch can carry the aborted list of a much longer range (#874).
     #[test]
     fn read_committed_aborted_scan_stops_at_the_bytes_actually_served() {
-        const OTHER_PID: i64 = PID + 1;
-
-        let LogInDir { dir: _dir, mut log } = aborted_transaction_log();
-        let clip_at = log.log_end_offset();
-        log.append(&mut transactional_batch(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's data");
-        log.append(&mut abort_marker(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's abort marker");
-        let full_end = log.log_end_offset();
-
-        // The exact byte length of the first transaction's two batches: a
-        // budget of this many bytes should serve exactly them, whatever
-        // `limit_offset` or `effective_lso` ask for beyond that.
-        let clip = log
-            .read_raw(Offset(0), clip_at, UNBOUNDED)
-            .expect("read the first transaction alone");
+        let (LogInDir { dir: _dir, log }, clip) = two_aborted_transactions();
+        let read = read_clipped_to(&clip, log.log_end_offset());
 
         let log = Mutex::new(log);
         let RawServed { records, aborted } =
-            super::read_records(&log.lock().expect("log mutex"), &super::BlockingRead {
-                fetch_offset: Offset(0),
-                limit_offset: full_end,
-                // Spans both transactions; only the byte budget below clips
-                // the read to the first one.
-                effective_lso: full_end,
-                read_max: krabka_units::ByteSize::from_bytes(
-                    u64::try_from(clip.total).unwrap_or(u64::MAX),
-                ),
-                read_committed_aborts: true,
-                sendfile_capable: false,
-                sendfile_min_bytes: 0,
-            })
-            .expect("the blocking read succeeds");
+            super::read_records(&log.lock().expect("log mutex"), &read)
+                .expect("the blocking read succeeds");
 
         assert!(records == RecordsPayload::Raw(clip.bytes));
         assert!(
