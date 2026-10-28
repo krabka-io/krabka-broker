@@ -48,8 +48,8 @@ fn console() -> ConsoleAdministration {
 async fn console_group(
     console: &mut ConsoleAdministration,
     group: String,
-    partitions: i32,
     topic: String,
+    partitions: i32,
 ) {
     console.broker = Some(start_console_group(&topic, &group, partitions).await);
     console.topic = topic;

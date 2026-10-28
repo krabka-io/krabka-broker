@@ -53,7 +53,7 @@ async fn producer_topic(sequences: &mut ProducerSequences, topic: String, produc
 }
 
 #[when("a producer batch starts at sequence {sequence} with record count {records}")]
-async fn send_sequence(sequences: &mut ProducerSequences, records: usize, sequence: i32) {
+async fn send_sequence(sequences: &mut ProducerSequences, sequence: i32, records: usize) {
     let client = sequences
         .client
         .as_ref()
@@ -71,7 +71,7 @@ async fn send_sequence(sequences: &mut ProducerSequences, records: usize, sequen
 
 #[when("the producer sends three records starting just before sequence rollover")]
 async fn cross_rollover(sequences: &mut ProducerSequences) {
-    send_sequence(sequences, 3, i32::MAX - 1).await;
+    send_sequence(sequences, i32::MAX - 1, 3).await;
 }
 
 #[when("the partition settles at log end five")]

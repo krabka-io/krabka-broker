@@ -112,11 +112,11 @@ async fn a_record_stamped_in_the_future_waits_for_its_delivery_time(
     delivery: DeliveryScenario,
     mode: String,
     topic: String,
-    held: bool,
     latest: i64,
     values: String,
+    held: bool,
 ) {
-    let _ = (mode, topic, held, latest, values);
+    let _ = (mode, topic, latest, values, held);
     delivery.shutdown().await;
 }
 
