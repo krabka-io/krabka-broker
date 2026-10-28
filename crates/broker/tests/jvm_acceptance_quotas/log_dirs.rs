@@ -14,9 +14,11 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     std::fs,
     tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
 
 struct DirectoryReport {
+    port_ownership: Option<MutexGuard<'static, ()>>,
     broker: Option<BrokerHandle>,
     primary: Option<TempDir>,
     extra: Option<TempDir>,
@@ -27,6 +29,7 @@ fn directories() -> DirectoryReport {
     // Start this scenario with fresh inputs and observations.
 
     DirectoryReport {
+        port_ownership: None,
         broker: None,
         primary: None,
         extra: None,
@@ -36,6 +39,7 @@ fn directories() -> DirectoryReport {
 
 #[given("six partitions are materialized across a broker configured with two log directories")]
 async fn jbod_topic(directories: &mut DirectoryReport) {
+    directories.port_ownership = Some(crate::claim_broker_ports().await);
     let (broker, primary, extra) = start_host_broker_jbod().await;
     nc_check_connectivity();
 
@@ -116,5 +120,15 @@ fn visible_directories(directories: &DirectoryReport) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jvm_kafka_log_dirs_describe_reports_jbod_spread(directories: DirectoryReport) {
-    directories.broker.expect("running broker").shutdown().await;
+    directories.shutdown().await;
+    drop(directories);
+}
+
+impl DirectoryReport {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        self.broker.take().expect("running broker").shutdown().await;
+        drop((self.primary.take(), self.extra.take()));
+        drop(port_ownership);
+    }
 }

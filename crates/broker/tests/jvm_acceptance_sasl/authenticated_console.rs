@@ -4,10 +4,11 @@ use {
     crate::{
         jvm_acceptance::{
             ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_TXN,
-            broker0_advertised, consume_console, create_console_topic,
-            docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity, numbered_payload,
-            oauthbearer_jaas, plain_jaas, produce_console, provision_plain_scram, scram_jaas,
-            start_dual_mech_broker, start_dual_mech_broker_with_reauth, start_oauthbearer_broker,
+            assert_numbered_console_values, broker0_advertised, consume_console,
+            create_console_topic, docker_run_kafka_tool_with_image_and_mount,
+            nc_check_connectivity, numbered_payload, oauthbearer_jaas, plain_jaas, produce_console,
+            provision_plain_scram, scram_jaas, start_dual_mech_broker,
+            start_dual_mech_broker_with_reauth, start_oauthbearer_broker,
             start_sasl_plaintext_broker, write_client_props, write_plain_props,
         },
         support::jvm_docker_command,
@@ -183,7 +184,7 @@ fn authenticated_creation(authentication: &Authentication) {
     );
 }
 
-#[when("the authenticated console producer writes ten numbered records")]
+#[when("the authenticated console producer writes msg-0 through msg-9")]
 fn produce_authenticated(authentication: &mut Authentication) {
     let mount = authentication
         .client
@@ -231,7 +232,7 @@ fn consume_authenticated(authentication: &mut Authentication) {
     ));
 }
 
-#[then("the authenticated consumer succeeds and returns all ten numbered values")]
+#[then("the authenticated consumer succeeds and returns msg-0 through msg-9")]
 fn authenticated_values(authentication: &Authentication) {
     let output = authentication
         .consumed
@@ -242,14 +243,7 @@ fn authenticated_values(authentication: &Authentication) {
         "consumer failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for index in 0..10 {
-        let needle = format!("msg-{index:04}");
-        assert!(
-            stdout.contains(&needle),
-            "consumer missing {needle}: {stdout:?}"
-        );
-    }
+    assert_numbered_console_values(output, "msg-", 10);
 }
 
 #[when("the JVM verifiable producer sends ten records at one record per second")]

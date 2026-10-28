@@ -17,10 +17,12 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
     std::process::Output,
+    tokio::sync::MutexGuard,
 };
 
 const TOPIC: &str = "krabka-deleg-token-itest";
 struct TokenLifecycle {
+    port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
     admin: Option<ClientPropsFile>,
     created: Option<Output>,
@@ -35,6 +37,7 @@ fn token() -> TokenLifecycle {
     // Start this scenario with fresh inputs and observations.
 
     TokenLifecycle {
+        port_ownership: None,
         cluster: None,
         admin: None,
         created: None,
@@ -47,6 +50,7 @@ fn token() -> TokenLifecycle {
 }
 #[given("three registered SASL brokers share the delegation token master key")]
 async fn token_cluster(token: &mut TokenLifecycle) {
+    token.port_ownership = Some(crate::claim_broker_ports().await);
     let cluster = start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
         ADMIN,
         ADMIN_PASS,
@@ -196,9 +200,18 @@ fn expired(token: &TokenLifecycle) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jvm_kafka_delegation_tokens_end_to_end(token: TokenLifecycle) {
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        token.cluster.expect("token cluster started");
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    token.shutdown().await;
+    drop(token);
+}
+
+impl TokenLifecycle {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
+            self.cluster.take().expect("token cluster started");
+        h1.shutdown().await;
+        h2.shutdown().await;
+        h3.shutdown().await;
+        drop(port_ownership);
+    }
 }

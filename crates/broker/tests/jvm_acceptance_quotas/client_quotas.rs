@@ -11,8 +11,10 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
     std::process::Output,
+    tokio::sync::MutexGuard,
 };
 struct QuotaAdministration {
+    port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
     admin: Option<ClientPropsFile>,
     entity: String,
@@ -28,6 +30,7 @@ fn quota() -> QuotaAdministration {
     // Start this scenario with fresh inputs and observations.
 
     QuotaAdministration {
+        port_ownership: None,
         cluster: None,
         admin: None,
         entity: String::new(),
@@ -41,6 +44,7 @@ fn quota() -> QuotaAdministration {
 }
 #[given("three registered SASL brokers accept the administrator and these extra PLAIN users")]
 async fn cluster(quota: &mut QuotaAdministration, datatable: Vec<Vec<String>>) {
+    quota.port_ownership = Some(crate::claim_broker_ports().await);
     let users: Vec<(String, String)> = datatable
         .into_iter()
         .skip(1)
@@ -164,12 +168,16 @@ async fn removed(quota: &QuotaAdministration) {
         })
         .await;
 }
-async fn shutdown(quota: QuotaAdministration) {
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        quota.cluster.expect("SASL quota cluster started");
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+impl QuotaAdministration {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
+            self.cluster.take().expect("SASL quota cluster started");
+        h1.shutdown().await;
+        h2.shutdown().await;
+        h3.shutdown().await;
+        drop(port_ownership);
+    }
 }
 
 #[ignore = "requires Docker"]
@@ -179,7 +187,8 @@ async fn shutdown(quota: QuotaAdministration) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jvm_kafka_configs_alter_client_quota_end_to_end(quota: QuotaAdministration) {
-    Box::pin(shutdown(quota)).await;
+    Box::pin(quota.shutdown()).await;
+    drop(quota);
 }
 
 #[ignore = "requires Docker"]
@@ -189,7 +198,8 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end(quota: QuotaAdministrat
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jvm_kafka_configs_alter_ip_quota_end_to_end(quota: QuotaAdministration) {
-    Box::pin(shutdown(quota)).await;
+    Box::pin(quota.shutdown()).await;
+    drop(quota);
 }
 
 #[ignore = "requires Docker"]
@@ -199,5 +209,6 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end(quota: QuotaAdministration)
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end(quota: QuotaAdministration) {
-    Box::pin(shutdown(quota)).await;
+    Box::pin(quota.shutdown()).await;
+    drop(quota);
 }

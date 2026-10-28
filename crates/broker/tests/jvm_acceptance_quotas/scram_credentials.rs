@@ -11,9 +11,11 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
     std::process::Output,
+    tokio::sync::MutexGuard,
 };
 
 struct CredentialInspection {
+    port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
     admin: Option<ClientPropsFile>,
     altered: Option<Output>,
@@ -24,6 +26,7 @@ fn credentials() -> CredentialInspection {
     // Start this scenario with fresh inputs and observations.
 
     CredentialInspection {
+        port_ownership: None,
         cluster: None,
         admin: None,
         altered: None,
@@ -32,6 +35,7 @@ fn credentials() -> CredentialInspection {
 }
 #[given("a three broker SASL cluster accepts the administrator's PLAIN identity")]
 async fn secured_cluster(credentials: &mut CredentialInspection) {
+    credentials.port_ownership = Some(crate::claim_broker_ports().await);
     credentials.cluster =
         Some(Box::pin(start_three_broker_sasl_plaintext_jvm_cluster().call()).await);
     nc_check_connectivity();
@@ -103,5 +107,20 @@ fn mechanism(credentials: &CredentialInspection) {
 async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end(
     credentials: CredentialInspection,
 ) {
+    credentials.shutdown().await;
     drop(credentials);
+}
+
+impl CredentialInspection {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) = self
+            .cluster
+            .take()
+            .expect("SCRAM credential cluster started");
+        h1.shutdown().await;
+        h2.shutdown().await;
+        h3.shutdown().await;
+        drop(port_ownership);
+    }
 }
