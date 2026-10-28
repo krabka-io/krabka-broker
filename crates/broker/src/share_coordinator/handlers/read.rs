@@ -85,6 +85,7 @@ mod tests {
             owned::read_share_group_state_request::{PartitionData, ReadStateData},
             primitives::uuid::Uuid as ProtoUuid,
         },
+        rstest_bdd::datatable::Rows,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([33; 16]);
@@ -163,7 +164,7 @@ mod tests {
     async fn request_read_story(
         read_story: &mut ReadStory,
         group: String,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<ReadStoryRequest>,
+        #[datatable] datatable: Rows<ReadStoryRequest>,
     ) {
         let group = group_name_literal(group);
         let requested: Vec<_> = datatable
@@ -190,7 +191,7 @@ mod tests {
                 &read_story.state.as_ref().expect("seeded state").coordinator,
                 &read_story.state.as_ref().expect("seeded state").image,
                 ReadShareGroupStateRequest {
-                    group_id: group.into(),
+                    group_id: group,
                     ..Default::default()
                 },
             )
@@ -202,7 +203,7 @@ mod tests {
     )]
     fn response_read_story(
         read_story: &ReadStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<ReadStoryExpected>,
+        #[datatable] datatable: Rows<ReadStoryExpected>,
     ) {
         let expected: Vec<_> = datatable
             .into_iter()

@@ -830,7 +830,7 @@ mod tests {
         } else {
             Some(expiry.parse().expect("expiry timestamp"))
         };
-        stored_offset.value = Some(value(expiry, if topic_id { Some(TOPIC_ID) } else { None }));
+        stored_offset.value = Some(value(expiry, topic_id.then_some(TOPIC_ID)));
     }
     #[when("the coordinator serializes the offset commit and reads it from the compacted log")]
     fn offset_commit_codec(stored_offset: &mut StoredOffset) {
@@ -863,7 +863,7 @@ mod tests {
                     .as_ref()
                     .expect("original commit")
                     .expire_timestamp_ms,
-                if topic_id { Some(TOPIC_ID) } else { None },
+                topic_id.then_some(TOPIC_ID),
             )
         };
         assert!(stored_offset.decoded.as_ref() == Some(&expected));

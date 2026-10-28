@@ -385,6 +385,7 @@ async fn completed_recovered_transaction(
         assert!(state.state == TxnState::CompleteCommit);
         assert!(state.next_producer_id.is_none());
         assert!(state.next_producer_epoch == -1);
+        drop(state);
     }
     transaction_initialization
         .started

@@ -316,20 +316,8 @@ async fn controller_listener_key_set(controller_admin: &mut ControllerAdminScena
         .iter()
         .map(|api| api.api_key)
         .collect::<BTreeSet<_>>();
-    check!(
-        advertised
-            .difference(&expected)
-            .copied()
-            .collect::<Vec<_>>()
-            .is_empty()
-    );
-    check!(
-        expected
-            .difference(&advertised)
-            .copied()
-            .collect::<Vec<_>>()
-            .is_empty()
-    );
+    check!(advertised.difference(&expected).next().is_none());
+    check!(expected.difference(&advertised).next().is_none());
     controller_admin.shutdown().await;
 }
 #[rstest_bdd_macros::when(

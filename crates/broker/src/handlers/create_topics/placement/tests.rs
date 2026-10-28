@@ -242,10 +242,12 @@ fn manual_assignments_preserve_partition_order_and_validate_brokers() {
     assert!(assignments == vec![vec![NodeId(1), NodeId(2)], vec![NodeId(2), NodeId(1)]]);
 }
 
+type ManualReplicaAssignmentResult = Result<Vec<Vec<NodeId>>, (i16, String)>;
+
 #[derive(Default)]
 struct ManualPlacementScenario {
     topic: CreatableTopic,
-    result: Option<Result<Vec<Vec<NodeId>>, (i16, String)>>,
+    result: Option<ManualReplicaAssignmentResult>,
 }
 #[rstest::fixture]
 fn manual_placement() -> ManualPlacementScenario {

@@ -97,6 +97,7 @@ pub mod test_support {
             },
             primitives::uuid::Uuid as ProtoUuid,
         },
+        rstest_bdd::datatable::Rows,
         std::{ops::RangeInclusive, path::Path, sync::Arc, time::Duration},
         tokio::time::{sleep, timeout},
     };
@@ -252,9 +253,7 @@ pub mod test_support {
     }
 
     /// Construct explicit per-topic reply rows with the wire schema's default tags.
-    pub fn state_response_rows<R: StateReply>(
-        rows: rstest_bdd::datatable::Rows<StateResponseRow>,
-    ) -> R {
+    pub fn state_response_rows<R: StateReply>(rows: Rows<StateResponseRow>) -> R {
         R::from_results(
             rows.into_iter()
                 .map(|row| {

@@ -189,7 +189,7 @@ fn rejected_witness_config(witness_config: &WitnessConfig) {
     name = "witness role is a read only broker config"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_role_is_a_read_only_broker_config(mut witness_config: WitnessConfig) {
+async fn witness_role_is_a_read_only_broker_config(witness_config: WitnessConfig) {
     witness_config.shutdown().await;
     drop(witness_config);
 }

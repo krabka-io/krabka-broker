@@ -733,7 +733,7 @@ struct ShareStateInitialization {
     reply: Option<ObservedShareOperation>,
     snapshots: Option<usize>,
     summary: Option<ShareSummaryObservation>,
-    _directory_guard: Option<tempfile::TempDir>,
+    directory_guard: Option<tempfile::TempDir>,
 }
 
 #[rstest::fixture]
@@ -760,7 +760,7 @@ async fn initialized_share_state_key(
         .expect("initial share state");
     share_state_initialization.setup = Some(setup);
     share_state_initialization.image = Some(image);
-    share_state_initialization._directory_guard = Some(directory);
+    share_state_initialization.directory_guard = Some(directory);
 }
 
 #[rstest_bdd_macros::given("the repeated InitializeShareGroupState request is JSON {request}")]
@@ -866,7 +866,7 @@ struct ShareStateWrite {
     request: Option<ShareStateWriteRequest>,
     reply: Option<ObservedShareOperation>,
     summary: Option<ShareSummaryObservation>,
-    _directory_guard: Option<tempfile::TempDir>,
+    directory_guard: Option<tempfile::TempDir>,
 }
 
 #[rstest::fixture]
@@ -881,7 +881,7 @@ fn share_state_write() -> ShareStateWrite {
 async fn seeded_share_state_write(share_state_write: &mut ShareStateWrite, trunk: bool) {
     let directory = tempdir().expect("fresh share state write log");
     share_state_write.seeded = Some(seeded(directory.path(), trunk).await);
-    share_state_write._directory_guard = Some(directory);
+    share_state_write.directory_guard = Some(directory);
 }
 
 #[rstest_bdd_macros::given(

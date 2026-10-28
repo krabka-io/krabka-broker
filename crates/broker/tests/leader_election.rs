@@ -621,7 +621,7 @@ fn served_election_attempts(election_behavior: &ElectionBehavior) {
     name = "broker death elects new leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_death_elects_new_leader(mut election_behavior: ElectionBehavior) {
+async fn broker_death_elects_new_leader(election_behavior: ElectionBehavior) {
     election_behavior.shutdown().await;
     drop(election_behavior);
 }
@@ -632,7 +632,7 @@ async fn broker_death_elects_new_leader(mut election_behavior: ElectionBehavior)
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_failover_recovers_after_a_real_broker_restart(
-    mut election_behavior: ElectionBehavior,
+    election_behavior: ElectionBehavior,
 ) {
     election_behavior.shutdown().await;
     drop(election_behavior);
@@ -643,7 +643,7 @@ async fn unclean_failover_recovers_after_a_real_broker_restart(
     name = "acks all completes after isr shrink"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_completes_after_isr_shrink(mut election_behavior: ElectionBehavior) {
+async fn acks_all_completes_after_isr_shrink(election_behavior: ElectionBehavior) {
     election_behavior.shutdown().await;
     drop(election_behavior);
 }
@@ -653,7 +653,7 @@ async fn acks_all_completes_after_isr_shrink(mut election_behavior: ElectionBeha
     name = "isr expand on catchup"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isr_expand_on_catchup(mut election_behavior: ElectionBehavior) {
+async fn isr_expand_on_catchup(election_behavior: ElectionBehavior) {
     election_behavior.shutdown().await;
     drop(election_behavior);
 }
@@ -663,7 +663,7 @@ async fn isr_expand_on_catchup(mut election_behavior: ElectionBehavior) {
     name = "produce during leader failover"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_during_leader_failover(mut election_behavior: ElectionBehavior) {
+async fn produce_during_leader_failover(election_behavior: ElectionBehavior) {
     election_behavior.shutdown().await;
     drop(election_behavior);
 }
@@ -948,7 +948,7 @@ async fn rejoined_session_fenced_controller(election_behavior: &ElectionBehavior
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership(
-    mut election_behavior: ElectionBehavior,
+    election_behavior: ElectionBehavior,
 ) {
     election_behavior.shutdown().await;
     drop(election_behavior);
@@ -960,7 +960,7 @@ async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership(
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership(
-    mut election_behavior: ElectionBehavior,
+    election_behavior: ElectionBehavior,
 ) {
     election_behavior.shutdown().await;
     drop(election_behavior);

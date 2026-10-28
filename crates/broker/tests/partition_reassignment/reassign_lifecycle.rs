@@ -28,7 +28,7 @@ use {
     krabka_protocol::owned::list_partition_reassignments_response::OngoingTopicReassignment,
     std::{
         collections::HashSet,
-        fs,
+        fs, iter, mem,
         net::SocketAddr,
         sync::OnceLock,
         time::{Duration, Instant},
@@ -119,14 +119,14 @@ impl ReassignmentBehavior {
         self.removing = broker_id(*self.original.last().expect("RF2 replicas"));
     }
 
-    async fn shutdown(self) {
+    async fn shutdown(&mut self) {
         let Self {
             guard,
             brokers,
             directories,
             extra_directories,
             ..
-        } = self;
+        } = mem::take(self);
         for broker in brokers.into_iter().flatten() {
             broker.shutdown().await;
         }
@@ -151,7 +151,9 @@ async fn foo_reassignment_cluster(reassignment: &mut ReassignmentBehavior) {
 )]
 async fn preplaced_reassignment_cluster(reassignment: &mut ReassignmentBehavior) {
     reassignment.topic = "preplaced".into();
-    reassignment.extra_directories = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    reassignment.extra_directories = iter::repeat_with(|| tempfile::tempdir().unwrap())
+        .take(3)
+        .collect();
     let paths = [0, 1, 2].map(|index| reassignment.extra_directories[index].path().to_path_buf());
     reassignment.install(start_three_broker_plaintext_cluster_with_log_dirs(&paths).await);
     create_automatic_topic_plaintext()
@@ -477,6 +479,7 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     reassignment: ReassignmentBehavior,
 ) {
     reassignment.shutdown().await;
+    drop(reassignment);
 }
 
 #[rstest_bdd_macros::scenario(
@@ -486,6 +489,7 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn alter_then_complete_via_isr_catchup(reassignment: ReassignmentBehavior) {
     reassignment.shutdown().await;
+    drop(reassignment);
 }
 
 #[rstest_bdd_macros::scenario(
@@ -495,6 +499,7 @@ async fn alter_then_complete_via_isr_catchup(reassignment: ReassignmentBehavior)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_in_flight_returns_pending_rows(reassignment: ReassignmentBehavior) {
     reassignment.shutdown().await;
+    drop(reassignment);
 }
 
 #[rstest_bdd_macros::scenario(
@@ -504,4 +509,5 @@ async fn list_in_flight_returns_pending_rows(reassignment: ReassignmentBehavior)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_via_null_replicas_reverts(reassignment: ReassignmentBehavior) {
     reassignment.shutdown().await;
+    drop(reassignment);
 }

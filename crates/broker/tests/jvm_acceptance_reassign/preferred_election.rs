@@ -206,7 +206,7 @@ async fn preferred_leads(election: &PreferredElection) {
 // the difference.
 
 use crate::{
-    oracle::{CliRun, Side, ToolFile},
+    oracle::{Side, ToolFile},
     support::jvm_docker_command,
     tool_output::{ElectionOutcome, TopicPartition, election_json, parse_election},
 };
@@ -334,7 +334,7 @@ async fn preferred_offline(unavailable: &mut OfflineReplicaCommand, topic: Strin
     let side = unavailable.side();
     let topic = unavailable.topic.as_str();
     let props = &unavailable.props;
-    let props_file = ToolFile::new("/client.properties", &props);
+    let props_file = ToolFile::new("/client.properties", props);
 
     side.run_with_files(
         "kafka-topics",
@@ -417,7 +417,7 @@ fn elect_unavailable(unavailable: &mut OfflineReplicaCommand) {
             "/client.properties",
         ],
         &[
-            ToolFile::new("/client.properties", &props),
+            ToolFile::new("/client.properties", props),
             ToolFile::new(ELECTION_JSON, &document),
         ],
         None,

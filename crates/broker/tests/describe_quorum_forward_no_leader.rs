@@ -14,7 +14,6 @@ mod support;
 
 use {
     crate::support::{client::connect_owned, shutdown_cluster, start_n_node_with_retry},
-    SocketAddr,
     assert2::{assert, check},
 };
 

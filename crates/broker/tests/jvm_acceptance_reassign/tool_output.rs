@@ -424,7 +424,7 @@ mod tests {
     }
 
     impl PlanDocuments {
-        fn generated_pair(&self) -> &Option<(Vec<Assignment>, Vec<Assignment>)> {
+        fn generated_pair(&self) -> Option<(Vec<Assignment>, Vec<Assignment>)> {
             self.generated.get().expect("the generated plans were read")
         }
     }

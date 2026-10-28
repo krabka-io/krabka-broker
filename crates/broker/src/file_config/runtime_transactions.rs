@@ -182,7 +182,10 @@ mod tests {
             share_coordinator::config::ShareCoordinatorConfig,
         },
         assert2::assert,
+        krabka_compression::CompressionType,
         krabka_units::{mebibytes, secs},
+        rstest_bdd::datatable::Rows,
+        std::time::Duration,
     };
 
     #[test]
@@ -279,7 +282,7 @@ barrier_max_topics_per_group = 16
     #[rstest_bdd_macros::then("the complete Share coordinator policy equals defaults except")]
     fn share_coordinator_policy(
         share_coordinator_properties: &ShareCoordinatorProperties,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<CoordinatorPolicyField>,
+        #[datatable] datatable: Rows<CoordinatorPolicyField>,
     ) {
         let config = share_coordinator_properties
             .applied
@@ -292,33 +295,31 @@ barrier_max_topics_per_group = 16
             match row.field.as_str() {
                 "snapshot_update_records_per_snapshot" => {
                     expected.snapshot_update_records_per_snapshot =
-                        row.value.parse().expect("integer setting")
+                        row.value.parse().expect("integer setting");
                 }
                 "write_timeout" => {
-                    expected.write_timeout = std::time::Duration::from_millis(
-                        row.value.parse().expect("timer milliseconds"),
-                    )
+                    expected.write_timeout =
+                        Duration::from_millis(row.value.parse().expect("timer milliseconds"));
                 }
                 "state_topic_prune_interval" => {
-                    expected.state_topic_prune_interval = std::time::Duration::from_millis(
-                        row.value.parse().expect("timer milliseconds"),
-                    )
+                    expected.state_topic_prune_interval =
+                        Duration::from_millis(row.value.parse().expect("timer milliseconds"));
                 }
                 "state_topic_compression_codec" => {
                     expected.state_topic_compression_codec = match row.value.as_str() {
-                        "zstd" => krabka_compression::CompressionType::Zstd,
+                        "zstd" => CompressionType::Zstd,
                         other => panic!("unknown codec {other}"),
-                    }
+                    };
                 }
                 "threads" => expected.threads = row.value.parse().expect("integer setting"),
                 "append_linger" => {
-                    expected.append_linger = Some(std::time::Duration::from_millis(
+                    expected.append_linger = Some(Duration::from_millis(
                         row.value.parse().expect("linger milliseconds"),
-                    ))
+                    ));
                 }
                 "cached_buffer_max_bytes" => {
                     expected.cached_buffer_max_bytes =
-                        krabka_units::bytes(row.value.parse().expect("cache bytes"))
+                        krabka_units::bytes(row.value.parse().expect("cache bytes"));
                 }
                 unknown => panic!("unknown Share coordinator field {unknown}"),
             }

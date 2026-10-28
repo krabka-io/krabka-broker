@@ -157,6 +157,7 @@ mod tests {
             authorizer::AllowAllAuthorizer,
             broker::{Broker, BrokerHandle},
             config::BrokerConfig,
+            coordinator::unified::actor::GroupKindTag,
             handlers::{
                 RequestContext, encode_response,
                 group_heartbeat_test_support::{
@@ -535,10 +536,9 @@ mod tests {
         let started = join_ready_broker().await;
         let broker = started.broker.broker_arc_for_test();
         broker.group_coordinator.mark_share("share");
-        let _consumer = broker.group_coordinator.get_or_create_group(
-            "consumer",
-            crate::coordinator::unified::actor::GroupKindTag::Consumer,
-        );
+        let _consumer = broker
+            .group_coordinator
+            .get_or_create_group("consumer", GroupKindTag::Consumer);
         streams_creation.started = Some(started);
     }
     #[rstest_bdd_macros::when("member m1 sends streams heartbeat epoch {epoch} to group {group}")]

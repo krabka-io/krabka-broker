@@ -41,7 +41,7 @@ async fn describe_share_offsets_policy(
     let authorizer: Arc<dyn Authorizer> = if allowed {
         Arc::new(AllowAllAuthorizer)
     } else {
-        Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll))
+        Arc::new(ControllerPeerAllowed(DenyAll))
     };
     let started = start_share_broker()
         .authorizer(authorizer)
@@ -175,3 +175,5 @@ async fn describe_share_offset_case_1(share_offsets_description: ShareOffsetsDes
 )]
 #[tokio::test]
 async fn describe_share_offset_case_2(share_offsets_description: ShareOffsetsDescription) {}
+
+use crate::test_support::ControllerPeerAllowed;

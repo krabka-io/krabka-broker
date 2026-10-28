@@ -74,6 +74,7 @@ mod tests {
             owned::delete_share_group_state_request::{DeleteStateData, PartitionData},
             primitives::uuid::Uuid as ProtoUuid,
         },
+        rstest_bdd::datatable::Rows,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([31; 16]);
@@ -187,7 +188,7 @@ mod tests {
     )]
     fn deletion_response(
         delete_state_story: &DeleteStateStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<StateResponseRow>,
+        #[datatable] datatable: Rows<StateResponseRow>,
     ) {
         let expected: DeleteShareGroupStateResponse = state_response_rows(datatable);
         check!(delete_state_story.observed.as_ref().expect("RPC completed") == &expected);

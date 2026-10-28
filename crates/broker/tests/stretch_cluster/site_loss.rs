@@ -157,7 +157,7 @@ fn refused_witness_after_site_losses(site_loss: &SiteLoss) {
     name = "preferred site holds replicas zero and the leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preferred_site_holds_replicas_zero_and_the_leader(mut site_loss: SiteLoss) {
+async fn preferred_site_holds_replicas_zero_and_the_leader(site_loss: SiteLoss) {
     site_loss.shutdown().await;
     drop(site_loss);
 }
@@ -167,7 +167,7 @@ async fn preferred_site_holds_replicas_zero_and_the_leader(mut site_loss: SiteLo
     name = "acks all survives the loss of the non preferred data site"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_survives_the_loss_of_the_non_preferred_data_site(mut site_loss: SiteLoss) {
+async fn acks_all_survives_the_loss_of_the_non_preferred_data_site(site_loss: SiteLoss) {
     site_loss.shutdown().await;
     drop(site_loss);
 }
@@ -178,7 +178,7 @@ async fn acks_all_survives_the_loss_of_the_non_preferred_data_site(mut site_loss
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_single_site_loss_keeps_acks_all_committing(
-    mut site_loss: SiteLoss,
+    site_loss: SiteLoss,
     stop: usize,
     observer: usize,
     leader: u64,
@@ -194,9 +194,7 @@ async fn a_single_site_loss_keeps_acks_all_committing(
     name = "both data sites down leaves no leader and the witness refuses writes"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes(
-    mut site_loss: SiteLoss,
-) {
+async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes(site_loss: SiteLoss) {
     site_loss.shutdown().await;
     drop(site_loss);
 }

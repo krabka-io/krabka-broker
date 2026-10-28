@@ -77,11 +77,12 @@ mod tests {
     }
 
     use {
-        crate::coordinator::unified::test_support::wire_bytes,
+        crate::coordinator::unified::{
+            codec_observations::KafkaMetadataKey, test_support::wire_bytes,
+        },
         rstest_bdd_macros::{given, scenarios, then, when},
     };
-    type ShareMetadataKeyScenario =
-        crate::coordinator::unified::codec_observations::KafkaMetadataKey;
+    type ShareMetadataKeyScenario = KafkaMetadataKey;
     #[rstest::fixture]
     fn input() -> ShareMetadataKeyScenario {
         // Start this scenario with fresh inputs and observations.

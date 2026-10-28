@@ -558,7 +558,7 @@ async fn committed_remote_backlog(backlog_rf3: &RemoteBacklog) {
     name = "rf three remote leader uses committed high watermark"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rf_three_remote_leader_uses_committed_high_watermark(mut backlog_rf3: RemoteBacklog) {
+async fn rf_three_remote_leader_uses_committed_high_watermark(backlog_rf3: RemoteBacklog) {
     backlog_rf3.shutdown().await;
     drop(backlog_rf3);
 }

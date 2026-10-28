@@ -77,19 +77,6 @@ fn input_topic_source(partitions: i32) -> Arc<FakeMetadataSource> {
     )
 }
 
-fn coordinator_with_source(
-    source: Arc<FakeMetadataSource>,
-    max_size: Option<usize>,
-) -> Arc<GroupCoordinator> {
-    let mut config = undelayed();
-    if let Some(max_size) = max_size {
-        config.max_size = max_size;
-    }
-    let coordinator = coordinator_with_log(config, Arc::new(InMemoryOffsetsLog::default()));
-    coordinator.set_metadata_source(source);
-    coordinator
-}
-
 #[test]
 fn persisted_group_config_overrides_actor_defaults() {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());

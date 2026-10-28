@@ -230,7 +230,7 @@ mod tests {
                 "instance_id" => request.instance_id = Some(value.to_owned()),
                 "rack_id" => request.rack_id = Some(value.to_owned()),
                 "rebalance_timeout_ms" => {
-                    request.rebalance_timeout_ms = value.parse().expect("rebalance timeout")
+                    request.rebalance_timeout_ms = value.parse().expect("rebalance timeout");
                 }
                 "active_tasks" | "standby_tasks" | "warmup_tasks" => {
                     let tasks = match value {
@@ -270,7 +270,7 @@ mod tests {
                         .as_mut()
                         .expect("join topology")
                         .subtopologies[0]
-                        .source_topic_regex = vec![value.to_owned()]
+                        .source_topic_regex = vec![value.to_owned()];
                 }
                 other => panic!("unknown request field {other}"),
             }

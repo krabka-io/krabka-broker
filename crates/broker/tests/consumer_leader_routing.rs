@@ -36,6 +36,7 @@ use {
     krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch},
     std::{
         collections::{HashMap, HashSet, hash_map::Entry},
+        mem,
         time::Duration,
     },
     support::cluster_lock,
@@ -183,10 +184,9 @@ fn every_leader(routing: &LeaderRouting, values: String) {
 }
 
 impl LeaderRouting {
-    async fn shutdown(self) {
-        let Self { cluster, guard, .. } = self;
-        shutdown_cluster(cluster).await;
-        drop(guard);
+    async fn shutdown(&mut self) {
+        shutdown_cluster(mem::take(&mut self.cluster)).await;
+        drop(self.guard.take());
     }
 }
 
@@ -197,4 +197,5 @@ impl LeaderRouting {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn consumer_fetches_from_non_bootstrap_leaders(routing: LeaderRouting) {
     routing.shutdown().await;
+    drop(routing);
 }

@@ -24,20 +24,22 @@ use {
 };
 #[rstest_bdd_macros::given("topic t partition 0 contains the fifty records v0 through v49")]
 async fn persisted_records_before_directory_move(replica_directory: &mut ReplicaDirectoryScenario) {
-    let producer = Producer::builder()
-        .bootstrap(replica_directory.address().to_string())
-        .build()
-        .await
-        .expect("producer");
-    enqueue_unkeyed_values(
-        &producer,
-        "t",
-        (0..50i32).map(|index| Bytes::from(format!("v{index}"))),
-    )
-    .await;
-    producer.flush().await.expect("flush source records");
-    producer.close().await.expect("close source producer");
-    drop(producer);
+    {
+        let producer = Producer::builder()
+            .bootstrap(replica_directory.address().to_string())
+            .build()
+            .await
+            .expect("producer");
+        enqueue_unkeyed_values(
+            &producer,
+            "t",
+            (0..50i32).map(|index| Bytes::from(format!("v{index}"))),
+        )
+        .await;
+        producer.flush().await.expect("flush source records");
+        producer.close().await
+    }
+    .expect("close source producer");
 }
 #[rstest_bdd_macros::then(
     "partitions {partitions} acknowledge success, DescribeLogDirs places them in the destination, the source is empty and no future directory remains"

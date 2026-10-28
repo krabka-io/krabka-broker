@@ -530,7 +530,7 @@ mod tests {
             log_dir::partition_dir,
             log_dir_status::LogDirRegistry,
             metrics::{BrokerMetrics, RequestPhases},
-            partition::{AppendedBatch, test_support::test_partition},
+            partition::{AppendedBatch, Partition, test_support::test_partition},
             partition_writer::storage_failure_error,
             producer_state::ProducerState,
             test_support::spawn_standalone_partition,
@@ -552,7 +552,7 @@ mod tests {
 
     struct ProduceAckScenario {
         dir: tempfile::TempDir,
-        partition: Option<Arc<crate::partition::Partition>>,
+        partition: Option<Arc<Partition>>,
         target: i64,
         current_minimum: Result<usize, i16>,
         row: Option<PartitionProduceResponse>,
@@ -603,20 +603,19 @@ mod tests {
     #[rstest_bdd_macros::when("acks all completes at its deadline")]
     async fn finish_produce_ack(produce_ack: &mut ProduceAckScenario) {
         let partition = produce_ack.partition.as_ref().expect("partition");
-        let transition = partition.lock_produce_transition().await;
-        produce_ack.admitted_topic = transition.topic_id;
-        let pending = PendingAck::new(
-            PartitionProduceResponse {
-                index: 0,
-                base_offset: 0,
-                ..Default::default()
-            },
-            Arc::clone(partition),
-            Offset(produce_ack.target),
-            None,
-            transition,
-        );
-        produce_ack.row = Some(
+        let row = {
+            let pending = PendingAck::new(
+                PartitionProduceResponse {
+                    index: 0,
+                    base_offset: 0,
+                    ..Default::default()
+                },
+                Arc::clone(partition),
+                Offset(produce_ack.target),
+                None,
+                partition.lock_produce_transition().await,
+            );
+            produce_ack.admitted_topic = pending.transition.topic_id;
             pending
                 .finish(
                     Instant::now(),
@@ -626,8 +625,9 @@ mod tests {
                     },
                     future::pending(),
                 )
-                .await,
-        );
+                .await
+        };
+        produce_ack.row = Some(row);
     }
     #[rstest_bdd_macros::then(
         "the full Produce row has error {error} and queries the admitted topic identity once"

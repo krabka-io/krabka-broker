@@ -393,6 +393,7 @@ mod tests {
             convert::{ByteSizeExt, TimeExt},
             mebibytes, secs,
         },
+        rstest_bdd::datatable::Rows,
         std::path::PathBuf,
     };
 
@@ -450,7 +451,7 @@ storage_dir = "/var/lib/krabka/tier"
     #[rstest_bdd_macros::then("the complete Kafka metadata transport policy is")]
     fn metadata_transport_values(
         remote_file_policy: &RemoteFilePolicy,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<PolicyValue>,
+        #[datatable] datatable: Rows<PolicyValue>,
     ) {
         let config = remote_file_policy
             .applied
@@ -462,7 +463,7 @@ storage_dir = "/var/lib/krabka/tier"
             panic!("expected topic-backed metadata");
         };
         let actual = vec![
-            ("bootstrap", policy.bootstrap.to_string()),
+            ("bootstrap", policy.bootstrap.clone()),
             ("num_partitions", policy.num_partitions.to_string()),
             ("replication", policy.replication.to_string()),
             ("min_isr", policy.min_isr.to_string()),

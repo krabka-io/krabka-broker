@@ -1,4 +1,4 @@
-//! Real producer, transaction and ListOffsets operations shared by isolation-bound stories.
+//! Real producer, transaction and `ListOffsets` operations shared by isolation-bound stories.
 use {
     crate::{
         support,

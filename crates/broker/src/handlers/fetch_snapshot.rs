@@ -311,19 +311,19 @@ mod tests {
             match cells[0].as_str() {
                 "topic" => req.topics[0].name = value.to_owned(),
                 "partition" => {
-                    req.topics[0].partitions[0].partition = value.parse().expect("partition")
+                    req.topics[0].partitions[0].partition = value.parse().expect("partition");
                 }
                 "end offset delta" => {
                     req.topics[0].partitions[0].snapshot_id.end_offset +=
-                        value.parse::<i64>().expect("end offset delta")
+                        value.parse::<i64>().expect("end offset delta");
                 }
                 "snapshot epoch delta" => {
                     req.topics[0].partitions[0].snapshot_id.epoch +=
-                        value.parse::<i32>().expect("snapshot epoch delta")
+                        value.parse::<i32>().expect("snapshot epoch delta");
                 }
                 "leader epoch delta" => {
                     req.topics[0].partitions[0].current_leader_epoch +=
-                        value.parse::<i32>().expect("leader epoch delta")
+                        value.parse::<i32>().expect("leader epoch delta");
                 }
                 "position" => {
                     req.topics[0].partitions[0].position = if value == "snapshot size" {

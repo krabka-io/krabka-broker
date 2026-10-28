@@ -95,7 +95,7 @@ fn no_witness_redirect(witness_topic: &WitnessTopic) {
     name = "witness is a visible isr member that serves no reads"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_is_a_visible_isr_member_that_serves_no_reads(mut witness_topic: WitnessTopic) {
+async fn witness_is_a_visible_isr_member_that_serves_no_reads(witness_topic: WitnessTopic) {
     witness_topic.shutdown().await;
     drop(witness_topic);
 }

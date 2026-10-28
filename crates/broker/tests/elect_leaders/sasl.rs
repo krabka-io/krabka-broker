@@ -6,12 +6,9 @@
 //! PLAINTEXT one the election tests use.
 
 pub use crate::kafka_wire::create_configured_topic_sasl as create_topic_sasl_plain;
-use {
-    crate::{
-        kafka_wire::{self, PlainAuthenticationSetup},
-        support::admin::{ElectionSetup, election_partition_errors, election_request},
-    },
-    SocketAddr,
+use crate::{
+    kafka_wire::{self, PlainAuthenticationSetup},
+    support::admin::{ElectionSetup, election_partition_errors, election_request},
 };
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.

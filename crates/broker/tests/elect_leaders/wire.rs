@@ -12,7 +12,6 @@ use {
         kafka_wire,
         support::{admin::ElectionKind, topics::AssignedTopicSetup},
     },
-    SocketAddr,
     assert2::assert,
     krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest,
     tokio::net::TcpStream,

@@ -36,7 +36,6 @@ use {
             record_batch_with_values,
         },
         topic_id_for,
-        transaction_wire::close_transaction_clients,
     },
     tempfile::TempDir,
 };
@@ -349,54 +348,61 @@ async fn read_durable_commit(durability_behavior: &mut DurabilityBehavior, recor
     let records: Vec<String> = serde_json::from_str(&records).expect("transaction payloads");
     let broker = durability_behavior.broker.as_ref().expect("single broker");
     broker.wait_until_transaction_coordinator_ready().await;
-    let producer = transactional_producer(durability_behavior.bootstrap.clone(), "rc-tid").await;
-    let transaction = producer
-        .begin_transaction()
-        .await
-        .expect("begin transaction");
-    for value in &records {
-        drop(
-            producer
-                .enqueue(
-                    producer_record()
-                        .topic(durability_behavior.topic.clone())
-                        .value(Some(Bytes::from(value.clone())))
-                        .call(),
-                )
-                .await
-                .expect("record queued"),
-        );
-    }
-    transaction.commit().await.expect("transaction committed");
-    let mut consumer = Consumer::builder()
-        .bootstrap(durability_behavior.bootstrap.clone())
-        .group_id("rc-g")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe([durability_behavior.topic.clone()])
-        .build()
-        .await
-        .expect("consumer");
-    broker
-        .wait_until_local_log_end_offset(
-            &durability_behavior.topic,
-            0,
-            i64::try_from(records.len()).expect("record count"),
-        )
-        .await;
-    let mut seen = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while seen.len() < records.len() && Instant::now() < deadline {
-        for record in consumer
-            .poll(krabka_units::millis(200))
+    let (seen, consumer, producer_close_result) = {
+        let producer =
+            transactional_producer(durability_behavior.bootstrap.clone(), "rc-tid").await;
+        let transaction = producer
+            .begin_transaction()
             .await
-            .expect("consumer poll")
-        {
-            seen.push(String::from_utf8_lossy(record.value.as_deref().unwrap_or(b"")).into_owned());
+            .expect("begin transaction");
+        for value in &records {
+            drop(
+                producer
+                    .enqueue(
+                        producer_record()
+                            .topic(durability_behavior.topic.clone())
+                            .value(Some(Bytes::from(value.clone())))
+                            .call(),
+                    )
+                    .await
+                    .expect("record queued"),
+            );
         }
-    }
+        transaction.commit().await.expect("transaction committed");
+        let mut consumer = Consumer::builder()
+            .bootstrap(durability_behavior.bootstrap.clone())
+            .group_id("rc-g")
+            .auto_offset_reset(AutoOffsetReset::Earliest)
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .subscribe([durability_behavior.topic.clone()])
+            .build()
+            .await
+            .expect("consumer");
+        broker
+            .wait_until_local_log_end_offset(
+                &durability_behavior.topic,
+                0,
+                i64::try_from(records.len()).expect("record count"),
+            )
+            .await;
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while seen.len() < records.len() && Instant::now() < deadline {
+            for record in consumer
+                .poll(krabka_units::millis(200))
+                .await
+                .expect("consumer poll")
+            {
+                seen.push(
+                    String::from_utf8_lossy(record.value.as_deref().unwrap_or(b"")).into_owned(),
+                );
+            }
+        }
+        (seen, consumer, producer.close().await)
+    };
+    producer_close_result.expect("close transaction producer");
+    consumer.close().await.expect("close committed consumer");
     durability_behavior.committed_values = Some(seen);
-    close_transaction_clients(producer.close(), consumer).await;
 }
 #[rstest_bdd_macros::then("the read-committed consumer sees exactly {records}")]
 fn durable_committed_records(durability_behavior: &DurabilityBehavior, records: String) {

@@ -275,7 +275,7 @@ async fn write_transactions(isolation: &mut TransactionIsolation) {
                javac -cp "$CP" -d /tmp /tmp/TransactionalProducer.java; \
                java -cp "/tmp:$CP" TransactionalProducer "$1" "$2""#,
             "--",
-            &bootstrap_1,
+            bootstrap_1,
             TOPIC,
         ]).input(ContainerInput::Attached).call()
         .stdin(Stdio::piped())
@@ -364,7 +364,7 @@ fn fenced_producer(isolation: &mut TransactionIsolation, topic: String) {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        &bootstrap_1,
+        bootstrap_1,
     ]);
     let mut zombie = jvm_docker_command().image("--entrypoint").args(&["bash",
             KAFKA_IMAGE_TXN,
@@ -374,7 +374,7 @@ fn fenced_producer(isolation: &mut TransactionIsolation, topic: String) {
                javac -cp "$CP" -d /tmp /tmp/ZombieProducer.java; \
                java -cp "/tmp:$CP" ZombieProducer "$1" "$2""#,
             "--",
-            &bootstrap_1,
+            bootstrap_1,
             &topic,
         ]).input(ContainerInput::Attached).call()
         .stdin(Stdio::piped())

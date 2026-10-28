@@ -352,7 +352,7 @@ fn rejected_two_phase_feature(two_phase_scenario: &TwoPhaseScenario, docstring: 
     name = "enable 2pc rejected when cluster disabled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_rejected_when_cluster_disabled(mut two_phase_scenario: TwoPhaseScenario) {
+async fn enable_2pc_rejected_when_cluster_disabled(two_phase_scenario: TwoPhaseScenario) {
     two_phase_scenario.shutdown().await;
     drop(two_phase_scenario);
 }
@@ -363,7 +363,7 @@ async fn enable_2pc_rejected_when_cluster_disabled(mut two_phase_scenario: TwoPh
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop(
-    mut two_phase_scenario: TwoPhaseScenario,
+    two_phase_scenario: TwoPhaseScenario,
 ) {
     two_phase_scenario.shutdown().await;
     drop(two_phase_scenario);
@@ -374,7 +374,7 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop(
     name = "enable 2pc persists no timeout sentinel"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_persists_no_timeout_sentinel(mut two_phase_scenario: TwoPhaseScenario) {
+async fn enable_2pc_persists_no_timeout_sentinel(two_phase_scenario: TwoPhaseScenario) {
     two_phase_scenario.shutdown().await;
     drop(two_phase_scenario);
 }
@@ -385,7 +385,7 @@ async fn enable_2pc_persists_no_timeout_sentinel(mut two_phase_scenario: TwoPhas
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused(
-    mut two_phase_scenario: TwoPhaseScenario,
+    two_phase_scenario: TwoPhaseScenario,
 ) {
     two_phase_scenario.shutdown().await;
     drop(two_phase_scenario);

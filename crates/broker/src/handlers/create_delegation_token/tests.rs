@@ -107,7 +107,7 @@ fn refusal(
 #[derive(Default)]
 struct TokenCreationScenario {
     resources: Option<TokenFixture>,
-    auth: Option<crate::network::auth::ConnectionAuth>,
+    auth: Option<ConnectionAuth>,
     provision: SecretProvision,
     super_users: Vec<String>,
     ceiling: i64,
@@ -569,3 +569,5 @@ fn token_gate_uses_delegation_token_level() {
         );
     }
 }
+
+use crate::network::auth::ConnectionAuth;

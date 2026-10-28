@@ -461,7 +461,7 @@ fn accepted_produce_gate_rf1_leader(produce_leadership: &ProduceLeadership) {
     name = "produce to non leader is rejected"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_to_non_leader_is_rejected(mut produce_leadership: ProduceLeadership) {
+async fn produce_to_non_leader_is_rejected(produce_leadership: ProduceLeadership) {
     produce_leadership.shutdown().await;
     drop(produce_leadership);
 }

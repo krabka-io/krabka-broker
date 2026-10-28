@@ -246,7 +246,7 @@ mod tests {
     use {
         super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level},
         crate::{
-            authorizer::AuthorizationResult,
+            authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
@@ -265,7 +265,10 @@ mod tests {
                 handlers::test_support::lead_share_state_partitions,
                 persister_client::SharePersister,
             },
-            test_support::{StartedBroker as HandlerStartedBroker, start_share_broker},
+            test_support::{
+                ControllerPeerAllowed, DenyAll, ShareApiSupport,
+                StartedBroker as HandlerStartedBroker, start_share_broker,
+            },
         },
         assert2::assert,
         krabka_metadata::{AclOperation, ResourceType},
@@ -439,20 +442,18 @@ mod tests {
         enabled: bool,
         allowed: bool,
     ) {
-        let authorizer: Arc<dyn crate::authorizer::Authorizer> = if allowed {
-            Arc::new(crate::authorizer::AllowAllAuthorizer)
+        let authorizer: Arc<dyn Authorizer> = if allowed {
+            Arc::new(AllowAllAuthorizer)
         } else {
-            Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::test_support::DenyAll,
-            ))
+            Arc::new(ControllerPeerAllowed(DenyAll))
         };
         share_offsets_deletion.started = Some(
             start_share_broker()
                 .authorizer(authorizer)
                 .support(if enabled {
-                    crate::test_support::ShareApiSupport::Enabled
+                    ShareApiSupport::Enabled
                 } else {
-                    crate::test_support::ShareApiSupport::Disabled
+                    ShareApiSupport::Disabled
                 })
                 .call()
                 .await,

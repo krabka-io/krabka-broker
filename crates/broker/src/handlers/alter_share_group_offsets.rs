@@ -276,7 +276,7 @@ mod tests {
     use {
         super::handle as alter_share_group_offsets_handle,
         crate::{
-            authorizer::{AllowAllAuthorizer, AuthorizationResult},
+            authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
@@ -294,9 +294,12 @@ mod tests {
                     configured_topic_request_from,
                 },
             },
-            share_coordinator::handlers::test_support::lead_share_state_partitions,
+            share_coordinator::{
+                coordinator::ShareStateSummary, handlers::test_support::lead_share_state_partitions,
+            },
             test_support::{
-                ShareApiSupport, StartedBroker as HandlerStartedBroker, start_share_broker,
+                ControllerPeerAllowed, DenyAll, ShareApiSupport,
+                StartedBroker as HandlerStartedBroker, start_share_broker,
             },
         },
         assert2::assert,
@@ -433,7 +436,7 @@ mod tests {
     struct ShareOffsetAlteration {
         started: Option<HandlerStartedBroker>,
         response: Option<AlterShareGroupOffsetsResponse>,
-        summary_before: Vec<Option<crate::share_coordinator::coordinator::ShareStateSummary>>,
+        summary_before: Vec<Option<ShareStateSummary>>,
     }
     #[rstest::fixture]
     fn share_offset_alteration() -> ShareOffsetAlteration {
@@ -451,12 +454,10 @@ mod tests {
         enabled: bool,
         allowed: bool,
     ) {
-        let authorizer: Arc<dyn crate::authorizer::Authorizer> = if allowed {
+        let authorizer: Arc<dyn Authorizer> = if allowed {
             Arc::new(AllowAllAuthorizer)
         } else {
-            Arc::new(crate::test_support::ControllerPeerAllowed(
-                crate::test_support::DenyAll,
-            ))
+            Arc::new(ControllerPeerAllowed(DenyAll))
         };
         share_offset_alteration.started = Some(
             start_share_broker()

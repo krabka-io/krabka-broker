@@ -94,6 +94,7 @@ mod tests {
             },
             primitives::uuid::Uuid as ProtoUuid,
         },
+        rstest_bdd::datatable::Rows,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([51; 16]);
@@ -210,7 +211,7 @@ mod tests {
     async fn issue_state_write(
         write_state_story: &mut WriteStateStory,
         group: String,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<WriteStateInput>,
+        #[datatable] datatable: Rows<WriteStateInput>,
     ) {
         let group = group_name_literal(group);
         let partitions: Vec<_> = datatable
@@ -253,7 +254,7 @@ mod tests {
     )]
     fn state_write_response(
         write_state_story: &WriteStateStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<WriteStateExpected>,
+        #[datatable] datatable: Rows<WriteStateExpected>,
     ) {
         let expected: Vec<_> = datatable
             .into_iter()

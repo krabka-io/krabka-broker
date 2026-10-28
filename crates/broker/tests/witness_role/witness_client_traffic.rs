@@ -157,9 +157,7 @@ fn refused_witness_clients(witness_topic: &WitnessTopic) {
     name = "witness refuses client traffic while replication advances"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_refuses_client_traffic_while_replication_advances(
-    mut witness_topic: WitnessTopic,
-) {
+async fn witness_refuses_client_traffic_while_replication_advances(witness_topic: WitnessTopic) {
     witness_topic.shutdown().await;
     drop(witness_topic);
 }

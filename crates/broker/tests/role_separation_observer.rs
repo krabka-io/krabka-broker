@@ -597,7 +597,7 @@ async fn committed_observer_unregister(observer_behavior: &ObserverBehavior) {
     name = "broker only node observes and forwards"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_node_observes_and_forwards(mut observer_behavior: ObserverBehavior) {
+async fn broker_only_node_observes_and_forwards(observer_behavior: ObserverBehavior) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
 }
@@ -607,7 +607,7 @@ async fn broker_only_node_observes_and_forwards(mut observer_behavior: ObserverB
     name = "controller only node opens no client listener"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_only_node_opens_no_client_listener(mut observer_behavior: ObserverBehavior) {
+async fn controller_only_node_opens_no_client_listener(observer_behavior: ObserverBehavior) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
 }
@@ -618,7 +618,7 @@ async fn controller_only_node_opens_no_client_listener(mut observer_behavior: Ob
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn broker_only_node_forwards_describe_quorum_to_controller(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
@@ -630,7 +630,7 @@ async fn broker_only_node_forwards_describe_quorum_to_controller(
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
@@ -642,7 +642,7 @@ async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controll
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
@@ -1040,7 +1040,7 @@ fn caught_up_quorum_observers(observer_behavior: &ObserverBehavior) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
@@ -1052,7 +1052,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
@@ -1063,9 +1063,7 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster(
     name = "broker only nodes are described as quorum observers"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_nodes_are_described_as_quorum_observers(
-    mut observer_behavior: ObserverBehavior,
-) {
+async fn broker_only_nodes_are_described_as_quorum_observers(observer_behavior: ObserverBehavior) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);
 }
@@ -1076,7 +1074,7 @@ async fn broker_only_nodes_are_described_as_quorum_observers(
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node(
-    mut observer_behavior: ObserverBehavior,
+    observer_behavior: ObserverBehavior,
 ) {
     observer_behavior.shutdown().await;
     drop(observer_behavior);

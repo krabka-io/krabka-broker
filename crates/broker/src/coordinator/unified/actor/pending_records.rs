@@ -841,13 +841,13 @@ mod tests {
             match row.family.as_str() {
                 "classic-group" => pending.classic_group_metadata_tombstone = true,
                 "subscription-metadata" => {
-                    pending.partition_metadata = PartitionMetadataWrite::Tombstone
+                    pending.partition_metadata = PartitionMetadataWrite::Tombstone;
                 }
                 "group-epoch" => {
                     pending.group_metadata = Some(
                         GroupMetadataValue::decode(value.as_deref().expect("group metadata value"))
                             .expect("literal group metadata"),
-                    )
+                    );
                 }
                 "subscription" => pending.member_metadata.push((
                     row.member,
@@ -861,7 +861,7 @@ mod tests {
                             value.as_deref().expect("target metadata value"),
                         )
                         .expect("literal assignment metadata"),
-                    )
+                    );
                 }
                 "target" => pending.target_per_member.push((
                     row.member,

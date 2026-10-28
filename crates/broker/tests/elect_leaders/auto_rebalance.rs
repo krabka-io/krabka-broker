@@ -13,7 +13,6 @@ use {
         wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
         wire::create_topic_plaintext,
     },
-    SocketAddr,
     krabka_broker::Broker,
     tokio::net::TcpSocket,
 };

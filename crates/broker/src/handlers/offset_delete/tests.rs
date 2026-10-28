@@ -115,7 +115,7 @@ async fn offset_deletion_authorization(
     offset_deletion: &mut OffsetDeletionScenario,
     allowed: bool,
 ) {
-    let authorizer: Arc<dyn crate::authorizer::Authorizer> = if allowed {
+    let authorizer: Arc<dyn Authorizer> = if allowed {
         Arc::new(AllowAllAuthorizer)
     } else {
         Arc::new(DenyAll)
@@ -197,8 +197,7 @@ async fn offset_deletion_response(
     code: i16,
     datatable: Vec<Vec<String>>,
 ) {
-    let mut topics: Vec<krabka_protocol::owned::offset_delete_response::OffsetDeleteResponseTopic> =
-        Vec::new();
+    let mut topics: Vec<OffsetDeleteResponseTopic> = Vec::new();
     for cells in datatable.into_iter().skip(1) {
         if topics.last().is_none_or(|topic| topic.name != cells[0]) {
             topics.push(expected_topic(&cells[0], Vec::new()));
@@ -245,6 +244,7 @@ async fn offset_deletion_response(
             .expect("dated tombstone");
         check!(offset == log.log_end_offset() - 1);
         check!(timestamp <= now_ms());
+        drop(log);
     }
     offset_deletion
         .started
@@ -619,3 +619,8 @@ async fn offset_delete_tombstones_only_offsets_the_group_holds() {
 
     broker.shutdown().await;
 }
+
+use {
+    crate::authorizer::Authorizer,
+    krabka_protocol::owned::offset_delete_response::OffsetDeleteResponseTopic,
+};

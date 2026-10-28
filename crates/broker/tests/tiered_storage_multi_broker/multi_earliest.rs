@@ -499,7 +499,7 @@ async fn read_from_earliest(bootstrap: &str, isolation: IsolationLevel, end: i64
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts(
-    mut tiered_earliest: TieredEarliest,
+    tiered_earliest: TieredEarliest,
 ) {
     tiered_earliest.shutdown().await;
     drop(tiered_earliest);
@@ -511,7 +511,7 @@ async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts(
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back(
-    mut tiered_earliest: TieredEarliest,
+    tiered_earliest: TieredEarliest,
 ) {
     tiered_earliest.shutdown().await;
     drop(tiered_earliest);
@@ -522,7 +522,7 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back(
     name = "a compressed archive reads back from earliest"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_compressed_archive_reads_back_from_earliest(mut tiered_earliest: TieredEarliest) {
+async fn a_compressed_archive_reads_back_from_earliest(tiered_earliest: TieredEarliest) {
     tiered_earliest.shutdown().await;
     drop(tiered_earliest);
 }

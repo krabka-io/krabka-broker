@@ -169,7 +169,7 @@ async fn healed_stretch_isr(unreachable_leader: &UnreachableLeader) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal(
-    mut unreachable_leader: UnreachableLeader,
+    unreachable_leader: UnreachableLeader,
 ) {
     unreachable_leader.shutdown().await;
     drop(unreachable_leader);

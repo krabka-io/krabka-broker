@@ -86,6 +86,7 @@ mod tests {
             owned::initialize_share_group_state_request::{InitializeStateData, PartitionData},
             primitives::uuid::Uuid as ProtoUuid,
         },
+        rstest_bdd::datatable::Rows,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([32; 16]);
@@ -179,7 +180,7 @@ mod tests {
     )]
     async fn issue_state_initialization(
         initialize_state_story: &mut InitializeStateStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<InitializeInput>,
+        #[datatable] datatable: Rows<InitializeInput>,
     ) {
         let mut inputs = datatable.into_iter();
         let input = inputs.next().expect("one initialization request");
@@ -241,7 +242,7 @@ mod tests {
     )]
     fn initialize_response(
         initialize_state_story: &InitializeStateStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<StateResponseRow>,
+        #[datatable] datatable: Rows<StateResponseRow>,
     ) {
         let expected: InitializeShareGroupStateResponse = state_response_rows(datatable);
         check!(
@@ -269,7 +270,7 @@ mod tests {
     #[rstest_bdd_macros::then("initialization appends exactly these complete snapshot records")]
     fn initialize_snapshots(
         initialize_state_story: &InitializeStateStory,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<InitializeSnapshot>,
+        #[datatable] datatable: Rows<InitializeSnapshot>,
     ) {
         let expected: Vec<_> = datatable
             .into_iter()

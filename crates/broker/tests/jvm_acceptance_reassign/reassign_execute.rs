@@ -380,10 +380,10 @@ async fn pending_first_move(additional: &mut OfflineReplicaCommand, topic: Strin
     let props = &additional.props;
 
     side.create_assigned_topic(AssignedTopicCommandSetup {
-        topic: topic,
+        topic,
         assignment: "1,1",
         props_path: CLIENT_PROPS,
-        files: &[ToolFile::new(CLIENT_PROPS, &props)],
+        files: &[ToolFile::new(CLIENT_PROPS, props)],
     });
     for partition in 0..2 {
         brokers
@@ -412,7 +412,7 @@ async fn pending_first_move(additional: &mut OfflineReplicaCommand, topic: Strin
     }]);
     reassign(
         &side,
-        Some(&props),
+        Some(props),
         &["--execute", "--reassignment-json-file", PLAN_JSON],
         vec![ToolFile::new(PLAN_JSON, &first_plan)],
     )
@@ -449,7 +449,7 @@ fn add_move(additional: &mut OfflineReplicaCommand) {
     }]);
     additional.output = Some(reassign(
         &side,
-        Some(&props),
+        Some(props),
         &[
             "--execute",
             "--reassignment-json-file",

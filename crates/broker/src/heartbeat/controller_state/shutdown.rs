@@ -189,9 +189,15 @@ mod tests {
     };
 
     #[derive(serde::Deserialize)]
-    struct ReportedHeartbeatFacts {
+    struct ReportedHeartbeatIntent {
         fence: bool,
         shutdown: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ReportedHeartbeatFacts {
+        #[serde(flatten)]
+        intent: ReportedHeartbeatIntent,
         caught_up: bool,
         leaderships: bool,
         shutdown_offset: Option<i64>,
@@ -240,8 +246,8 @@ mod tests {
             .expect("explicit heartbeat intent and replication observations");
         broker_shutdown_heartbeat.facts = Some(HeartbeatFacts {
             wants: HeartbeatWants {
-                fence: reported.fence,
-                shut_down: reported.shutdown,
+                fence: reported.intent.fence,
+                shut_down: reported.intent.shutdown,
             },
             caught_up: reported.caught_up,
             has_leaderships: reported.leaderships,

@@ -1,6 +1,8 @@
 //! Typed observations shared by Kafka persisted-record compatibility scenarios.
 //! Native record construction, codec calls and assertions stay in their domains.
 
+use std::fmt::Debug;
+
 /// A prepared persisted record and the bytes produced by its real encoder.
 pub struct EncodedRecord<T> {
     pub value: Option<T>,
@@ -68,7 +70,7 @@ impl<T, E> Default for KafkaDecodedRecord<T, E> {
         }
     }
 }
-impl<T: PartialEq + std::fmt::Debug, E: std::fmt::Debug> KafkaDecodedRecord<T, E> {
+impl<T: PartialEq + Debug, E: Debug> KafkaDecodedRecord<T, E> {
     /// Compare the full wire layout and all recovered native fields.
     pub fn assert_compatible(&self) {
         assert_kafka_bytes(self.encoded.as_ref(), &self.golden);
@@ -112,7 +114,7 @@ impl KafkaMetadataKey {
     }
 }
 
-impl<T: PartialEq + std::fmt::Debug> KafkaRecordRoundTrip<T> {
+impl<T: PartialEq + Debug> KafkaRecordRoundTrip<T> {
     /// Assert the complete Kafka byte layout and the independently decoded fields.
     pub fn assert_compatible(&self) {
         assert_kafka_bytes(self.encoded.as_ref(), &self.golden);

@@ -285,7 +285,7 @@ async fn deleted_backlog(backlog: &Backlog) {
     name = "backlog is scraped and survives scale to zero"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn backlog_is_scraped_and_survives_scale_to_zero(mut backlog: Backlog) {
+async fn backlog_is_scraped_and_survives_scale_to_zero(backlog: Backlog) {
     backlog.shutdown().await;
     drop(backlog);
 }

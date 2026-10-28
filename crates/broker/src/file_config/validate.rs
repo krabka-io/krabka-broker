@@ -599,10 +599,10 @@ mod tests {
         match field.as_str() {
             "segment_size_bytes" => expected.segment_size = krabka_units::bytes(value),
             "segment_roll_interval_ms" => {
-                expected.segment_roll_interval = krabka_units::millis(value)
+                expected.segment_roll_interval = krabka_units::millis(value);
             }
             "max_retention_size_bytes" => {
-                expected.max_retention_size = Some(krabka_units::bytes(value))
+                expected.max_retention_size = Some(krabka_units::bytes(value));
             }
             "max_retention_ms" => expected.max_retention = Some(krabka_units::millis(value)),
             "max_idle_interval_ms" => expected.max_idle_interval = krabka_units::millis(value),

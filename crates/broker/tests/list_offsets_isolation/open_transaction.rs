@@ -1,4 +1,4 @@
-//! ListOffsets isolation bounds exercised through real producer and transaction operations.
+//! `ListOffsets` isolation bounds exercised through real producer and transaction operations.
 use {
     crate::isolation_scenarios::{Isolation, isolation, shutdown},
     rstest_bdd_macros::scenario,

@@ -380,7 +380,7 @@ fn responsive_secured_drill_paths(soak_drill: &SecuredSoakDrill) {
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged(
-    mut soak_drill: SecuredSoakDrill,
+    soak_drill: SecuredSoakDrill,
 ) {
     soak_drill.shutdown().await;
     drop(soak_drill);

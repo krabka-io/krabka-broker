@@ -38,24 +38,6 @@ pub const SASL_LISTENER: &str = "SASL_PLAINTEXT";
 
 // ── Topics, scopes and the operators ─────────────────────────────────────────
 
-/// The topic that a literal-scope freeze covers.
-pub const LITERAL_TOPIC: &str = "kfc9-orders";
-/// What the operator typed when they froze [`LITERAL_TOPIC`]. It rides in the
-/// refusal, so the JVM producer must print it back.
-pub const LITERAL_REASON: &str = "DR cutover";
-
-/// The namespace a prefixed-scope freeze covers.
-pub const PREFIX_SCOPE: &str = "kfc9-tenant-a.";
-/// A topic inside [`PREFIX_SCOPE`]. Its own name is in no registry entry, so
-/// refusing it exercises the prefix index rather than the literal one.
-pub const PREFIX_TOPIC: &str = "kfc9-tenant-a.events";
-/// What the operator typed when they froze [`PREFIX_SCOPE`].
-pub const PREFIX_REASON: &str = "tenant offboarding";
-
-/// The unfrozen control topic. It exists so that a refusal is shown to be the
-/// freeze rather than a produce path that stopped working.
-pub const CONTROL_TOPIC: &str = "kfc9-control";
-
 /// The topic the `kafka-leader-election` case elects a leader for.
 pub const ELECT_TOPIC: &str = "kfc9-elect";
 

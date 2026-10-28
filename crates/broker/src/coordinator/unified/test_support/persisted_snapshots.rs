@@ -92,7 +92,7 @@ pub fn streams_seed(value: &StreamsGroupSeed) -> Value {
         "metadata_hash": metadata_hash,
         "validated_topology_epoch": validated_topology_epoch,
         "last_assignment_configs": last_assignment_configs,
-        "description_epochs": description_epochs(description_epochs_value),
+        "description_epochs": description_epochs(*description_epochs_value),
         "assignment_epoch": assignment_epoch,
         "assignment_timestamp_ms": assignment_timestamp_ms,
         "topology": topology.as_ref().map(streams_topology),
@@ -406,7 +406,7 @@ pub fn streams_topology(value: &StreamsGroupTopologyValue) -> Value {
     })
 }
 
-pub fn description_epochs(value: &DescriptionEpochs) -> Value {
+pub fn description_epochs(value: DescriptionEpochs) -> Value {
     let DescriptionEpochs { stored, failed } = value;
     json!({
         "stored": stored,

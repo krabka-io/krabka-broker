@@ -500,7 +500,7 @@ fn consumed_restored_minio_records(jvm_tiered: &JvmTiered) {
     name = "tiered storage round trip through minio"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tiered_storage_round_trip_through_minio(mut jvm_tiered: JvmTiered) {
+async fn tiered_storage_round_trip_through_minio(jvm_tiered: JvmTiered) {
     jvm_tiered.shutdown().await;
     drop(jvm_tiered);
 }
@@ -511,7 +511,7 @@ async fn tiered_storage_round_trip_through_minio(mut jvm_tiered: JvmTiered) {
     name = "tiered storage disable needs delete on disable"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tiered_storage_disable_needs_delete_on_disable(mut jvm_tiered: JvmTiered) {
+async fn tiered_storage_disable_needs_delete_on_disable(jvm_tiered: JvmTiered) {
     jvm_tiered.shutdown().await;
     drop(jvm_tiered);
 }
@@ -522,7 +522,7 @@ async fn tiered_storage_disable_needs_delete_on_disable(mut jvm_tiered: JvmTiere
     name = "tiered storage topic rlmm survives restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tiered_storage_topic_rlmm_survives_restart(mut jvm_tiered: JvmTiered) {
+async fn tiered_storage_topic_rlmm_survives_restart(jvm_tiered: JvmTiered) {
     jvm_tiered.shutdown().await;
     drop(jvm_tiered);
 }
@@ -533,7 +533,7 @@ async fn tiered_storage_topic_rlmm_survives_restart(mut jvm_tiered: JvmTiered) {
     name = "restored cluster serves the jvm console consumer"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn restored_cluster_serves_the_jvm_console_consumer(mut jvm_tiered: JvmTiered) {
+async fn restored_cluster_serves_the_jvm_console_consumer(jvm_tiered: JvmTiered) {
     jvm_tiered.shutdown().await;
     drop(jvm_tiered);
 }

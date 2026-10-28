@@ -296,6 +296,8 @@ fn validate_share_group_order(share: &ShareGroupConfig) -> Result<(), FileConfig
 
 #[cfg(test)]
 mod tests {
+    use rstest_bdd::datatable::Rows;
+
     fn applied_runtime(body: &str) -> Result<BrokerConfig, String> {
         let file: FileConfig =
             toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
@@ -339,7 +341,7 @@ mod tests {
     #[rstest_bdd_macros::then("the entire Share group policy equals Kafka defaults except")]
     fn share_group_policy(
         coordinator_properties: &CoordinatorProperties,
-        #[datatable] datatable: rstest_bdd::datatable::Rows<SharePolicyField>,
+        #[datatable] datatable: Rows<SharePolicyField>,
     ) {
         let config = coordinator_properties
             .applied
@@ -351,34 +353,34 @@ mod tests {
         for row in datatable {
             match row.field.as_str() {
                 "max_inflight_records" => {
-                    expected.max_inflight_records = row.value.parse().expect("integer bound")
+                    expected.max_inflight_records = row.value.parse().expect("integer bound");
                 }
                 "max_partition_max_record_locks" => {
                     expected.max_partition_max_record_locks =
-                        row.value.parse().expect("integer bound")
+                        row.value.parse().expect("integer bound");
                 }
                 "max_delivery_count_limit" => {
-                    expected.max_delivery_count_limit = row.value.parse().expect("integer bound")
+                    expected.max_delivery_count_limit = row.value.parse().expect("integer bound");
                 }
                 "record_lock_duration" => {
                     expected.record_lock_duration =
-                        Duration::from_millis(row.value.parse().expect("millisecond duration"))
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
                 }
                 "min_record_lock_duration" => {
                     expected.min_record_lock_duration =
-                        Duration::from_millis(row.value.parse().expect("millisecond duration"))
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
                 }
                 "min_session_timeout" => {
                     expected.min_session_timeout =
-                        Duration::from_millis(row.value.parse().expect("millisecond duration"))
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
                 }
                 "max_session_timeout" => {
                     expected.max_session_timeout =
-                        Duration::from_millis(row.value.parse().expect("millisecond duration"))
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
                 }
                 "session_timeout" => {
                     expected.session_timeout =
-                        Duration::from_millis(row.value.parse().expect("millisecond duration"))
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
                 }
                 unknown => panic!("unknown Share policy field {unknown}"),
             }
