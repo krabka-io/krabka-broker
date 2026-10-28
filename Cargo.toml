@@ -319,6 +319,10 @@ krabka-units = "0.7.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
+# `fs::sync_file_range`, which the write-back pacing uses, is in rustix only
+# through the open upstream PR bytecodealliance/rustix#1718, from this fork
+# at its head. Drop the patch when a rustix release carries it.
+rustix = { git = "https://github.com/robot-head/rustix", rev = "8b5b932aba81d9d2869517fe63a1b9167daf5289" }
 krabka-admin-ui = { git = "https://github.com/krabka-io/krabka-cli", rev = "b39dc88d0da3792db02ad62469b45f4fe312ea75" }
 krabka-app-sdk = { git = "https://github.com/krabka-io/krabka-gateway", rev = "49870fd8e5f708274ff69a3e64a092844e2f8809" }
 krabka-audit = { path = "crates/audit" }
