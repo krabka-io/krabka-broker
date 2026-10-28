@@ -234,7 +234,7 @@ opentelemetry_sdk = { version = "0.33", default-features = false, features = ["t
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
 prometheus-client = "0.25"
 proptest = "1"
-rstest = "0.26"
+rstest = "0.28"
 rstest-bdd = "0.6"
 rstest-bdd-macros = "0.6"
 # rstest-bdd localizations must be embedded in debug test binaries as well;
