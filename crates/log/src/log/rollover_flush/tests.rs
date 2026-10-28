@@ -19,7 +19,7 @@ use {
     std::{
         collections::HashSet,
         fs::{self, File},
-        io, iter,
+        io, iter, mem,
         path::Path,
         sync::{
             Arc, Condvar, Mutex,
@@ -405,7 +405,10 @@ fn many_partitions_share_a_fixed_worker_pool() {
     for (_, _, gate, _) in &partitions {
         gate.open_gate();
     }
-    let mut threads: HashSet<_> = started.into_iter().map(Result::unwrap).collect();
+    let mut threads = HashSet::new();
+    for thread in started {
+        threads.insert(thread.unwrap());
+    }
     assert!(
         pending
             .iter()
@@ -666,13 +669,22 @@ fn appended_through_page_cache(
     budget: Option<u32>,
     appends: usize,
 ) -> (Log, Arc<CountingIo>) {
-    let mut log = Log::open(dir, LogConfig {
-        writeback_window: bytes(window),
-        page_cache_budget: budget.map(bytes),
-        retention: None,
-        ..LogConfig::default()
-    })
-    .unwrap();
+    appended_with(
+        dir,
+        LogConfig {
+            writeback_window: bytes(window),
+            page_cache_budget: budget.map(bytes),
+            retention: None,
+            ..LogConfig::default()
+        },
+        appends,
+    )
+}
+
+/// A log opened with `config`, a counting I/O and a private flush pool,
+/// after `appends` appends of one 1 KiB record each.
+fn appended_with(dir: &Path, config: LogConfig, appends: usize) -> (Log, Arc<CountingIo>) {
+    let mut log = Log::open(dir, config).unwrap();
     let io = Arc::new(CountingIo::default());
     log.test_set_io(Arc::<CountingIo>::clone(&io));
     log.rollover_flusher.executor =
@@ -811,4 +823,133 @@ fn pacing_restarts_from_a_cut_or_reset_active_segment() {
         io.syncs.load(Ordering::SeqCst) > before,
         "a window after the reset is written out"
     );
+}
+
+/// The drops recorded so far, cleared for the next step.
+fn take_drops(io: &CountingIo) -> Vec<(u64, u64)> { mem::take(&mut *io.drops.lock().unwrap()) }
+
+/// 64 appends of one 1 KiB record through 4 KiB windows under an 8 KiB
+/// budget, synced: every handed-over page but the newest two has been
+/// dropped, and the drops so far are cleared.
+fn cold_log(dir: &Path) -> (Log, Arc<CountingIo>) {
+    let (log, io) = appended_through_page_cache(dir, 4096, Some(8192), 64);
+    log.rollover_flusher.finish().unwrap();
+    take_drops(&io);
+    (log, io)
+}
+
+/// A fetch of bytes the budget has dropped drops the pages behind it, where
+/// its reader's previous fetch was, and a byte-copy fetch its own pages too,
+/// so a consumer reading an old backlog leaves no page cache in its wake. A
+/// fetch of the newest bytes, which the ledger holds, drops nothing.
+#[test]
+fn a_cold_fetch_drops_the_pages_behind_it() {
+    let dir = tempdir().unwrap();
+    let (log, io) = cold_log(dir.path());
+    let active = log.active.as_ref().unwrap();
+    let cold_before = log
+        .rollover_flusher
+        .page_cache_retained_from(active.log_file())
+        .unwrap();
+    assert!(
+        cold_before == log.writeback_handed - 8192,
+        "{cold_before} cold"
+    );
+
+    // Every batch is the same length, so the batch at offset `n` starts at
+    // `n * batch_len`.
+    let first = log.read_raw(Offset(0), Offset(64), bytes(4096)).unwrap();
+    let batches = first.last_offset.unwrap().0 - first.start_offset.0 + 1;
+    let batch_len = u64::try_from(first.total).unwrap() / u64::try_from(batches).unwrap();
+    // The oldest records are cold; nothing is behind them, so the byte-copy
+    // read drops only its own pages, from the start of the file.
+    assert!(take_drops(&io) == vec![(0, batch_len * u64::try_from(batches).unwrap())]);
+
+    // Further on, the read drops the pages back to twice its size behind it,
+    // from a page boundary, through its own.
+    let read = log.read_raw(Offset(16), Offset(64), bytes(4096)).unwrap();
+    let start = 16 * batch_len;
+    let end = start + u64::try_from(read.total).unwrap();
+    assert!(end <= cold_before, "{end} is not cold before {cold_before}");
+    let from = (start - 8192) & !4095;
+    assert!(take_drops(&io) == vec![(from, end - from)]);
+
+    // The newest records are in the ledger: nothing is dropped for them.
+    let tail = 60 * batch_len;
+    assert!(tail >= cold_before, "{tail} is cold before {cold_before}");
+    log.read_raw(Offset(60), Offset(64), bytes(4096)).unwrap();
+    assert!(take_drops(&io).is_empty());
+}
+
+/// The `sendfile` fetch sends its bytes after it is described, so it drops
+/// only the pages behind a cold region, up to the page the region starts in.
+#[krabka_macros::sendfile_cfg]
+#[test]
+fn a_cold_sendfile_fetch_drops_the_pages_behind_its_region() {
+    let dir = tempdir().unwrap();
+    let (log, io) = cold_log(dir.path());
+    let desc = log
+        .read_raw_desc(Offset(16), Offset(64), bytes(4096))
+        .unwrap();
+    let region = desc.regions.first().expect("a cached run is described");
+    let from = (region.offset - 8192) & !4095;
+    let to = region.offset & !4095;
+    assert!(take_drops(&io) == vec![(from, to - from)]);
+    // The first region of the file has nothing behind it.
+    log.read_raw_desc(Offset(0), Offset(64), bytes(4096))
+        .unwrap();
+    assert!(take_drops(&io).is_empty());
+}
+
+/// Without a budget no fetch is cold, and a fetch of the active segment
+/// before any of its pages was handed over is not either.
+#[test]
+fn fetches_without_a_budget_or_before_a_handover_drop_nothing() {
+    let dir = tempdir().unwrap();
+    let (log, io) = appended_through_page_cache(dir.path(), 4096, None, 64);
+    log.rollover_flusher.finish().unwrap();
+    log.read_raw(Offset(0), Offset(64), bytes(4096)).unwrap();
+    assert!(take_drops(&io).is_empty());
+
+    let dir = tempdir().unwrap();
+    // A 1 MiB window: 64 KiB of appends hand nothing over.
+    let (log, io) = appended_through_page_cache(dir.path(), 1 << 20, Some(8192), 64);
+    log.rollover_flusher.finish().unwrap();
+    assert!(log.writeback_handed == 0);
+    log.read_raw(Offset(0), Offset(64), bytes(4096)).unwrap();
+    assert!(take_drops(&io).is_empty());
+}
+
+/// A sealed segment with no page left in the ledger is cold throughout: a
+/// fetch of it drops its pages even where nothing behind it was handed over.
+#[test]
+fn a_fetch_of_a_sealed_segment_the_ledger_forgot_is_cold() {
+    let dir = tempdir().unwrap();
+    // 8 KiB segments: the 64 appends roll seven times or more.
+    let (log, io) = appended_with(
+        dir.path(),
+        LogConfig {
+            writeback_window: bytes(4096),
+            page_cache_budget: Some(bytes(8192)),
+            segment_size: bytes(8 * 1024),
+            retention: None,
+            ..LogConfig::default()
+        },
+        64,
+    );
+    log.rollover_flusher.finish().unwrap();
+    assert!(
+        log.segments.len() >= 4,
+        "{} sealed segments",
+        log.segments.len()
+    );
+    let oldest = &log.segments[0];
+    assert!(
+        log.rollover_flusher
+            .page_cache_retained_from(oldest.log_file())
+            .is_none()
+    );
+    take_drops(&io);
+    let read = log.read_raw(Offset(0), Offset(1), bytes(4096)).unwrap();
+    assert!(take_drops(&io) == vec![(0, u64::try_from(read.total).unwrap())]);
 }

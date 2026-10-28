@@ -9,7 +9,9 @@
 use {
     super::{
         RawSegmentDesc, Segment,
-        read_raw::{RawBatch, select_raw_range},
+        io::SourceIo,
+        read_raw::{RawBatch, RawReadSource, select_raw_range},
+        read_source::ReadSource,
     },
     crate::{config::DEFAULT_READ_AHEAD_MAX, error::LogError},
     krabka_ids::Offset,
@@ -25,7 +27,10 @@ const SMALL_BATCH_THRESHOLD: usize = 16 * 1024;
 /// Maximum bytes prefetched after the scanner identifies a small batch.
 const HEADER_SCAN_WINDOW: usize = 256 * 1024;
 
-impl Segment {
+/// The zero-copy descriptor read of a [`ReadSource`]. Provided for every
+/// source, so it runs the same over a live segment under the log lock and
+/// over a view of one after the lock is released.
+pub trait RawDescSource: ReadSource {
     /// [`Segment::read_raw_desc_with_policy`] for a fetch that must not walk
     /// bytes outside the page cache. `None` means the run is not cached, and
     /// the fetch takes the byte-copy path instead.
@@ -49,7 +54,7 @@ impl Segment {
     ///
     /// # Errors
     /// Returns an error when log I/O fails, or a record or index is corrupt.
-    pub(crate) fn read_raw_desc_if_cached(
+    fn read_raw_desc_if_cached(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
@@ -70,7 +75,7 @@ impl Segment {
     /// window a fetch from `start_pos` would walk.
     fn run_is_cached(&self, start_pos: u64, max_size: ByteSize) -> bool {
         let window = (max_size.bytes_u64().max(HEADER_LEN as u64))
-            .min(self.log_size.saturating_sub(start_pos));
+            .min(self.log_size().saturating_sub(start_pos));
         // No bytes from the start: an empty segment, which compaction leaves
         // behind, or a run that starts at the end of the file. The walk reads
         // nothing there, so it cannot wait on the disk. Asking the page cache
@@ -86,50 +91,23 @@ impl Segment {
     /// Cache capability only; successful probes and misses can change as
     /// pages enter and leave the cache and must always be checked again.
     fn byte_is_cached(&self, offset: u64) -> bool {
-        if self.cache_probe_unsupported.load(Ordering::Relaxed) {
+        if self.cache_probe_unsupported().load(Ordering::Relaxed) {
             return true;
         }
-        self.io
-            .is_cached(&self.log_file, offset)
-            .unwrap_or_else(|| {
-                self.cache_probe_unsupported.store(true, Ordering::Relaxed);
-                true
-            })
-    }
-
-    /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
-    /// `sendfile` fetch path.
-    ///
-    /// This method runs the **same** boundary walk and selects the identical
-    /// `[start_pos+range_start, start_pos+range_end)` byte range that
-    /// `read_raw` would have sliced. It returns a [`krabka_protocol::records::FileRegion`] descriptor
-    /// instead of a `pread` of the payload into an owned `Bytes`.
-    ///
-    /// The walk reads bounded windows to amortize header lookups and uses the
-    /// header's `batch_length` to find boundaries. It returns a file region
-    /// instead of building an owned copy of the selected payload. The region
-    /// is byte-identical to the `bytes` of `read_raw` for the same
-    /// `(fetch_offset, limit_offset, max_bytes)`.
-    #[instrument(
-        level = "debug",
-        skip(self),
-        fields(base_offset = self.base_offset.0),
-        err,
-    )]
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn read_raw_desc(
-        &self,
-        fetch_offset: Offset,
-        limit_offset: Offset,
-        max_size: ByteSize,
-    ) -> Result<RawSegmentDesc, LogError> {
-        self.read_raw_desc_with_policy(fetch_offset, limit_offset, max_size, DEFAULT_READ_AHEAD_MAX)
+        self.io().is_cached(self.file(), offset).unwrap_or_else(|| {
+            self.cache_probe_unsupported()
+                .store(true, Ordering::Relaxed);
+            true
+        })
     }
 
     /// [`Segment::read_raw_desc`] under the log's configured read policy: the
     /// readahead hint reaches at most `read_ahead_max` past the read's own
     /// window.
+    ///
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or
+    /// the requested offset violates the segment state.
     fn read_raw_desc_with_policy(
         &self,
         fetch_offset: Offset,
@@ -175,7 +153,7 @@ impl Segment {
         // takes the newest bytes from memory and the rest in one large read:
         // an empty description is what the broker falls back on, and a
         // segment that contributes nothing is one the log's walk passes over.
-        if self.wrote_direct {
+        if self.wrote_direct() {
             return Ok(None);
         }
         let Some(start_pos) = self.raw_start_position_with(
@@ -193,7 +171,7 @@ impl Segment {
         // Scan bounded windows to find headers; keep the selected payload file-backed.
         let max_bytes = max_size.bytes_usize();
         let window =
-            (max_bytes.max(HEADER_LEN) as u64).min(self.log_size.saturating_sub(start_pos));
+            (max_bytes.max(HEADER_LEN) as u64).min(self.log_size().saturating_sub(start_pos));
         self.advise_read(start_pos, window, read_ahead_max);
         let window = usize::try_from(window)
             .map_err(|_| LogError::Corrupt("read_raw_desc window too large".into()))?;
@@ -230,14 +208,14 @@ impl Segment {
         else {
             return Ok(Some(RawSegmentDesc::empty()));
         };
-        if start_pos + range.positions.end as u64 > self.log_size {
+        if start_pos + range.positions.end as u64 > self.log_size() {
             return Ok(Some(RawSegmentDesc::empty()));
         }
         Ok(Some(RawSegmentDesc {
             start_offset: range.start_offset,
             last_offset: range.last_offset,
             region: Some(FileRegion {
-                file: Arc::clone(&self.log_file),
+                file: Arc::clone(self.file()),
                 offset: start_pos + range.positions.start as u64,
                 len: range.positions.len(),
             }),
@@ -245,9 +223,43 @@ impl Segment {
     }
 }
 
+impl<S: ReadSource + ?Sized> RawDescSource for S {}
+
+impl Segment {
+    /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
+    /// `sendfile` fetch path.
+    ///
+    /// This method runs the **same** boundary walk and selects the identical
+    /// `[start_pos+range_start, start_pos+range_end)` byte range that
+    /// `read_raw` would have sliced. It returns a [`krabka_protocol::records::FileRegion`] descriptor
+    /// instead of a `pread` of the payload into an owned `Bytes`.
+    ///
+    /// The walk reads bounded windows to amortize header lookups and uses the
+    /// header's `batch_length` to find boundaries. It returns a file region
+    /// instead of building an owned copy of the selected payload. The region
+    /// is byte-identical to the `bytes` of `read_raw` for the same
+    /// `(fetch_offset, limit_offset, max_bytes)`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(base_offset = self.base_offset.0),
+        err,
+    )]
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    pub fn read_raw_desc(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        max_size: ByteSize,
+    ) -> Result<RawSegmentDesc, LogError> {
+        self.read_raw_desc_with_policy(fetch_offset, limit_offset, max_size, DEFAULT_READ_AHEAD_MAX)
+    }
+}
+
 /// Whether the descriptor walk first asks the page cache about its run.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Probe {
+pub enum Probe {
     /// Walk the run wherever its bytes are.
     None,
     /// Describe nothing when the run's first or last byte is not cached.

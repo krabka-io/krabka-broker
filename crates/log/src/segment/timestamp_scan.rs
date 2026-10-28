@@ -7,7 +7,7 @@
 //! scan needs lives here.
 
 use {
-    super::Segment,
+    super::{Segment, header_walk::HeaderWalk as _},
     crate::{
         config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError, record_limit::check_records_read,
     },

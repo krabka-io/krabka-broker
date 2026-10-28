@@ -13,7 +13,9 @@
 //! from the decision the fetch handler made earlier.
 
 #[krabka_macros::sendfile_cfg]
-use super::sendfile::sendfile_region;
+use super::sendfile::{HANDOFF_BYTES, sendfile_region};
+#[krabka_macros::sendfile_cfg]
+use crate::blocking::run_in_place;
 #[krabka_macros::sendfile_cfg]
 use bytes::BytesMut;
 #[krabka_macros::sendfile_cfg]
@@ -219,9 +221,15 @@ where
         sendfile_region(tcp, region, stream.write_idle_window()).await?;
         Ok(FetchDrainPath::Sendfile)
     } else {
-        // TLS fallback: pread the region into a buffer and write it.
+        // TLS fallback: pread the region into a buffer and write it. A large
+        // region's read waits for the disk as a sendfile of it would, and
+        // leaves the worker the same way.
         let mut buf = BytesMut::zeroed(region.len);
-        read_region_exact(region, &mut buf)?;
+        if region.len >= HANDOFF_BYTES {
+            run_in_place(|| read_region_exact(region, &mut buf))?;
+        } else {
+            read_region_exact(region, &mut buf)?;
+        }
         stream.write_all(&buf).await.map_err(BrokerError::Io)?;
         Ok(FetchDrainPath::Pread)
     }

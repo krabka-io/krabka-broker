@@ -200,11 +200,3 @@ impl Segment {
         Ok(tail)
     }
 }
-
-impl Segment {
-    /// The cached bytes from `pos` on, up to about `max`, when the segment
-    /// writes directly and holds `pos` in memory. See [`TailCache::bytes_from`].
-    pub(super) fn cached_bytes(&self, pos: u64, max: usize) -> Option<bytes::Bytes> {
-        self.direct.as_ref()?.cache.bytes_from(pos, max)
-    }
-}

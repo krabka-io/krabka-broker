@@ -5,7 +5,7 @@
 //! module.
 
 use {
-    super::Segment,
+    super::{Segment, io::SourceIo as _},
     crate::{config::DEFAULT_READ_BUFFER_CAP, error::LogError},
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,

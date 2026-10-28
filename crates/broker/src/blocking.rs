@@ -14,7 +14,8 @@
 //! task waits for the length of one call.
 //!
 //! [`run_blocking`] and [`spawn_blocking`] are the two shapes the broker uses
-//! for work that may block; nothing else in the crate calls
+//! for work that may block, and [`run_in_place`] is the shape for work that
+//! borrows from its task; nothing else in the crate calls
 //! `block_in_place` or `spawn_blocking` on a runtime path. A test makes a
 //! native thread run its blocking work inline too, with
 //! [`inline_blocking_on_this_thread`], and so drives the WASI path on every
@@ -97,6 +98,35 @@ where
             .await
             .map_err(BlockingError::Join),
         Placement::Inline => run_inline(work),
+    }
+}
+
+/// Run `work` on this thread, with the worker's other duties handed to
+/// another thread for the duration.
+///
+/// This is [`run_blocking`] for work that borrows from the calling task and
+/// so cannot move to the blocking pool: a `sendfile(2)` from a file the task
+/// holds to its own socket. On a multi-thread runtime it is `block_in_place`,
+/// and the worker's core, with its queued tasks and its turn at the I/O
+/// driver, passes to another thread while `work` runs. A current-thread
+/// runtime, and `wasm32-wasip1`, run `work` inline, as they run any work of
+/// the task. A panic unwinds into the caller.
+///
+/// The hand-off matters beyond the tasks queued on this worker. A worker that
+/// wakes from the I/O driver with one task to run wakes no other worker, and
+/// the driver then goes unpolled until that task yields or something else
+/// wakes a worker. A long syscall inside such a task holds up every socket
+/// event of the runtime, not only its own: a `sendfile` that waits for the
+/// disk, or that fills a socket buffer of several MiB, keeps a producer's
+/// request unread for as long as it runs. With the core handed away, the
+/// thread that takes it parks on the driver and serves those events.
+///
+/// Only the `sendfile` drain calls it, so it exists where that does.
+#[krabka_macros::sendfile_cfg]
+pub fn run_in_place<R>(work: impl FnOnce() -> R) -> R {
+    match Placement::for_current_runtime() {
+        Placement::InPlace => task::block_in_place(work),
+        Placement::Pool | Placement::Inline => work(),
     }
 }
 
@@ -379,6 +409,46 @@ mod tests {
                  caller is {caller:?}"
             );
         }
+    }
+
+    /// In place, the work runs on the calling thread while the runtime's
+    /// other tasks go on: on a runtime with one worker, a task that waits on
+    /// a second task inside `run_in_place` sees it finish, which it could not
+    /// if the worker were held. Inline, the work runs on the calling thread
+    /// too, and a task that is alone on its runtime gets its value back.
+    #[test]
+    fn work_in_place_runs_here_and_lets_the_other_tasks_run() {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .expect("build a runtime");
+        let (ran_on, other_task_ran) = runtime.block_on(async {
+            let flag = Arc::new(AtomicUsize::new(0));
+            let other = Arc::clone(&flag);
+            let other_task = tokio::spawn(async move {
+                other.store(1, Ordering::SeqCst);
+            });
+            let caller = thread::current().id();
+            let (ran_on, seen) = run_in_place(|| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while flag.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                (thread::current().id(), flag.load(Ordering::SeqCst))
+            });
+            other_task.await.expect("the other task finishes");
+            (ran_on == caller, seen == 1)
+        });
+        check!(ran_on, "the work ran on the calling thread");
+        check!(
+            other_task_ran,
+            "the other task ran while the work held the calling thread"
+        );
+
+        let CountingRuntime { runtime, .. } = counting_runtime(false);
+        let _guard = inline_blocking_on_this_thread();
+        let value = runtime.block_on(async { run_in_place(|| 7) });
+        check!(value == 7);
     }
 
     /// Blocking work that panics.

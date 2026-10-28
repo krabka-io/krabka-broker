@@ -10,7 +10,7 @@ use rustix::io::pread;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use {
-    super::Segment,
+    super::read_source::ReadSource,
     crate::{
         error::LogError,
         io::{LogIo, write_all_with, write_progress},
@@ -137,7 +137,10 @@ pub(super) fn read_ahead_span(
     })
 }
 
-impl Segment {
+/// The positional I/O of a [`ReadSource`]: its reads and its readahead hint.
+/// Provided for every source, so a read runs the same over a live segment
+/// and over a view of one.
+pub trait SourceIo: ReadSource {
     /// Ask the kernel for the window a read from `start_pos` is about to
     /// take, and for up to `read_ahead_max` of the window after it.
     ///
@@ -153,21 +156,29 @@ impl Segment {
     /// calls, because Linux reads only the start of one large range. Kafka's fetch needs no hint:
     /// it reads no batch header past the one it starts at, and sends a slice
     /// that may end in a partial batch.
-    pub(super) fn advise_read(&self, start_pos: u64, window: u64, read_ahead_max: ByteSize) {
-        if let Some(ReadAheadSpan { offset, len }) =
-            read_ahead_span(start_pos, window, self.log_size, read_ahead_max.bytes_u64())
-        {
-            self.io.advise_will_need(&self.log_file, offset, len);
+    fn advise_read(&self, start_pos: u64, window: u64, read_ahead_max: ByteSize) {
+        if let Some(ReadAheadSpan { offset, len }) = read_ahead_span(
+            start_pos,
+            window,
+            self.log_size(),
+            read_ahead_max.bytes_u64(),
+        ) {
+            self.io().advise_will_need(self.file(), offset, len);
         }
     }
 
-    pub(super) fn read_log_range(
+    /// Read up to `max_bytes` from `start_pos` onto the end of `buf`, and
+    /// no further than the source's size.
+    ///
+    /// # Errors
+    /// Returns the underlying read error.
+    fn read_log_range(
         &self,
         start_pos: u64,
         buf: &mut Vec<u8>,
         max_bytes: usize,
     ) -> Result<(), LogError> {
-        let available = self.log_size.saturating_sub(start_pos);
+        let available = self.log_size().saturating_sub(start_pos);
         let to_read = available.min(u64::try_from(max_bytes).unwrap_or(u64::MAX));
         let to_read = usize::try_from(to_read).unwrap_or(usize::MAX);
         let base = buf.len();
@@ -191,27 +202,29 @@ impl Segment {
     /// otherwise wait on the disk for every fetch. The cache runs to
     /// `log_size`, so a range that starts inside it ends inside it too.
     fn read_at(&self, start_pos: u64, out: &mut [u8]) -> io::Result<usize> {
-        let Some(mode) = self.direct.as_ref() else {
-            return read_full_at(&self.log_file, start_pos, out);
+        let Some(cache) = self.tail_cache() else {
+            return read_full_at(self.file(), start_pos, out);
         };
-        let cached_from = mode.cache.start();
+        let cached_from = cache.start();
         let from_file = usize::try_from(cached_from.saturating_sub(start_pos))
             .unwrap_or(usize::MAX)
             .min(out.len());
         let (file_part, cache_part) = out.split_at_mut(from_file);
-        let read = read_full_at(&self.log_file, start_pos, file_part)?;
+        let read = read_full_at(self.file(), start_pos, file_part)?;
         if read < file_part.len() {
             return Ok(read);
         }
         let cache_pos = start_pos.max(cached_from);
-        if mode.cache.read(cache_pos, cache_part) {
+        if cache.read(cache_pos, cache_part) {
             return Ok(out.len());
         }
         // Not where the cache says it is: the file has every byte below
         // `log_size`, so read it there.
-        Ok(from_file + read_full_at(&self.log_file, cache_pos, cache_part)?)
+        Ok(from_file + read_full_at(self.file(), cache_pos, cache_part)?)
     }
 }
+
+impl<S: ReadSource + ?Sized> SourceIo for S {}
 
 #[cfg(test)]
 mod tests {

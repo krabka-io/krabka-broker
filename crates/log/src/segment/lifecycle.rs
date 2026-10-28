@@ -10,7 +10,10 @@ use std::cell::Cell;
 #[cfg(not(target_os = "wasi"))]
 use std::fs::File;
 use {
-    super::{ReserveRequest, Segment, io::seek_to_log_size},
+    super::{
+        ReserveRequest, Segment,
+        io::{SourceIo as _, seek_to_log_size},
+    },
     crate::{error::LogError, io::LogIo},
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
@@ -74,6 +77,11 @@ impl Segment {
     /// The `.log` file, for a background sync of its page-cache data.
     #[cfg(not(target_os = "wasi"))]
     pub(crate) fn log_file_handle(&self) -> Arc<File> { Arc::clone(&self.log_file) }
+
+    /// The `.log` file's shared handle, which the page-cache ledger records
+    /// its synced ranges against.
+    #[cfg(not(target_os = "wasi"))]
+    pub(crate) fn log_file(&self) -> &Arc<File> { &self.log_file }
 
     /// Mark this segment as sealed. No more appends.
     ///

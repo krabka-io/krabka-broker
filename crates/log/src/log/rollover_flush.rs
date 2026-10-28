@@ -171,6 +171,14 @@ impl Flusher {
         self.shared.finish_through(ticket)
     }
 
+    /// [`page_cache::Ledger::retained_from`] on this log's executor, or
+    /// `None` before a job has started it: nothing has been handed over yet.
+    #[cfg(not(target_os = "wasi"))]
+    pub fn page_cache_retained_from(&self, file: &Arc<File>) -> Option<u64> {
+        let executor = self.executor.as_ref()?;
+        executor.page_cache().retained_from(file)
+    }
+
     /// The executor this log's jobs run on, started on the first call.
     #[cfg(not(target_os = "wasi"))]
     fn executor(&mut self) -> io::Result<Arc<executor::Executor>> {
