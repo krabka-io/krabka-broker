@@ -5,6 +5,8 @@
 //! `trim_to_offset` moves the log start forward without touching the
 //! active segment.
 
+#[cfg(not(target_os = "wasi"))]
+use krabka_units::prelude::ByteSizeExt as _;
 use {
     super::Log,
     crate::{
@@ -149,7 +151,13 @@ impl Log {
                 active_txn_index.truncate_from(offset)?;
                 self.active_txn_index = active_txn_index;
                 let stamp_index_path = seg.stamp_index_path();
+                // The promoted segment's pages were handed over while it was
+                // active; the pacing goes on from its cut.
+                #[cfg(not(target_os = "wasi"))]
+                let handed = seg.size().bytes_u64();
                 self.active = Some(seg);
+                #[cfg(not(target_os = "wasi"))]
+                self.restart_writeback_pacing(handed);
                 self.stamp_indexes
                     .retain(|segment_base, _| *segment_base <= base);
                 self.reopen_active_stamp_index(base, stamp_index_path)?;
@@ -162,6 +170,8 @@ impl Log {
                 self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
                 let stamp_index_path = new_seg.stamp_index_path();
                 self.active = Some(new_seg);
+                #[cfg(not(target_os = "wasi"))]
+                self.restart_writeback_pacing(0);
                 self.dir_sync_needed = true;
                 self.stamp_indexes.clear();
                 self.reopen_active_stamp_index(offset, stamp_index_path)?;
@@ -178,6 +188,12 @@ impl Log {
             self.active_txn_index.truncate_from(offset)?;
             let base = active.base_offset();
             let stamp_index_path = active.stamp_index_path();
+            // The pages handed over past the cut are gone; the pacing goes on
+            // from the cut or from where it was, whichever comes first.
+            #[cfg(not(target_os = "wasi"))]
+            let handed = self.writeback_handed.min(active.size().bytes_u64());
+            #[cfg(not(target_os = "wasi"))]
+            self.restart_writeback_pacing(handed);
             self.reopen_active_stamp_index(base, stamp_index_path)?;
             if let Some(index) = self.stamp_indexes.get_mut(&base) {
                 index.truncate_from(offset)?;

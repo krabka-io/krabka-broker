@@ -50,9 +50,9 @@ impl Flush {
 enum Job {
     /// A sealed segment's files and the producer snapshot at its end.
     Rollover(Flush),
-    /// The active segment's `.log` file, synced so that the page cache holds
-    /// little dirty data for it, and the whole pages the sync hands over,
-    /// recorded against the page-cache budget afterwards. See
+    /// A range of the active segment's `.log` file whose write-out is
+    /// started so that the page cache holds little dirty data for it, and
+    /// whose whole pages are then recorded against the page-cache budget. See
     /// `Log::pace_writeback` and [`page_cache::Ledger`].
     Writeback {
         file: Arc<File>,
@@ -80,7 +80,7 @@ impl Job {
                 budget,
                 ledger,
             } => {
-                io.sync_data(&file)?;
+                io.write_back(&file, offset, len)?;
                 if let Some(budget) = budget {
                     ledger.retain(file, io, offset, len, budget);
                 }
@@ -199,11 +199,12 @@ impl Flusher {
     #[cfg(not(target_os = "wasi"))]
     pub fn submit(&self, flush: Flush) -> io::Result<()> { self.enqueue(Job::Rollover(flush)) }
 
-    /// Queue a sync of the active segment's `.log` file behind the jobs
-    /// already queued, handing over its `len` whole pages from `offset` to
-    /// the executor's page-cache ledger under `budget` once synced. Unlike a
-    /// rollover flush it holds no snapshot memory, so it reserves nothing; it
-    /// does start the executor when no rollover has.
+    /// Queue the write-out of `len` bytes from `offset` of the active
+    /// segment's `.log` file behind the jobs already queued, handing those
+    /// whole pages over to the executor's page-cache ledger under `budget`
+    /// once it is started. Unlike a rollover flush it holds no snapshot
+    /// memory, so it reserves nothing; it does start the executor when no
+    /// rollover has.
     #[cfg(not(target_os = "wasi"))]
     pub fn submit_writeback(
         &mut self,

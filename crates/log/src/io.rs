@@ -25,7 +25,10 @@ use std::{
 #[cfg(target_os = "linux")]
 use {
     rustix::{
-        fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
+        fs::{
+            Advice, FallocateFlags, SyncFileRangeFlags, fadvise, fallocate, open, statx,
+            sync_file_range,
+        },
         io::{Errno, ReadWriteFlags, preadv2},
     },
     std::num::NonZeroU64,
@@ -86,6 +89,21 @@ pub trait LogIo: Debug + Send + Sync {
     /// # Errors
     /// Returns the underlying data-sync error.
     fn sync_data(&self, file: &File) -> io::Result<()> { file.sync_data() }
+
+    /// Start the write-out of `len` bytes of `file`'s page-cache data from
+    /// `offset`, without waiting for it and without a journal commit or a
+    /// disk-cache flush. On Linux this is `sync_file_range(2)` with
+    /// `SYNC_FILE_RANGE_WRITE`; elsewhere it is [`Self::sync_data`], which
+    /// does more and blocks. `Log` paces the active segment's dirty data with
+    /// it, so an `fdatasync` of the file, which stalls the appends that run
+    /// while it is in progress, happens only at the roll and on request.
+    ///
+    /// # Errors
+    /// Returns the underlying write-out error.
+    #[cfg(not(target_os = "wasi"))]
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
+        write_back(file, offset, len)
+    }
 
     /// Write bytes at `file`'s current cursor on behalf of `target`.
     ///
@@ -164,14 +182,18 @@ pub trait LogIo: Debug + Send + Sync {
     }
 
     /// Drop the page cache's copy of the `len` bytes of a `.log` file from
-    /// `offset`, which the kernel has written out.
+    /// `offset`, once the kernel has written them out.
     ///
-    /// This is `posix_fadvise(POSIX_FADV_DONTNEED)`. The kernel frees the
-    /// clean pages inside the range and keeps one it is still writing, so a
-    /// range whose write-out has not finished is dropped only in part, and no
-    /// data is lost either way; a later read of the range comes from the
-    /// disk. A failure changes nothing a reader can observe, so it is
-    /// dropped. The targets without `posix_fadvise` do nothing, and
+    /// This waits for the range's write-out with `sync_file_range`, then
+    /// gives `posix_fadvise(POSIX_FADV_DONTNEED)`. The kernel frees only
+    /// clean pages, so a drop of a range whose write-out had only been
+    /// started, as the budget's are when the budget is smaller than the
+    /// write-out in flight, would leave its pages cached and the ledger no
+    /// longer counting them; the wait is what makes a drop a drop. On pages
+    /// written out long ago, every drop of a sealed segment, it returns at
+    /// once. No data is lost either way; a later read of the range comes
+    /// from the disk. A failure changes nothing a reader can observe, so it
+    /// is dropped. The targets without these calls do nothing, and
     /// `wasm32-wasip1`, which has no flush pool, has no caller. See
     /// `log::page_cache`.
     #[cfg(not(target_os = "wasi"))]
@@ -390,8 +412,31 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 #[cfg(target_os = "linux")]
+fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
+    sync_file_range(file, offset, len, SyncFileRangeFlags::WRITE)?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "wasi")))]
+fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
+    let _ = (offset, len);
+    file.sync_data()
+}
+
+#[cfg(target_os = "linux")]
 fn drop_cached(file: &File, offset: u64, len: u64) {
     if let Some(len) = NonZeroU64::new(len) {
+        // The pages must be clean to go: wait for a write-out still in
+        // flight, and start one for a page that is still dirty. A failure
+        // here leaves the hint to do what it can.
+        let _ = sync_file_range(
+            file,
+            offset,
+            len.get(),
+            SyncFileRangeFlags::WAIT_BEFORE
+                | SyncFileRangeFlags::WRITE
+                | SyncFileRangeFlags::WAIT_AFTER,
+        );
         // A refused hint leaves the pages as they were.
         let _ = fadvise(file, offset, Some(len), Advice::DontNeed);
     }

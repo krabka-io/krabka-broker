@@ -2149,7 +2149,7 @@
         },
         "log_writeback_window": {
           "default": null,
-          "description": "How many bytes a partition written through the page cache appends\nbetween background syncs of its active segment. The broker starts an\n`fdatasync` of the segment file every this many bytes, off the writer,\nand makes an append wait while two are still running, so the kernel\nholds about twice this much dirty data for the segment at most. That\nkeeps the kernel's dirty-page throttling, which pauses a writer for up\nto 200 ms at a time, and the sync at segment roll from holding an\nappend for long. A partition with `preallocate=true` writes through\n`O_DIRECT` and needs none of this. The default is 2 MiB, and 0 leaves\nwrite-back to the kernel.",
+          "description": "How many bytes a partition written through the page cache appends\nbetween background write-outs of its active segment. The broker asks\nthe kernel to write the segment's new whole pages out\n(`sync_file_range`) every this many bytes, off the writer, and makes\nan append wait while two such requests are still running, so the\nkernel holds about twice this much dirty data for the segment at most.\nThat keeps the kernel's dirty-page throttling, which pauses a writer\nfor up to 200 ms at a time, and the sync at segment roll from holding\nan append for long, and unlike an `fdatasync` of the file it does not\nstall the appends that run while it is in progress. A partition with `preallocate=true` writes through\n`O_DIRECT` and needs none of this. The default is 2 MiB, and 0 leaves\nwrite-back to the kernel.",
           "format": "byte-size",
           "type": [
             "string",

@@ -80,6 +80,9 @@ allow-git = [
     "https://github.com/krabka-io/krabka-streams-rs",
     "https://github.com/testcontainers/testcontainers-rs-modules-community",
     "https://github.com/krabka-io/plotly.rs",
+    # rustix with `fs::sync_file_range` (bytecodealliance/rustix#1718), until a
+    # release carries it: see the `[patch.crates-io]` entry in Cargo.toml.
+    "https://github.com/robot-head/rustix",
 ]
 
 [[licenses.clarify]]
