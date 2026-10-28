@@ -593,6 +593,18 @@ refuses a `listeners` config with any other listener when
 `process.roles=controller`. Logs are one JSON object
 per line on stdout; `RUST_LOG` sets the level.
 
+The container image starts the broker with
+`GLIBC_TUNABLES=glibc.malloc.trim_threshold=134217728:glibc.malloc.mmap_threshold=67108864`.
+A broker started from the binary outside the image sets the same variable.
+It makes glibc keep the 10 MiB records buffers of fetch responses in its
+arenas instead of mapping and unmapping each one: with the defaults, a
+consumer draining a backlog at 500 K msg/s makes the broker return about
+54 MiB to the kernel a dozen times a second, every page fault of the process
+waits behind each call, and the producers' publish p99 rises for the length
+of the drain (1.3 to 3.5 ms measured; 2.1 ms with the variable). The arenas
+keep about 300 MiB more resident at that rate, within the memory the
+[capacity](capacity.md) guidance reserves for the process.
+
 Start the three voters within a few seconds of each other. The
 quorum elects a leader once a majority is up, and the brokers register with
 it. `kafka-metadata-quorum --bootstrap-server broker-1.example:9092 describe
