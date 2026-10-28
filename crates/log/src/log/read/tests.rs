@@ -632,15 +632,22 @@ fn an_uncached_run_falls_back_to_one_large_read() {
     assert2::assert!(copied.bytes == raw.bytes);
 }
 
+/// A log in `dir` of `batches` one-record batches from offset 0, with
+/// segments so small that each batch rolls one.
+fn one_batch_per_segment(dir: &Path, batches: i64) -> Log {
+    let mut log = segmented_log(dir, bytes(100));
+    for off in 0..batches {
+        log.append(&mut test_batch_at(off)).unwrap();
+    }
+    log
+}
+
 /// A log of six batches, one segment each, whose segment based at `cold`
 /// reads as not in the page cache.
 #[krabka_macros::sendfile_cfg]
 fn six_segments_one_cold(cold: impl Fn(&Log) -> i64) -> (tempfile::TempDir, Log) {
     let dir = tempdir().unwrap();
-    let mut log = segmented_log(dir.path(), bytes(100));
-    for off in 0..6 {
-        log.append(&mut test_batch_at(off)).unwrap();
-    }
+    let mut log = one_batch_per_segment(dir.path(), 6);
     let base = cold(&log);
     log.test_set_io(Arc::new(ColdFile {
         cold: segment_inode(dir.path(), base),
@@ -994,10 +1001,7 @@ fn a_plan_reads_up_to_the_end_it_saw() {
 #[test]
 fn a_plan_may_block_when_the_read_would() {
     let dir = tempdir().unwrap();
-    let mut log = segmented_log(dir.path(), bytes(100));
-    for off in 0..6 {
-        log.append(&mut test_batch_at(off)).unwrap();
-    }
+    let log = one_batch_per_segment(dir.path(), 6);
     check!(log.segments.len() >= 2);
     let end = log.log_end_offset();
     let active = log.active.as_ref().unwrap().base_offset();
@@ -1030,10 +1034,7 @@ fn a_plan_may_block_when_the_read_would() {
 #[test]
 fn a_plan_views_only_the_segments_its_budget_can_reach() {
     let dir = tempdir().unwrap();
-    let mut log = segmented_log(dir.path(), bytes(100));
-    for off in 0..12 {
-        log.append(&mut test_batch_at(off)).unwrap();
-    }
+    let log = one_batch_per_segment(dir.path(), 12);
     let end = log.log_end_offset();
     let segments = log.segments.len() + 1;
     check!(segments >= 6);

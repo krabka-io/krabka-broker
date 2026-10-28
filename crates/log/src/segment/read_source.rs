@@ -93,19 +93,27 @@ pub trait ReadSource {
     }
 }
 
+/// The accessors a segment and its view answer from fields of the same
+/// name: the view copies them from the segment.
+macro_rules! field_accessors {
+    () => {
+        fn file(&self) -> &Arc<File> { &self.log_file }
+
+        fn io(&self) -> &Arc<dyn LogIo> { &self.io }
+
+        fn log_size(&self) -> u64 { self.log_size }
+
+        fn base(&self) -> Offset { self.base_offset }
+
+        fn last(&self) -> Offset { self.last_offset }
+
+        #[krabka_macros::sendfile_cfg]
+        fn wrote_direct(&self) -> bool { self.wrote_direct }
+    };
+}
+
 impl ReadSource for Segment {
-    fn file(&self) -> &Arc<File> { &self.log_file }
-
-    fn io(&self) -> &Arc<dyn LogIo> { &self.io }
-
-    fn log_size(&self) -> u64 { self.log_size }
-
-    fn base(&self) -> Offset { self.base_offset }
-
-    fn last(&self) -> Offset { self.last_offset }
-
-    #[krabka_macros::sendfile_cfg]
-    fn wrote_direct(&self) -> bool { self.wrote_direct }
+    field_accessors!();
 
     fn tail_cache(&self) -> Option<&TailCache> { self.direct.as_ref().map(|mode| &mode.cache) }
 
@@ -186,18 +194,7 @@ impl SegmentReadView {
 }
 
 impl ReadSource for SegmentReadView {
-    fn file(&self) -> &Arc<File> { &self.log_file }
-
-    fn io(&self) -> &Arc<dyn LogIo> { &self.io }
-
-    fn log_size(&self) -> u64 { self.log_size }
-
-    fn base(&self) -> Offset { self.base_offset }
-
-    fn last(&self) -> Offset { self.last_offset }
-
-    #[krabka_macros::sendfile_cfg]
-    fn wrote_direct(&self) -> bool { self.wrote_direct }
+    field_accessors!();
 
     fn tail_cache(&self) -> Option<&TailCache> { self.tail.as_ref() }
 
