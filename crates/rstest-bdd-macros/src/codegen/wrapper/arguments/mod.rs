@@ -350,6 +350,9 @@ pub(super) fn prepare_argument_processing(
     } = bind_arguments(args, &binding_idents);
 
     let declares = gen_fixture_decls(&fixtures, ident, ctx_ident);
+    let fixture_guards = fixtures.iter().rev().map(|fixture| {
+        format_ident!("__rstest_bdd_guard_{}", fixture.binding)
+    }).collect();
     let all_captures = capture_accessors(placeholder_names.len());
     let step_struct_present = step_struct.is_some();
     let StepArgParseResult {
@@ -377,6 +380,7 @@ pub(super) fn prepare_argument_processing(
     let docstring_decl = gen_docstring_decl(docstring, pattern, ident);
     PreparedArgs {
         declares,
+        fixture_guards,
         step_arg_parses,
         step_struct_decl,
         datatable_decl,

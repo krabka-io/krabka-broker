@@ -94,11 +94,14 @@ struct WrapperCodeFragments<'a> {
 fn generate_sync_unwind_handling(
     path: &TokenStream2,
     call_expr: &TokenStream2,
+    fixture_guards: &[syn::Ident],
     exec_err: &TokenStream2,
     panic_err: &TokenStream2,
 ) -> TokenStream2 {
     quote! {
-        match catch_unwind(AssertUnwindSafe(|| { #call_expr })) {
+        let __rstest_bdd_step_outcome = catch_unwind(AssertUnwindSafe(|| { #call_expr }));
+        #(drop(#fixture_guards);)*
+        match __rstest_bdd_step_outcome {
             Ok(res) => res
                 .map(|value| #path::StepExecution::from_value(value))
                 .map_err(|message| #exec_err),
@@ -250,7 +253,7 @@ fn render_wrapper_function(
     match wrapper_kind {
         WrapperKind::Sync => {
             let unwind_handling =
-                generate_sync_unwind_handling(&path, call_expr, &exec_err, &panic_err);
+                generate_sync_unwind_handling(&path, call_expr, &prepared.fixture_guards, &exec_err, &panic_err);
             let fragments = WrapperCodeFragments {
                 path: &path,
                 expect_attr: &expect_attr,
@@ -261,7 +264,7 @@ fn render_wrapper_function(
         }
         WrapperKind::Async => {
             let unwind_handling =
-                async_wrapper::generate_unwind_handling(&path, call_expr, &exec_err, &panic_err);
+                async_wrapper::generate_unwind_handling(&path, call_expr, &prepared.fixture_guards, &exec_err, &panic_err);
             let fragments = WrapperCodeFragments {
                 path: &path,
                 expect_attr: &expect_attr,

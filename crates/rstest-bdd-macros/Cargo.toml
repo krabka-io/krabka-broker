@@ -25,9 +25,9 @@ strict-compile-time-validation = ["compile-time-validation"] # Treats warnings a
 
 
 [dependencies]
-rstest-bdd-patterns.workspace = true
-rstest-bdd-harness.workspace = true
-rstest-bdd-policy.workspace = true
+rstest-bdd-patterns = "0.6.0"
+rstest-bdd-harness = "0.6.0"
+rstest-bdd-policy = "0.6.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote.workspace = true
 syn.workspace = true

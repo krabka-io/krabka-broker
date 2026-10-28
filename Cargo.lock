@@ -257,7 +257,7 @@ dependencies = [
  "proptest",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-test-macros",
  "serde",
  "serde_json",
@@ -1683,10 +1683,10 @@ dependencies = [
  "proptest",
  "regex",
  "rstest",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-macros",
- "rstest-bdd-patterns",
- "rstest-bdd-policy",
+ "rstest-bdd-patterns 0.6.0",
+ "rstest-bdd-policy 0.6.0",
  "rstest-bdd-test-macros",
  "rust-embed",
  "rustversion",
@@ -1712,10 +1712,21 @@ dependencies = [
  "insta",
  "proptest",
  "rstest",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-test-macros",
  "temp-env",
  "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "rstest-bdd-harness"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef06c10321ddaeef30b5eec9c1e1109fd5f742e22a16042881418843c42e8ef"
+dependencies = [
+ "cargo_metadata",
  "thiserror 2.0.20",
  "tracing",
 ]
@@ -1732,7 +1743,7 @@ dependencies = [
  "proptest",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-macros",
  "rstest-bdd-test-macros",
  "rustversion",
@@ -1752,7 +1763,7 @@ dependencies = [
  "prettyplease 0.3.0",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-macros",
  "rstest-bdd-test-macros",
  "rustversion",
@@ -1781,9 +1792,9 @@ dependencies = [
  "quote",
  "regex",
  "rstest",
- "rstest-bdd-harness",
- "rstest-bdd-patterns",
- "rstest-bdd-policy",
+ "rstest-bdd-harness 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rstest-bdd-patterns 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rstest-bdd-policy 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rstest-bdd-test-macros",
  "rustc_version",
  "serial_test",
@@ -1806,11 +1817,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "rstest-bdd-patterns"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b48c602114cc336e5b6aab57f55be42fe83aeddf68f8d06649b04fa3a8e8aac"
+dependencies = [
+ "gherkin",
+ "regex",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "rstest-bdd-policy"
 version = "0.6.0"
 dependencies = [
  "rstest",
 ]
+
+[[package]]
+name = "rstest-bdd-policy"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a763e4ca8dea3871aef38f58ef0a6fa9b8a47dd06e34f1503aa32467db87d70"
 
 [[package]]
 name = "rstest-bdd-server"
@@ -1828,7 +1856,7 @@ dependencies = [
  "proptest",
  "regex",
  "rstest",
- "rstest-bdd-patterns",
+ "rstest-bdd-patterns 0.6.0",
  "rstest-bdd-server",
  "rstest-bdd-test-macros",
  "serde",
@@ -2362,7 +2390,7 @@ dependencies = [
  "predicates",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
+ "rstest-bdd-harness 0.6.0",
  "rstest-bdd-macros",
  "rstest-bdd-test-macros",
  "toml 1.1.5+spec-1.1.0",
