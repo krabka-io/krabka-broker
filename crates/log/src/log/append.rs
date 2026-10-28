@@ -688,11 +688,7 @@ impl Log {
         // The rollover flush syncs what the sealed segment's background
         // syncs had not reached; the new segment starts with nothing unsynced.
         #[cfg(not(target_os = "wasi"))]
-        {
-            self.writeback_unsynced = 0;
-            self.writeback_jobs.clear();
-            self.writeback_handed = 0;
-        }
+        self.restart_writeback_pacing(0);
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         Ok(())

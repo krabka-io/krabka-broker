@@ -15,7 +15,7 @@ use {
     bytes::Bytes,
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Record, RecordBatch},
-    krabka_units::bytes,
+    krabka_units::{bytes, prelude::ByteSizeExt as _},
     std::{
         collections::HashSet,
         fs::{self, File},
@@ -646,7 +646,11 @@ struct CountingIo {
 }
 
 impl LogIo for CountingIo {
-    fn sync_data(&self, file: &File) -> io::Result<()> {
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
+        assert!(
+            offset % 4096 == 0 && len % 4096 == 0,
+            "a write-out range covers whole pages"
+        );
         self.syncs.fetch_add(1, Ordering::SeqCst);
         file.sync_data()
     }
@@ -686,16 +690,20 @@ fn appended_with(dir: &Path, config: LogConfig, appends: usize) -> (Log, Arc<Cou
     log.rollover_flusher.executor =
         Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
     for _ in 0..appends {
-        let mut batch = RecordBatch {
-            records: vec![Record {
-                value: Some(Bytes::from(vec![7u8; 1024])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        log.append(&mut batch).unwrap();
+        log.append(&mut kib_batch()).unwrap();
     }
     (log, io)
+}
+
+/// One batch of one 1 KiB record, the unit the pacing tests append.
+fn kib_batch() -> RecordBatch {
+    RecordBatch {
+        records: vec![Record {
+            value: Some(Bytes::from(vec![7u8; 1024])),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
 }
 
 /// Through the page cache, every `writeback_window` appended bytes start one
@@ -756,6 +764,68 @@ fn a_page_cache_budget_drops_the_oldest_synced_pages() {
     assert!(ledger.recorded_bytes() == 8192);
 }
 
+/// An explicit sync hands the whole pages written since the last window to
+/// the ledger before it syncs everything, so a flush between windows leaves
+/// no page outside the budget's accounting, and the frontier stays on a
+/// page boundary.
+#[test]
+fn an_explicit_sync_hands_its_pages_to_the_ledger() {
+    let dir = tempdir().unwrap();
+    let (mut log, io) = appended_through_page_cache(dir.path(), 1 << 20, Some(1 << 20), 10);
+    assert!(log.writeback_handed == 0);
+    let before = io.syncs.load(Ordering::SeqCst);
+
+    log.sync().unwrap();
+    log.rollover_flusher.finish().unwrap();
+
+    let active = log.active.as_ref().unwrap();
+    let size = active.size().bytes_u64();
+    assert!(
+        log.writeback_handed == size & !4095 && log.writeback_handed > 0,
+        "{} handed of {size}",
+        log.writeback_handed
+    );
+    assert!(io.syncs.load(Ordering::SeqCst) == before + 1);
+    let ledger = log.rollover_flusher.executor.as_ref().unwrap().page_cache();
+    assert!(ledger.recorded_bytes() == log.writeback_handed);
+}
+
+/// Cutting the log in place or replacing its active segment restarts the
+/// pacing from the segment that is active then: the next window's pages are
+/// written out, instead of waiting until the new segment grows past the old
+/// frontier.
+#[test]
+fn pacing_restarts_from_a_cut_or_reset_active_segment() {
+    let dir = tempdir().unwrap();
+    let (mut log, io) = appended_through_page_cache(dir.path(), 4096, None, 64);
+    assert!(log.writeback_handed >= 32 * 1024);
+
+    log.truncate_to(Offset(0)).unwrap();
+    a_window_is_written_out_after(&mut log, &io, "the cut");
+
+    log.reset_to(Offset(1_000)).unwrap();
+    a_window_is_written_out_after(&mut log, &io, "the reset");
+}
+
+/// Right after `what` the pacing has handed nothing over, and the next 8 KiB
+/// of appends through 4 KiB windows start a write-out of the active segment.
+fn a_window_is_written_out_after(log: &mut Log, io: &CountingIo, what: &str) {
+    assert!(
+        log.writeback_handed == 0,
+        "{} handed over after {what}",
+        log.writeback_handed
+    );
+    let before = io.syncs.load(Ordering::SeqCst);
+    for _ in 0..8 {
+        log.append(&mut kib_batch()).unwrap();
+    }
+    log.rollover_flusher.finish().unwrap();
+    assert!(
+        io.syncs.load(Ordering::SeqCst) > before,
+        "a window after {what} is written out"
+    );
+}
+
 /// The drops recorded so far, cleared for the next step.
 fn take_drops(io: &CountingIo) -> Vec<(u64, u64)> { mem::take(&mut *io.drops.lock().unwrap()) }
 
@@ -767,6 +837,27 @@ fn cold_log(dir: &Path) -> (Log, Arc<CountingIo>) {
     log.rollover_flusher.finish().unwrap();
     take_drops(&io);
     (log, io)
+}
+
+/// A read that starts in pages the budget has dropped waits for the disk,
+/// whatever the active segment says of its recent bytes: its plan says it
+/// may block while the segment's own verdict says it may not. The newest
+/// bytes, which the ledger holds, stay hot.
+#[test]
+fn a_plan_blocks_for_a_cold_start_of_the_active_segment() {
+    let dir = tempdir().unwrap();
+    let (log, _io) = cold_log(dir.path());
+    assert!(!log.read_may_block(Offset(0)));
+    assert!(
+        log.plan_raw_read(Offset(0), Offset(64), bytes(4096))
+            .unwrap()
+            .may_block()
+    );
+    assert!(
+        !log.plan_raw_read(Offset(63), Offset(64), bytes(4096))
+            .unwrap()
+            .may_block()
+    );
 }
 
 /// A fetch of bytes the budget has dropped drops the pages behind it, where

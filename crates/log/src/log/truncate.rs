@@ -5,6 +5,8 @@
 //! `trim_to_offset` moves the log start forward without touching the
 //! active segment.
 
+#[cfg(not(target_os = "wasi"))]
+use krabka_units::prelude::ByteSizeExt as _;
 use {
     super::Log,
     crate::{
@@ -12,7 +14,11 @@ use {
         txn_index::TxnIndex,
     },
     krabka_ids::Offset,
-    std::{collections::HashSet, sync::Arc, time::SystemTime},
+    std::{
+        collections::HashSet,
+        sync::{Arc, atomic::Ordering},
+        time::SystemTime,
+    },
     tracing::{field, instrument},
 };
 
@@ -63,6 +69,9 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
+        // Before any file changes: a read planned earlier and still running
+        // sees the count move and serves nothing, whatever it has copied.
+        self.truncations.fetch_add(1, Ordering::SeqCst);
         let log_end = self.log_end_offset();
         let empty_rolled_active_at_cut = offset == log_end
             && !self.segments.is_empty()
@@ -142,7 +151,13 @@ impl Log {
                 active_txn_index.truncate_from(offset)?;
                 self.active_txn_index = active_txn_index;
                 let stamp_index_path = seg.stamp_index_path();
+                // The promoted segment's pages were handed over while it was
+                // active; the pacing goes on from its cut.
+                #[cfg(not(target_os = "wasi"))]
+                let handed = seg.size().bytes_u64();
                 self.active = Some(seg);
+                #[cfg(not(target_os = "wasi"))]
+                self.restart_writeback_pacing(handed);
                 self.stamp_indexes
                     .retain(|segment_base, _| *segment_base <= base);
                 self.reopen_active_stamp_index(base, stamp_index_path)?;
@@ -155,6 +170,8 @@ impl Log {
                 self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
                 let stamp_index_path = new_seg.stamp_index_path();
                 self.active = Some(new_seg);
+                #[cfg(not(target_os = "wasi"))]
+                self.restart_writeback_pacing(0);
                 self.dir_sync_needed = true;
                 self.stamp_indexes.clear();
                 self.reopen_active_stamp_index(offset, stamp_index_path)?;
@@ -171,6 +188,12 @@ impl Log {
             self.active_txn_index.truncate_from(offset)?;
             let base = active.base_offset();
             let stamp_index_path = active.stamp_index_path();
+            // The pages handed over past the cut are gone; the pacing goes on
+            // from the cut or from where it was, whichever comes first.
+            #[cfg(not(target_os = "wasi"))]
+            let handed = self.writeback_handed.min(active.size().bytes_u64());
+            #[cfg(not(target_os = "wasi"))]
+            self.restart_writeback_pacing(handed);
             self.reopen_active_stamp_index(base, stamp_index_path)?;
             if let Some(index) = self.stamp_indexes.get_mut(&base) {
                 index.truncate_from(offset)?;
