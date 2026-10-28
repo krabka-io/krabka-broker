@@ -248,7 +248,16 @@ aspect check-delivery-image --expected delivery-image.digest \
   --image ghcr.io/krabka-io/krabka-broker:v0.5.2
 ```
 
-The GitHub release carries `sbom.cdx.json` for the same build.
+The GitHub release carries `sbom.cdx.json` for the same build. `aspect sbom`
+writes it from Bazel's graph of `//packaging:image` and refuses any Cargo
+package that `cargo deny --all-features list` does not know, so each one
+passed the `cargo deny --all-features check` the release job runs first. The
+union is deliberate: rules_rs resolves features once for the workspace, with
+every member's optional features, its dev-dependencies and every platform in
+`PLATFORM_TRIPLES`, and builds each crate of the image with that set, which is
+wider than the x86_64 non-dev graph a `cargo build` of the broker resolves.
+`ci.yml`'s `delivery` job runs the same two commands, so a package the policy
+does not cover fails the push to `main` and not the release of a tag.
 
 `aspect verify-release` does all of these checks from outside, with cosign 3,
 and also checks what the attestations say: the provenance must name the tagged
