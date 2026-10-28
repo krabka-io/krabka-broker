@@ -9,7 +9,6 @@
 use crate::io::LogIo;
 // `active.size().bytes_u64()` below is only read where `pace_writeback` exists.
 #[cfg(not(target_os = "wasi"))]
-use krabka_units::prelude::ByteSizeExt as _;
 #[cfg(unix)]
 use std::path::Path;
 use {
@@ -63,16 +62,17 @@ impl Log {
     pub fn sync(&mut self) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
         // Everything is synced below, so the next window starts from zero.
-        // The pages handed over so far stay recorded; the rest of the active
-        // segment is handed over by the next window after its sync.
+        // The whole pages written since the last hand-over go to the ledger
+        // first: a sync between windows must leave no page outside the
+        // budget's accounting, and the frontier must stay on a page boundary.
         #[cfg(not(target_os = "wasi"))]
         {
             self.writeback_unsynced = 0;
-            self.writeback_handed = self
-                .active
-                .as_ref()
-                .map_or(0, |active| active.size().bytes_u64());
             self.writeback_jobs.clear();
+            if self.active.is_some() {
+                let budget = self.page_cache_budget();
+                self.hand_over_pages(budget)?;
+            }
         }
         for segment in &mut self.segments {
             Self::segment_flush(segment)?;

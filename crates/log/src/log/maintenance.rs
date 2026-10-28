@@ -263,10 +263,26 @@ impl Log {
             return Ok(());
         }
         self.writeback_unsynced = 0;
-        // Hand off whole pages only: the page the next append writes into
-        // stays out of the write-out, so the append never finds it busy and
-        // the ledger never drops it from under it, and no page is handed over
-        // twice.
+        self.hand_over_pages(budget)
+    }
+
+    /// Hand the whole pages of the active segment written since the last
+    /// hand-over to a write-back job, after waiting for the oldest job while
+    /// two are still running. This is the end of a window of
+    /// [`Self::pace_writeback`], and what [`Log::sync`] does with the pages a
+    /// window had not reached, so no page written through the page cache
+    /// stays outside the ledger's accounting. Nothing happens for a segment
+    /// that writes directly, or when no whole page is new.
+    ///
+    /// Whole pages only: the page the next append writes into stays out of
+    /// the write-out, so the append never finds it busy and the ledger never
+    /// drops it from under it, and no page is handed over twice.
+    #[cfg(not(target_os = "wasi"))]
+    pub(super) fn hand_over_pages(&mut self, budget: Option<u64>) -> Result<(), LogError> {
+        let active = self.active.as_ref().ok_or_else(super::no_active_segment)?;
+        if active.writes_direct() {
+            return Ok(());
+        }
         let end = active.size().bytes_u64() & !(page_cache::PAGE - 1);
         let offset = self.writeback_handed;
         if end <= offset {
@@ -289,6 +305,30 @@ impl Log {
         self.writeback_jobs
             .push_back(self.rollover_flusher.ticket());
         Ok(())
+    }
+
+    /// The page-cache budget in bytes, as configured.
+    #[cfg(not(target_os = "wasi"))]
+    pub(super) fn page_cache_budget(&self) -> Option<u64> {
+        self.config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .page_cache_budget
+            .map(ByteSizeExt::bytes_u64)
+    }
+
+    /// Start the write-back pacing over for the segment that is active now,
+    /// with its pages handed over up to `handed`: a fresh segment at 0, a
+    /// segment cut in place at the cut, a sealed segment promoted by a cut at
+    /// its size, all on a page boundary. A roll, a truncation and a reset
+    /// each call this when they replace or cut the active segment; the
+    /// frontier of the segment before would otherwise hold back every window
+    /// until the new one grew past it.
+    #[cfg(not(target_os = "wasi"))]
+    pub(super) fn restart_writeback_pacing(&mut self, handed: u64) {
+        self.writeback_unsynced = 0;
+        self.writeback_jobs.clear();
+        self.writeback_handed = handed & !(page_cache::PAGE - 1);
     }
 
     pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {

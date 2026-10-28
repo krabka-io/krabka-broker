@@ -390,6 +390,8 @@ impl Log {
         self.stamp_indexes.clear();
         self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
         self.active = Some(new_active);
+        #[cfg(not(target_os = "wasi"))]
+        self.restart_writeback_pacing(0);
         self.dir_sync_needed = true;
         // Preserve any injected stamp source; reopen its (fresh) sidecar.
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;

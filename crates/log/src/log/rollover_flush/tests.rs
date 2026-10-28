@@ -15,7 +15,7 @@ use {
     bytes::Bytes,
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Record, RecordBatch},
-    krabka_units::bytes,
+    krabka_units::{bytes, prelude::ByteSizeExt as _},
     std::{
         collections::HashSet,
         fs::{self, File},
@@ -678,16 +678,20 @@ fn appended_through_page_cache(
     log.rollover_flusher.executor =
         Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
     for _ in 0..appends {
-        let mut batch = RecordBatch {
-            records: vec![Record {
-                value: Some(Bytes::from(vec![7u8; 1024])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        log.append(&mut batch).unwrap();
+        log.append(&mut kib_batch()).unwrap();
     }
     (log, io)
+}
+
+/// One batch of one 1 KiB record, the unit the pacing tests append.
+fn kib_batch() -> RecordBatch {
+    RecordBatch {
+        records: vec![Record {
+            value: Some(Bytes::from(vec![7u8; 1024])),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
 }
 
 /// Through the page cache, every `writeback_window` appended bytes start one
@@ -746,4 +750,65 @@ fn a_page_cache_budget_drops_the_oldest_synced_pages() {
     }
     let ledger = log.rollover_flusher.executor.as_ref().unwrap().page_cache();
     assert!(ledger.recorded_bytes() == 8192);
+}
+
+/// An explicit sync hands the whole pages written since the last window to
+/// the ledger before it syncs everything, so a flush between windows leaves
+/// no page outside the budget's accounting, and the frontier stays on a
+/// page boundary.
+#[test]
+fn an_explicit_sync_hands_its_pages_to_the_ledger() {
+    let dir = tempdir().unwrap();
+    let (mut log, io) = appended_through_page_cache(dir.path(), 1 << 20, Some(1 << 20), 10);
+    assert!(log.writeback_handed == 0);
+    let before = io.syncs.load(Ordering::SeqCst);
+
+    log.sync().unwrap();
+    log.rollover_flusher.finish().unwrap();
+
+    let active = log.active.as_ref().unwrap();
+    let size = active.size().bytes_u64();
+    assert!(
+        log.writeback_handed == size & !4095 && log.writeback_handed > 0,
+        "{} handed of {size}",
+        log.writeback_handed
+    );
+    assert!(io.syncs.load(Ordering::SeqCst) == before + 1);
+    let ledger = log.rollover_flusher.executor.as_ref().unwrap().page_cache();
+    assert!(ledger.recorded_bytes() == log.writeback_handed);
+}
+
+/// Cutting the log in place or replacing its active segment restarts the
+/// pacing from the segment that is active then: the next window's pages are
+/// written out, instead of waiting until the new segment grows past the old
+/// frontier.
+#[test]
+fn pacing_restarts_from_a_cut_or_reset_active_segment() {
+    let dir = tempdir().unwrap();
+    let (mut log, io) = appended_through_page_cache(dir.path(), 4096, None, 64);
+    assert!(log.writeback_handed >= 32 * 1024);
+
+    log.truncate_to(Offset(0)).unwrap();
+    assert!(log.writeback_handed == 0);
+    let before = io.syncs.load(Ordering::SeqCst);
+    for _ in 0..8 {
+        log.append(&mut kib_batch()).unwrap();
+    }
+    log.rollover_flusher.finish().unwrap();
+    assert!(
+        io.syncs.load(Ordering::SeqCst) > before,
+        "a window after the cut is written out"
+    );
+
+    log.reset_to(Offset(1_000)).unwrap();
+    assert!(log.writeback_handed == 0);
+    let before = io.syncs.load(Ordering::SeqCst);
+    for _ in 0..8 {
+        log.append(&mut kib_batch()).unwrap();
+    }
+    log.rollover_flusher.finish().unwrap();
+    assert!(
+        io.syncs.load(Ordering::SeqCst) > before,
+        "a window after the reset is written out"
+    );
 }
