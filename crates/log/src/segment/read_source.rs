@@ -21,15 +21,14 @@
 //! active segment grows, and a view reads up to the size it saw: bytes
 //! appended after the plan belong to the next fetch.
 
+#[krabka_macros::sendfile_cfg]
+use std::sync::atomic::AtomicBool;
 use {
     super::{Segment, direct::TailCache},
     crate::{error::LogError, index::OffsetIndexEntry, io::LogIo},
     bytes::Bytes,
     krabka_ids::Offset,
-    std::{
-        fs::File,
-        sync::{Arc, atomic::AtomicBool},
-    },
+    std::{fs::File, sync::Arc},
 };
 
 /// The sparse-index lookups a read's start position needs, for one target
@@ -74,12 +73,15 @@ pub trait ReadSource {
     /// The last offset of any batch in the segment.
     fn last(&self) -> Offset;
     /// Whether the segment has written through `O_DIRECT`, so its bytes are
-    /// mostly not in the page cache.
+    /// mostly not in the page cache. Only the descriptor read asks, so it
+    /// exists where `sendfile` does.
+    #[krabka_macros::sendfile_cfg]
     fn wrote_direct(&self) -> bool;
     /// The newest bytes of a segment that writes directly, held in memory.
     fn tail_cache(&self) -> Option<&TailCache>;
     /// Whether the page-cache probe is known not to work on this segment's
-    /// filesystem; see `Segment::byte_is_cached`.
+    /// filesystem; see the descriptor read's `byte_is_cached`, its only user.
+    #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool;
     /// The index lookups for a read whose target is `target_rel`.
     fn index_hint(&self, target_rel: u32) -> IndexHint;
@@ -102,10 +104,12 @@ impl ReadSource for Segment {
 
     fn last(&self) -> Offset { self.last_offset }
 
+    #[krabka_macros::sendfile_cfg]
     fn wrote_direct(&self) -> bool { self.wrote_direct }
 
     fn tail_cache(&self) -> Option<&TailCache> { self.direct.as_ref().map(|mode| &mode.cache) }
 
+    #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool { &self.cache_probe_unsupported }
 
     fn index_hint(&self, target_rel: u32) -> IndexHint {
@@ -128,8 +132,26 @@ pub struct SegmentReadView {
     log_size: u64,
     base_offset: Offset,
     last_offset: Offset,
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
     wrote_direct: bool,
     tail: Option<TailCache>,
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
     cache_probe_unsupported: Arc<AtomicBool>,
     /// The target the index hint is for: the read's offset, relative.
     target_rel: u32,
@@ -174,10 +196,12 @@ impl ReadSource for SegmentReadView {
 
     fn last(&self) -> Offset { self.last_offset }
 
+    #[krabka_macros::sendfile_cfg]
     fn wrote_direct(&self) -> bool { self.wrote_direct }
 
     fn tail_cache(&self) -> Option<&TailCache> { self.tail.as_ref() }
 
+    #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool { &self.cache_probe_unsupported }
 
     fn index_hint(&self, target_rel: u32) -> IndexHint {
@@ -210,8 +234,26 @@ impl Segment {
             log_size: self.log_size,
             base_offset: self.base_offset,
             last_offset: self.last_offset,
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "watchos",
+                target_os = "freebsd",
+                target_os = "dragonfly",
+            ))]
             wrote_direct: self.wrote_direct,
             tail: self.direct.as_ref().map(|mode| mode.cache.clone()),
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "watchos",
+                target_os = "freebsd",
+                target_os = "dragonfly",
+            ))]
             cache_probe_unsupported: Arc::clone(&self.cache_probe_unsupported),
             target_rel,
             hint: self.index_hint(target_rel),
@@ -222,10 +264,12 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
+    #[krabka_macros::sendfile_cfg]
+    use crate::segment::RawDescSource as _;
     use {
         super::*,
         crate::segment::{
-            RawDescSource as _, RawReadSource as _,
+            RawReadSource as _,
             test_support::{DENSE_INDEX, TempSegment, test_batch_at, test_segment},
         },
         krabka_units::prelude::{bytes, mebibytes},
@@ -234,6 +278,7 @@ mod tests {
     /// A view taken under the lock reads what the segment reads, through
     /// both verbatim paths, from every offset, and keeps reading it after
     /// the segment has grown: it is of the moment it was taken.
+    #[krabka_macros::sendfile_cfg]
     #[test]
     fn a_view_reads_what_its_segment_read_when_it_was_taken() {
         let TempSegment {
