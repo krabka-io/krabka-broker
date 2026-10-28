@@ -23,9 +23,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-28
+
 ### Fixed
 
 - The container image sets `GLIBC_TUNABLES=glibc.malloc.trim_threshold=134217728:glibc.malloc.mmap_threshold=67108864`, so freeing a fetch response's 10 MiB records buffers makes no syscall. With glibc's defaults a consumer draining a backlog at 500 K msg/s made the broker return about 54 MiB to the kernel a dozen times a second, and every page fault in the process waited behind each call: the producers' publish p99 rose from 1.3 to 3.5 ms for the length of the drain (16 partitions, RF1; 2.5 to 6.1 ms on GCE against Redpanda's 4.3) and is 2.1 ms with the tunables. The arenas keep about 300 MiB more resident at that rate. A deployment that runs the binary outside the image sets the variable itself; see [Deploy](docs/operations/deploy.md#start) (#1836).
+- No 1.1.1 image or GitHub release exists either: the release commit's CI run lost its coverage lane to a startup race, the rerun was cancelled, and GitHub refuses to retry it, so the image was never delivered. 1.1.2 is the same broker with the allocator setting above.
 
 ## [1.1.1] - 2026-10-28
 
@@ -2623,7 +2626,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.2
 [1.1.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.1
 [1.1.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.0
 [1.0.8]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.8
