@@ -76,7 +76,7 @@ const RECORDS: usize = 60;
 const PAYLOAD: usize = 256;
 /// Local retention wide enough to keep a few sealed, already-tiered segments
 /// on the leader's disk, and narrow enough to evict the oldest ones.
-const LOCAL_RETENTION_BYTES: &str = "4096";
+const LOCAL_RETENTION_BYTES: u64 = 4096;
 /// The broker added as a replica.
 const NEW_REPLICA: i32 = 3;
 
@@ -117,21 +117,30 @@ const CASES: [Case; 3] = [
     },
 ];
 
-/// The base offsets of the `*.log` files in one replica's partition directory,
-/// ascending.
-fn segment_bases(partition_dir: &Path) -> Vec<i64> {
-    local_log_files(partition_dir)
-        .into_iter()
-        .map(|(base, _)| base)
-        .collect()
-}
+/// The base offsets of the `*.log` files one [`local_log_files`] listing
+/// holds, ascending.
+fn segment_bases(files: &[(i64, u64)]) -> Vec<i64> { files.iter().map(|(base, _)| *base).collect() }
 
-/// The total size of every `*.log` file but the active (last) one.
-fn sealed_bytes(partition_dir: &Path) -> u64 {
-    let files = local_log_files(partition_dir);
+/// The total size of every `*.log` file in one [`local_log_files`] listing
+/// but the active (last) one.
+fn sealed_bytes(files: &[(i64, u64)]) -> u64 {
     files
         .split_last()
         .map_or(0, |(_, sealed)| sealed.iter().map(|(_, len)| len).sum())
+}
+
+/// Whether local retention has evicted all it can from one [`local_log_files`]
+/// listing. Kafka's size pass drops the oldest sealed segment only while the
+/// local log's bytes over `local.retention.bytes` still cover that whole
+/// segment, so it is done once the oldest sealed segment holds more bytes than
+/// the log has over the budget. Nothing is produced after the setup, so a log
+/// in that state keeps its segments.
+fn local_retention_done(files: &[(i64, u64)]) -> bool {
+    let total: u64 = files.iter().map(|(_, len)| len).sum();
+    match files {
+        [(_, oldest), _, ..] => *oldest > total.saturating_sub(LOCAL_RETENTION_BYTES),
+        _ => true,
+    }
 }
 
 /// Creates `topic` on broker 1 alone, tiered, with partial local retention.
@@ -142,7 +151,10 @@ async fn create_tiered_topic(admin: &mut AdminClient, leader: &BrokerHandle, top
                 .name(topic)
                 .configs(BTreeMap::from([
                     ("remote.storage.enable".into(), "true".into()),
-                    ("local.retention.bytes".into(), LOCAL_RETENTION_BYTES.into()),
+                    (
+                        "local.retention.bytes".into(),
+                        LOCAL_RETENTION_BYTES.to_string(),
+                    ),
                     ("retention.bytes".into(), "-1".into()),
                     ("retention.ms".into(), "-1".into()),
                 ]))
@@ -184,28 +196,37 @@ struct SettledLeader {
 }
 
 /// Waits until every sealed segment of `topic` is in the remote tier, local
-/// retention has evicted the oldest of them, and at least one tiered segment is
-/// still on the leader's disk.
+/// retention has evicted all it can, and at least one tiered segment is still
+/// on the leader's disk.
+///
+/// The eviction must have ended, not only begun. The copy pass uploads the
+/// sealed segments faster than the retention passes that follow it drop them,
+/// so a leader whose earliest pending upload is already the active segment can
+/// still be evicting. A measurement taken then counted sealed bytes the new
+/// replica never saw, and the case without the flag failed its check that the
+/// replica pulled them all (#1831).
 async fn await_settled_leader(admin: &Client, leader_dir: &Path, topic: &str) -> SettledLeader {
     let deadline = Instant::now() + Duration::from_mins(3);
     loop {
-        let bases = segment_bases(leader_dir);
+        let files = local_log_files(leader_dir);
         let pending_upload = earliest_pending_upload(admin, topic).await;
-        // Uploaded up to the active segment, evicted from below, and still
-        // holding a sealed segment that is already tiered.
-        if let [local_log_start, .., active] = bases[..]
+        // Uploaded up to the active segment, evicted from below as far as the
+        // budget allows, and still holding a sealed segment that is already
+        // tiered.
+        if let [local_log_start, .., active] = segment_bases(&files)[..]
             && local_log_start > 0
             && pending_upload == active
+            && local_retention_done(&files)
         {
             return SettledLeader {
                 local_log_start,
                 pending_upload,
-                sealed_local_bytes: sealed_bytes(leader_dir),
+                sealed_local_bytes: sealed_bytes(&files),
             };
         }
         assert!(
             Instant::now() <= deadline,
-            "{topic}: the leader never settled; segments={bases:?} pending={pending_upload}"
+            "{topic}: the leader never settled; files={files:?} pending={pending_upload}"
         );
         // intentional: the copy pass and local retention both run on the
         // broker's own 1s interval, and the object store is a directory.
@@ -373,7 +394,8 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
             .expect("the leader holds the partition");
         await_caught_up(&b3, case.topic, leader_end).await;
 
-        let new_replica_start = segment_bases(&new_replica_dir)
+        let new_replica_files = local_log_files(&new_replica_dir);
+        let new_replica_start = segment_bases(&new_replica_files)
             .first()
             .copied()
             .expect("the new replica holds a segment");
@@ -387,9 +409,8 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
             .get();
         eprintln!(
             "ITEST: {}: the new replica starts at {new_replica_start} and pulled {replicated} \
-             bytes; its files are {:?}",
+             bytes; its files are {new_replica_files:?}",
             case.topic,
-            local_log_files(&new_replica_dir),
         );
         if case.from_last_tiered {
             check!(

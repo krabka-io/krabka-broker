@@ -2,15 +2,19 @@
 use {
     crate::support::{
         client::produce_batch,
-        produce::ProduceTimeoutMillis,
+        produce::{ProduceTimeoutMillis, leadership_unsettled},
         records::batch_from_records,
+        retry::retry_until,
         topics::{
             AssignedTopicSetup, assigned_topic, creatable_topic, create_topic_request,
             create_topic_request_with_setup, topic_configs,
         },
     },
     krabka_protocol::{
-        owned::create_topics_request::{CreatableTopic, CreatableTopicConfig},
+        owned::{
+            create_topics_request::{CreatableTopic, CreatableTopicConfig},
+            produce_response::PartitionProduceResponse,
+        },
         primitives::uuid::Uuid,
         records::Record,
     },
@@ -20,6 +24,11 @@ use {
     },
     tokio::time,
 };
+
+/// How long a replica may take to apply a topic's configuration, and the
+/// leader of a new partition to serve its first produce: the harness's usual
+/// awaiter bound.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn tiered_configs(segment_bytes: Option<&str>) -> Vec<CreatableTopicConfig> {
     topic_configs(
@@ -98,7 +107,7 @@ pub async fn await_tiered_replicas(
     segment_size: Option<krabka_units::ByteSize>,
     failure: &str,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + SETTLE_TIMEOUT;
     loop {
         let ready = |broker: &&krabka_broker::BrokerHandle| {
             broker
@@ -133,6 +142,13 @@ pub struct TieredRecordsSetup<'a> {
 }
 
 /// Produce one acknowledged single-record request for every caller-generated value.
+///
+/// A produce can reach the leader of a new partition before its partition
+/// writer is up, and the leader then answers `NOT_LEADER_OR_FOLLOWER` and
+/// names itself; the first produce of a suite did so under coverage
+/// instrumentation (#1831). That answer, and the others a Kafka producer
+/// retries, is retried within [`SETTLE_TIMEOUT`]. Any other error fails the
+/// produce at once.
 #[bon::builder]
 pub async fn produce_records(
     client: &krabka_client_core::Client,
@@ -151,12 +167,20 @@ pub async fn produce_records(
             value: Some(value(TieredRecordIndex(index))),
             ..Default::default()
         }]);
-        let response = produce_batch()
-            .client(client)
-            .batch(batch)
-            .topic(setup.topic)
-            .topic_id(setup.topic_id)
-            .timeout(ProduceTimeoutMillis(10_000))
+        let response = retry_until()
+            .attempt(|| {
+                produce_batch()
+                    .client(client)
+                    .batch(batch.clone())
+                    .topic(setup.topic)
+                    .topic_id(setup.topic_id)
+                    .timeout(ProduceTimeoutMillis(10_000))
+                    .call()
+            })
+            .is_complete(|response: &PartitionProduceResponse| {
+                !leadership_unsettled(response.error_code)
+            })
+            .timeout(SETTLE_TIMEOUT)
             .call()
             .await;
         assert2::assert!(response.error_code == 0, "Produce failed: {response:?}");

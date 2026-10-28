@@ -19,6 +19,7 @@ use {
         client::{metrics_config, scrape_metrics},
         fetch::single_partition_fetch,
         records::{batch_from_records, value_record},
+        retry::retry_until,
         topics::{creatable_topic, create_topic_request},
         wire::HeaderEncoding as RequestHeaderEncoding,
     },
@@ -35,7 +36,7 @@ use {
         primitives::uuid::Uuid,
     },
     std::{net::SocketAddr, time::Duration},
-    tokio::{net::TcpStream, task, time},
+    tokio::{net::TcpStream, time},
 };
 
 const TOPIC: &str = "metrics-it";
@@ -138,18 +139,21 @@ async fn fetch_one(addr: SocketAddr) {
 
 async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
+/// Scrapes `/metrics` until `needle` has left the body, and returns that body.
+///
+/// The series evictor runs on every metadata image change and on its own 30 s
+/// tick, so the bound is the harness's usual 30 s awaiter bound, which covers
+/// one tick. The 5 s bound this wait had before failed on a runner whose own
+/// log said its heartbeats starved beside a compile (#1831). The scrape is
+/// repeated at the retry helper's interval rather than in a tight loop, so
+/// that the wait itself does not take the cores the evictor needs.
 async fn wait_until_absent(addr: SocketAddr, needle: &str) -> String {
-    time::timeout(Duration::from_secs(5), async {
-        loop {
-            let body = scrape(addr).await;
-            if !body.contains(needle) {
-                return body;
-            }
-            task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("metrics label {needle:?} was not evicted"))
+    retry_until()
+        .attempt(|| scrape(addr))
+        .is_complete(|body: &String| !body.contains(needle))
+        .timeout(Duration::from_secs(30))
+        .call()
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
