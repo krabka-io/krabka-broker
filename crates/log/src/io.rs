@@ -419,6 +419,7 @@ fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
     file.sync_data()
 }
 
+#[cfg(target_os = "linux")]
 fn drop_cached(file: &File, offset: u64, len: u64) {
     if let Some(len) = NonZeroU64::new(len) {
         // A refused hint leaves the pages as they were.
