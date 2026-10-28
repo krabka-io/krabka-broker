@@ -15,6 +15,10 @@ The proc-macro package uses the published 0.6.0 harness, patterns and policy
 support crates, so consuming this Git patch does not introduce duplicate Git
 copies of runtime support crates.
 
+Data-table metadata uses explicit array-to-slice coercions instead of range
+indexing. This permits structured tables (including Background tables) inside
+Scenario Outlines on stable Rust, without requiring const Index support.
+
 Validation: all 504 upstream proc-macro unit tests pass, including the updated
 wrapper snapshot. The broker's rewritten transactions and topic-freeze suites
 pass Clippy with all warnings denied against this patch.
