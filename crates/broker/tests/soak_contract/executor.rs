@@ -474,6 +474,7 @@ pub async fn await_full_isr(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{
@@ -486,6 +487,9 @@ mod tests {
             schedule::ScheduledFault,
         },
         krabka_units::prelude::*,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
         std::collections::BTreeSet,
     };
 
@@ -501,59 +505,6 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        leader_restart_on_the_controller = { FaultKind::Restart { graceful: false }, Target::Leader, "controller", true },
-        leader_restart_on_a_leader = { FaultKind::Restart { graceful: false }, Target::Leader, "leader", false },
-        any_failover_pause_on_the_controller = { FaultKind::Pause { intends_failover: true }, Target::Broker(0), "controller", true },
-        quiet_pause_on_the_controller = { FaultKind::Pause { intends_failover: false }, Target::Broker(0), "controller", false },
-        controller_restart_measured_once = { FaultKind::Restart { graceful: true }, Target::Controller, "controller", true },
-    )]
-    fn a_fault_that_lands_on_the_controller_is_measured_for_its_failover(
-        kind: FaultKind,
-        target: Target,
-        role: &str,
-        measured: bool,
-    ) {
-        let checks = checks_for(&fault(kind, target), role);
-        let failovers = checks
-            .iter()
-            .filter(|check| **check == RecoveryCheck::ControllerFailover)
-            .count();
-        check!(failovers == usize::from(measured));
-    }
-
-    #[yare::parameterized(
-        leader_failover = { RecoveryCheck::LeaderFailover, true },
-        controller_failover = { RecoveryCheck::ControllerFailover, true },
-        isr_rejoin = { RecoveryCheck::IsrRejoin, false },
-        catch_up = { RecoveryCheck::CatchUpAfterPause, false },
-        certificate_served = { RecoveryCheck::CertificateServed, true },
-        reassignment_complete = { RecoveryCheck::ReassignmentComplete, true },
-    )]
-    fn a_failover_runs_from_the_injection_and_a_rejoin_from_the_cleanup(
-        check: RecoveryCheck,
-        from_injection: bool,
-    ) {
-        check!(measured_from_injection(check) == from_injection);
-    }
-
-    /// Partition 0 of `t`, led by `leader`.
-    fn leading(leader: i32) -> Vec<PartitionState> {
-        vec![PartitionState {
-            topic: "t".to_owned(),
-            partition: 0,
-            leader,
-            replicas: vec![1, 2, 3],
-            isr: vec![1, 2, 3],
-        }]
-    }
-
-    fn partitions(led: &[i32]) -> BTreeSet<TopicPartition> {
-        led.iter()
-            .map(|partition| ("t".to_owned(), *partition))
-            .collect()
-    }
-
     #[derive(Debug, PartialEq, Eq)]
     enum Seen {
         FailedOver,
@@ -561,34 +512,156 @@ mod tests {
         Unmeasurable,
     }
 
-    #[yare::parameterized(
-        unknown_led_is_never_failed_over = { None, Some((2, 2)), Seen::Unmeasurable },
-        unknown_led_with_no_answer = { None, None, Seen::Unmeasurable },
-        nothing_led_has_nothing_to_move = { Some(&[]), Some((2, 1)), Seen::FailedOver },
-        led_partition_moved = { Some(&[0]), Some((2, 2)), Seen::FailedOver },
-        led_partition_still_on_the_target = { Some(&[0]), Some((2, 1)), Seen::Waiting },
-        only_the_target_answers = { Some(&[0]), Some((1, 2)), Seen::Waiting },
-        nobody_answers = { Some(&[0]), None, Seen::Waiting },
-    )]
-    fn a_leader_failover_is_seen_only_against_what_the_target_is_known_to_have_led(
-        led: Option<&[i32]>,
-        answer: Option<(i32, i32)>,
-        seen: Seen,
-    ) {
-        let led = led.map(partitions);
-        let states = answer.map(|(from, leader)| (from, leading(leader)));
-        let outcome = leader_failover(
-            led.as_ref(),
-            states
-                .as_ref()
-                .map(|(from, states)| (*from, states.as_slice())),
-            1,
-        );
-        let outcome = match outcome {
-            Ok(()) => Seen::FailedOver,
-            Err(Waiting::For(_)) => Seen::Waiting,
-            Err(Waiting::Unmeasurable(_)) => Seen::Unmeasurable,
-        };
-        check!(outcome == seen);
+    #[derive(Default)]
+    struct RecoveryScenario {
+        fault: Option<ScheduledFault>,
+        role: String,
+        checks: Vec<RecoveryCheck>,
+        check: Option<RecoveryCheck>,
+        from_injection: Slot<bool>,
+        led: Option<BTreeSet<TopicPartition>>,
+        answer: Option<(i32, Vec<PartitionState>)>,
+        outcome: Option<Seen>,
     }
+
+    #[fixture]
+    fn recovery() -> RecoveryScenario {
+        // A recovery judgment uses one fault and the metadata available for it.
+        RecoveryScenario {
+            fault: None,
+            ..Default::default()
+        }
+    }
+
+    #[given("fault {kind} targets {target} and lands on a node holding role {role}")]
+    fn fault_landing(recovery: &mut RecoveryScenario, kind: String, target: String, role: String) {
+        let kind = match kind.as_str() {
+            "ungraceful-restart" => FaultKind::Restart { graceful: false },
+            "graceful-restart" => FaultKind::Restart { graceful: true },
+            "failover-pause" => FaultKind::Pause {
+                intends_failover: true,
+            },
+            "quiet-pause" => FaultKind::Pause {
+                intends_failover: false,
+            },
+            _ => panic!("a supported fault kind"),
+        };
+        let target = match target.as_str() {
+            "leader" => Target::Leader,
+            "controller" => Target::Controller,
+            "broker-zero" => Target::Broker(0),
+            _ => panic!("a supported fault target"),
+        };
+        recovery.fault = Some(fault(kind, target));
+        recovery.role = role;
+    }
+
+    #[when("the executor selects recovery checks for the role the fault actually hit")]
+    fn select_recovery_checks(recovery: &mut RecoveryScenario) {
+        recovery.checks = checks_for(
+            recovery.fault.as_ref().expect("the fault was supplied"),
+            &recovery.role,
+        );
+    }
+
+    #[then("controller failover is measured exactly once: {measured}")]
+    fn controller_measurement(recovery: &RecoveryScenario, measured: bool) {
+        let failovers = recovery
+            .checks
+            .iter()
+            .filter(|check| **check == RecoveryCheck::ControllerFailover)
+            .count();
+        check!(failovers == usize::from(measured));
+    }
+
+    #[given("the recovery check is {check}")]
+    fn named_recovery_check(recovery: &mut RecoveryScenario, check: String) {
+        recovery.check = Some(match check.as_str() {
+            "leader-failover" => RecoveryCheck::LeaderFailover,
+            "controller-failover" => RecoveryCheck::ControllerFailover,
+            "isr-rejoin" => RecoveryCheck::IsrRejoin,
+            "catch-up" => RecoveryCheck::CatchUpAfterPause,
+            "certificate-served" => RecoveryCheck::CertificateServed,
+            "reassignment-complete" => RecoveryCheck::ReassignmentComplete,
+            _ => panic!("a supported recovery check"),
+        });
+    }
+
+    #[when("the executor chooses whether the recovery clock starts at injection")]
+    fn choose_recovery_clock(recovery: &RecoveryScenario) {
+        recovery.from_injection.set(measured_from_injection(
+            recovery.check.expect("the recovery check was supplied"),
+        ));
+    }
+
+    #[then("the clock starts at injection rather than cleanup: {injection}")]
+    fn recovery_clock_origin(recovery: &RecoveryScenario, injection: bool) {
+        check!(recovery.from_injection.get() == Some(injection));
+    }
+
+    #[given("before injection node one led partition set {led}")]
+    fn previously_led_partitions(recovery: &mut RecoveryScenario, led: String) {
+        recovery.led = match led.as_str() {
+            "unknown" => None,
+            "none" => Some(BTreeSet::new()),
+            _ => Some(
+                led.split(',')
+                    .map(|partition| {
+                        (
+                            "t".to_owned(),
+                            partition.parse().expect("a previously led partition"),
+                        )
+                    })
+                    .collect(),
+            ),
+        };
+    }
+
+    #[given("metadata comes from node {from} with partition leader {leader}")]
+    fn reported_partition_leader(recovery: &mut RecoveryScenario, from: String, leader: String) {
+        recovery.answer = if from == "none" {
+            None
+        } else {
+            Some((from.parse().expect("a responding node"), vec![
+                PartitionState {
+                    topic: "t".to_owned(),
+                    partition: 0,
+                    leader: leader.parse().expect("a reported leader"),
+                    replicas: vec![1, 2, 3],
+                    isr: vec![1, 2, 3],
+                },
+            ]))
+        };
+    }
+
+    #[when("the executor judges failover away from node one using only known metadata")]
+    fn observe_leader_failover(recovery: &mut RecoveryScenario) {
+        recovery.outcome = Some(
+            match leader_failover(
+                recovery.led.as_ref(),
+                recovery
+                    .answer
+                    .as_ref()
+                    .map(|(from, states)| (*from, states.as_slice())),
+                1,
+            ) {
+                Ok(()) => Seen::FailedOver,
+                Err(Waiting::For(_)) => Seen::Waiting,
+                Err(Waiting::Unmeasurable(_)) => Seen::Unmeasurable,
+            },
+        );
+    }
+
+    #[then("the observed leader recovery is {outcome}")]
+    fn observed_leader_recovery(recovery: &RecoveryScenario, outcome: String) {
+        let expected = match outcome.as_str() {
+            "failed-over" => Seen::FailedOver,
+            "waiting" => Seen::Waiting,
+            "unmeasurable" => Seen::Unmeasurable,
+            _ => panic!("a recovery verdict"),
+        };
+        check!(recovery.outcome.as_ref().expect("the failover was judged") == &expected);
+    }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/executor.feature", fixtures = [recovery: RecoveryScenario]);
 }

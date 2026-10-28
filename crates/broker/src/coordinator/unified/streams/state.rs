@@ -535,7 +535,6 @@ mod tests {
         super::{test_support::task_map, *},
         crate::coordinator::unified::test_support::assert_group_epoch_exhaustion,
         assert2::{assert, check},
-        std::iter,
     };
 
     fn clean_member_group() -> StreamsGroupState {
@@ -585,16 +584,50 @@ mod tests {
         assert!(!g.dirty);
     }
 
-    /// Kafka 4.3's `StreamsGroup` constructor starts a group at group epoch 1
-    /// and `TargetAssignmentMetadata.INITIAL`, target assignment epoch 1.
-    #[test]
-    fn a_new_group_starts_at_kafkas_initial_epochs() {
-        let g = StreamsGroupState::new("g");
+    #[derive(Default)]
+    struct NewStreamsGroup {
+        id: String,
+        group: Option<StreamsGroupState>,
+    }
+
+    #[rstest::fixture]
+    fn new_streams_group() -> NewStreamsGroup {
+        // Keep new streams group inputs and observations fresh for each scenario.
+        NewStreamsGroup::default()
+    }
+
+    #[rstest_bdd_macros::given("a previously unseen streams group ID {id}")]
+    fn unseen_streams_group(new_streams_group: &mut NewStreamsGroup, id: String) {
+        new_streams_group.id = id;
+    }
+
+    #[rstest_bdd_macros::when("the streams coordinator creates that group")]
+    fn create_streams_group(new_streams_group: &mut NewStreamsGroup) {
+        new_streams_group.group = Some(StreamsGroupState::new(&new_streams_group.id));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the streams group is Empty with group, assignment, and target epochs all 1"
+    )]
+    fn initial_streams_group_state(new_streams_group: &NewStreamsGroup) {
+        let group = new_streams_group
+            .group
+            .as_ref()
+            .expect("the streams group was created");
         check!(
-            (g.group_epoch, g.assignment_epoch, g.target.epoch, g.phase)
-                == (1, 1, 1, StreamsGroupStatePhase::Empty)
+            (
+                group.group_epoch,
+                group.assignment_epoch,
+                group.target.epoch,
+                group.phase
+            ) == (1, 1, 1, StreamsGroupStatePhase::Empty)
         );
     }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/streams/state/initial_group.feature",
+        fixtures = [new_streams_group: NewStreamsGroup]
+    );
 
     #[test]
     fn bump_epoch_increments_and_dirties() {
@@ -651,30 +684,6 @@ mod tests {
 
     /// A member of the table: its process id, state, epoch, and assigned and
     /// pending tasks of subtopology `s`, active then standby.
-    struct Member {
-        id: &'static str,
-        process: &'static str,
-        state: StreamsMemberAssignmentState,
-        epoch: i32,
-        active: &'static [i32],
-        standby: &'static [i32],
-        active_pending: &'static [i32],
-        standby_pending: &'static [i32],
-    }
-
-    const fn stable(id: &'static str, process: &'static str, epoch: i32) -> Member {
-        Member {
-            id,
-            process,
-            state: StreamsMemberAssignmentState::Stable,
-            epoch,
-            active: &[],
-            standby: &[],
-            active_pending: &[],
-            standby_pending: &[],
-        }
-    }
-
     fn tasks_of(partitions: &[i32]) -> BTreeMap<String, Vec<i32>> {
         if partitions.is_empty() {
             BTreeMap::new()
@@ -685,74 +694,10 @@ mod tests {
 
     /// What a reconciliation leaves of `m1`: whether it changed, its state and
     /// epoch, and its assigned and pending tasks of subtopology `s`.
-    struct ExpectedMember {
-        changed: bool,
-        state: StreamsMemberAssignmentState,
-        epoch: i32,
-        active: &'static [i32],
-        standby: &'static [i32],
-        active_pending: &'static [i32],
-        standby_pending: &'static [i32],
-    }
-
     /// The owned active and standby tasks that a heartbeat reports.
-    struct OwnedSetup {
-        active: &'static [i32],
-        standby: &'static [i32],
-    }
-
-    /// An expectation with no standby tasks and nothing pending.
-    fn settled(
-        changed: bool,
-        state: StreamsMemberAssignmentState,
-        epoch: i32,
-        active: &'static [i32],
-    ) -> ExpectedMember {
-        ExpectedMember {
-            changed,
-            state,
-            epoch,
-            active,
-            standby: &[],
-            active_pending: &[],
-            standby_pending: &[],
-        }
-    }
-
-    /// An expectation that holds epoch 1 with task `1` pending revocation.
-    fn waiting(changed: bool, active: &'static [i32]) -> ExpectedMember {
-        ExpectedMember {
-            changed,
-            state: StreamsMemberAssignmentState::UnrevokedTasks,
-            epoch: 1,
-            active,
-            standby: &[],
-            active_pending: &[1],
-            standby_pending: &[],
-        }
-    }
-
-    /// A heartbeat that reports `active` and no standby tasks.
-    fn owning(active: &'static [i32]) -> OwnedSetup {
-        OwnedSetup {
-            active,
-            standby: &[],
-        }
-    }
-
     /// One row: the name, `m1`, another member, the target active and standby
     /// tasks of `m1`, the owned tasks of its heartbeat or `None`, and what is
     /// expected of `m1`.
-    struct BuilderRow {
-        name: &'static str,
-        m1: Member,
-        other: Option<Member>,
-        target_active: &'static [i32],
-        target_standby: &'static [i32],
-        owned: Option<OwnedSetup>,
-        expected: ExpectedMember,
-    }
-
     /// What a reconciliation leaves of a member, as the group holds it.
     #[derive(Debug, PartialEq)]
     struct ReconciledMember {
@@ -765,224 +710,10 @@ mod tests {
         standby_pending: TaskMap,
     }
 
-    fn unrevoked_member() -> Member {
-        Member {
-            state: StreamsMemberAssignmentState::UnrevokedTasks,
-            active: &[0],
-            active_pending: &[1],
-            ..stable("m1", "p1", 1)
-        }
-    }
-
-    fn stable_active(active: &'static [i32]) -> Member {
-        Member {
-            active,
-            ..stable("m1", "p1", 1)
-        }
-    }
-
-    fn builder_rows() -> Vec<BuilderRow> {
-        use StreamsMemberAssignmentState::Stable;
-
-        vec![
-            BuilderRow {
-                name: "a stable member takes the new tasks at the target epoch",
-                m1: stable_active(&[0]),
-                other: None,
-                target_active: &[0, 1],
-                target_standby: &[],
-                owned: Some(owning(&[0])),
-                expected: settled(true, Stable, 2, &[0, 1]),
-            },
-            BuilderRow {
-                name: "a member keeps its epoch while it owns a revoked task",
-                m1: stable_active(&[0, 1]),
-                other: None,
-                target_active: &[0],
-                target_standby: &[],
-                owned: Some(owning(&[0, 1])),
-                expected: waiting(true, &[0]),
-            },
-            BuilderRow {
-                name: "a member that reports no tasks has nothing to revoke",
-                m1: stable_active(&[0, 1]),
-                other: None,
-                target_active: &[0],
-                target_standby: &[],
-                owned: Some(owning(&[])),
-                expected: settled(true, Stable, 2, &[0]),
-            },
-            BuilderRow {
-                name: "an unrevoked member moves on once it stops reporting the task",
-                m1: unrevoked_member(),
-                other: None,
-                target_active: &[0],
-                target_standby: &[],
-                owned: Some(owning(&[0])),
-                expected: settled(true, Stable, 2, &[0]),
-            },
-            BuilderRow {
-                name: "an unrevoked member that still reports the task waits",
-                m1: unrevoked_member(),
-                other: None,
-                target_active: &[0],
-                target_standby: &[],
-                owned: Some(owning(&[0, 1])),
-                expected: waiting(false, &[0]),
-            },
-            BuilderRow {
-                name: "an unrevoked member without owned tasks waits",
-                m1: unrevoked_member(),
-                other: None,
-                target_active: &[0],
-                target_standby: &[],
-                owned: None,
-                expected: waiting(false, &[0]),
-            },
-        ]
-    }
-
-    fn held_back_builder_rows() -> Vec<BuilderRow> {
-        use StreamsMemberAssignmentState::{Stable, UnreleasedTasks, UnrevokedTasks};
-
-        vec![
-            BuilderRow {
-                name: "an active task that another member still owns is held back",
-                m1: stable("m1", "p1", 1),
-                other: Some(Member {
-                    state: UnrevokedTasks,
-                    active_pending: &[1],
-                    ..stable("m2", "p2", 1)
-                }),
-                target_active: &[0, 1],
-                target_standby: &[],
-                owned: Some(owning(&[])),
-                expected: settled(true, UnreleasedTasks, 2, &[0]),
-            },
-            BuilderRow {
-                name: "a standby task that the same process runs as active is held back",
-                m1: stable("m1", "p1", 1),
-                other: Some(Member {
-                    active: &[0],
-                    ..stable("m2", "p1", 1)
-                }),
-                target_active: &[],
-                target_standby: &[0],
-                owned: Some(owning(&[])),
-                expected: settled(true, UnreleasedTasks, 2, &[]),
-            },
-            BuilderRow {
-                name: "a standby task that another process runs as active is given",
-                m1: stable("m1", "p1", 1),
-                other: Some(Member {
-                    active: &[0],
-                    ..stable("m2", "p2", 1)
-                }),
-                target_active: &[],
-                target_standby: &[0],
-                owned: Some(owning(&[])),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: Stable,
-                    epoch: 2,
-                    active: &[],
-                    standby: &[0],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
-            },
-            BuilderRow {
-                name: "a revoked standby task waits for its release",
-                m1: Member {
-                    standby: &[0],
-                    ..stable("m1", "p1", 1)
-                },
-                other: None,
-                target_active: &[],
-                target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[],
-                    standby: &[0],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: UnrevokedTasks,
-                    epoch: 1,
-                    active: &[],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[0],
-                },
-            },
-        ]
-    }
-
     /// Kafka's `CurrentAssignmentBuilder`. Each row puts `m1` and maybe a
     /// second member in a group with a target at epoch 2, reconciles `m1`
     /// with the owned tasks of its heartbeat, and compares the whole
     /// reconciliation state of `m1` afterwards.
-    #[test]
-    fn reconcile_member_follows_kafka_current_assignment_builder() {
-        let rows = builder_rows().into_iter().chain(held_back_builder_rows());
-        for BuilderRow {
-            name,
-            m1,
-            other,
-            target_active,
-            target_standby,
-            owned,
-            expected,
-        } in rows
-        {
-            let mut group = StreamsGroupState::new("g");
-            group.group_epoch = 2;
-            for member in iter::once(m1).chain(other) {
-                let mut state = StreamsMemberState::joining(member.id, "c", "h");
-                state.process_id = member.process.to_owned();
-                state.assignment_state = member.state;
-                state.member_epoch = member.epoch;
-                state.active = tasks_of(member.active);
-                state.standby = tasks_of(member.standby);
-                state.active_pending_revocation = tasks_of(member.active_pending);
-                state.standby_pending_revocation = tasks_of(member.standby_pending);
-                group.members.insert(member.id.to_owned(), state);
-            }
-            let mut target = StreamsTargetAssignment::default();
-            target.active.insert("m1".into(), tasks_of(target_active));
-            target.standby.insert("m1".into(), tasks_of(target_standby));
-            group.install_target(target);
-            let owned = owned.map(|owned| RoleTasks {
-                active: tasks_of(owned.active),
-                standby: tasks_of(owned.standby),
-                warmup: BTreeMap::new(),
-            });
-
-            let changed = group.reconcile_member("m1", owned.as_ref());
-
-            let m1 = &group.members["m1"];
-            check!(
-                ReconciledMember {
-                    changed,
-                    state: m1.assignment_state,
-                    epoch: m1.member_epoch,
-                    active: m1.active.clone(),
-                    standby: m1.standby.clone(),
-                    active_pending: m1.active_pending_revocation.clone(),
-                    standby_pending: m1.standby_pending_revocation.clone(),
-                } == ReconciledMember {
-                    changed: expected.changed,
-                    state: expected.state,
-                    epoch: expected.epoch,
-                    active: tasks_of(expected.active),
-                    standby: tasks_of(expected.standby),
-                    active_pending: tasks_of(expected.active_pending),
-                    standby_pending: tasks_of(expected.standby_pending),
-                },
-                "{name}"
-            );
-        }
-    }
-
     /// Kafka's `scheduleStreamsGroupRebalanceTimeout`: a member that enters
     /// `UnrevokedTasks` must revoke within its rebalance timeout, or it is
     /// removed. A member that left that state is not.
@@ -1031,5 +762,153 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    mod bdd_reconciliation {
+        use {
+            super::*,
+            rstest_bdd::datatable::Rows,
+            rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        };
+        #[derive(Default)]
+        struct MemberReconciliation {
+            group: Option<StreamsGroupState>,
+            owned: Option<RoleTasks>,
+            changed: Option<bool>,
+        }
+        #[rstest::fixture]
+        fn reconciliation() -> MemberReconciliation {
+            // Start this scenario with fresh inputs and observations.
+            MemberReconciliation::default()
+        }
+
+        #[when(
+            "the coordinator reconciles m1 against its target epoch 2 and heartbeat owned tasks"
+        )]
+        fn reconcile_assignment(reconciliation: &mut MemberReconciliation) {
+            reconciliation.changed = Some(
+                reconciliation
+                    .group
+                    .as_mut()
+                    .expect("group prepared")
+                    .reconcile_member("m1", reconciliation.owned.as_ref()),
+            );
+        }
+        #[derive(DataTableRow)]
+        struct ReconciliationMemberInput {
+            member: String,
+            process: String,
+            state: String,
+            epoch: i32,
+            active: String,
+            standby: String,
+            active_pending: String,
+            standby_pending: String,
+        }
+        #[derive(DataTableRow)]
+        struct ExpectedReconciliation {
+            changed: bool,
+            state: String,
+            epoch: i32,
+            active: String,
+            standby: String,
+            active_pending: String,
+            standby_pending: String,
+        }
+        fn assignment_state(text: &str) -> StreamsMemberAssignmentState {
+            match text {
+                "Stable" => StreamsMemberAssignmentState::Stable,
+                "UnrevokedTasks" => StreamsMemberAssignmentState::UnrevokedTasks,
+                "UnreleasedTasks" => StreamsMemberAssignmentState::UnreleasedTasks,
+                _ => panic!("unknown Streams member assignment state"),
+            }
+        }
+        fn task_partitions(text: &str) -> BTreeMap<String, Vec<i32>> {
+            tasks_of(
+                &serde_json::from_str::<Vec<i32>>(text).expect("subtopology s task partitions"),
+            )
+        }
+        #[given("Streams group g at epoch 2 has these members in subtopology s")]
+        fn reconciliation_members(
+            reconciliation: &mut MemberReconciliation,
+            #[datatable] rows: Rows<ReconciliationMemberInput>,
+        ) {
+            let mut group = StreamsGroupState::new("g");
+            group.group_epoch = 2;
+            for row in rows {
+                let mut member = StreamsMemberState::joining(&row.member, "c", "h");
+                member.process_id = row.process;
+                member.assignment_state = assignment_state(&row.state);
+                member.member_epoch = row.epoch;
+                member.active = task_partitions(&row.active);
+                member.standby = task_partitions(&row.standby);
+                member.active_pending_revocation = task_partitions(&row.active_pending);
+                member.standby_pending_revocation = task_partitions(&row.standby_pending);
+                group.members.insert(row.member, member);
+            }
+            reconciliation.group = Some(group);
+        }
+        #[given(
+            "m1 target active tasks are {active} standby tasks {standby} and heartbeat owns active {owned_active} standby {owned_standby}"
+        )]
+        fn reconciliation_target(
+            reconciliation: &mut MemberReconciliation,
+            active: String,
+            standby: String,
+            owned_active: String,
+            owned_standby: String,
+        ) {
+            let mut target = StreamsTargetAssignment::default();
+            target.active.insert("m1".into(), task_partitions(&active));
+            target
+                .standby
+                .insert("m1".into(), task_partitions(&standby));
+            reconciliation
+                .group
+                .as_mut()
+                .expect("group members given")
+                .install_target(target);
+            reconciliation.owned = if owned_active == "null" {
+                None
+            } else {
+                Some(RoleTasks {
+                    active: task_partitions(&owned_active),
+                    standby: task_partitions(&owned_standby),
+                    warmup: BTreeMap::new(),
+                })
+            };
+        }
+        #[then("m1 has this complete reconciliation result")]
+        fn expected_reconciliation(
+            reconciliation: &MemberReconciliation,
+            #[datatable] rows: Rows<ExpectedReconciliation>,
+        ) {
+            let row = rows
+                .into_iter()
+                .next()
+                .expect("expected member reconciliation state");
+            let member = &reconciliation.group.as_ref().expect("group given").members["m1"];
+            check!(
+                ReconciledMember {
+                    changed: reconciliation
+                        .changed
+                        .expect("native reconciliation completed"),
+                    state: member.assignment_state,
+                    epoch: member.member_epoch,
+                    active: member.active.clone(),
+                    standby: member.standby.clone(),
+                    active_pending: member.active_pending_revocation.clone(),
+                    standby_pending: member.standby_pending_revocation.clone()
+                } == ReconciledMember {
+                    changed: row.changed,
+                    state: assignment_state(&row.state),
+                    epoch: row.epoch,
+                    active: task_partitions(&row.active),
+                    standby: task_partitions(&row.standby),
+                    active_pending: task_partitions(&row.active_pending),
+                    standby_pending: task_partitions(&row.standby_pending)
+                }
+            );
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/state.feature",fixtures=[reconciliation:MemberReconciliation]);
     }
 }

@@ -19,7 +19,11 @@
 use {
     assert2::assert,
     krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    krabka_security::OAuthBearerValidator,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
     std::fs,
+    tempfile::{TempDir, tempdir},
 };
 
 /// A self-contained CA cert. It does not depend on the security crate's
@@ -39,22 +43,30 @@ OnP9WAj0vBqSLWmYcm6N6hNz8KcCIQDDXGEYKtNkfUzKrICS2v40ybJqzyZ9cbaR\n\
 Shzd0RKUbQ==\n\
 -----END CERTIFICATE-----\n";
 
-#[test]
-fn introspection_validator_builds_without_an_externally_installed_crypto_provider() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let secret_path = dir.path().join("client-secret");
-    fs::write(&secret_path, "the-secret").expect("write secret");
-    // The kind-oauth-introspection Kafka CR sets `tlsTrustedCertificates`
-    // on the listener, which the operator renders to an `idp_tls_trust`
-    // PEM path in the broker TOML. That path drives
-    // `ReqwestIntrospectionClient::new` through `build_client_config_from_pem`
-    // → `rustls::ClientConfig::builder()`, which is the actual panic
-    // site without the eager `CryptoProvider` install. The PEM only
-    // needs to parse — the resulting rustls config never sees the
-    // network in this test.
-    let ca_path = dir.path().join("idp-ca.pem");
-    fs::write(&ca_path, DEV_CERT_PEM).expect("write idp-ca");
+struct IntrospectionBootstrap {
+    directory: Option<TempDir>,
+    file: Option<FileConfig>,
+    broker: BrokerConfig,
+}
 
+#[fixture]
+fn introspection() -> IntrospectionBootstrap {
+    // Start this scenario with fresh inputs and observations.
+
+    IntrospectionBootstrap {
+        directory: None,
+        file: None,
+        broker: BrokerConfig::default(),
+    }
+}
+
+#[given("a fresh process has an introspection client configuration with a secret and trusted CA")]
+fn client_configuration(introspection: &mut IntrospectionBootstrap) {
+    let directory = tempdir().expect("tempdir");
+    let secret_path = directory.path().join("client-secret");
+    fs::write(&secret_path, "the-secret").expect("write secret");
+    let ca_path = directory.path().join("idp-ca.pem");
+    fs::write(&ca_path, DEV_CERT_PEM).expect("write idp-ca");
     let toml = format!(
         r#"
 [oauthbearer]
@@ -64,19 +76,30 @@ introspection_client_secret_path = '{secret}'
 idp_tls_trust                    = '{ca}'
 "#,
         secret = secret_path.display(),
-        ca = ca_path.display(),
+        ca = ca_path.display()
     );
-    let file: FileConfig = toml::from_str(&toml).expect("parse FileConfig");
-    let mut cfg = BrokerConfig::default();
-    // Pre-fix, this `apply_to` panicked inside
-    // `rustls::ClientConfig::builder()` (called from
-    // `build_client_config_from_pem` when `idp_tls_trust` is set)
-    // because no `CryptoProvider` was installed yet. Post-fix,
-    // `ReqwestIntrospectionClient::new` installs it idempotently and
-    // `apply_to` returns Ok.
-    file.apply_to(&mut cfg).expect("apply_to should not panic");
+    introspection.file = Some(toml::from_str(&toml).expect("parse FileConfig"));
+    introspection.directory = Some(directory);
+}
+
+#[when("the listener configuration builds its introspection client before broker startup")]
+fn apply_client_configuration(introspection: &mut IntrospectionBootstrap) {
+    introspection
+        .file
+        .take()
+        .expect("an introspection configuration was supplied")
+        .apply_to(&mut introspection.broker)
+        .expect("apply_to should not panic");
+}
+
+#[then(
+    "the broker uses an introspection validator without an externally installed crypto provider"
+)]
+fn introspection_validator(introspection: &IntrospectionBootstrap) {
     assert!(matches!(
-        cfg.oauthbearer_validator,
-        krabka_security::OAuthBearerValidator::Introspection(_)
+        introspection.broker.oauthbearer_validator,
+        OAuthBearerValidator::Introspection(_)
     ));
 }
+
+scenarios!("tests/features/migrated/tests/introspection_client_bootstrap.feature", fixtures = [introspection: IntrospectionBootstrap]);

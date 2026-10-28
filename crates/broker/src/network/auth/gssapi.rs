@@ -416,73 +416,75 @@ mod tests {
         }
     }
 
-    /// Kafka's `KerberosShortNamer` on what `sspi` hands the broker: `DEFAULT`
-    /// takes the first component of a service principal, and only in the
-    /// configured realm.
-    #[test]
-    fn map_gssapi_principal_follows_kafkas_short_namer() {
-        let config = |rules: &[&str], realm: Option<&str>| {
-            gssapi_config(
-                "/unused.keytab",
-                realm,
-                rules
-                    .iter()
-                    .map(|rule| KerberosRule::parse(rule).expect("rule parses"))
-                    .collect(),
-            )
-        };
-        // (rules, configured realm, principal from sspi, short name)
-        let cases = [
-            (
-                &["DEFAULT"][..],
-                Some("REALM.COM"),
-                "alice@realm.com",
-                Some("alice"),
-            ),
-            (
-                &["DEFAULT"][..],
-                Some("REALM.COM"),
-                "kafka/host.example.com@realm.com",
-                Some("kafka"),
-            ),
-            // A principal from another realm is not the local user.
-            (
-                &["DEFAULT"][..],
-                Some("REALM.COM"),
-                "alice@other.realm",
-                None,
-            ),
-            // No configured realm: `DEFAULT` matches nothing, not the
-            // principal's own realm.
-            (&["DEFAULT"][..], None, "alice@other.realm", None),
-            (&["DEFAULT"][..], None, "alice@realm.com", None),
-            // A rule can still name the realm itself.
-            (
-                &["RULE:[1:$1@$0](.*@OTHER.REALM)s/@.*//"][..],
-                None,
-                "alice@other.realm",
-                Some("alice"),
-            ),
-            // `(match)` is a whole-string match and `/U` upper-cases.
-            (
-                &["RULE:[1:$1](ali)s/^/x/", "RULE:[1:$1]/U"][..],
-                None,
-                "alice@realm.com",
-                Some("ALICE"),
-            ),
-            // Kafka's short namer does not know a third component.
-            (&["DEFAULT"][..], Some("REALM.COM"), "a/b/c@realm.com", None),
-        ];
-        for (rules, realm, principal, expected) in cases {
-            check!(
-                map_gssapi_principal(principal, &config(rules, realm))
-                    .ok()
-                    .as_deref()
-                    == expected,
-                "{rules:?} realm {realm:?} on {principal}"
-            );
-        }
+    #[derive(Default)]
+    struct GssapiShortName {
+        config: Option<GssapiConfig>,
+        principal: String,
+        mapped: rstest_bdd::Slot<Option<String>>,
     }
+
+    #[rstest::fixture]
+    fn gssapi_short_name() -> GssapiShortName {
+        // Each authenticated Kerberos principal has an independent mapping outcome.
+        GssapiShortName::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "GSSAPI short-name rules are JSON {rules} with configured realm {realm}"
+    )]
+    fn supplied_gssapi_mapping(
+        gssapi_short_name: &mut GssapiShortName,
+        rules: String,
+        realm: String,
+    ) {
+        let rules: Vec<String> = serde_json::from_str(&rules).expect("explicit Kerberos rule list");
+        gssapi_short_name.config = Some(gssapi_config(
+            "/unused.keytab",
+            if realm == "unset" {
+                None
+            } else {
+                Some(realm.as_str())
+            },
+            rules
+                .iter()
+                .map(|rule| KerberosRule::parse(rule).expect("rule parses"))
+                .collect(),
+        ));
+    }
+
+    #[rstest_bdd_macros::given("SSPI authenticated principal {principal}")]
+    fn supplied_sspi_principal(gssapi_short_name: &mut GssapiShortName, principal: String) {
+        gssapi_short_name.principal = principal;
+    }
+
+    #[rstest_bdd_macros::when("the authenticated GSSAPI principal is mapped to a local user")]
+    fn map_authenticated_gssapi_principal(gssapi_short_name: &mut GssapiShortName) {
+        gssapi_short_name.mapped.set(
+            map_gssapi_principal(
+                &gssapi_short_name.principal,
+                gssapi_short_name
+                    .config
+                    .as_ref()
+                    .expect("mapping configuration was given"),
+            )
+            .ok(),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the local GSSAPI user is {expected}")]
+    fn mapped_gssapi_short_name(gssapi_short_name: &GssapiShortName, expected: String) {
+        check!(gssapi_short_name.mapped.get() == Some(Some(expected)));
+    }
+
+    #[rstest_bdd_macros::then("the GSSAPI principal cannot be mapped to a local user")]
+    fn refused_gssapi_short_name(gssapi_short_name: &GssapiShortName) {
+        check!(gssapi_short_name.mapped.get() == Some(None));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/network/auth/gssapi.feature",
+        fixtures = [gssapi_short_name: GssapiShortName]
+    );
 
     #[test]
     fn map_gssapi_principal_uppercases_realm_before_default_rule() {

@@ -26,7 +26,6 @@ krabka_macros::rebuild_reconciliation_group! {
     /// The fields that the projection does not hold get faithful constants. The
     /// subscription is fixed to the one topic, `last_seen` is constant, and
     /// `previous_member_epoch` affects no decision.
-
     pub(super) fn rebuild_group(s: &ReconState) -> GroupState
     [member = m, built = ms]
     { ms }

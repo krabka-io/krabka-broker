@@ -314,22 +314,37 @@ mod tests {
         std::{sync::Arc, time::Duration},
     };
 
-    /// Kafka's `FetchResponse.sizeOf`, which `FetchContext.getResponseSize`
-    /// charges to the consumer byte rate, is `4 + data.size(version)`. An
-    /// empty response's body is the response array (4 bytes at v0), then
-    /// `ThrottleTimeMs` from v1, `ErrorCode` and `SessionId` from v7, and the
-    /// compact encoding with its tagged-field byte from v12.
-    #[yare::parameterized(
-        v0 = { 0, 8 },
-        v1 = { 1, 12 },
-        v4 = { 4, 12 },
-        v7 = { 7, 18 },
-        v12 = { 12, 16 },
-    )]
-    fn an_empty_fetch_response_is_charged_kafkas_size(version: i16, size: u64) {
-        let response = FetchResponse::default();
-        assert2::assert!(fetch_response_size(&response, version) == size);
+    #[derive(Default)]
+    struct FetchChargeScenario {
+        response: Option<FetchResponse>,
+        version: i16,
+        size: Option<u64>,
     }
+    #[rstest::fixture]
+    fn fetch_charge() -> FetchChargeScenario {
+        let response = None;
+        FetchChargeScenario {
+            response,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("an empty Fetch response uses API version {version}")]
+    fn empty_fetch_charge(fetch_charge: &mut FetchChargeScenario, version: i16) {
+        fetch_charge.version = version;
+        fetch_charge.response = Some(FetchResponse::default());
+    }
+    #[rstest_bdd_macros::when("the fetch response size is charged to the consumer byte quota")]
+    fn calculate_fetch_charge(fetch_charge: &mut FetchChargeScenario) {
+        fetch_charge.size = Some(fetch_response_size(
+            fetch_charge.response.as_ref().unwrap(),
+            fetch_charge.version,
+        ));
+    }
+    #[rstest_bdd_macros::then("the empty response quota charge is {bytes} bytes")]
+    fn check_fetch_charge(fetch_charge: &FetchChargeScenario, bytes: u64) {
+        assert2::assert!(fetch_charge.size.unwrap() == bytes);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_empty_fetch_charge",fixtures=[fetch_charge:FetchChargeScenario]);
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {

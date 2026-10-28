@@ -17,7 +17,7 @@ use {
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
         producer_state::ProducerState,
-        test_support::{COORDINATOR_WRITE_ERROR_CASES, FakeMetadataSource},
+        test_support::FakeMetadataSource,
         txn::{bootstrap, coordinator::TxnCoordinator, state::TxnEntry, version::TxnVersion},
     },
     assert2::assert,
@@ -44,26 +44,6 @@ const P0: PartitionIndex = PartitionIndex(0);
 /// The leader epoch this broker leads the partition at.
 const EPOCH: i32 = 3;
 const TID: &str = "tid";
-
-/// Kafka's `appendTransactionToLog` turns the error of its append into the
-/// coordinator error the client gets, and passes any other error through.
-#[test]
-fn append_errors_map_as_kafka_append_transaction_to_log() {
-    let cases = [
-        (
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            codes::COORDINATOR_NOT_AVAILABLE,
-        ),
-        (
-            codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
-            codes::COORDINATOR_NOT_AVAILABLE,
-        ),
-        (codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE),
-    ];
-    for (append, expected) in cases.into_iter().chain(COORDINATOR_WRITE_ERROR_CASES) {
-        assert!(coordinator_append_error(append) == expected, "{append}");
-    }
-}
 
 /// `__transaction_state` with one partition that `leader` leads at `epoch`
 /// over replicas 1 and 2 with `isr`, and a `min.insync.replicas` of 2, as
@@ -397,3 +377,47 @@ async fn a_tombstone_removes_the_id_only_once_it_commits() {
         assert!(coordinator.get(TID).is_some() == kept, "{what}");
     }
 }
+
+#[derive(Default)]
+struct TransactionLogAppendFailure {
+    append: Option<i16>,
+    response: Option<i16>,
+}
+
+#[rstest::fixture]
+fn transaction_log_append_failure() -> TransactionLogAppendFailure {
+    // Each transaction-state append failure has an independent client response.
+    TransactionLogAppendFailure::default()
+}
+
+#[rstest_bdd_macros::given("the transaction state log append failed with Kafka code {code}")]
+fn supplied_transaction_append_failure(
+    transaction_log_append_failure: &mut TransactionLogAppendFailure,
+    code: i16,
+) {
+    transaction_log_append_failure.append = Some(code);
+}
+
+#[rstest_bdd_macros::when("the transaction coordinator maps the append failure for its client")]
+fn map_transaction_append_failure(
+    transaction_log_append_failure: &mut TransactionLogAppendFailure,
+) {
+    transaction_log_append_failure.response = Some(coordinator_append_error(
+        transaction_log_append_failure
+            .append
+            .expect("append failure was given"),
+    ));
+}
+
+#[rstest_bdd_macros::then("the transaction append response carries Kafka code {code}")]
+fn expected_transaction_append_failure(
+    transaction_log_append_failure: &TransactionLogAppendFailure,
+    code: i16,
+) {
+    assert!(transaction_log_append_failure.response == Some(code));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/txn/coordinator/commit/tests.feature",
+    fixtures = [transaction_log_append_failure: TransactionLogAppendFailure]
+);

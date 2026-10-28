@@ -4,111 +4,87 @@
 
 use {super::*, assert2::check};
 
-/// One step of a quota scenario: record bytes, change the bound, or read the
-/// throttle time, at a clock reading in milliseconds.
-#[derive(Debug, Clone, Copy)]
-enum Step {
-    Record { at: i64, bytes: u64 },
-    Update { bytes_per_second: i64 },
-    Throttle { at: i64 },
-    Acquire { at: i64, bytes: u64 },
+#[derive(Default)]
+struct RemoteLogQuota {
+    quota: Option<RlmQuotaManager>,
+    throttle_ms: Option<i64>,
+    acquisition: Option<Result<(), i64>>,
 }
 
-/// What a scenario's `Throttle` and `Acquire` steps answered, in order.
-fn run_steps(bound: i64, steps: &[Step]) -> Vec<Result<(), i64>> {
-    let quota = RlmQuotaManager::new(bound, QuotaWindow::default());
-    steps
-        .iter()
-        .filter_map(|step| match *step {
-            Step::Record { at, bytes } => {
-                quota.record_at(bytes, at);
-                None
-            }
-            Step::Update { bytes_per_second } => {
-                quota.update_quota(bytes_per_second);
-                None
-            }
-            Step::Throttle { at } => Some(match quota.throttle_time_ms_at(at) {
-                0 => Ok(()),
-                throttle => Err(throttle),
-            }),
-            Step::Acquire { at, bytes } => Some(quota.try_acquire_at(bytes, at)),
-        })
-        .collect()
+#[rstest::fixture]
+fn remote_log_quota() -> RemoteLogQuota {
+    // Each rate history and live quota bound belong to one independent manager.
+    RemoteLogQuota::default()
 }
 
-#[yare::parameterized(
-    // Nothing recorded measures zero, so the first read always goes ahead.
-    an_idle_quota_allows = { 1000, &[Step::Throttle { at: 0 }], &[Ok(())] },
-    // 2000 bytes over the one-second floor of the window is 2000 B/s: one
-    // second over a 1000 B/s bound, `(2000 - 1000) / 1000 * 1000`.
-    a_burst_over_the_bound_throttles_for_the_excess = {
-        1000,
-        &[Step::Record { at: 0, bytes: 2000 }, Step::Throttle { at: 0 }],
-        &[Err(1000)],
-    },
-    // At 1.5 s the window is 1.5 s wide: 1333 B/s, and
-    // `(1333.3 - 1000) / 1000 * 1500` rounds to 500 ms.
-    the_window_widens_with_elapsed_time = {
-        1000,
-        &[Step::Record { at: 0, bytes: 2000 }, Step::Throttle { at: 1500 }],
-        &[Err(500)],
-    },
-    // At 2 s the rate is exactly the bound, which is still acceptable.
-    a_rate_at_the_bound_is_allowed = {
-        1000,
-        &[Step::Record { at: 0, bytes: 2000 }, Step::Throttle { at: 2000 }],
-        &[Ok(())],
-    },
-    // Eleven one-second samples: a sample 11 s old is purged.
-    a_sample_older_than_the_whole_window_is_purged = {
-        1,
-        &[Step::Record { at: 0, bytes: 1_000_000 }, Step::Throttle { at: 10_999 }, Step::Throttle { at: 11_000 }],
-        &[Err(999_989_001), Ok(())],
-    },
-    // Samples in later windows add up, measured from the oldest one.
-    later_samples_add_to_the_rate = {
-        1000,
-        &[
-            Step::Record { at: 0, bytes: 1000 },
-            Step::Record { at: 1000, bytes: 1000 },
-            Step::Record { at: 2000, bytes: 2000 },
-            Step::Throttle { at: 2000 },
-        ],
-        &[Err(2000)],
-    },
-    // A new bound applies to the samples already recorded.
-    raising_the_bound_releases_the_recorded_bytes = {
-        1000,
-        &[
-            Step::Record { at: 0, bytes: 2000 },
-            Step::Throttle { at: 0 },
-            Step::Update { bytes_per_second: 4000 },
-            Step::Throttle { at: 0 },
-        ],
-        &[Err(1000), Ok(())],
-    },
-    lowering_the_bound_throttles_the_recorded_bytes = {
-        i64::MAX,
-        &[
-            Step::Record { at: 0, bytes: 2000 },
-            Step::Throttle { at: 0 },
-            Step::Update { bytes_per_second: 500 },
-            Step::Throttle { at: 0 },
-        ],
-        &[Ok(()), Err(3000)],
-    },
-    // The copy path's check-and-record: the first segment goes ahead and is
-    // counted, so the second one waits.
-    acquire_records_only_what_it_admits = {
-        1000,
-        &[Step::Acquire { at: 0, bytes: 3000 }, Step::Acquire { at: 0, bytes: 1 }, Step::Throttle { at: 0 }],
-        &[Ok(()), Err(2000), Err(2000)],
-    },
+#[rstest_bdd_macros::given(
+    "a remote-log quota permits {rate} bytes per second with Kafka sample windows"
 )]
-fn the_quota_follows_kafkas_simple_rate(bound: i64, steps: &[Step], expected: &[Result<(), i64>]) {
-    check!(run_steps(bound, steps) == expected);
+fn supplied_remote_log_quota(remote_log_quota: &mut RemoteLogQuota, rate: i64) {
+    remote_log_quota.quota = Some(RlmQuotaManager::new(rate, QuotaWindow::default()));
 }
+
+#[rstest_bdd_macros::when("the manager records {bytes} remote-log bytes at millisecond {at}")]
+fn record_remote_log_quota(remote_log_quota: &RemoteLogQuota, bytes: u64, at: i64) {
+    remote_log_quota
+        .quota
+        .as_ref()
+        .expect("quota manager was configured")
+        .record_at(bytes, at);
+}
+
+#[rstest_bdd_macros::when("the manager samples the remote-log throttle at millisecond {at}")]
+fn sample_remote_log_quota(remote_log_quota: &mut RemoteLogQuota, at: i64) {
+    remote_log_quota.throttle_ms = Some(
+        remote_log_quota
+            .quota
+            .as_ref()
+            .expect("quota manager was configured")
+            .throttle_time_ms_at(at),
+    );
+}
+
+#[rstest_bdd_macros::when("the remote-log byte-rate bound is changed to {rate}")]
+fn update_remote_log_quota(remote_log_quota: &RemoteLogQuota, rate: i64) {
+    remote_log_quota
+        .quota
+        .as_ref()
+        .expect("quota manager was configured")
+        .update_quota(rate);
+}
+
+#[rstest_bdd_macros::when(
+    "the manager tries to acquire {bytes} remote-log bytes at millisecond {at}"
+)]
+fn acquire_remote_log_quota(remote_log_quota: &mut RemoteLogQuota, bytes: u64, at: i64) {
+    remote_log_quota.acquisition = Some(
+        remote_log_quota
+            .quota
+            .as_ref()
+            .expect("quota manager was configured")
+            .try_acquire_at(bytes, at),
+    );
+}
+
+#[rstest_bdd_macros::then("the remote-log throttle is {milliseconds} milliseconds")]
+fn expected_remote_log_throttle(remote_log_quota: &RemoteLogQuota, milliseconds: i64) {
+    check!(remote_log_quota.throttle_ms == Some(milliseconds));
+}
+
+#[rstest_bdd_macros::then("the remote-log acquisition is admitted")]
+fn admitted_remote_log_acquisition(remote_log_quota: &RemoteLogQuota) {
+    check!(remote_log_quota.acquisition == Some(Ok(())));
+}
+
+#[rstest_bdd_macros::then("the remote-log acquisition is refused for {milliseconds} milliseconds")]
+fn refused_remote_log_acquisition(remote_log_quota: &RemoteLogQuota, milliseconds: i64) {
+    check!(remote_log_quota.acquisition == Some(Err(milliseconds)));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/remote_log_manager/quota/tests.feature",
+    fixtures = [remote_log_quota: RemoteLogQuota]
+);
 
 #[test]
 fn an_unlimited_quota_never_throttles() {

@@ -316,30 +316,6 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
 /// gives `computeGroupHash` of topic `orders`, id `0101..01-0101..01`, two
 /// partitions and no racks, as the golden value below, and a group that
 /// subscribes to no existing topic writes 0.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_written_metadata_hash_is_kafkas() {
-    // (case, the metadata, the hash of the group's epoch record)
-    let rows = [
-        (
-            "orders exists",
-            snapshot_of(&[("orders", 1, 2)]),
-            2_418_189_869_542_540_743,
-        ),
-        ("orders does not exist", snapshot_of(&[]), 0),
-    ];
-    let mut written = Vec::new();
-    let mut expected = Vec::new();
-    for (case, metadata, hash) in rows {
-        let coordinator = make_coord_with_metadata(SwitchableMetadata::new(metadata));
-        let handle = coordinator.get_or_create_consumer("g");
-        heartbeat(&handle, join()).await;
-        let seed = coordinator.cached_seed("g").expect("the group's records");
-        written.push((case, seed.group_epoch, seed.metadata_hash));
-        expected.push((case, 2, hash));
-    }
-    check!(written == expected);
-}
-
 /// KIP-1263: a consumer group replays the `AssignmentTimestamp` of its target
 /// assignment metadata record, and Kafka's `canComputeNextTargetAssignment`
 /// runs the assignment interval from it, so a coordinator failover does not
@@ -387,4 +363,54 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
         cases.record(case, joined.member_epoch, (before, after), written, wanted);
     }
     cases.check();
+}
+
+use rstest_bdd_macros::{given, then, when};
+#[derive(Default)]
+struct WrittenMetadataHash {
+    coordinator: Option<Arc<GroupCoordinator>>,
+    written: Option<(i32, i64)>,
+}
+#[rstest::fixture]
+fn written_hash() -> WrittenMetadataHash {
+    // Start this scenario with fresh inputs and observations.
+    WrittenMetadataHash::default()
+}
+#[given("metadata contains the two-partition orders topic {topic_exists}")]
+fn hash_metadata_image(written_hash: &mut WrittenMetadataHash, topic_exists: bool) {
+    let image = if topic_exists {
+        snapshot_of(&[("orders", 1, 2)])
+    } else {
+        snapshot_of(&[])
+    };
+    written_hash.coordinator = Some(make_coord_with_metadata(SwitchableMetadata::new(image)));
+}
+#[when("a consumer joins group g subscribed to orders and the coordinator persists its epoch")]
+async fn persist_group_metadata_hash(written_hash: &mut WrittenMetadataHash) {
+    let coordinator = written_hash
+        .coordinator
+        .as_ref()
+        .expect("coordinator metadata configured");
+    let handle = coordinator.get_or_create_consumer("g");
+    heartbeat(&handle, join()).await;
+    let seed = coordinator
+        .cached_seed("g")
+        .expect("persisted group records");
+    written_hash.written = Some((seed.group_epoch, seed.metadata_hash));
+}
+#[then("group epoch 2 carries exact Kafka metadata hash {hash}")]
+fn kafka_written_group_hash(written_hash: &WrittenMetadataHash, hash: i64) {
+    check!(written_hash.written == Some((2, hash)));
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/metadata_update/tests.feature",
+    name = "A consumer group writes the Kafka topic metadata hash"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_written_metadata_hash_is_kafkas(
+    written_hash: WrittenMetadataHash,
+    topic_exists: bool,
+    hash: i64,
+) {
+    let _ = (written_hash, topic_exists, hash);
 }

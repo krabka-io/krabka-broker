@@ -91,9 +91,28 @@ pub fn grep_base_offsets(dump: &str) -> String {
         .join("\n")
 }
 
-#[test]
-fn kafka_dump_offset_parser_accepts_spaced_values() {
-    let dump = "baseOffset: 0 lastOffset: 9 count: 10\n\
-                offset: 10 position: 211 payload: value";
-    assert2::assert!(max_offset_in_dump(dump) == Some(10));
+#[derive(Default)]
+struct DumpOffsets {
+    text: String,
+    offset: rstest_bdd::Slot<Option<i64>>,
 }
+#[rstest::fixture]
+fn dump_offsets() -> DumpOffsets {
+    // Every parsed dump has an independent observation slot.
+    DumpOffsets::default()
+}
+#[rstest_bdd_macros::given("Kafka dump-log output")]
+fn kafka_dump_text(dump_offsets: &mut DumpOffsets, docstring: String) {
+    dump_offsets.text = docstring;
+}
+#[rstest_bdd_macros::when("the highest Kafka dump offset is parsed")]
+fn parse_dump_offset(dump_offsets: &mut DumpOffsets) {
+    dump_offsets
+        .offset
+        .set(max_offset_in_dump(&dump_offsets.text));
+}
+#[rstest_bdd_macros::then("the highest offset is {offset}")]
+fn parsed_dump_offset(dump_offsets: &DumpOffsets, offset: i64) {
+    assert2::assert!(dump_offsets.offset.get() == Some(Some(offset)));
+}
+rstest_bdd_macros::scenarios!("tests/features/migrated/tests/jvm_kip320_divergence/dump_log.feature", fixtures=[dump_offsets:DumpOffsets]);

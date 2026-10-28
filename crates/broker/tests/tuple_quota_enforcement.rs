@@ -43,144 +43,144 @@ use {
         tuple_quota_drivers::{await_authorized_produce, drive_alter_client_quotas_sasl},
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    krabka_metadata::EntityKey,
+    krabka_protocol::owned::produce_response::ProduceResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Integration test
-// ─────────────────────────────────────────────────────────────────────────────
+#[derive(Default)]
+struct TupleQuota {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    address: Option<SocketAddr>,
+    admin_password: String,
+    alice_password: String,
+    altered: Option<Vec<(EntityKey, i16)>>,
+    produced: Option<ProduceResponse>,
+}
 
-/// Sets `(user=alice, client-id=app-x) producer_byte_rate=1024`.
-///
-/// * A produce of about 4 KB as (alice, app-x) gives `throttle_time_ms > 0`,
-///   because the tuple matches.
-/// * A produce of about 4 KB as (alice, other) gives `throttle_time_ms == 0`,
-///   because no quota matches.
-///
-/// The second assertion verifies that the tuple quota does NOT fire on an
-/// unmatched `client_id`, that is, that no `(user=alice)` fallback quota is
-/// set.
-///
-/// This test covers the end-to-end behaviour: the Produce handler must pass
-/// `ctx.client_id` to the quota lookup. If it passes `""`, no tuple quota ever
-/// matches and both produces return `throttle_time_ms == 0`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tuple_quota_throttles_only_matching_client_id() {
-    let admin_password = uuid::Uuid::new_v4().to_string();
-    let alice_password = uuid::Uuid::new_v4().to_string();
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
-        ("admin", admin_password.as_str()),
-        ("alice", alice_password.as_str()),
+#[fixture]
+fn tuple_quota() -> TupleQuota {
+    // Each authenticated client request retains its real broker throttle observation.
+    TupleQuota::default()
+}
+
+#[given("Alice may write tuple-quota-topic using authenticated client IDs")]
+async fn authorized_tuple_writer(tuple_quota: &mut TupleQuota) {
+    tuple_quota.admin_password = uuid::Uuid::new_v4().to_string();
+    tuple_quota.alice_password = uuid::Uuid::new_v4().to_string();
+    let (broker, directory, address) = start_single_broker_sasl_plaintext_with_users("admin", &[
+        ("admin", tuple_quota.admin_password.as_str()),
+        ("alice", tuple_quota.alice_password.as_str()),
     ])
     .await;
-
-    // Seed ACL entries so the authorizer engages (compat shim disabled) and
-    // alice can Write to the topic.
-    seed_compat_shim_disable_acl(&handle).await;
+    seed_compat_shim_disable_acl(&broker).await;
     create_topic_as_admin()
-        .addr(addr)
+        .addr(address)
         .client_id(CLIENT_ID)
-        .password(admin_password.as_bytes())
+        .password(tuple_quota.admin_password.as_bytes())
         .topic(support::topics::ConfiguredTopicSetup {
             name: "tuple-quota-topic".into(),
             ..Default::default()
         })
         .call()
         .await;
-    handle
+    broker
         .wait_until_partition_present("tuple-quota-topic", 0)
         .await;
-    seed_alice_write_acl(&handle, "tuple-quota-topic").await;
+    seed_alice_write_acl(&broker, "tuple-quota-topic").await;
+    tuple_quota.broker = Some(broker);
+    tuple_quota.directory = Some(directory);
+    tuple_quota.address = Some(address);
+}
 
-    // Set tuple quota: (user=alice, client-id=app-x) producer_byte_rate=1024.
-    // Rate = 1024 bytes/sec, burst = 1 second at rate = 1024 bytes free.
-    // Producing 4 KB = 4096 bytes means ~3072 bytes over budget → throttle fires.
-    // No (user=alice)-only quota is set, so (alice, other) has no quota at all.
-    let alter_resp = drive_alter_client_quotas_sasl(
-        addr,
-        vec![(
-            vec![
-                ("user".into(), Some("alice".into())),
-                ("client-id".into(), Some("app-x".into())),
-            ],
-            vec![("producer_byte_rate".into(), 1024.0, false)],
-        )],
-        &QuotaAlterSetup {
-            authentication: PlainAuthenticationSetup {
-                client_id: CLIENT_ID,
-                user: "admin",
-                password: admin_password.as_bytes().to_vec(),
+#[when("the administrator assigns only Alice's app-x tuple a 1024-byte-per-second producer quota")]
+async fn assign_tuple_quota(tuple_quota: &mut TupleQuota) {
+    tuple_quota.altered = Some(
+        drive_alter_client_quotas_sasl(
+            tuple_quota.address.expect("listener"),
+            vec![(
+                vec![
+                    ("user".into(), Some("alice".into())),
+                    ("client-id".into(), Some("app-x".into())),
+                ],
+                vec![("producer_byte_rate".into(), 1024.0, false)],
+            )],
+            &QuotaAlterSetup {
+                authentication: PlainAuthenticationSetup {
+                    client_id: CLIENT_ID,
+                    user: "admin",
+                    password: tuple_quota.admin_password.as_bytes().to_vec(),
+                },
+                ..Default::default()
             },
-            ..Default::default()
-        },
-    )
-    .await;
-    assert!(
-        alter_resp.len() == 1,
-        "one entry in AlterClientQuotas response"
+        )
+        .await,
     );
-    assert!(
-        alter_resp[0].1 == 0,
-        "AlterClientQuotas must succeed; error_code={}",
-        alter_resp[0].1
-    );
+}
 
-    // Await until the quota appears in the metadata image (absorb raft latency).
-    //
-    // `MetadataImage` canonicalizes EntityKey by sorting entries alphabetically
-    // by entity_type, so the stored key has "client-id" before "user".
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![
+#[then("the tuple quota alteration succeeds and appears in committed metadata")]
+async fn tuple_quota_committed(tuple_quota: &TupleQuota) {
+    let response = tuple_quota.altered.as_ref().expect("quota altered");
+    assert!(response.len() == 1);
+    assert!(response[0].1 == 0, "quota alter failed: {response:?}");
+    tuple_quota
+        .broker
+        .as_ref()
+        .expect("broker")
+        .wait_for_image(|image| {
+            let key: EntityKey = vec![
                 ("client-id".into(), Some("app-x".into())),
                 ("user".into(), Some("alice".into())),
             ];
-            img.client_quotas()
+            image
+                .client_quotas()
                 .get(&key)
-                .and_then(|cfgs| cfgs.get("producer_byte_rate"))
+                .and_then(|configs| configs.get("producer_byte_rate"))
                 == Some(&1024.0)
         })
         .await;
+}
 
-    // ── Case 1: (alice, app-x) — tuple matches, must throttle ────────────────
-    //
-    // Retry loop: TOPIC_AUTHORIZATION_FAILED (29) can fire if the alice Write
-    // ACL hasn't propagated to the handler's image snapshot yet.
-    let matching_resp = await_authorized_produce(addr, alice_password.as_bytes(), "app-x").await;
-
-    let part = &matching_resp.responses[0].partition_responses[0];
-    assert!(
-        part.error_code == 0,
-        "produce (alice, app-x) must succeed; error_code={}",
-        part.error_code
+#[when("Alice produces four kilobytes through a fresh connection with client ID {client_id}")]
+async fn produce_under_tuple_quota(tuple_quota: &mut TupleQuota, client_id: String) {
+    tuple_quota.produced = Some(
+        await_authorized_produce(
+            tuple_quota.address.expect("listener"),
+            tuple_quota.alice_password.as_bytes(),
+            &client_id,
+        )
+        .await,
     );
-    assert!(
-        matching_resp.throttle_time_ms > 0,
-        "expected throttle_time_ms > 0 for (alice, app-x) with producer_byte_rate=1024 \
-         and 4 KB payload; got {} — T3 may not have merged yet (T3 wires ctx.client_id \
-         into the quota call site)",
-        matching_resp.throttle_time_ms
-    );
+}
 
-    // ── Case 2: (alice, other) — no quota match, must NOT throttle ────────────
-    //
-    // A fresh TCP connection means the token bucket starts from scratch, so
-    // there is no residual debt from Case 1.  No (user=alice)-only quota exists,
-    // so the produce must complete with throttle_time_ms == 0.
-    let non_matching_resp =
-        await_authorized_produce(addr, alice_password.as_bytes(), "other").await;
+#[then("the tuple-quota produce succeeds and is throttled: {throttled}")]
+fn tuple_quota_applied(tuple_quota: &TupleQuota, throttled: bool) {
+    let response = tuple_quota.produced.as_ref().expect("Produce answered");
+    assert!(response.responses[0].partition_responses[0].error_code == 0);
+    if throttled {
+        assert!(
+            response.throttle_time_ms > 0,
+            "matching tuple must throttle: {response:?}"
+        );
+    } else {
+        assert!(
+            response.throttle_time_ms == 0,
+            "unmatched client has no quota: {response:?}"
+        );
+    }
+}
 
-    let part = &non_matching_resp.responses[0].partition_responses[0];
-    assert!(
-        part.error_code == 0,
-        "produce (alice, other) must succeed; error_code={}",
-        part.error_code
-    );
-    assert!(
-        non_matching_resp.throttle_time_ms == 0,
-        "expected throttle_time_ms == 0 for (alice, other) — no tuple or user-only \
-         quota is set for this client_id; got {}",
-        non_matching_resp.throttle_time_ms
-    );
-
-    handle.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/tuple_quota_enforcement.feature",
+    name = "tuple quota throttles only matching client id"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tuple_quota_throttles_only_matching_client_id(tuple_quota: TupleQuota) {
+    tuple_quota.broker.take().expect("broker").shutdown().await;
+    drop(tuple_quota);
 }

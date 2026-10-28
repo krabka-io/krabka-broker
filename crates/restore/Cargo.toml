@@ -73,6 +73,10 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 assert2 = { workspace = true }
 yare = { workspace = true }
 # `large_archive` implements `object_store::ObjectStore` to synthesise a

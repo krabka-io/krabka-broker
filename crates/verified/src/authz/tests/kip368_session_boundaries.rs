@@ -1,55 +1,89 @@
-use super::*;
+use {
+    super::*,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::vec,
+};
 
-/// Kafka's `KafkaChannel.serverAuthenticationSessionExpired` expires a session
-/// only strictly after its deadline, and `Processor.processCompletedReceives`
-/// spares only a `SaslHandshake` that `maybeBeginServerReauthentication`
-/// accepts. Every other frame on an expired session closes the connection,
-/// `SaslAuthenticate` (36) included.
-#[yare::parameterized(
-    no_deadline_never_expires = { None, 0, i64::MAX, None, false },
-    before_the_deadline = { Some(1_000), 0, 999, None, false },
-    at_the_deadline = { Some(1_000), 0, 1_000, None, false },
-    one_ms_after_the_deadline = { Some(1_000), 0, 1_001, None, true },
-    api_versions_after_the_deadline = { Some(1_000), 18, 1_001, None, true },
-    sasl_authenticate_at_the_deadline = { Some(1_000), 36, 1_000, None, false },
-    sasl_authenticate_after_the_deadline = { Some(1_000), 36, 1_001, None, true },
-    handshake_that_begins_reauth = { Some(1_000), 17, 1_001, None, false },
-    handshake_a_second_after_the_last_reauth = { Some(1_000), 17, 2_001, Some(1_001), false },
-    handshake_inside_the_reauth_interval = { Some(1_000), 17, 2_000, Some(1_001), true },
-    handshake_inside_the_interval_before_the_deadline = { Some(1_000), 17, 1_000, Some(999), false },
-    i64_max_deadline_never_passes = { Some(i64::MAX), 0, i64::MAX, None, false },
-    i64_min_deadline = { Some(i64::MIN), 0, i64::MIN + 1, None, true },
-    interval_does_not_overflow = { Some(i64::MIN), 17, i64::MAX, Some(i64::MIN), false },
-)]
-fn session_expired_for_request_matches_kafka(
+#[derive(Default)]
+struct SessionBoundary {
     expiry_ms: Option<i64>,
-    api_key: i16,
-    now_ms: i64,
     last_reauth_start_ms: Option<i64>,
-    expired: bool,
-) {
-    check!(
-        session_expired_for_request(expiry_ms, api_key, now_ms, last_reauth_start_ms) == expired
-    );
+    expired: Option<bool>,
+    reauthentication: Option<bool>,
 }
 
-/// Kafka's `KafkaChannel.maybeBeginServerReauthentication`: a session with
-/// an expiry may begin a re-authentication when none has started on the
-/// connection, or the last one started a second or more ago.
-#[yare::parameterized(
-    no_expiry_never_reauthenticates = { None, 5_000, None, false },
-    first_reauthentication = { Some(1_000), 5_000, None, true },
-    exactly_a_second_later = { Some(1_000), 5_000, Some(4_000), true },
-    one_ms_inside_the_interval = { Some(1_000), 5_000, Some(4_001), false },
-    clock_rollback = { Some(1_000), 5_000, Some(6_000), false },
-    wide_gap_saturates = { Some(1_000), i64::MAX, Some(i64::MIN), true },
-    wide_rollback_saturates = { Some(1_000), i64::MIN, Some(i64::MAX), false },
-)]
-fn reauthentication_begins_matches_kafka(
-    expiry_ms: Option<i64>,
-    now_ms: i64,
-    last_start_ms: Option<i64>,
-    begins: bool,
-) {
-    check!(reauthentication_begins(expiry_ms, now_ms, last_start_ms) == begins);
+#[fixture]
+fn session() -> SessionBoundary {
+    // Start this scenario with fresh inputs and observations.
+
+    SessionBoundary {
+        expiry_ms: None,
+        last_reauth_start_ms: None,
+        expired: None,
+        reauthentication: None,
+    }
 }
+
+fn millis(value: &str) -> i64 {
+    match value {
+        "minimum" => i64::MIN,
+        "maximum" => i64::MAX,
+        "minimum-plus-one" => i64::MIN + 1,
+        _ => value.parse().expect("a signed millisecond timestamp"),
+    }
+}
+
+fn optional_millis(value: &str) -> Option<i64> {
+    if value == "none" {
+        None
+    } else {
+        Some(millis(value))
+    }
+}
+
+#[given(
+    "a session expiring at {expiry_ms} ms with its last reauthentication at {last_start_ms} ms"
+)]
+fn session_deadline(session: &mut SessionBoundary, expiry_ms: String, last_start_ms: String) {
+    session.expiry_ms = optional_millis(&expiry_ms);
+    session.last_reauth_start_ms = optional_millis(&last_start_ms);
+}
+
+#[when("a {request} request arrives at {now_ms} ms")]
+fn request_arrives(session: &mut SessionBoundary, request: String, now_ms: String) {
+    let api_key = match request.as_str() {
+        "Produce" => 0,
+        "ApiVersions" => 18,
+        "SaslHandshake" => 17,
+        "SaslAuthenticate" => 36,
+        _ => panic!("unknown session-boundary request: {request}"),
+    };
+    session.expired = Some(session_expired_for_request(
+        session.expiry_ms,
+        api_key,
+        millis(&now_ms),
+        session.last_reauth_start_ms,
+    ));
+}
+
+#[then("the request expires the authentication session: {expired}")]
+fn request_expiry(session: &SessionBoundary, expired: bool) {
+    check!(session.expired == Some(expired));
+}
+
+#[when("reauthentication is attempted at {now_ms} ms")]
+fn attempt_reauthentication(session: &mut SessionBoundary, now_ms: String) {
+    session.reauthentication = Some(reauthentication_begins(
+        session.expiry_ms,
+        millis(&now_ms),
+        session.last_reauth_start_ms,
+    ));
+}
+
+#[then("reauthentication can begin: {begins}")]
+fn reauthentication_admitted(session: &SessionBoundary, begins: bool) {
+    check!(session.reauthentication == Some(begins));
+}
+
+scenarios!("tests/features/migrated/src/authz/tests/kip368_session_boundaries.feature", fixtures = [session: SessionBoundary]);

@@ -18,15 +18,19 @@ use {
         },
     },
     assert2::{assert, check},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 mod support;
 
 use {
-    bytes::BufMut,
+    bytes::{BufMut, Bytes, BytesMut},
     krabka_protocol::{
         Encode,
         owned::{
             consumer_protocol_subscription::ConsumerProtocolSubscription,
+            join_group_response::JoinGroupResponse,
             offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
             offset_delete_response::{
                 OffsetDeleteResponse, OffsetDeleteResponsePartition, OffsetDeleteResponseTopic,
@@ -87,218 +91,262 @@ async fn fetch_offset(p: &support::InProcess, group: &str, topic: &str, partitio
     resp.groups[0].topics[0].partitions[0].committed_offset
 }
 
-/// T1, the happy path. Commit an offset for an Empty group and delete it.
-/// `OffsetFetch` then returns `-1`, which means no committed offset.
-#[tokio::test]
-async fn delete_offsets_from_empty_group_round_trip() {
-    let p = start().await;
-    create_topic(&p, "t1", 2).await;
-
-    commit_offset(&p, "g1", "t1", 0, 42).await;
-    commit_offset(&p, "g1", "t1", 1, 100).await;
-
-    // Group is Empty (no JoinGroup), delete should succeed.
-    let resp = p
-        .client
-        .send(offset_delete_request("g1", vec![offset_delete_topic(
-            "t1",
-            vec![offset_delete_partition(0)],
-        )]))
-        .await
-        .expect("OffsetDelete");
-    check!(resp.error_code == 0, "top-level NONE");
-    assert!(resp.topics.len() == 1);
-    assert!(resp.topics[0].partitions.len() == 1);
-    check!(
-        resp.topics[0].partitions[0].error_code == 0,
-        "partition 0 NONE"
-    );
-
-    // Verify partition 0 is gone, partition 1 still has its offset.
-    check!(
-        fetch_offset(&p, "g1", "t1", 0).await == OFFSET_ABSENT_SENTINEL,
-        "partition 0 offset cleared"
-    );
-    check!(
-        fetch_offset(&p, "g1", "t1", 1).await == 100,
-        "partition 1 offset untouched"
-    );
-
-    p.broker.shutdown().await;
+struct OffsetDeletion {
+    broker: Option<InProcess>,
+    group: String,
+    topic: String,
+    response: Option<OffsetDeleteResponse>,
+    bootstrap: Option<JoinGroupResponse>,
+    subscriber: Option<JoinGroupResponse>,
 }
 
-/// T2, unknown group. `OffsetDelete` against a group that was never
-/// joined or committed returns `GROUP_ID_NOT_FOUND` at the top level.
-#[tokio::test]
-async fn delete_offsets_unknown_group_returns_group_id_not_found() {
-    let p = start().await;
-    create_topic(&p, "t2", 1).await;
+#[fixture]
+fn deletion() -> OffsetDeletion {
+    // Start this scenario with fresh inputs and observations.
 
-    let resp = p
-        .client
-        .send(offset_delete_request("ghost", vec![offset_delete_topic(
-            "t2",
-            vec![offset_delete_partition(0)],
-        )]))
-        .await
-        .expect("OffsetDelete");
-    // A group-level refusal carries only the top-level code (#734).
-    assert!(
-        resp == OffsetDeleteResponse {
-            error_code: 69,
-            ..Default::default()
-        },
-        "top-level GROUP_ID_NOT_FOUND (69) and no topic rows"
-    );
-
-    p.broker.shutdown().await;
+    OffsetDeletion {
+        broker: None,
+        group: String::new(),
+        topic: String::new(),
+        response: None,
+        bootstrap: None,
+        subscriber: None,
+    }
 }
 
-/// T3, missing topic. The response carries per-partition
-/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a topic that does not exist, even when
-/// the group does exist.
-#[tokio::test]
-async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
-    let p = start().await;
-    create_topic(&p, "t3", 1).await;
-    commit_offset(&p, "g3", "t3", 0, 7).await;
-
-    let resp = p
-        .client
-        .send(offset_delete_request("g3", vec![offset_delete_topic(
-            "nonexistent",
-            vec![offset_delete_partition(0)],
-        )]))
-        .await
-        .expect("OffsetDelete");
-    assert!(resp.error_code == 0, "top-level NONE");
-    assert!(
-        resp.topics[0].partitions[0].error_code == 3,
-        "UNKNOWN_TOPIC_OR_PARTITION (3) for missing topic"
-    );
-
-    p.broker.shutdown().await;
+#[given("group {group} has offsets on topic {topic} with {partitions} partitions")]
+async fn committed_offsets(
+    deletion: &mut OffsetDeletion,
+    group: String,
+    topic: String,
+    partitions: i32,
+    datatable: Vec<Vec<String>>,
+) {
+    let broker = start().await;
+    create_topic(&broker, &topic, partitions).await;
+    for row in datatable.into_iter().skip(1) {
+        let [partition, offset]: [String; 2] =
+            row.try_into().expect("partition and committed offset");
+        commit_offset(
+            &broker,
+            &group,
+            &topic,
+            partition.parse().expect("partition index"),
+            offset.parse().expect("offset"),
+        )
+        .await;
+    }
+    deletion.broker = Some(broker);
+    deletion.group = group;
+    deletion.topic = topic;
 }
 
-/// T4, out-of-range partition. The response carries per-partition
-/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a partition index beyond the
-/// topic's partition count.
-#[tokio::test]
-async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition() {
-    let p = start().await;
-    create_topic(&p, "t4", 1).await;
-    commit_offset(&p, "g4", "t4", 0, 5).await;
+#[given("topic t2 exists but group ghost has never joined or committed")]
+async fn unknown_group(deletion: &mut OffsetDeletion) {
+    let broker = start().await;
+    create_topic(&broker, "t2", 1).await;
+    deletion.broker = Some(broker);
+    deletion.group = "ghost".into();
+    deletion.topic = "t2".into();
+}
 
-    let resp = p
-        .client
-        .send(offset_delete_request("g4", vec![offset_delete_topic(
-            "t4",
-            vec![offset_delete_partition(0), offset_delete_partition(99)],
-        )]))
-        .await
-        .expect("OffsetDelete");
-    // Kafka's broker answers p=99 before the coordinator answers p=0, and
-    // `OffsetDeleteResponse.Builder.merge` appends p=0 after it.
+#[when("offsets are deleted from topic {topic} for partitions {partitions}")]
+async fn delete_offsets(deletion: &mut OffsetDeletion, topic: String, partitions: String) {
+    let broker = deletion.broker.as_ref().expect("a coordinator was started");
+    let partitions = partitions
+        .split(',')
+        .map(|partition| {
+            offset_delete_partition(partition.trim().parse().expect("partition index"))
+        })
+        .collect();
+    deletion.response = Some(
+        broker
+            .client
+            .send(offset_delete_request(&deletion.group, vec![
+                offset_delete_topic(&topic, partitions),
+            ]))
+            .await
+            .expect("OffsetDelete"),
+    );
+}
+
+#[then("offset deletion returns top-level {code} and topic {topic} partition results")]
+fn partition_results(
+    deletion: &OffsetDeletion,
+    code: i16,
+    topic: String,
+    datatable: Vec<Vec<String>>,
+) {
+    let partitions = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [partition, error_code]: [String; 2] =
+                row.try_into().expect("partition and error code");
+            OffsetDeleteResponsePartition {
+                partition_index: partition.parse().expect("partition index"),
+                error_code: error_code.parse().expect("error code"),
+                ..Default::default()
+            }
+        })
+        .collect();
     let expected = OffsetDeleteResponse {
-        error_code: 0,
+        error_code: code,
         topics: vec![OffsetDeleteResponseTopic {
-            name: "t4".into(),
-            partitions: vec![
-                OffsetDeleteResponsePartition {
-                    partition_index: 99,
-                    error_code: 3,
-                    ..Default::default()
-                },
-                OffsetDeleteResponsePartition {
-                    partition_index: 0,
-                    error_code: 0,
-                    ..Default::default()
-                },
-            ],
+            name: topic,
+            partitions,
             ..Default::default()
         }],
         ..Default::default()
     };
-    check!(resp == expected);
-
-    p.broker.shutdown().await;
+    check!(deletion.response.as_ref().expect("OffsetDelete completed") == &expected);
 }
 
-/// T5, the subscription guard. A non-empty consumer-protocol group that is
-/// still subscribed to the topic returns per-partition
-/// `GROUP_SUBSCRIBED_TO_TOPIC` (86). The offset survives the request.
-#[tokio::test]
-async fn delete_offsets_for_subscribed_topic_returns_group_subscribed() {
-    let p = start().await;
-    create_topic(&p, "t5", 1).await;
-    commit_offset(&p, "g5", "t5", 0, 9).await;
-
-    // Build a ConsumerProtocolSubscription bytestring that subscribes to t5.
-    let sub = ConsumerProtocolSubscription {
-        topics: vec!["t5".into()],
+#[then("the unknown group is refused without any topic rows")]
+fn group_refusal(deletion: &OffsetDeletion) {
+    let expected = OffsetDeleteResponse {
+        error_code: 69,
         ..Default::default()
     };
-    let mut sub_bytes = bytes::BytesMut::new();
-    sub_bytes.put_i16(0); // protocol version negotiation prefix
-    sub.encode(&mut sub_bytes, 0).expect("encode subscription");
-    let sub_bytes = bytes::Bytes::from(sub_bytes.to_vec());
+    assert!(
+        deletion.response.as_ref().expect("OffsetDelete completed") == &expected,
+        "top-level GROUP_ID_NOT_FOUND (69) and no topic rows"
+    );
+}
 
-    // JoinGroup to create a live member with that subscription.
-    let r1 = p
+#[then("the remaining committed offsets are exactly")]
+async fn remaining_offsets(deletion: &OffsetDeletion, datatable: Vec<Vec<String>>) {
+    let broker = deletion.broker.as_ref().expect("a coordinator was started");
+    for row in datatable.into_iter().skip(1) {
+        let [partition, offset]: [String; 2] =
+            row.try_into().expect("partition and remaining offset");
+        let partition = partition.parse().expect("partition index");
+        let expected = if offset == "absent" {
+            OFFSET_ABSENT_SENTINEL
+        } else {
+            offset.parse().expect("remaining offset")
+        };
+        check!(
+            fetch_offset(broker, &deletion.group, &deletion.topic, partition).await == expected,
+            "partition {partition}"
+        );
+    }
+}
+
+#[when("a consumer joins with a subscription to the offset topic")]
+async fn subscribe(deletion: &mut OffsetDeletion) {
+    let broker = deletion.broker.as_ref().expect("a coordinator was started");
+    let subscription = ConsumerProtocolSubscription {
+        topics: vec![deletion.topic.clone()],
+        ..Default::default()
+    };
+    let mut encoded = BytesMut::new();
+    encoded.put_i16(0);
+    subscription
+        .encode(&mut encoded, 0)
+        .expect("encode subscription");
+    let encoded = Bytes::from(encoded.to_vec());
+    let timeouts = ClassicTimeouts {
+        rebalance: krabka_units::millis(1_500),
+        ..Default::default()
+    };
+    let bootstrap = broker
         .client
         .send(
             classic_join_request()
-                .group_id(("g5").into())
-                .timeouts(ClassicTimeouts {
-                    rebalance: krabka_units::millis(1_500),
-                    ..Default::default()
-                })
-                .protocols(vec![join_protocol("range", sub_bytes.clone())])
+                .group_id(deletion.group.clone())
+                .timeouts(timeouts)
+                .protocols(vec![join_protocol("range", encoded.clone())])
                 .call(),
         )
         .await
         .expect("JoinGroup1");
-    // First JoinGroup with empty member_id returns MEMBER_ID_REQUIRED (79).
-    let mid = required_member_id(r1.error_code, r1.member_id.clone());
-
-    // Re-join with the assigned member_id → become an actual member.
-    let r2 = p
+    let joined = broker
         .client
         .send(
             classic_join_request()
-                .group_id(("g5").into())
-                .member_id(mid)
-                .timeouts(ClassicTimeouts {
-                    rebalance: krabka_units::millis(1_500),
-                    ..Default::default()
-                })
-                .protocols(vec![join_protocol("range", sub_bytes)])
+                .group_id(deletion.group.clone())
+                .member_id(bootstrap.member_id.clone())
+                .timeouts(timeouts)
+                .protocols(vec![join_protocol("range", encoded)])
                 .call(),
         )
         .await
         .expect("JoinGroup2");
-    assert!(r2.error_code == 0);
+    deletion.bootstrap = Some(bootstrap);
+    deletion.subscriber = Some(joined);
+}
 
-    // OffsetDelete on the subscribed topic → GROUP_SUBSCRIBED_TO_TOPIC.
-    let resp = p
-        .client
-        .send(offset_delete_request("g5", vec![offset_delete_topic(
-            "t5",
-            vec![offset_delete_partition(0)],
-        )]))
-        .await
-        .expect("OffsetDelete");
-    check!(resp.error_code == 0, "top-level NONE");
-    check!(
-        resp.topics[0].partitions[0].error_code == 86,
-        "GROUP_SUBSCRIBED_TO_TOPIC (86)"
+#[then("membership bootstrap assigns an id and the subscriber joins successfully")]
+fn subscribed(deletion: &OffsetDeletion) {
+    let bootstrap = deletion
+        .bootstrap
+        .as_ref()
+        .expect("membership bootstrap completed");
+    let member = required_member_id(bootstrap.error_code, bootstrap.member_id.clone());
+    assert!(!member.is_empty());
+    assert!(
+        deletion
+            .subscriber
+            .as_ref()
+            .expect("subscription JoinGroup completed")
+            .error_code
+            == 0
     );
+}
 
-    // Offset is unchanged.
-    check!(
-        fetch_offset(&p, "g5", "t5", 0).await == 9,
-        "offset survived"
-    );
+async fn stop_offset_deletion(deletion: OffsetDeletion) {
+    deletion
+        .broker
+        .expect("a coordinator was started")
+        .broker
+        .shutdown()
+        .await;
+}
 
-    p.broker.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "Deleting one inactive-group partition preserves the others"
+)]
+#[tokio::test]
+async fn delete_offsets_from_empty_group_round_trip(deletion: OffsetDeletion) {
+    stop_offset_deletion(deletion).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "An unknown group is refused before partition processing"
+)]
+#[tokio::test]
+async fn delete_offsets_unknown_group_returns_group_id_not_found(deletion: OffsetDeletion) {
+    stop_offset_deletion(deletion).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "An existing group still receives a missing-topic partition error"
+)]
+#[tokio::test]
+async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition(deletion: OffsetDeletion) {
+    stop_offset_deletion(deletion).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "An invalid partition is refused before a valid partition is deleted"
+)]
+#[tokio::test]
+async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition(
+    deletion: OffsetDeletion,
+) {
+    stop_offset_deletion(deletion).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "A subscribed topic refuses deletion and retains its committed offset"
+)]
+#[tokio::test]
+async fn delete_offsets_for_subscribed_topic_returns_group_subscribed(deletion: OffsetDeletion) {
+    stop_offset_deletion(deletion).await;
 }

@@ -137,36 +137,62 @@ mod tests {
         check!(md.contains("split-brain") || md.contains("Split-brain"));
     }
 
-    #[test]
-    fn renders_all_three_scenarios() {
-        let md = failure_scenarios_md();
+    struct DiagramScenario {
+        traces: Vec<ScenarioTrace>,
+        markdown: String,
+    }
+
+    #[rstest::fixture]
+    fn diagrams() -> DiagramScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        DiagramScenario {
+            traces: Vec::new(),
+            markdown: String::new(),
+        }
+    }
+
+    #[rstest_bdd_macros::given("the deterministic consensus failure traces")]
+    fn consensus_traces(diagrams: &mut DiagramScenario) {
+        diagrams.traces = scenarios::scenarios();
+    }
+
+    #[rstest_bdd_macros::when("the failure trace slideshow is rendered")]
+    fn render_traces(diagrams: &mut DiagramScenario) {
+        diagrams.markdown.push_str(INTRO);
+        diagrams.markdown.push('\n');
+        for trace in &diagrams.traces {
+            render_scenario(&mut diagrams.markdown, trace);
+        }
+    }
+
+    #[rstest_bdd_macros::then(
+        "the slideshow includes reordered and duplicate delivery with invariants and outcomes"
+    )]
+    fn scenario_narratives(diagrams: &DiagramScenario) {
         for needle in [
             "Reordered message delivery",
             "Duplicate message delivery",
             "**Invariant:**",
             "**Outcome:**",
         ] {
-            assert2::assert!(md.contains(needle));
+            assert2::assert!(diagrams.markdown.contains(needle));
         }
     }
 
-    #[test]
-    fn emits_a_generated_diagram_per_scenario() {
-        // Each of the three scenarios renders one generated `{% mermaid() %}`
-        // sequence diagram, plus the split-brain scenario leads with one
-        // hand-authored contrast diagram — four mermaid blocks in total. This
-        // pins `render_diagram`'s output specifically: if it stopped emitting,
-        // only the single hand-authored contrast block would remain.
-        let md = failure_scenarios_md();
+    #[rstest_bdd_macros::then("three generated diagrams and the split-brain contrast are present")]
+    fn generated_diagrams(diagrams: &DiagramScenario) {
+        let md = &diagrams.markdown;
         let mermaid_blocks = md.matches("{% mermaid() %}").count();
         check!(
             mermaid_blocks == 4,
             "expected 3 generated diagrams + 1 contrast, got {mermaid_blocks}"
         );
-        // A generated diagram declares its participants and draws message
-        // arrows — content the hand-authored contrast for a single scenario
-        // cannot account for on its own (e.g. the reordered/duplicate scenarios).
         check!(md.matches("participant N").count() >= 6);
         check!(md.contains("->>"));
+        // Keep the public renderer covered as well as each trace's rendering.
+        check!(*md == failure_scenarios_md());
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/failure_diagrams", fixtures = [diagrams: DiagramScenario]);
 }

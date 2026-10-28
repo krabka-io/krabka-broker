@@ -162,11 +162,12 @@ mod tests {
             API_KEY_SASL_HANDSHAKE,
             test_support::{
                 HandshakeApiKey, HandshakeApiVersion, HandshakeHeader, read_request_from_frame,
-                read_response_frame, request_frame,
+                read_response_frame,
             },
         },
         assert2::assert,
-        bytes::{BufMut, Bytes},
+        bytes::BufMut,
+        std::mem,
         tokio::io,
     };
 
@@ -279,145 +280,167 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn read_kafka_request_decodes_nonflex_and_flexible_headers() {
-        let nonflex = request_frame()
-            .correlation(42)
-            .maybe_client_id(None)
-            .body(b"plain-body")
-            .call();
-        let decoded = read_request_from_frame(nonflex)
-            .await
-            .expect("nonflex request");
-        assert!(decoded == request(17, 1, 42, b"plain-body"));
-
-        let flex = request_frame()
-            .api_key(36)
-            .api_version(2)
-            .correlation(43)
-            .header(HandshakeHeader::Flexible)
-            .body(b"auth-body")
-            .call();
-        let decoded = read_request_from_frame(flex).await.expect("flex request");
-        assert!(decoded == request(36, 2, 43, b"auth-body"));
-
-        let mut inner = bytes::BytesMut::new();
-        RequestHeader {
-            request_api_key: API_KEY_API_VERSIONS,
-            request_api_version: 3,
-            correlation_id: 44,
-            client_id: Some("c".to_owned()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![
-                krabka_protocol::UnknownTaggedField {
-                    tag: 300,
-                    bytes: Bytes::from_static(b"tag-payload"),
-                },
-            ]),
-        }
-        .encode(&mut inner, 2)
-        .expect("encode flexible request header with tag");
-        inner.extend_from_slice(b"api-body");
-        let mut tagged = Vec::new();
-        tagged.extend_from_slice(
-            &u32::try_from(inner.len())
-                .expect("frame fits u32")
-                .to_be_bytes(),
-        );
-        tagged.extend_from_slice(&inner);
-        let decoded = read_request_from_frame(tagged)
-            .await
-            .expect("tagged flexible request");
-        assert!(decoded == request(API_KEY_API_VERSIONS, 3, 44, b"api-body"));
+    #[derive(Default)]
+    struct HandshakeRequestFrame {
+        frame: Vec<u8>,
+        stream: Option<io::DuplexStream>,
+        decoded: Option<Result<KafkaRequest, RaftHandshakeError>>,
     }
 
-    #[tokio::test]
-    async fn read_kafka_request_rejects_short_and_truncated_headers() {
-        for payload_len in 0..4 {
-            let mut frame = Vec::new();
-            frame.extend_from_slice(&u32::try_from(payload_len).unwrap().to_be_bytes());
-            frame.resize(4 + payload_len, 0);
-            let got = read_request_from_frame(frame).await;
-            assert!(
-                matches!(got, Err(RaftHandshakeError::Protocol(_))),
-                "want protocol error for {payload_len}-byte header, got {got:?}"
-            );
-        }
-
-        let mut short = Vec::new();
-        short.extend_from_slice(&9u32.to_be_bytes());
-        short.extend_from_slice(&[0; 9]);
-
-        let mut truncated_client = Vec::new();
-        truncated_client.extend_from_slice(&12u32.to_be_bytes());
-        truncated_client.extend_from_slice(&17i16.to_be_bytes());
-        truncated_client.extend_from_slice(&1i16.to_be_bytes());
-        truncated_client.extend_from_slice(&7i32.to_be_bytes());
-        truncated_client.extend_from_slice(&3i16.to_be_bytes());
-        truncated_client.extend_from_slice(b"xy");
-
-        let missing_tag = request_frame()
-            .api_key(36)
-            .api_version(2)
-            .correlation(44)
-            .call();
-
-        for frame in [short, truncated_client, missing_tag] {
-            let got = read_request_from_frame(frame).await;
-            assert!(
-                matches!(got, Err(RaftHandshakeError::Protocol(_))),
-                "want protocol error, got {got:?}"
-            );
-        }
+    #[rstest::fixture]
+    fn handshake_request_frame() -> HandshakeRequestFrame {
+        // Each peer presents fresh bytes and observes one request read.
+        HandshakeRequestFrame::default()
     }
 
-    /// A size prefix over the limit fails as a SASL failure, before any of the
-    /// frame is read: the stream holds the four size bytes and nothing else, so
-    /// a reader that tried to fill the frame would fail with an I/O error. The
-    /// limit is inclusive, and a prefix that reads as a negative Kafka int is
-    /// over it.
-    #[yare::parameterized(
-        exact_limit = { 4096_u32, false },
-        one_over_limit = { 4097, true },
-        maximum_u32 = { u32::MAX, true },
-        negative_kafka_length = { i32::MIN.cast_unsigned(), true },
-    )]
-    #[test_macro(tokio::test)]
-    async fn read_kafka_request_refuses_a_frame_over_the_sasl_receive_limit(
-        size: u32,
-        refused: bool,
+    #[rstest_bdd_macros::given("the controller peer sent Kafka frame hex {frame}")]
+    fn supplied_handshake_frame(
+        handshake_request_frame: &mut HandshakeRequestFrame,
+        frame: String,
     ) {
-        let (mut client, mut server) = io::duplex(64);
+        handshake_request_frame.frame =
+            hex::decode(frame).expect("explicit complete Kafka frame bytes");
+    }
+
+    #[rstest_bdd_macros::given(
+        "the controller peer sent size prefix {size} and closed without a payload"
+    )]
+    async fn supplied_handshake_size(
+        handshake_request_frame: &mut HandshakeRequestFrame,
+        size: u32,
+    ) {
+        let (mut client, server) = io::duplex(64);
         client
             .write_all(&size.to_be_bytes())
             .await
-            .expect("write the size prefix");
-        // Closing the writer ends the stream, so a reader that goes on to
-        // fill an admitted frame fails at once instead of waiting.
+            .expect("write size prefix");
         drop(client);
-        let got = read_kafka_request(&mut server, 4096).await;
-        assert2::assert!(
-            matches!(got, Err(RaftHandshakeError::Sasl(_))) == refused,
-            "a {size}-byte frame: {got:?}"
+        handshake_request_frame.stream = Some(server);
+    }
+
+    #[rstest_bdd_macros::when("the controller handshake reads the Kafka request frame")]
+    async fn read_supplied_handshake_frame(handshake_request_frame: &mut HandshakeRequestFrame) {
+        handshake_request_frame.decoded =
+            Some(read_request_from_frame(mem::take(&mut handshake_request_frame.frame)).await);
+    }
+
+    #[rstest_bdd_macros::when(
+        "the controller handshake admits a frame with SASL receive limit 4096"
+    )]
+    async fn admit_supplied_handshake_frame(handshake_request_frame: &mut HandshakeRequestFrame) {
+        handshake_request_frame.decoded = Some(
+            read_kafka_request(
+                handshake_request_frame
+                    .stream
+                    .as_mut()
+                    .expect("peer stream was given"),
+                4096,
+            )
+            .await,
         );
     }
 
-    #[tokio::test]
-    async fn read_kafka_request_accepts_exact_client_id_end_boundary() {
-        let frame = request_frame()
-            .correlation(45)
-            .maybe_client_id(Some(Some(&b"client"[..])))
-            .call();
-        let decoded = read_request_from_frame(frame).await.expect("exact header");
-        assert!(decoded == request(17, 1, 45, b""));
+    #[rstest_bdd_macros::then(
+        "the request has API {key} version {version}, correlation {correlation}, and body {body}"
+    )]
+    fn decoded_handshake_frame(
+        handshake_request_frame: &HandshakeRequestFrame,
+        key: i16,
+        version: i16,
+        correlation: i32,
+        body: String,
+    ) {
+        let body = if body == "empty" {
+            b"".as_slice()
+        } else {
+            body.as_bytes()
+        };
+        let actual = handshake_request_frame
+            .decoded
+            .as_ref()
+            .expect("request frame was read")
+            .as_ref()
+            .expect("valid request frame");
+        assert!(*actual == request(key, version, correlation, body));
     }
 
+    #[rstest_bdd_macros::then(
+        "the controller handshake rejects the malformed request as a protocol error"
+    )]
+    fn refused_handshake_frame(handshake_request_frame: &HandshakeRequestFrame) {
+        assert!(matches!(
+            handshake_request_frame
+                .decoded
+                .as_ref()
+                .expect("request frame was read"),
+            Err(RaftHandshakeError::Protocol(_))
+        ));
+    }
+
+    #[rstest_bdd_macros::then("frame admission reaches {outcome}")]
+    fn handshake_size_admission(handshake_request_frame: &HandshakeRequestFrame, outcome: String) {
+        let actual = handshake_request_frame
+            .decoded
+            .as_ref()
+            .expect("size prefix was admitted");
+        match outcome.as_str() {
+            "SASL receive-size failure" => {
+                assert!(matches!(actual, Err(RaftHandshakeError::Sasl(_))));
+            }
+            "payload reading after an admitted prefix" => {
+                assert!(!matches!(actual, Err(RaftHandshakeError::Sasl(_))));
+            }
+            other => panic!("unknown expected admission outcome {other}"),
+        }
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame/valid_requests.feature",
+        name = "Read a valid Kafka header and payload"
+    )]
     #[tokio::test]
-    async fn read_kafka_request_accepts_exact_header_prefix_frame() {
-        // A null client id and empty body make the frame exactly 10 bytes,
-        // the minimum legal v1 request header.
-        let frame = request_frame().correlation(46).maybe_client_id(None).call();
-        let decoded = read_request_from_frame(frame).await.expect("exact prefix");
-        assert!(decoded == request(17, 1, 46, b""));
+    async fn decoded_controller_request(
+        handshake_request_frame: HandshakeRequestFrame,
+        frame: String,
+        key: i16,
+        version: i16,
+        correlation: i32,
+        body: String,
+    ) {
+        let _ = (
+            handshake_request_frame,
+            frame,
+            key,
+            version,
+            correlation,
+            body,
+        );
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame/malformed_requests.feature",
+        name = "Refuse a malformed Kafka request header"
+    )]
+    #[tokio::test]
+    async fn refused_controller_request(
+        handshake_request_frame: HandshakeRequestFrame,
+        case: String,
+        frame: String,
+    ) {
+        let _ = (handshake_request_frame, case, frame);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame/receive_limit.feature",
+        name = "Check the inclusive SASL receive-size limit before payload reads"
+    )]
+    #[tokio::test]
+    async fn controller_request_receive_limit(
+        handshake_request_frame: HandshakeRequestFrame,
+        size: u32,
+        outcome: String,
+    ) {
+        let _ = (handshake_request_frame, size, outcome);
     }
 
     #[tokio::test]

@@ -49,6 +49,10 @@ tracing-subscriber = { workspace = true }
 assert2 = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 krabka-ids = { version = "0.7.0" }
 krabka-broker = { version = "1.1.1", path = "../broker" }
 tempfile = { workspace = true }

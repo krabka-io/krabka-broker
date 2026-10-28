@@ -8,34 +8,19 @@
 
 use {
     crate::{
-        cluster_lock,
+        OperatorElectionScenario, cluster_lock, operator_election,
         support::{self, controller_voters, topics::AssignedTopicSetup},
         wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
         wire::create_topic_plaintext,
     },
     krabka_broker::Broker,
-    std::net::SocketAddr,
     tokio::net::TcpSocket,
 };
-
-/// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
-///
-/// The cluster sets `auto_leader_rebalance_enable = true`,
-/// and `leader_imbalance_check_interval = krabka_units::secs(1)`.
-///
-/// Scenario:
-/// 1. Create an rf=2 topic over the wire. With 3 registered brokers,
-///    round-robin assigns `replicas = [1, 2]`, so broker 1 is the preferred
-///    leader.
-/// 2. Shut broker 1 down. Broker 2 becomes partition leader.
-/// 3. Revive broker 1 with Rejoin. It catches up into the ISR.
-/// 4. The background rebalance ticker runs with interval=1s and threshold=0%.
-///    It fires within about 2 ticks and submits `ElectLeaders Preferred`
-///    internally.
-/// 5. Within 15s, broker 1 must be the partition leader again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn auto_rebalance_restores_preferred_leader() {
-    let _g = cluster_lock().lock().await;
+#[rstest_bdd_macros::given(
+    "three static plaintext voters enable automatic leader rebalance every second and foo-rebalance partition 0 is led by preferred replica 1 with replicas 1 and 2"
+)]
+async fn automatically_rebalanced_cluster(operator_election: &mut OperatorElectionScenario) {
+    operator_election.lock = Some(cluster_lock().lock().await);
 
     support::init_tracing();
 
@@ -130,6 +115,17 @@ async fn auto_rebalance_restores_preferred_leader() {
     wait_partition_leader(&h0, topic, 0, 1).await;
     eprintln!("initial partition leader is broker 1 (preferred)");
 
+    operator_election.cluster = vec![(h0, cfg0, dir0), (h1, cfg1, dir1), (h2, cfg2, dir2)];
+}
+#[rstest_bdd_macros::when(
+    "preferred broker 1 stops and rejoins its static quorum until its replica returns to the ISR"
+)]
+async fn restart_automatically_rebalanced_replica(
+    operator_election: &mut OperatorElectionScenario,
+) {
+    let (h0, cfg0, directory) = operator_election.cluster.remove(0);
+    let h1 = &operator_election.cluster[0].0;
+    let topic = "foo-rebalance";
     // ── Phase 3: kill broker 1 (preferred leader). ────────────────────────
     h0.shutdown().await;
     // Take broker 1's ports back the moment it lets go of them, so that
@@ -167,23 +163,25 @@ async fn auto_rebalance_restores_preferred_leader() {
     eprintln!("broker 1 rejoined; waiting for ISR expansion");
 
     // Wait for broker 1 to be back in the ISR (visible from broker 2's image).
-    wait_isr_contains(&h1, topic, 0, 1).await;
+    wait_isr_contains(h1, topic, 0, 1).await;
     eprintln!("broker 1 back in ISR; waiting for auto-rebalance tick to fire");
 
-    // ── Phase 5: wait for auto-rebalance to restore broker 1 as leader. ──
-    // The ticker fires every 1s with threshold=0%; observe the committed
-    // metadata image on a surviving broker reflect broker 1 as leader again.
-    wait_partition_leader(&h1, topic, 0, 1).await;
-    eprintln!("auto-rebalance restored preferred leader (broker 1)");
-
-    // Clean up.
-    h0_new.shutdown().await;
-    h1.shutdown().await;
-    h2.shutdown().await;
-    drop(dir0);
-    drop(dir1);
-    drop(dir2);
+    operator_election.revived = Some(h0_new);
+    operator_election.retired_directory = Some(directory);
 }
+#[rstest_bdd_macros::then(
+    "the background rebalance ticker restores broker 1 as foo-rebalance partition 0 leader without an operator RPC"
+)]
+async fn automatically_restored_partition_leader(operator_election: &mut OperatorElectionScenario) {
+    wait_partition_leader(&operator_election.cluster[0].0, "foo-rebalance", 0, 1).await;
+    operator_election.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/automatic_leader_rebalance.feature",
+    name = "A rejoined preferred replica regains leadership through the background ticker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auto_rebalance_restores_preferred_leader(operator_election: OperatorElectionScenario) {}
 
 /// Binds `addr` again, without listening on it, as soon as the broker that
 /// listened there has shut down.
@@ -212,3 +210,5 @@ fn reserve_vacated_port(addr: SocketAddr) -> TcpSocket {
         .unwrap_or_else(|e| panic!("re-bind vacated port {addr}: {e:?}"));
     socket
 }
+
+use std::net::SocketAddr;

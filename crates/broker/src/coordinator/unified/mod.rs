@@ -47,6 +47,9 @@ mod type_lock;
 mod coordinator_replay_model;
 
 #[cfg(test)]
+mod codec_observations;
+
+#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 mod value_version_tests;

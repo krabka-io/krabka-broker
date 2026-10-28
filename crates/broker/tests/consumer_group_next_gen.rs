@@ -13,7 +13,7 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig, codes, coordinator::unified::config::RebalanceProtocol},
+    krabka_broker::{Broker, BrokerConfig, coordinator::unified::config::RebalanceProtocol},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
@@ -90,538 +90,511 @@ fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ConsumerGroupHeartbeat
     }
 }
 
-async fn join_group_on_topic(
-    client: &Client,
-    group: &str,
-    member_id: &str,
-    topic: &str,
-) -> ConsumerGroupHeartbeatResponse {
-    let mut request = heartbeat(group, member_id, 0);
-    request.subscribed_topic_names = Some(vec![topic.into()]);
-    client.send(request).await.unwrap()
+use {
+    krabka_metadata::{GroupConfigRecord, MetadataRecord},
+    krabka_protocol::{
+        owned::{
+            consumer_group_describe_response::ConsumerGroupDescribeResponse,
+            list_groups_response::ListGroupsResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
+    },
+    std::collections::BTreeMap,
+};
+#[derive(Default)]
+struct ConsumerBehavior {
+    broker: Option<krabka_broker::BrokerHandle>,
+    client: Option<Arc<Client>>,
+    responses: BTreeMap<String, Vec<ConsumerGroupHeartbeatResponse>>,
+    described: Option<ConsumerGroupDescribeResponse>,
+    listed: Option<ListGroupsResponse>,
+    late_topic_id: Option<WireUuid>,
+    directory_guard: Option<tempfile::TempDir>,
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_member_full_lifecycle() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t1", 4, "c1").await;
-
-    let mut req = heartbeat("g1", "", 0);
-    req.subscribed_topic_names = Some(vec!["t1".into()]);
-    let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == 0);
-    let member_id = resp.member_id.clone().unwrap();
-    // A new group starts at Kafka's epoch 1, and the join bumps it to 2.
-    assert!(resp.member_epoch == 2);
-    let assigned = resp.assignment.as_ref().unwrap();
-    let total_partitions: usize = assigned
-        .topic_partitions
-        .iter()
-        .map(|t| t.partitions.len())
-        .sum();
-    assert!(total_partitions == 4);
-
-    let mut hb2 = heartbeat("g1", &member_id, 2);
-    hb2.subscribed_topic_names = Some(vec!["t1".into()]);
-    let resp2 = client.send(hb2).await.unwrap();
-    assert!(resp2.error_code == 0);
-    assert!(resp2.member_epoch == 2);
-
-    let leave = heartbeat("g1", &member_id, -1);
-    let resp3 = client.send(leave).await.unwrap();
-    assert!(resp3.error_code == 0);
+#[rstest::fixture]
+fn consumer_behavior() -> ConsumerBehavior {
+    // Member identities, assignments and broker metadata belong to one scenario.
+    ConsumerBehavior::default()
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_members_split_partitions() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t2", 4, "c").await;
-
-    let mut a = heartbeat("g2", "", 0);
-    a.subscribed_topic_names = Some(vec!["t2".into()]);
-    let ra = client.send(a).await.unwrap();
-    assert!(ra.error_code == 0, "A join failed: {:?}", ra.error_code);
-    let mid_a = ra.member_id.clone().unwrap();
-
-    let mut b = heartbeat("g2", "", 0);
-    b.subscribed_topic_names = Some(vec!["t2".into()]);
-    let rb = client.send(b).await.unwrap();
-    assert!(rb.error_code == 0, "B join failed: {:?}", rb.error_code);
-    let mid_b = rb.member_id.clone().unwrap();
-    let b_epoch = rb.member_epoch;
-
-    // A re-heartbeats at its own epoch (1) to learn the rebalanced assignment
-    // and revoke the partitions B's target needs. B's join bumped the group
-    // epoch to 2 and updated A's target, but A's stored member_epoch is still
-    // 1 — we must heartbeat at that epoch.
-    // Each re-heartbeat reports what the member owns, so it is Kafka's full
-    // request and the response carries the assignment.
-    let owned = |response: &ConsumerGroupHeartbeatResponse| {
-        response.assignment.as_ref().map(reported_assignment)
+#[rstest_bdd_macros::given("a consumer broker with protocol policy {policy} and topics {topics}")]
+async fn consumer_broker(consumer_behavior: &mut ConsumerBehavior, policy: String, topics: String) {
+    let topics: Vec<(String, i32)> =
+        serde_json::from_str(&topics).expect("topics and partition counts");
+    let BootedBroker {
+        broker,
+        bootstrap,
+        dir,
+    } = if policy == "classic-only" {
+        let dir = tempfile::tempdir().expect("broker directory");
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.next_gen_consumer_group.rebalance_protocols = vec![RebalanceProtocol::Classic];
+        let broker = Broker::start(config).await.expect("classic-only broker");
+        let bootstrap = broker.listen_addr().to_string();
+        BootedBroker {
+            broker,
+            bootstrap,
+            dir,
+        }
+    } else {
+        assert!(policy == "classic-and-consumer");
+        boot().await
     };
-    let mut a3 = heartbeat("g2", &mid_a, ra.member_epoch);
-    a3.subscribed_topic_names = Some(vec!["t2".into()]);
-    a3.topic_partitions = owned(&ra);
-    let ra3 = client.send(a3).await.unwrap();
-    assert!(ra3.error_code == 0, "A re-hb failed: {:?}", ra3.error_code);
-    // A acknowledges the revocation by reporting only what it now owns.
-    let mut a4 = heartbeat("g2", &mid_a, ra3.member_epoch);
-    a4.subscribed_topic_names = Some(vec!["t2".into()]);
-    a4.topic_partitions = owned(&ra3);
-    let ra4 = client.send(a4).await.unwrap();
-    assert!(ra4.error_code == 0, "A ack failed: {:?}", ra4.error_code);
-
-    // B re-heartbeats to acquire the partitions A just released. Per KIP-848 the
-    // coordinator withholds a partition from its new owner until the previous
-    // owner has revoked it, so B's *join* response (rb) intentionally carries
-    // fewer partitions than B's target; B converges on this next heartbeat, now
-    // that A's re-heartbeat above revoked them.
-    let mut b3 = heartbeat("g2", &mid_b, b_epoch);
-    b3.subscribed_topic_names = Some(vec!["t2".into()]);
-    b3.topic_partitions = owned(&rb);
-    let rb3 = client.send(b3).await.unwrap();
-    assert!(rb3.error_code == 0, "B re-hb failed: {:?}", rb3.error_code);
-
-    let parts_a: usize = ra3
-        .assignment
-        .unwrap()
-        .topic_partitions
-        .iter()
-        .map(|t| t.partitions.len())
-        .sum();
-    let parts_b: usize = rb3
-        .assignment
-        .unwrap()
-        .topic_partitions
-        .iter()
-        .map(|t| t.partitions.len())
-        .sum();
-    assert!(parts_a + parts_b == 4);
+    let client = Arc::new(connect_client(&bootstrap, Some("c")).await);
+    for (topic, partitions) in topics {
+        create_topic(&client, &topic, partitions).await;
+    }
+    consumer_behavior.client = Some(client);
+    consumer_behavior.broker = Some(broker);
+    consumer_behavior.directory_guard = Some(dir);
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classic_group_locked_against_next_gen() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t3", 2, "c").await;
-
-    // A live classic group that does not use the consumer embedded protocol.
-    // Kafka's `validateOnlineUpgrade` refuses to upgrade it; an empty classic
-    // group would be replaced instead.
+#[derive(serde::Deserialize)]
+struct ConsumerHeartbeatInput {
+    group: String,
+    id: Option<String>,
+    epoch: Option<i32>,
+    topics: Option<Vec<String>>,
+    regex: Option<String>,
+    ownership: String,
+}
+#[rstest_bdd_macros::when("member {member} sends consumer heartbeat {request}")]
+async fn consumer_member_heartbeat(
+    consumer_behavior: &mut ConsumerBehavior,
+    member: String,
+    request: String,
+) {
+    let request: ConsumerHeartbeatInput =
+        serde_json::from_str(&request).expect("native consumer heartbeat inputs");
+    let previous = consumer_behavior
+        .responses
+        .get(&member)
+        .and_then(|responses| responses.last());
+    let id = request
+        .id
+        .or_else(|| previous?.member_id.clone())
+        .unwrap_or_default();
+    let epoch = request
+        .epoch
+        .unwrap_or_else(|| previous.expect("member's acknowledged epoch").member_epoch);
+    let owned = match request.ownership.as_str() {
+        "previous-assignment" => previous
+            .expect("previous member response")
+            .assignment
+            .as_ref()
+            .map(reported_assignment),
+        "omitted" => None,
+        "empty" => Some(vec![]),
+        other => panic!("unknown owned-partition report {other}"),
+    };
+    let mut native = heartbeat(&request.group, &id, epoch);
+    native.subscribed_topic_names = request.topics;
+    native.subscribed_topic_regex = request.regex;
+    native.topic_partitions = owned;
+    let response = consumer_behavior
+        .client
+        .as_ref()
+        .expect("consumer client")
+        .send(native)
+        .await
+        .expect("consumer heartbeat");
+    consumer_behavior
+        .responses
+        .entry(member)
+        .or_default()
+        .push(response);
+}
+fn last_consumer_response<'a>(
+    world: &'a ConsumerBehavior,
+    member: &str,
+) -> &'a ConsumerGroupHeartbeatResponse {
+    world
+        .responses
+        .get(member)
+        .expect("member history")
+        .last()
+        .expect("heartbeat executed")
+}
+#[rstest_bdd_macros::then("member {member} receives Kafka code {code}")]
+fn consumer_response_code(consumer_behavior: &ConsumerBehavior, member: String, code: i16) {
+    assert!(last_consumer_response(consumer_behavior, &member).error_code == code);
+}
+#[rstest_bdd_macros::then("member {member} receives epoch {epoch}")]
+fn consumer_response_epoch(consumer_behavior: &ConsumerBehavior, member: String, epoch: i32) {
+    assert!(last_consumer_response(consumer_behavior, &member).member_epoch == epoch);
+}
+#[rstest_bdd_macros::then("member {member} receives {count} assigned partitions")]
+fn consumer_assignment_count(consumer_behavior: &ConsumerBehavior, member: String, count: usize) {
+    let assignment = last_consumer_response(consumer_behavior, &member)
+        .assignment
+        .as_ref()
+        .expect("assignment present");
+    assert!(
+        assignment
+            .topic_partitions
+            .iter()
+            .map(|topic| topic.partitions.len())
+            .sum::<usize>()
+            == count
+    );
+}
+#[rstest_bdd_macros::then("member {member} receives id {identity}")]
+fn consumer_echoed_identity(
+    consumer_behavior: &ConsumerBehavior,
+    member: String,
+    identity: String,
+) {
+    assert!(
+        last_consumer_response(consumer_behavior, &member)
+            .member_id
+            .as_deref()
+            == Some(identity.as_str())
+    );
+}
+#[rstest_bdd_macros::then("member {member} receives exact message {message}")]
+fn consumer_exact_message(consumer_behavior: &ConsumerBehavior, member: String, message: String) {
+    assert!(
+        last_consumer_response(consumer_behavior, &member)
+            .error_message
+            .as_deref()
+            == Some(message.as_str())
+    );
+}
+#[rstest_bdd_macros::then(
+    "member {member} receives diagnostic fragment {message} without admission"
+)]
+fn consumer_refused_pattern(consumer_behavior: &ConsumerBehavior, member: String, message: String) {
+    let response = last_consumer_response(consumer_behavior, &member);
+    check!(
+        response
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&message)
+    );
+    check!(response.member_id.is_none() || response.member_epoch == 0);
+}
+#[rstest_bdd_macros::then(
+    "member {member} response {index} and member {other} response {other_index} assign {count} partitions in total"
+)]
+fn consumer_split_assignment(
+    consumer_behavior: &ConsumerBehavior,
+    member: String,
+    index: usize,
+    other: String,
+    other_index: usize,
+    count: usize,
+) {
+    let count_for = |id: &str, index: usize| {
+        consumer_behavior.responses[id][index]
+            .assignment
+            .as_ref()
+            .expect("assignment present")
+            .topic_partitions
+            .iter()
+            .map(|topic| topic.partitions.len())
+            .sum::<usize>()
+    };
+    assert!(count_for(&member, index) + count_for(&other, other_index) == count);
+}
+#[rstest_bdd_macros::given(
+    "a live classic group {group} uses protocol type connect with protocol default"
+)]
+async fn live_connect_group(consumer_behavior: &mut ConsumerBehavior, group: String) {
+    let client = consumer_behavior.client.as_ref().expect("client");
     let join = |member_id: String| {
         classic_join_request()
-            .group_id(("g3").into())
+            .group_id(group.clone())
             .member_id(member_id)
             .timeouts(ClassicTimeouts {
                 rebalance: krabka_units::millis(60_000),
                 ..Default::default()
             })
-            .protocol_type(("connect").into())
+            .protocol_type("connect".into())
             .protocols(vec![JoinGroupRequestProtocol {
                 name: "default".into(),
                 ..Default::default()
             }])
             .call()
     };
-    let required = client.send(join(String::new())).await.unwrap();
-    let joined = client.send(join(required.member_id)).await.unwrap();
-    assert!(joined.error_code == 0, "{joined:?}");
-
-    let mut req = heartbeat("g3", "", 0);
-    req.subscribed_topic_names = Some(vec!["t3".into()]);
-    let resp = client.send(req).await.unwrap();
-    assert!(
-        (resp.error_code, resp.error_message.as_deref())
-            == (
-                codes::GROUP_ID_NOT_FOUND,
-                Some(
-                    "Cannot upgrade classic group g3 to consumer group because the group does \
-                     not use the consumer embedded protocol."
-                )
-            )
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kill_switch_returns_unsupported_version() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.next_gen_consumer_group.rebalance_protocols = vec![RebalanceProtocol::Classic];
-    let broker = Broker::start(config).await.unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    let client = Arc::new(connect_client(bootstrap.as_str(), Some("c")).await);
-
-    let mut req = heartbeat("g4", "", 0);
-    req.subscribed_topic_names = Some(vec!["t".into()]);
-    let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == codes::UNSUPPORTED_VERSION);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_after_join() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t5", 2, "c").await;
-
-    let mut req = heartbeat("g5", "", 0);
-    req.subscribed_topic_names = Some(vec!["t5".into()]);
-    let _ = client.send(req).await.unwrap();
-
-    let desc = client
-        .send(ConsumerGroupDescribeRequest {
-            group_ids: vec!["g5".into()],
-            include_authorized_operations: false,
-            ..Default::default()
-        })
+    let required = client
+        .send(join(String::new()))
         .await
-        .unwrap();
-    assert!(desc.groups.len() == 1);
-    check!(desc.groups[0].error_code == 0);
-    check!(desc.groups[0].group_state == "Stable");
+        .expect("classic member identity");
+    let joined = client
+        .send(join(required.member_id))
+        .await
+        .expect("classic join");
+    assert!(joined.error_code == 0);
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_old_epoch_is_fenced() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t6", 2, "c").await;
-
-    // A joins; group_epoch goes 1→2, A's member_epoch = 2.
-    let mut req = heartbeat("g6", "", 0);
-    req.subscribed_topic_names = Some(vec!["t6".into()]);
-    let r = client.send(req).await.unwrap();
-    assert!(r.error_code == 0);
-    let mid = r.member_id.unwrap();
-
-    // B joins; group_epoch goes 2→3, B's member_epoch = 3, A's is still 2.
-    let mut req2 = heartbeat("g6", "", 0);
-    req2.subscribed_topic_names = Some(vec!["t6".into()]);
-    let rb = client.send(req2).await.unwrap();
-    assert!(rb.error_code == 0);
-
-    // A's heartbeat at epoch 2 succeeds and tells A to give up half of its
-    // partitions. Kafka's `CurrentAssignmentBuilder` keeps A at epoch 2 until
-    // A reports an owned set without them.
-    let mut catch_up = heartbeat("g6", &mid, 2);
-    catch_up.subscribed_topic_names = Some(vec!["t6".into()]);
-    let rc = client.send(catch_up).await.unwrap();
-    assert!(rc.error_code == 0);
-    assert!(
-        rc.member_epoch == 2,
-        "A stays at epoch 2 while it owns partitions it must revoke"
-    );
-    let kept = rc.assignment.expect("A is told its assignment shrank");
-
-    // A reports what it keeps, and moves to epoch 3.
-    let mut acknowledge = heartbeat("g6", &mid, 2);
-    acknowledge.topic_partitions = Some(reported_assignment(&kept));
-    let ra = client.send(acknowledge).await.unwrap();
-    assert!(ra.error_code == 0);
-    assert!(ra.member_epoch == 3, "A moves to epoch 3 once it revoked");
-
-    // Now A re-heartbeats at the OLD epoch 2 and reports no owned partitions;
-    // A's stored epoch is 3. Kafka's `throwIfConsumerGroupMemberEpochIsInvalid`
-    // accepts the previous epoch only with owned partitions inside the
-    // assignment, so this heartbeat is fenced.
-    let stale = heartbeat("g6", &mid, 2);
-    let resp = client.send(stale).await.unwrap();
-    assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_join_with_client_member_id_echoes_and_assigns() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("tc", 2, "c").await;
-
-    // Client supplies its own member id (GA KIP-848 semantics).
-    let resp = join_group_on_topic(&client, "gc", "client-generated-id", "tc").await;
-
-    assert!(resp.error_code == 0, "client-id first-join failed");
-    assert!(
-        resp.member_id.as_deref() == Some("client-generated-id"),
-        "broker must echo the client-supplied member id"
-    );
-    let parts: usize = resp
-        .assignment
-        .expect("assignment present")
-        .topic_partitions
-        .iter()
-        .map(|t| t.partitions.len())
-        .sum();
-    assert!(
-        parts == 2,
-        "single member should be assigned both partitions"
+#[rstest_bdd_macros::when("the client describes consumer group {group}")]
+async fn describe_consumer_group(consumer_behavior: &mut ConsumerBehavior, group: String) {
+    consumer_behavior.described = Some(
+        consumer_behavior
+            .client
+            .as_ref()
+            .expect("client")
+            .send(ConsumerGroupDescribeRequest {
+                group_ids: vec![group],
+                include_authorized_operations: false,
+                ..Default::default()
+            })
+            .await
+            .expect("describe group"),
     );
 }
-
-/// `kafka-consumer-groups.sh --list` sends `ListGroups` (`api_key` 16) with
-/// `types_filter = ["consumer"]`. A live next-gen consumer group must appear in
-/// that response with `group_type == "consumer"`. It must NOT appear when the
-/// request filters on `["share"]`, and it must appear exactly once with no
-/// filter.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_includes_next_gen_consumer_group() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("tlist", 2, "c").await;
-
-    // Join a next-gen consumer group so it is registered in the coordinator.
-    let resp = join_group_on_topic(&client, "glist", "", "tlist").await;
-    assert!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-
-    // types_filter = ["consumer"] → contains glist tagged "consumer".
-    let resp = list_groups_by_type(&client, "consumer").await;
-    let row = resp
+#[rstest_bdd_macros::then(
+    "the description contains {count} group with Kafka code {code} and state {state}"
+)]
+fn consumer_described_state(
+    consumer_behavior: &ConsumerBehavior,
+    count: usize,
+    code: i16,
+    state: String,
+) {
+    let response = consumer_behavior
+        .described
+        .as_ref()
+        .expect("description requested");
+    assert!(response.groups.len() == count);
+    check!(response.groups[0].error_code == code);
+    check!(response.groups[0].group_state == state);
+}
+#[rstest_bdd_macros::when("the client lists groups with type filter {kind}")]
+async fn list_consumer_groups(consumer_behavior: &mut ConsumerBehavior, kind: String) {
+    let client = consumer_behavior.client.as_ref().expect("client");
+    consumer_behavior.listed = Some(if kind == "all" {
+        client
+            .send(ListGroupsRequest::default())
+            .await
+            .expect("ListGroups all")
+    } else {
+        list_groups_by_type(client, &kind).await
+    });
+}
+#[rstest_bdd_macros::then("group {group} appears {count} times with type {kind}")]
+fn listed_consumer_group(
+    consumer_behavior: &ConsumerBehavior,
+    group: String,
+    count: usize,
+    kind: String,
+) {
+    let matching = consumer_behavior
+        .listed
+        .as_ref()
+        .expect("groups listed")
         .groups
         .iter()
-        .find(|g| g.group_id == "glist")
-        .unwrap_or_else(|| {
-            panic!(
-                "consumer group glist missing from ListGroups[consumer], got {:?}",
-                resp.groups.iter().map(|g| &g.group_id).collect::<Vec<_>>()
-            )
-        });
-    assert!(
-        row.group_type == "consumer",
-        "expected group_type=consumer, got {:?}",
-        row.group_type
-    );
-
-    // types_filter = ["share"] → glist must NOT appear.
-    let resp = list_groups_by_type(&client, "share").await;
-    let ids: Vec<_> = resp.groups.iter().map(|g| g.group_id.as_str()).collect();
-    assert!(
-        !ids.contains(&"glist"),
-        "consumer group glist must be excluded under types_filter=[share], got {ids:?}",
-    );
-
-    // No filter → glist appears exactly once, tagged "consumer".
-    let resp = client
-        .send(ListGroupsRequest::default())
-        .await
-        .expect("ListGroups[all]");
-    let matches: Vec<_> = resp
-        .groups
-        .iter()
-        .filter(|g| g.group_id == "glist")
-        .collect();
-    assert!(
-        matches.len() == 1,
-        "glist must be listed exactly once, got {} rows",
-        matches.len()
-    );
-    assert!(
-        matches[0].group_type == "consumer",
-        "unfiltered list must tag glist as consumer, got {:?}",
-        matches[0].group_type
-    );
-}
-
-/// KIP-848: a `SubscribedTopicRegex` that does not compile fails the
-/// heartbeat with `INVALID_REGULAR_EXPRESSION` (128) and admits no member.
-///
-/// Kafka's `GroupMetadataManager.throwIfRegularExpressionIsInvalid` compiles
-/// the pattern before it writes any member record. The failure mode this pins
-/// is the opposite one: admitting the member with `NONE` and never assigning
-/// it a partition, which leaves a consumer sitting on an empty assignment
-/// with no diagnostic.
-///
-/// This is the wire test rather than a JVM-lane one because no stock JVM
-/// client can reach the broker check. `KafkaConsumer.subscribe(Pattern)` and
-/// `kafka-console-consumer --include` both compile the pattern locally with
-/// `java.util.regex`, so an invalid pattern dies in the client with
-/// `PatternSyntaxException` (observed against `apache/kafka:4.3.1`:
-/// `ConsoleConsumer$ConsumerWrapper` compiles at construction, before any
-/// request is sent). Only a compiled 4.x application using the
-/// `SubscriptionPattern` overload sends the string through, and this
-/// repository has no image carrying both a JDK and the 4.x client jars.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
-    let ConsumerCase {
-        broker: _b,
-        dir: _d,
-        client,
-    } = consumer_case("t-badregex", 1, "c-badregex").await;
-
-    for pattern in ["(", "[a-", "a{2,1}"] {
-        let mut req = heartbeat("g-badregex", "", 0);
-        req.subscribed_topic_regex = Some(pattern.into());
-        let resp = client.send(req).await.unwrap();
-        check!(
-            resp.error_code == 128,
-            "pattern {pattern:?} must answer INVALID_REGULAR_EXPRESSION, got {} ({:?})",
-            resp.error_code,
-            resp.error_message
-        );
-        check!(
-            resp.error_message
-                .as_deref()
-                .unwrap_or_default()
-                .contains("is not a valid regular expression"),
-            "pattern {pattern:?} must carry Kafka's message, got {:?}",
-            resp.error_message
-        );
-        check!(
-            resp.member_id.is_none() || resp.member_epoch == 0,
-            "pattern {pattern:?} must not admit a member: {resp:?}"
-        );
+        .filter(|row| row.group_id == group)
+        .collect::<Vec<_>>();
+    assert!(matching.len() == count);
+    for row in matching {
+        assert!(row.group_type == kind);
     }
-
-    // The group is still joinable with a pattern that does compile, so the
-    // refusals above left no member state behind.
-    let mut good = heartbeat("g-badregex", "", 0);
-    good.subscribed_topic_regex = Some("t-bad.*".into());
-    let resp = client.send(good).await.unwrap();
-    assert!(resp.error_code == 0, "valid pattern: {resp:?}");
-    assert!(resp.member_epoch == 1);
 }
-
-/// Kafka's `GroupMetadataManager.onMetadataUpdate`: a member that subscribed
-/// to a topic before the topic existed gets its partitions, with a new member
-/// epoch, at its first heartbeat after the broker applies the topic. It waits
-/// neither for a periodic refresh nor for a session to time out.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
-    let BootedBroker {
-        broker: _b,
-        bootstrap,
-        dir: _d,
-    } = boot().await;
-    let client = connect_client(bootstrap.as_str(), Some("c-late")).await;
-    let mut join = heartbeat("g-late", "", 0);
-    join.subscribed_topic_names = Some(vec!["late".into()]);
-    let joined = client.send(join).await.unwrap();
-    let member_id = joined.member_id.clone().expect("member id");
-    check!(joined.error_code == 0);
-    check!(joined.member_epoch == 2);
-    check!(joined.assignment == Some(Assignment::default()));
-
-    create_topic(&client, "late", 3).await;
+#[rstest_bdd_macros::when(
+    "topic {topic} is created with {partitions} partitions after member {member} joined group {group} at epoch {epoch}"
+)]
+async fn refresh_late_topic(
+    consumer_behavior: &mut ConsumerBehavior,
+    topic: String,
+    partitions: i32,
+    member: String,
+    group: String,
+    epoch: i32,
+) {
+    let client = consumer_behavior.client.as_ref().expect("client");
+    create_topic(client, &topic, partitions).await;
     let metadata = client
-        .send(named_topic_metadata("late"))
+        .send(named_topic_metadata(&topic))
         .await
-        .expect("Metadata");
-    let topic_id = metadata.topics[0].topic_id;
-
-    // The broker refreshes the group when its metadata image holds the topic,
-    // which can be a moment after `CreateTopics` answers. The member keeps
-    // heartbeating at its epoch, as a consumer does, for far less than the
-    // 45 s session timeout.
+        .expect("topic metadata");
+    consumer_behavior.late_topic_id = Some(metadata.topics[0].topic_id);
+    let id = last_consumer_response(consumer_behavior, &member)
+        .member_id
+        .clone()
+        .expect("member identity");
     let created = Instant::now();
     let refreshed = loop {
         let answer = client
-            .send(heartbeat("g-late", &member_id, 2))
+            .send(heartbeat(&group, &id, epoch))
             .await
-            .unwrap();
+            .expect("metadata refresh heartbeat");
         if answer.assignment.is_some() || created.elapsed() > Duration::from_secs(10) {
             break answer;
         }
         time::sleep(Duration::from_millis(20)).await;
     };
-
-    check!(
-        refreshed
-            == ConsumerGroupHeartbeatResponse {
-                member_id: Some(member_id),
-                member_epoch: 3,
-                heartbeat_interval_ms: 5_000,
-                assignment: Some(Assignment {
-                    topic_partitions: vec![TopicPartitions {
-                        topic_id,
-                        partitions: vec![0, 1, 2],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }),
+    consumer_behavior
+        .responses
+        .entry(member)
+        .or_default()
+        .push(refreshed);
+}
+#[rstest_bdd_macros::then(
+    "member {member} receives the complete new-topic response at epoch {epoch} interval {interval} and partitions {partitions}"
+)]
+fn late_topic_response(
+    consumer_behavior: &ConsumerBehavior,
+    member: String,
+    epoch: i32,
+    interval: i32,
+    partitions: String,
+) {
+    let partitions: Vec<i32> = serde_json::from_str(&partitions).expect("expected partition ids");
+    let response = last_consumer_response(consumer_behavior, &member);
+    let expected = ConsumerGroupHeartbeatResponse {
+        member_id: consumer_behavior.responses[&member][0].member_id.clone(),
+        member_epoch: epoch,
+        heartbeat_interval_ms: interval,
+        assignment: Some(Assignment {
+            topic_partitions: vec![TopicPartitions {
+                topic_id: consumer_behavior.late_topic_id.expect("created topic id"),
+                partitions,
                 ..Default::default()
-            }
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    check!(response == &expected);
+}
+#[rstest_bdd_macros::then("member {member} receives an explicit empty assignment")]
+fn empty_consumer_assignment(consumer_behavior: &ConsumerBehavior, member: String) {
+    check!(
+        last_consumer_response(consumer_behavior, &member).assignment
+            == Some(Assignment::default())
     );
 }
-
-/// Kafka's `consumerGroupHeartbeatIntervalMs`: a group's
-/// `consumer.heartbeat.interval.ms` replaces the broker's
-/// `group.consumer.heartbeat.interval.ms` in the heartbeat response of that
-/// group only.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
-    let BootedBroker {
-        broker,
-        bootstrap,
-        dir: _dir,
-    } = boot().await;
-    let client = Arc::new(connect_client(bootstrap.as_str(), Some("c")).await);
-    broker
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: "g-tuned".into(),
-                configs: [
-                    (
-                        "consumer.heartbeat.interval.ms".to_owned(),
-                        "7000".to_owned(),
-                    ),
-                    ("consumer.session.timeout.ms".to_owned(), "50000".to_owned()),
-                ]
-                .into(),
-            },
-        ))
+#[rstest_bdd_macros::given("group {group} has persisted consumer configuration {configs}")]
+async fn tuned_consumer_group(
+    consumer_behavior: &mut ConsumerBehavior,
+    group: String,
+    configs: String,
+) {
+    let configs: BTreeMap<String, String> =
+        serde_json::from_str(&configs).expect("consumer group config");
+    consumer_behavior
+        .broker
+        .as_ref()
+        .expect("broker")
+        .submit_metadata_record_for_test(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+            group_id: group,
+            configs,
+        }))
         .await
-        .expect("set the group config");
-
-    let mut intervals = Vec::new();
-    for group in ["g-tuned", "g-plain"] {
-        let mut join = heartbeat(group, "", 0);
-        join.subscribed_topic_names = Some(vec![]);
-        let answer = client.send(join).await.unwrap();
-        check!(answer.error_code == 0, "{group}: {answer:?}");
-        intervals.push((group, answer.heartbeat_interval_ms));
-    }
-
-    check!(intervals == [("g-tuned", 7_000), ("g-plain", 5_000)]);
+        .expect("group configuration");
+}
+#[rstest_bdd_macros::then("member {member} receives heartbeat interval {interval} milliseconds")]
+fn tuned_consumer_interval(consumer_behavior: &ConsumerBehavior, member: String, interval: i32) {
+    check!(last_consumer_response(consumer_behavior, &member).heartbeat_interval_ms == interval);
+}
+#[rstest_bdd_macros::then("the consumer behavior broker is shut down")]
+async fn finish_consumer_behavior(consumer_behavior: &mut ConsumerBehavior) {
+    drop(consumer_behavior.client.take());
+    consumer_behavior
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
 }
 
-/// A running broker, the directory that backs it and a client connected to it.
-struct ConsumerCase {
-    broker: krabka_broker::BrokerHandle,
-    dir: tempfile::TempDir,
-    client: Arc<Client>,
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "single member full lifecycle"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn single_member_full_lifecycle(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
 }
 
-fn consumer_case(
-    topic: &str,
-    partitions: i32,
-    client_id: &str,
-) -> Pin<Box<impl Future<Output = ConsumerCase>>> {
-    let topic = topic.to_owned();
-    let client_id = client_id.to_owned();
-    Box::pin(async move {
-        let BootedBroker {
-            broker,
-            bootstrap,
-            dir,
-        } = boot().await;
-        let client = Arc::new(connect_client(bootstrap.as_str(), Some(&client_id)).await);
-        create_topic(&client, &topic, partitions).await;
-        ConsumerCase {
-            broker,
-            dir,
-            client,
-        }
-    })
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "two members split partitions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_members_split_partitions(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "classic group locked against next gen"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classic_group_locked_against_next_gen(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "kill switch returns unsupported version"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_switch_returns_unsupported_version(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "describe after join"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_after_join(consumer_behavior: ConsumerBehavior) { let _ = consumer_behavior; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "an old epoch is fenced"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_epoch_is_fenced(consumer_behavior: ConsumerBehavior) { let _ = consumer_behavior; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "first join with client member id echoes and assigns"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_join_with_client_member_id_echoes_and_assigns(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "list groups includes next gen consumer group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_groups_includes_next_gen_consumer_group(consumer_behavior: ConsumerBehavior) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "an invalid subscribed topic regex fails the heartbeat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat(
+    consumer_behavior: ConsumerBehavior,
+) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "a topic created after the member joined reaches its next heartbeat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat(
+    consumer_behavior: ConsumerBehavior,
+) {
+    let _ = consumer_behavior;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "a group config overrides the heartbeat interval of its group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_config_overrides_the_heartbeat_interval_of_its_group(
+    consumer_behavior: ConsumerBehavior,
+) {
+    let _ = consumer_behavior;
 }

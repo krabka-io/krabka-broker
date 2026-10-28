@@ -5,7 +5,7 @@
 
 use {
     crate::{
-        admin_harness::create_topic_helper,
+        admin_harness::{AdminCluster, admin, create_topic_helper},
         support::{
             self,
             fetch::fetch_topic_row,
@@ -14,11 +14,11 @@ use {
                 list_offset_partition, single_partition_list_offsets,
             },
             records::record_count,
-            start_n_node_client,
         },
     },
     assert2::{assert, check},
-    krabka_broker::{NodeId, codes},
+    krabka_broker::{BrokerHandle, NodeId, codes},
+    krabka_client_core::Client,
     krabka_log::name,
     krabka_protocol::{
         owned::{
@@ -30,55 +30,15 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{fs, path::Path},
+    tempfile::TempDir,
 };
 
 /// Request timestamp sentinel (-2) asking where the log starts. Kafka's
 /// `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
 const EARLIEST_TIMESTAMP: i64 = -2;
-
-/// `DeleteRecords`: the test produces 100 records and then trims from offset
-/// 50. The response carries a valid `low_watermark`, and the broker's
-/// `log_start_offset` moves forward.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_records_trims_log_start() {
-    let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
-    let broker = &cluster[0].0;
-
-    create_topic_helper(&client, "t-dr", 1).await;
-
-    // Produce 100 single-record batches through the broker's test helper.
-    broker
-        .produce_records_for_test("t-dr", 0, 100)
-        .await
-        .expect("produce_records_for_test");
-
-    let part_result = trim(&client, "t-dr", 50).await;
-    check!(
-        part_result.error_code == 0,
-        "delete_records error: {:?}",
-        part_result.error_code
-    );
-    // low_watermark must be the resulting log_start_offset after trim.
-    check!(
-        part_result.low_watermark >= 0,
-        "low_watermark should be non-negative, got {}",
-        part_result.low_watermark
-    );
-    check!(
-        part_result.low_watermark <= 50,
-        "low_watermark {} should be <= requested offset 50",
-        part_result.low_watermark
-    );
-
-    let log_start = broker
-        .partition_log_start_for_test("t-dr", 0)
-        .expect("partition exists");
-    assert!(
-        log_start == part_result.low_watermark,
-        "partition log_start_offset should equal low_watermark"
-    );
-}
 
 /// The topic the restart case trims, kept clear of the one above so the two
 /// cases never share a partition directory.
@@ -108,79 +68,6 @@ struct TrimmedView {
     fetch_error_code: i16,
     fetch_log_start_offset: i64,
     fetched_records: usize,
-}
-
-/// A `DeleteRecords` that lands inside the active segment survives a restart.
-///
-/// A trim onto a segment boundary needs nothing durable of its own: the
-/// segments below it are deleted, and the first surviving base offset *is* the
-/// log start. A trim inside a segment has no such witness, so the reopened log
-/// has to read the start back from its own checkpoint. Without that, the broker
-/// serves records an operator already deleted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_trim_inside_the_active_segment_survives_a_restart() {
-    // The directory outlives both brokers, which is what makes the second boot
-    // a restart rather than a fresh cluster.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let records = usize::try_from(RESTART_RECORDS).expect("record count fits usize");
-
-    {
-        let (broker, client) = support::start_with_dir(dir.path()).await;
-        create_topic_helper(&client, RESTART_TOPIC, 1).await;
-        broker
-            .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
-            .await;
-        broker
-            .produce_records_for_test(RESTART_TOPIC, 0, records)
-            .await
-            .expect("produce_records_for_test");
-        // A trim is bounded by the high watermark, so the whole log has to be
-        // acknowledged before the requested offset is reachable.
-        broker
-            .wait_until_high_watermark(RESTART_TOPIC, 0, RESTART_RECORDS)
-            .await;
-
-        check!(
-            segment_base_offsets(dir.path(), RESTART_TOPIC) == vec![0],
-            "the case needs every record in one segment, or a deleted segment \
-             name would carry the trim on its own"
-        );
-
-        let trimmed = trim(&client, RESTART_TOPIC, RESTART_TRIM_TO).await;
-        check!(
-            trimmed.error_code == codes::NONE,
-            "delete_records: {trimmed:?}"
-        );
-        check!(trimmed.low_watermark == RESTART_TRIM_TO);
-        check!(
-            broker.partition_log_start_for_test(RESTART_TOPIC, 0) == Some(RESTART_TRIM_TO),
-            "the trim moved the live partition's log start"
-        );
-
-        broker.shutdown().await;
-    }
-
-    // Nothing about the trim is in the segment names: the file that holds the
-    // deleted records is still there, and it still starts at 0.
-    check!(segment_base_offsets(dir.path(), RESTART_TOPIC) == vec![0]);
-
-    let (broker, client) = support::start_with_dir(dir.path()).await;
-    broker
-        .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
-        .await;
-
-    assert!(
-        trimmed_view(&client, RESTART_TOPIC, 0).await
-            == TrimmedView {
-                earliest_error_code: codes::NONE,
-                earliest_offset: RESTART_TRIM_TO,
-                fetch_error_code: codes::OFFSET_OUT_OF_RANGE,
-                fetch_log_start_offset: -1,
-                fetched_records: 0,
-            }
-    );
-
-    broker.shutdown().await;
 }
 
 /// Trim partition 0 of `topic` from `offset` and return the partition row.
@@ -278,4 +165,212 @@ async fn fetch_from(
         .await
         .expect("Fetch");
     resp.responses.remove(0).partitions.remove(0)
+}
+struct RecordTrimming {
+    broker: Option<BrokerHandle>,
+    client: Option<Client>,
+    directory: Option<TempDir>,
+    topic: &'static str,
+    trimmed: Option<DeleteRecordsPartitionResult>,
+    view: Option<TrimmedView>,
+}
+
+impl RecordTrimming {
+    fn broker<'a>(&'a self, admin: &'a AdminCluster) -> &'a BrokerHandle {
+        self.broker.as_ref().unwrap_or_else(|| admin.broker())
+    }
+
+    fn client<'a>(&'a self, admin: &'a AdminCluster) -> &'a Client {
+        self.client.as_ref().unwrap_or_else(|| admin.client())
+    }
+}
+
+#[fixture]
+fn trimming() -> RecordTrimming {
+    // Start this scenario with fresh inputs and observations.
+
+    RecordTrimming {
+        broker: None,
+        client: None,
+        directory: None,
+        topic: "",
+        trimmed: None,
+        view: None,
+    }
+}
+
+#[given("topic t-dr contains 100 records on the admin broker")]
+async fn records_to_trim(admin: &AdminCluster, trimming: &mut RecordTrimming) {
+    create_topic_helper(admin.client(), "t-dr", 1).await;
+    admin
+        .broker()
+        .produce_records_for_test("t-dr", 0, 100)
+        .await
+        .expect("produce_records_for_test");
+    trimming.topic = "t-dr";
+}
+
+#[given("a restartable topic contains 100 committed records entirely in segment 0")]
+async fn restartable_records(trimming: &mut RecordTrimming) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (broker, client) = support::start_with_dir(directory.path()).await;
+    create_topic_helper(&client, RESTART_TOPIC, 1).await;
+    broker
+        .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
+        .await;
+    broker
+        .produce_records_for_test(
+            RESTART_TOPIC,
+            0,
+            usize::try_from(RESTART_RECORDS).expect("record count fits usize"),
+        )
+        .await
+        .expect("produce_records_for_test");
+    broker
+        .wait_until_high_watermark(RESTART_TOPIC, 0, RESTART_RECORDS)
+        .await;
+    check!(
+        segment_base_offsets(directory.path(), RESTART_TOPIC) == vec![0],
+        "every record must be in one segment or a deleted segment name would carry the trim"
+    );
+    trimming.topic = RESTART_TOPIC;
+    trimming.directory = Some(directory);
+    trimming.broker = Some(broker);
+    trimming.client = Some(client);
+}
+
+#[when("DeleteRecords trims the topic before offset 50")]
+async fn delete_before_50(admin: &AdminCluster, trimming: &mut RecordTrimming) {
+    trimming.trimmed = Some(trim(trimming.client(admin), trimming.topic, RESTART_TRIM_TO).await);
+}
+
+#[then("the successful trim reports a valid low watermark equal to the local log start")]
+fn trim_watermark(admin: &AdminCluster, trimming: &RecordTrimming) {
+    let result = trimming
+        .trimmed
+        .as_ref()
+        .expect("DeleteRecords was submitted");
+    check!(
+        result.error_code == 0,
+        "delete_records error: {:?}",
+        result.error_code
+    );
+    check!(
+        result.low_watermark >= 0,
+        "low_watermark should be non-negative, got {}",
+        result.low_watermark
+    );
+    check!(
+        result.low_watermark <= 50,
+        "low_watermark {} should be <= requested offset 50",
+        result.low_watermark
+    );
+    let log_start = trimming
+        .broker(admin)
+        .partition_log_start_for_test(trimming.topic, 0)
+        .expect("partition exists");
+    assert!(
+        log_start == result.low_watermark,
+        "partition log_start_offset should equal low_watermark"
+    );
+}
+
+#[then("the live trim succeeds and advances both low watermark and log start to 50")]
+fn active_segment_trim(admin: &AdminCluster, trimming: &RecordTrimming) {
+    let result = trimming
+        .trimmed
+        .as_ref()
+        .expect("DeleteRecords was submitted");
+    check!(
+        result.error_code == codes::NONE,
+        "delete_records: {result:?}"
+    );
+    check!(result.low_watermark == RESTART_TRIM_TO);
+    check!(
+        trimming
+            .broker(admin)
+            .partition_log_start_for_test(RESTART_TOPIC, 0)
+            == Some(RESTART_TRIM_TO),
+        "the trim moved the live partition's log start"
+    );
+}
+
+#[when("the trimmed broker shuts down")]
+async fn stop_trimmed_broker(trimming: &mut RecordTrimming) {
+    drop(trimming.client.take());
+    trimming
+        .broker
+        .take()
+        .expect("a restartable broker")
+        .shutdown()
+        .await;
+}
+
+#[then("the partition still has only segment 0 to witness the trim")]
+fn same_segment_after_trim(trimming: &RecordTrimming) {
+    let directory = trimming
+        .directory
+        .as_ref()
+        .expect("the persistent log directory");
+    check!(segment_base_offsets(directory.path(), RESTART_TOPIC) == vec![0]);
+}
+
+#[when("the broker restarts from that same log directory")]
+async fn restart_trimmed_broker(trimming: &mut RecordTrimming) {
+    let directory = trimming
+        .directory
+        .as_ref()
+        .expect("the persistent log directory");
+    let (broker, client) = support::start_with_dir(directory.path()).await;
+    broker
+        .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
+        .await;
+    trimming.broker = Some(broker);
+    trimming.client = Some(client);
+}
+
+#[when("the client asks for the earliest offset and fetches from offset 0")]
+async fn observe_trimmed_log(admin: &AdminCluster, trimming: &mut RecordTrimming) {
+    trimming.view = Some(trimmed_view(trimming.client(admin), RESTART_TOPIC, 0).await);
+}
+
+#[then("the restarted log begins at 50 and refuses the old fetch without serving records")]
+fn durable_trim(trimming: &RecordTrimming) {
+    assert!(
+        trimming.view.as_ref()
+            == Some(&TrimmedView {
+                earliest_error_code: codes::NONE,
+                earliest_offset: RESTART_TRIM_TO,
+                fetch_error_code: codes::OFFSET_OUT_OF_RANGE,
+                fetch_log_start_offset: -1,
+                fetched_records: 0,
+            })
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_delete_records.feature",
+    name = "delete records trims log start"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_records_trims_log_start(admin: AdminCluster, trimming: RecordTrimming) {
+    drop(trimming);
+    admin.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_delete_records.feature",
+    name = "a trim inside the active segment survives a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_trim_inside_the_active_segment_survives_a_restart(
+    admin: AdminCluster,
+    trimming: RecordTrimming,
+) {
+    trimming
+        .broker
+        .expect("a restarted broker")
+        .shutdown()
+        .await;
+    admin.shutdown().await;
 }

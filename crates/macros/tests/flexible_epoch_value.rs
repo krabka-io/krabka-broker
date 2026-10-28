@@ -1,7 +1,7 @@
 //! The derive preserves epoch wire bytes and passes codec errors through.
 #![cfg(test)]
 
-use assert2::assert;
+use {assert2::assert, std::str};
 
 #[path = "support/codec.rs"]
 mod error;
@@ -72,34 +72,73 @@ struct Value {
     assignment_timestamp_ms: i64,
 }
 
-#[yare::parameterized(
-    zero_timestamp = { 7, 0, &b"\x00\x00\x00\x00\x00\x07\x00"[..] },
-    tagged_timestamp = {
-        7,
-        42,
-        &b"\x00\x00\x00\x00\x00\x07\x01\x00\x08\x00\x00\x00\x00\x00\x00\x00\x2a"[..],
-    },
-    negative_values = {
-        -1,
-        -1,
-        &b"\x00\x00\xff\xff\xff\xff\x01\x00\x08\xff\xff\xff\xff\xff\xff\xff\xff"[..],
-    },
-)]
-fn keeps_exact_kafka_bytes_and_every_truncation_error(
-    epoch: i32,
-    timestamp: i64,
-    golden: &'static [u8],
-) {
-    let value = Value {
+struct EpochCodecScenario {
+    value: Value,
+    golden: Vec<u8>,
+    encoded: Vec<u8>,
+    decoded: Option<Result<Value, error::BrokerError>>,
+    prefixes: Vec<Result<Value, error::BrokerError>>,
+}
+
+#[rstest::fixture]
+fn epoch_codec() -> EpochCodecScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    EpochCodecScenario {
+        value: Value {
+            assignment_epoch: 0,
+            assignment_timestamp_ms: 0,
+        },
+        golden: Vec::new(),
+        encoded: Vec::new(),
+        decoded: None,
+        prefixes: Vec::new(),
+    }
+}
+
+#[rstest_bdd_macros::given("assignment epoch {epoch} at timestamp {timestamp}")]
+fn epoch_value(epoch_codec: &mut EpochCodecScenario, epoch: i32, timestamp: i64) {
+    epoch_codec.value = Value {
         assignment_epoch: epoch,
         assignment_timestamp_ms: timestamp,
     };
-    assert2::assert!(value.encode() == golden);
-    assert2::assert!(Value::decode(golden) == Ok(value));
-    for end in 0..golden.len() {
-        assert2::assert!(Value::decode(&golden[..end]).is_err());
+}
+
+#[rstest_bdd_macros::given("Kafka epoch value bytes {golden}")]
+fn epoch_bytes(epoch_codec: &mut EpochCodecScenario, golden: String) {
+    let digits: String = golden.split_whitespace().collect();
+    let (pairs, remainder) = digits.as_bytes().as_chunks::<2>();
+    assert!(remainder.is_empty(), "complete hexadecimal bytes");
+    epoch_codec.golden = pairs
+        .iter()
+        .map(|pair| {
+            u8::from_str_radix(str::from_utf8(pair).expect("ASCII hex"), 16)
+                .expect("hexadecimal wire fixture")
+        })
+        .collect();
+}
+
+#[rstest_bdd_macros::when(
+    "the epoch value and every shorter byte prefix are passed through the codec"
+)]
+fn code_epoch_value(epoch_codec: &mut EpochCodecScenario) {
+    epoch_codec.encoded = epoch_codec.value.encode().to_vec();
+    epoch_codec.decoded = Some(Value::decode(&epoch_codec.golden));
+    epoch_codec.prefixes = (0..epoch_codec.golden.len())
+        .map(|end| Value::decode(&epoch_codec.golden[..end]))
+        .collect();
+}
+
+#[rstest_bdd_macros::then("the Kafka bytes round trip and every truncated prefix is rejected")]
+fn epoch_codec_results(epoch_codec: &EpochCodecScenario) {
+    assert!(epoch_codec.encoded == epoch_codec.golden);
+    assert!(epoch_codec.decoded == Some(Ok(epoch_codec.value)));
+    for prefix in &epoch_codec.prefixes {
+        assert!(prefix.is_err());
     }
 }
+
+rstest_bdd_macros::scenarios!("tests/features/epoch_codec", fixtures = [epoch_codec: EpochCodecScenario]);
 
 #[test]
 fn retains_record_specific_version_errors_and_codec_errors() {

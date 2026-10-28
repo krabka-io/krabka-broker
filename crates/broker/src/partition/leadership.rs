@@ -675,38 +675,81 @@ mod tests {
         assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 4);
     }
 
-    #[tokio::test]
-    async fn each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it() {
-        // Live epoch 3. Kafka fences a `ListOffsets` row for every request
-        // epoch but `-1` and the live one, while Fetch also lets every other
-        // negative epoch through. Verified on apache/kafka:4.3.1: with a live
-        // epoch of 0, `ListOffsets` v4 answers `current_leader_epoch = -2`
-        // with FENCED_LEADER_EPOCH (74) and Fetch v11 serves it records.
-        const LIVE: i32 = 3;
-        let (p, _td) = test_partition(Arc::new(Notify::new()));
-        p.test_set_leader_epoch(LIVE);
+    #[derive(Default)]
+    struct PartitionEpochRequest {
+        partition: Option<(Partition, tempfile::TempDir)>,
+        fetch: rstest_bdd::Slot<Option<(i16, i32)>>,
+        list_offsets: rstest_bdd::Slot<Option<(i16, i32)>>,
+    }
 
-        let fenced = Some((FENCED_LEADER_EPOCH, LIVE));
-        let unknown = Some((UNKNOWN_LEADER_EPOCH, LIVE));
-        // (request epoch, Fetch verdict, ListOffsets verdict)
-        let cases = [
-            (LIVE - 1, fenced, fenced),
-            (LIVE, None, None),
-            (LIVE + 1, unknown, unknown),
-            (-1, None, None),
-            (-2, None, fenced),
-            (i32::MIN, None, fenced),
-        ];
-        for (request_epoch, fetch, list_offsets) in cases {
-            assert!(
-                p.fetch_leader_epoch_fence(request_epoch) == fetch,
-                "{request_epoch}"
-            );
-            assert!(
-                p.list_offsets_leader_epoch_fence(request_epoch) == list_offsets,
-                "{request_epoch}"
-            );
+    #[rstest::fixture]
+    fn partition_epoch_request() -> PartitionEpochRequest {
+        // Each protocol request receives an independent partition epoch view.
+        PartitionEpochRequest::default()
+    }
+
+    #[rstest_bdd_macros::given("a local partition is led at epoch 3")]
+    fn supplied_partition_epoch(partition_epoch_request: &mut PartitionEpochRequest) {
+        let (partition, directory) = test_partition(Arc::new(Notify::new()));
+        partition.test_set_leader_epoch(3);
+        partition_epoch_request.partition = Some((partition, directory));
+    }
+
+    #[rstest_bdd_macros::when("Fetch and ListOffsets request current leader epoch {epoch}")]
+    fn query_partition_epoch_guards(
+        partition_epoch_request: &mut PartitionEpochRequest,
+        epoch: i32,
+    ) {
+        let (partition, _) = partition_epoch_request
+            .partition
+            .as_ref()
+            .expect("led partition was given");
+        partition_epoch_request
+            .fetch
+            .set(partition.fetch_leader_epoch_fence(epoch));
+        partition_epoch_request
+            .list_offsets
+            .set(partition.list_offsets_leader_epoch_fence(epoch));
+    }
+
+    fn expected_partition_epoch_fence(verdict: &str) -> Option<(i16, i32)> {
+        match verdict {
+            "allowed" => None,
+            "fenced" => Some((FENCED_LEADER_EPOCH, 3)),
+            "unknown" => Some((UNKNOWN_LEADER_EPOCH, 3)),
+            _ => panic!("unknown expected leader epoch verdict {verdict}"),
         }
+    }
+
+    #[rstest_bdd_macros::then(
+        "Fetch is {fetch} and ListOffsets is {list_offsets} against live epoch 3"
+    )]
+    fn expected_partition_epoch_guards(
+        partition_epoch_request: &PartitionEpochRequest,
+        fetch: String,
+        list_offsets: String,
+    ) {
+        assert!(
+            partition_epoch_request.fetch.get() == Some(expected_partition_epoch_fence(&fetch))
+        );
+        assert!(
+            partition_epoch_request.list_offsets.get()
+                == Some(expected_partition_epoch_fence(&list_offsets))
+        );
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/partition/leadership.feature",
+        name = "Each API applies Kafka's leader epoch sentinel rule"
+    )]
+    #[tokio::test]
+    async fn each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it(
+        partition_epoch_request: PartitionEpochRequest,
+        epoch: i32,
+        fetch: String,
+        list_offsets: String,
+    ) {
+        let _ = (partition_epoch_request, epoch, fetch, list_offsets);
     }
 
     #[tokio::test]

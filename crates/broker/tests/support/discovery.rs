@@ -13,6 +13,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    std::net::SocketAddr,
 };
 
 pub fn api_versions_request_for(
@@ -104,4 +105,16 @@ pub fn metadata_first_partition<'a>(
 /// The first matching partition's leader, with a caller-selected missing-row value.
 pub fn metadata_first_leader(response: &MetadataResponse, topic: &str, default: i32) -> i32 {
     metadata_first_partition(response, topic).map_or(default, |partition| partition.leader_id)
+}
+
+/// A successful coordinator lookup names the local broker and its listener.
+pub fn expected_local_coordinator(key: &str, listen: SocketAddr) -> Coordinator {
+    expected_coordinator(
+        key,
+        1,
+        listen.ip().to_string(),
+        i32::from(listen.port()),
+        0,
+        None,
+    )
 }

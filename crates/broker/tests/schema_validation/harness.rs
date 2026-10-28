@@ -13,7 +13,7 @@ use {
         records::value_record,
         topics::{TopicReplicationFactor, creatable_topic, topic_configs},
     },
-    assert2::assert,
+    assert2::{assert, check},
     bytes::Bytes,
     krabka_broker::{BrokerConfig, BrokerHandle, file_config::FileConfig},
     krabka_client_core::Client,
@@ -24,6 +24,11 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordBatch,
     },
+    rstest::fixture,
+    rstest_bdd::Slot,
+    rstest_bdd_macros::{given, then, when},
+    std::collections::BTreeMap,
+    tempfile::TempDir,
     wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -285,18 +290,118 @@ pub fn apply_registry_config(config: &mut BrokerConfig, text: &str) {
     file.apply_to(config).expect("[schema_registry] applies");
 }
 
-/// Check the value's response and, when specified, the independent append expectation.
-pub async fn check_value_append(
-    broker: &BrokerHandle,
-    client: &Client,
-    topic: &str,
-    topic_id: WireUuid,
-    value: Option<Bytes>,
-    expected: (i16, Option<i64>),
-) {
-    let out = produce_value(client, topic, topic_id, value).await;
-    assert2::check!(out.error_code == expected.0, "{out:?}");
-    if let Some(log_end) = expected.1 {
-        assert2::check!(broker.local_log_end_offset(topic, 0) == Some(log_end));
+/// Fresh broker, registry, input values, and captured produce observations.
+#[derive(Default)]
+pub struct SchemaScenario {
+    pub(super) registry: Option<MockServer>,
+    pub(super) broker: Option<BrokerHandle>,
+    pub(super) client: Option<Client>,
+    pub(super) directory: Option<TempDir>,
+    pub(super) topics: BTreeMap<String, WireUuid>,
+    pub(super) payload: Slot<Option<Bytes>>,
+    pub(super) outcomes: BTreeMap<String, PartitionProduceResponse>,
+    pub(super) counters: Slot<(u64, u64)>,
+}
+
+impl SchemaScenario {
+    pub(super) fn broker(&self) -> &BrokerHandle {
+        self.broker
+            .as_ref()
+            .expect("the schema-validation broker is running")
     }
+
+    pub(super) fn client(&self) -> &Client {
+        self.client
+            .as_ref()
+            .expect("the schema-validation client is connected")
+    }
+
+    pub(super) fn topic(&self, name: &str) -> WireUuid { self.topics[name] }
+
+    pub(super) fn install(
+        &mut self,
+        registry: Option<MockServer>,
+        started: (BrokerHandle, Client, TempDir),
+        topic: WireUuid,
+    ) {
+        let (broker, client, directory) = started;
+        self.registry = registry;
+        self.broker = Some(broker);
+        self.client = Some(client);
+        self.directory = Some(directory);
+        self.topics.insert("validated".to_owned(), topic);
+    }
+
+    pub(super) async fn shutdown(&mut self) {
+        self.broker
+            .take()
+            .expect("the schema-validation broker is running")
+            .shutdown()
+            .await;
+        drop(self.client.take());
+        drop(self.registry.take());
+        drop(self.directory.take());
+    }
+
+    pub(super) fn capture_cache(&self) {
+        self.counters.set((
+            self.broker().metrics().schema_validation_cache_misses.get(),
+            self.broker().metrics().schema_validation_cache_hits.get(),
+        ));
+    }
+}
+
+#[fixture]
+pub(super) fn schema() -> SchemaScenario {
+    // Registry instances, data directories, and wire outcomes are per-scenario.
+    SchemaScenario {
+        broker: None,
+        ..Default::default()
+    }
+}
+
+#[given("a registry binds schema 42 to validated and validated-full subjects")]
+async fn bound_schema_registry(schema: &mut SchemaScenario) {
+    let (registry, broker, client, directory, id) =
+        mock_topic_fixture("validated", VALIDATED).await;
+    schema.install(Some(registry), (broker, client, directory), id);
+}
+
+#[given("the record carries schema 42 with arbitrary body bytes")]
+fn known_schema_value(schema: &SchemaScenario) {
+    schema.payload.set(Some(framed(KNOWN_ID, b"anything")));
+}
+
+#[given("the record value is a tombstone")]
+fn tombstone_value(schema: &SchemaScenario) { schema.payload.set(None); }
+
+#[when("the producer sends the prepared record to {topic}")]
+async fn produce_prepared_value(schema: &mut SchemaScenario, topic: String) {
+    let value = schema.payload.get().expect("a record value was prepared");
+    let out = produce_value(schema.client(), &topic, schema.topic(&topic), value).await;
+    schema.outcomes.insert(topic, out);
+    schema.capture_cache();
+}
+
+#[when("an observer reads the schema-validation cache counters")]
+fn observe_schema_cache(schema: &SchemaScenario) { schema.capture_cache(); }
+
+#[then("schema cache misses are {misses} and hits are {hits}")]
+fn schema_cache_counts(schema: &SchemaScenario, misses: u64, hits: u64) {
+    check!(schema.counters.get() == Some((misses, hits)));
+}
+
+#[then("schema produce to {topic} returns error {code} and its log end is {offset}")]
+fn schema_append_outcome(schema: &SchemaScenario, topic: String, code: i16, offset: i64) {
+    let out = schema
+        .outcomes
+        .get(&topic)
+        .expect("a schema record was produced");
+    check!(out.error_code == code, "{out:?}");
+    check!(schema.broker().local_log_end_offset(&topic, 0) == Some(offset));
+}
+
+#[then("the validated produce succeeds")]
+fn validated_produce_succeeded(schema: &SchemaScenario) {
+    check!(schema.outcomes["validated"].error_code == 0);
 }

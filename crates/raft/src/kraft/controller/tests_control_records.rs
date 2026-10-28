@@ -559,111 +559,6 @@ fn add_request(id: u64, directory: u128) -> AddVoter {
 /// reached the leader's log end, or the log end the previous fetch saw. A
 /// candidate that is only a record or two behind under continuous appends is
 /// admitted.
-#[tokio::test]
-async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
-    struct Case {
-        label: &'static str,
-        fetches: Vec<Fetch>,
-        admitted: bool,
-    }
-
-    use crate::reconfig::{ReconfigOutcome, VoterChange};
-
-    /// One fetch by the candidate: its directory, the offset it asks for
-    /// (`None` is the leader's log end at that moment, `Some(-1)` the log end
-    /// before this row's append) and whether the leader appends a record first.
-    struct Fetch {
-        directory: u128,
-        offset: Option<i64>,
-        append_first: bool,
-    }
-    let fetch = |directory, offset, append_first| Fetch {
-        directory,
-        offset,
-        append_first,
-    };
-    let candidate_directory = 7;
-    let cases = [
-        Case {
-            label: "it never fetched",
-            fetches: vec![],
-            admitted: false,
-        },
-        Case {
-            label: "it fetched short of the end and never reached it",
-            fetches: vec![fetch(candidate_directory, Some(0), false)],
-            admitted: false,
-        },
-        Case {
-            label: "it fetched at the log end",
-            fetches: vec![fetch(candidate_directory, None, false)],
-            admitted: true,
-        },
-        Case {
-            label: "it kept pace with the appends between two fetches",
-            fetches: vec![
-                fetch(candidate_directory, Some(0), false),
-                fetch(candidate_directory, Some(-1), true),
-            ],
-            admitted: true,
-        },
-        Case {
-            label: "the fetches were made under another directory id",
-            fetches: vec![fetch(candidate_directory + 1, None, false)],
-            admitted: false,
-        },
-    ];
-    for Case {
-        label,
-        fetches,
-        admitted,
-    } in cases
-    {
-        let EngineInDir {
-            engine: mut leader,
-            dir: _dir,
-        } = kraft_version_one_leader();
-        for Fetch {
-            directory,
-            offset,
-            append_first,
-        } in fetches
-        {
-            let end_before_append = leader.log.log_end_offset().0;
-            if append_first {
-                leader.test_append_and_commit(&topic_record("t"));
-            }
-            leader.clock_base -= Duration::from_millis(10);
-            let offset = match offset {
-                Some(-1) => end_before_append,
-                Some(offset) => offset,
-                None => leader.log.log_end_offset().0,
-            };
-            leader.record_observer_fetch(
-                ReplicaKey {
-                    id: NodeId(4),
-                    directory_id: uuid::Uuid::from_u128(directory),
-                },
-                offset,
-            );
-        }
-
-        let (reply, mut rx) = oneshot::channel();
-        leader.on_reconfigure(VoterChange::Add(add_request(4, candidate_directory)), reply);
-        let end = leader.log.log_end_offset();
-        leader.advance_and_apply(end);
-        let outcome = rx.try_recv().expect("the add was answered");
-        if admitted {
-            check!(matches!(outcome, Ok(ReconfigOutcome::Committed)), "{label}");
-        } else {
-            check!(
-                matches!(outcome, Err(RaftError::VoterNotCaughtUp { .. })),
-                "{label}"
-            );
-        }
-    }
-}
-
 /// Kafka drops an observer that has been silent for five minutes in
 /// `observerStates()`, which only `DescribeQuorum` calls, while
 /// `isReplicaCaughtUp` reads the same map with a window of an hour. A fetch by
@@ -710,75 +605,6 @@ async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
 /// candidate: a candidate the leader has never seen fetch still gets the
 /// pending-change, duplicate-id and `kraft.version` answers, and a request that
 /// passes them is admitted without appending anything.
-#[tokio::test]
-async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
-    use crate::reconfig::{ReconfigOutcome, VoterChange};
-
-    let check_add = |leader: &mut Engine, request: AddVoter| {
-        let (reply, mut rx) = oneshot::channel();
-        leader.on_reconfigure(VoterChange::CheckAdd(request), reply);
-        rx.try_recv().expect("the check was answered")
-    };
-
-    // No pending change, HWM past the epoch start, kraft.version 1: a stranger
-    // passes, and nothing is appended or left pending.
-    let EngineInDir {
-        engine: mut leader,
-        dir: _dir,
-    } = kraft_version_one_leader();
-    let end = leader.log.log_end_offset();
-    check!(
-        matches!(
-            check_add(&mut leader, add_request(4, 7)),
-            Ok(ReconfigOutcome::Committed)
-        ),
-        "a stranger passes the local checks"
-    );
-    check!(leader.log.log_end_offset() == end);
-    check!(leader.pending_reconfig.is_none());
-    check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
-
-    // The id is already a voter, under this directory or another: DUPLICATE_VOTER
-    // before any probe or catch-up check.
-    for directory in [0, 7] {
-        check!(
-            matches!(
-                check_add(&mut leader, add_request(2, directory)),
-                Err(RaftError::DuplicateVoter(NodeId(2)))
-            ),
-            "voter 2 as directory {directory}"
-        );
-    }
-
-    // A pending change is REQUEST_TIMED_OUT, whichever candidate asks.
-    leader.pending_reconfig = Some(PendingReconfig {
-        need_offset: Offset(100),
-        reply: None,
-        removed_local_leader: false,
-    });
-    for id in [2, 4] {
-        check!(
-            matches!(
-                check_add(&mut leader, add_request(id, 7)),
-                Err(RaftError::ReconfigInProgress)
-            ),
-            "node {id} during a pending change"
-        );
-    }
-    leader.pending_reconfig = None;
-
-    // Below kraft.version 1 there is nothing to add to.
-    let (mut leader, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
-    elect_single_voter_engine(&mut leader);
-    check!(
-        matches!(
-            check_add(&mut leader, add_request(4, 7)),
-            Err(RaftError::UnsupportedKraftVersion(0))
-        ),
-        "kraft.version 0"
-    );
-}
-
 /// `LeaderState.updateVoterAndObserverStates` keeps a replica's `ReplicaState`
 /// as it crosses between the observer and voter maps: a candidate that becomes a
 /// voter keeps its fetch and caught-up times, and a removed voter is listed as
@@ -1065,4 +891,193 @@ fn a_new_observer_is_published_without_a_commit() {
         })
         .collect();
     assert!(observers == vec![key]);
+}
+
+use {
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, then, when},
+};
+#[derive(DataTableRow)]
+struct CandidateFetch {
+    directory: u128,
+    offset: String,
+    append: bool,
+}
+
+#[derive(Default)]
+struct VoterAdmission {
+    leader: Option<EngineInDir>,
+    end: Option<Offset>,
+    outcome: Option<Result<ReconfigOutcome, RaftError>>,
+}
+#[rstest::fixture]
+fn admission() -> VoterAdmission {
+    // Start this scenario with fresh inputs and observations.
+
+    VoterAdmission::default()
+}
+
+#[given("a quorum leader at kraft version {version} with pending reconfiguration {pending}")]
+fn admission_leader(admission: &mut VoterAdmission, version: i16, pending: bool) {
+    let mut leader = if version == 1 {
+        kraft_version_one_leader()
+    } else {
+        let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
+        elect_single_voter_engine(&mut engine);
+        EngineInDir { engine, dir }
+    };
+    if pending {
+        leader.engine.pending_reconfig = Some(PendingReconfig {
+            need_offset: Offset(100),
+            reply: None,
+            removed_local_leader: false,
+        });
+    }
+    admission.end = Some(leader.engine.log.log_end_offset());
+    admission.leader = Some(leader);
+}
+
+#[given("candidate 4 has fetched with this history")]
+fn candidate_fetches(admission: &mut VoterAdmission, #[datatable] rows: Rows<CandidateFetch>) {
+    let leader = &mut admission.leader.as_mut().expect("leader configured").engine;
+    for row in rows {
+        let directory = row.directory;
+        let previous_end = leader.log.log_end_offset().0;
+        if row.append {
+            leader.test_append_and_commit(&topic_record("t"));
+        }
+        leader.clock_base -= Duration::from_millis(10);
+        let offset = match row.offset.as_str() {
+            "end" => leader.log.log_end_offset().0,
+            "previous-end" => previous_end,
+            value => value.parse().expect("fetch offset"),
+        };
+        leader.record_observer_fetch(
+            ReplicaKey {
+                id: NodeId(4),
+                directory_id: uuid::Uuid::from_u128(directory),
+            },
+            offset,
+        );
+    }
+}
+
+#[when("the controller {operation} voter {id} in directory {directory}")]
+fn candidate_admission(
+    admission: &mut VoterAdmission,
+    operation: String,
+    id: u64,
+    directory: u128,
+) {
+    use crate::reconfig::VoterChange;
+    let leader = &mut admission.leader.as_mut().expect("leader configured").engine;
+    let (reply, mut receiver) = oneshot::channel();
+    let request = add_request(id, directory);
+    let change = match operation.as_str() {
+        "adds" => VoterChange::Add(request),
+        "checks" => VoterChange::CheckAdd(request),
+        _ => panic!("unknown admission operation"),
+    };
+    leader.on_reconfigure(change, reply);
+    if operation == "adds" {
+        let end = leader.log.log_end_offset();
+        leader.advance_and_apply(end);
+    }
+    admission.outcome = Some(receiver.try_recv().expect("admission answered"));
+}
+
+#[then("voter admission returns {outcome}")]
+fn admission_result(admission: &VoterAdmission, outcome: String) {
+    let actual = admission.outcome.as_ref().expect("admission performed");
+    match outcome.as_str() {
+        "committed" => {
+            check!(matches!(actual, Ok(ReconfigOutcome::Committed)));
+        }
+        "not-caught-up" => {
+            check!(matches!(actual, Err(RaftError::VoterNotCaughtUp { .. })));
+        }
+        "duplicate" => {
+            check!(matches!(actual, Err(RaftError::DuplicateVoter(NodeId(2)))));
+        }
+        "pending-change" => {
+            check!(matches!(actual, Err(RaftError::ReconfigInProgress)));
+        }
+        "unsupported-version" => {
+            check!(matches!(actual, Err(RaftError::UnsupportedKraftVersion(0))));
+        }
+        _ => panic!("unknown admission outcome"),
+    }
+}
+
+#[then("checking admission leaves the log and voter set unchanged without a pending change")]
+fn admission_check_no_mutation(admission: &VoterAdmission) {
+    let leader = &admission.leader.as_ref().expect("leader configured").engine;
+    check!(Some(leader.log.log_end_offset()) == admission.end);
+    check!(leader.pending_reconfig.is_none());
+    check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "No fetch never catches up"
+)]
+#[tokio::test]
+async fn unfetched_candidate_is_refused(admission: VoterAdmission) { let _ = admission; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "A short fetch is insufficient"
+)]
+#[tokio::test]
+async fn short_fetch_is_refused(admission: VoterAdmission) { let _ = admission; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "Fetching the log end catches up"
+)]
+#[tokio::test]
+async fn current_end_fetch_is_admitted(admission: VoterAdmission) { let _ = admission; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "A replica keeping pace with appends catches up"
+)]
+#[tokio::test]
+async fn continuous_append_candidate_is_admitted(admission: VoterAdmission) { let _ = admission; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "Another directory cannot establish candidate progress"
+)]
+#[tokio::test]
+async fn another_directory_does_not_admit_candidate(admission: VoterAdmission) {
+    let _ = admission;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "A stranger passes local checks without changing quorum state"
+)]
+#[tokio::test]
+async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order(
+    admission: VoterAdmission,
+) {
+    let _ = admission;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "Local admission refuses invalid requests in Kafka order"
+)]
+#[tokio::test]
+async fn local_add_admission_order(
+    admission: VoterAdmission,
+    version: i16,
+    pending: bool,
+    id: u64,
+    directory: u128,
+    outcome: String,
+) {
+    let _ = admission;
+    let _ = (version, pending, id, directory, outcome);
 }

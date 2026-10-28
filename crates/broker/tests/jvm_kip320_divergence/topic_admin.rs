@@ -92,13 +92,6 @@ pub async fn create_mixed_topic(bootstrap: &str, topic: &str) {
     }
 }
 
-#[test]
-fn topic_description_isr_parser_ignores_ids_outside_isr_field() {
-    let description =
-        "Topic: krabka-kip320-3 Partition: 0 Leader: 1 Replicas: 1,2,3 Isr: 1,2 Elr: 3";
-    assert2::assert!(described_isr(description) == vec![1, 2]);
-}
-
 /// Create the mixed topic and wait for the scenario's required JVM-visible ISR.
 pub async fn create_and_wait_for_isr(
     bootstrap: &str,
@@ -131,3 +124,28 @@ fn describe_topic(bootstrap: &str, topic: &str) -> Output {
         bootstrap,
     ])
 }
+
+#[derive(Default)]
+struct DescribedIsr {
+    description: String,
+    members: Option<Vec<u64>>,
+}
+#[rstest::fixture]
+fn described_isr_behavior() -> DescribedIsr {
+    // Every topic description is parsed independently.
+    DescribedIsr::default()
+}
+#[rstest_bdd_macros::given("a Kafka topic description {description}")]
+fn topic_description(described_isr_behavior: &mut DescribedIsr, description: String) {
+    described_isr_behavior.description = description;
+}
+#[rstest_bdd_macros::when("the ISR field is parsed")]
+fn parse_isr_members(described_isr_behavior: &mut DescribedIsr) {
+    described_isr_behavior.members = Some(described_isr(&described_isr_behavior.description));
+}
+#[rstest_bdd_macros::then("the complete ISR is {members}")]
+fn parsed_isr_members(described_isr_behavior: &DescribedIsr, members: String) {
+    let members: Vec<u64> = serde_json::from_str(&members).expect("ISR members");
+    assert2::assert!(described_isr_behavior.members.as_ref().expect("ISR parsed") == &members);
+}
+rstest_bdd_macros::scenarios!("tests/features/migrated/tests/jvm_kip320_divergence/topic_admin.feature", fixtures=[described_isr_behavior:DescribedIsr]);

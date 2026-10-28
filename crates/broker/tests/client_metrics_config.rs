@@ -7,8 +7,13 @@
 //! in-process broker, and it asserts the full operator-facing round-trip.
 
 use {
-    crate::support::{configs::client_metrics_subscription, start_n_node_client},
+    crate::support::{configs::client_metrics_subscription, shutdown_cluster, start_n_node_client},
     assert2::{assert, check},
+    krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_client_core::Client,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 mod support;
 
@@ -71,75 +76,141 @@ fn assert_list_response(response: &ListConfigResourcesResponse) {
     );
 }
 
-// ── test ──────────────────────────────────────────────────────────────────────
+struct MetricsSubscription {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    client: Option<Client>,
+    metrics: String,
+    altered: Option<IncrementalAlterConfigsResponse>,
+    described: Option<DescribeConfigsResponse>,
+    listed: Option<ListConfigResourcesResponse>,
+}
 
-/// CONFIG ROUND-TRIP:
-///
-/// 1. `IncrementalAlterConfigs` for `CLIENT_METRICS` "sub-a" with
-///    `metrics=org.apache.kafka.consumer.` and `interval.ms=60000` (SET ops).
-///    Asserts per-resource `error_code` == NONE (0).
-///
-/// 2. `DescribeConfigs` for `CLIENT_METRICS` "sub-a". Asserts:
-///    - `metrics` value == "org.apache.kafka.consumer.", `config_source` == 7.
-///    - `interval.ms` value == "60000", `config_source` == 7.
-///    - the `match` entry is present at its default, `config_source` == 5.
-///
-/// 3. `ListConfigResources` (v1, `resource_types`=[16]). Asserts that the result
-///    contains a `ConfigResource` with `resource_type` 16 and `resource_name`
-///    "sub-a".
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_metrics_config_alter_describe_list_round_trip() {
-    let (_cluster, client) = start_n_node_client(1, "client-metrics-config-test").await;
+#[fixture]
+fn subscription() -> MetricsSubscription {
+    // Start this scenario with fresh inputs and observations.
 
-    // ── Step 1: IncrementalAlterConfigs ──────────────────────────────────────
-    let alter_req = client_metrics_subscription()
-        .metrics("org.apache.kafka.consumer.")
+    MetricsSubscription {
+        cluster: Vec::new(),
+        client: None,
+        metrics: String::new(),
+        altered: None,
+        described: None,
+        listed: None,
+    }
+}
+
+#[given("a single-broker cluster accepting client metrics subscriptions")]
+async fn metrics_cluster(subscription: &mut MetricsSubscription) {
+    let (cluster, client) = start_n_node_client(1, "client-metrics-config-test").await;
+    subscription.cluster = cluster;
+    subscription.client = Some(client);
+}
+
+#[given("subscription sub-a selects consumer metrics every 60000 milliseconds")]
+fn consumer_metrics_subscription(subscription: &mut MetricsSubscription) {
+    subscription.metrics = "org.apache.kafka.consumer.".into();
+}
+
+#[when("the operator creates subscription sub-a with IncrementalAlterConfigs")]
+async fn create_subscription(subscription: &mut MetricsSubscription) {
+    let client = subscription
+        .client
+        .as_ref()
+        .expect("a client metrics cluster");
+    let request = client_metrics_subscription()
+        .metrics(&subscription.metrics)
         .call();
+    subscription.altered = Some(client.send(request).await.expect("IncrementalAlterConfigs"));
+}
 
-    let alter_resp: IncrementalAlterConfigsResponse = client
-        .send(alter_req)
-        .await
-        .expect("IncrementalAlterConfigs");
-
+#[then("the subscription change succeeds for exactly one resource")]
+fn subscription_created(subscription: &MetricsSubscription) {
+    let response = subscription
+        .altered
+        .as_ref()
+        .expect("a subscription change");
     assert!(
-        alter_resp.responses.len() == 1,
+        response.responses.len() == 1,
         "expected exactly one resource response, got {}",
-        alter_resp.responses.len()
+        response.responses.len()
     );
-    let resource_resp = &alter_resp.responses[0];
+    let resource = &response.responses[0];
     assert!(
-        resource_resp.error_code == 0,
+        resource.error_code == 0,
         "IncrementalAlterConfigs CLIENT_METRICS must succeed; error_code={} message={:?}",
-        resource_resp.error_code,
-        resource_resp.error_message
+        resource.error_code,
+        resource.error_message
     );
+}
 
-    // ── Step 2: DescribeConfigs ───────────────────────────────────────────────
-    let describe_req = DescribeConfigsRequest {
+#[when("the operator describes subscription sub-a")]
+async fn describe_subscription(subscription: &mut MetricsSubscription) {
+    let request = DescribeConfigsRequest {
         resources: vec![DescribeConfigsResource {
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
             resource_name: "sub-a".to_owned(),
-            configuration_keys: None, // all keys
+            configuration_keys: None,
             ..Default::default()
         }],
         include_synonyms: false,
         include_documentation: false,
         ..Default::default()
     };
+    subscription.described = Some(
+        subscription
+            .client
+            .as_ref()
+            .expect("a client metrics cluster")
+            .send(request)
+            .await
+            .expect("DescribeConfigs"),
+    );
+}
 
-    let describe_resp: DescribeConfigsResponse =
-        client.send(describe_req).await.expect("DescribeConfigs");
+#[then(
+    "the description preserves metrics and interval with client-metrics sources and the default match"
+)]
+fn subscription_description(subscription: &MetricsSubscription) {
+    assert_describe_response(
+        subscription
+            .described
+            .as_ref()
+            .expect("a subscription description"),
+    );
+}
 
-    assert_describe_response(&describe_resp);
-
-    // ── Step 3: ListConfigResources ───────────────────────────────────────────
-    let list_req = ListConfigResourcesRequest {
+#[when("the operator lists client metrics configuration resources")]
+async fn list_subscriptions(subscription: &mut MetricsSubscription) {
+    let request = ListConfigResourcesRequest {
         resource_types: vec![RESOURCE_TYPE_CLIENT_METRICS],
         ..Default::default()
     };
+    subscription.listed = Some(
+        subscription
+            .client
+            .as_ref()
+            .expect("a client metrics cluster")
+            .send(request)
+            .await
+            .expect("ListConfigResources"),
+    );
+}
 
-    let list_resp: ListConfigResourcesResponse =
-        client.send(list_req).await.expect("ListConfigResources");
+#[then("subscription sub-a appears in the client metrics resource list")]
+fn subscription_listed(subscription: &MetricsSubscription) {
+    assert_list_response(
+        subscription
+            .listed
+            .as_ref()
+            .expect("a client metrics resource list"),
+    );
+}
 
-    assert_list_response(&list_resp);
+#[scenario(
+    path = "tests/features/migrated/tests/client_metrics_config.feature",
+    name = "client metrics config alter describe list round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_metrics_config_alter_describe_list_round_trip(subscription: MetricsSubscription) {
+    shutdown_cluster(subscription.cluster).await;
 }

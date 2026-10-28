@@ -179,10 +179,9 @@ mod tests {
                 alter_user_scram_credentials::{
                     answer,
                     test_support::{
-                        KAFKA_MAX_SCRAM_ITERATIONS, KAFKA_UNACCEPTABLE_CREDENTIAL,
-                        KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion, expected_response,
-                        expected_result, process_deletion, process_upsertion, start_broker,
-                        test_context, valid_upsertion,
+                        KAFKA_UNACCEPTABLE_CREDENTIAL, KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion,
+                        expected_response, expected_result, process_deletion, process_upsertion,
+                        start_broker, test_context, valid_upsertion,
                     },
                 },
                 test_support::allow_all_authorizer,
@@ -190,7 +189,10 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{MetadataRecord, ScramCredentialRecord},
-        krabka_protocol::owned::alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
+        krabka_protocol::owned::{
+            alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
+            alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
+        },
         std::sync::Arc,
     };
 
@@ -247,35 +249,71 @@ mod tests {
         assert!(records.is_empty());
     }
 
-    #[test]
-    fn process_upsertion_rejects_iterations_above_kafka_maximum() {
-        let mut records = Vec::new();
-        let mut upsertion = valid_upsertion("alice");
-        upsertion.iterations = KAFKA_MAX_SCRAM_ITERATIONS + 1;
-
-        let r = process_upsertion(upsertion, true, &mut records);
-
-        assert!(
-            r == expected_result(
-                "alice",
-                KAFKA_UNACCEPTABLE_CREDENTIAL,
-                Some("Too many iterations"),
-            )
-        );
-        assert!(records.is_empty());
+    struct ScramIterationContract {
+        upsertion: Option<ScramCredentialUpsertion>,
+        authorized: bool,
+        records: Vec<MetadataRecord>,
+        result: Option<AlterUserScramCredentialsResult>,
     }
 
-    #[test]
-    fn process_upsertion_allows_kafka_maximum_iterations() {
-        let mut records = Vec::new();
-        let mut upsertion = valid_upsertion("alice");
-        upsertion.iterations = KAFKA_MAX_SCRAM_ITERATIONS;
+    #[rstest::fixture]
+    fn scram_iterations() -> ScramIterationContract {
+        // Start this scenario with fresh inputs and observations.
 
-        let r = process_upsertion(upsertion, true, &mut records);
-
-        assert!(r == expected_result("alice", 0, None));
-        assert!(records.len() == 1);
+        ScramIterationContract {
+            upsertion: None,
+            authorized: false,
+            records: Vec::new(),
+            result: None,
+        }
     }
+
+    #[rstest_bdd_macros::given(
+        "alice supplies a SCRAM-SHA-256 credential upsertion with {iterations} iterations"
+    )]
+    fn scram_iteration_request(scram_iterations: &mut ScramIterationContract, iterations: i32) {
+        let mut upsertion = valid_upsertion("alice");
+        upsertion.iterations = iterations;
+        scram_iterations.upsertion = Some(upsertion);
+    }
+
+    #[rstest_bdd_macros::given("the SCRAM alteration has cluster ALTER permission")]
+    fn authorize_scram_iteration_request(scram_iterations: &mut ScramIterationContract) {
+        scram_iterations.authorized = true;
+    }
+
+    #[rstest_bdd_macros::when("the controller validates the SCRAM credential upsertion")]
+    fn validate_scram_iterations(scram_iterations: &mut ScramIterationContract) {
+        scram_iterations.result = Some(process_upsertion(
+            scram_iterations
+                .upsertion
+                .take()
+                .expect("a credential upsertion was given"),
+            scram_iterations.authorized,
+            &mut scram_iterations.records,
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "alice's SCRAM alteration returns error {code} with message {message}"
+    )]
+    fn scram_iteration_response(
+        scram_iterations: &ScramIterationContract,
+        code: i16,
+        message: String,
+    ) {
+        let message: Option<String> =
+            serde_json::from_str(&message).expect("nullable JSON diagnostic");
+        let expected = expected_result("alice", code, message.as_deref());
+        assert!(scram_iterations.result.as_ref() == Some(&expected));
+    }
+
+    #[rstest_bdd_macros::then("exactly {count} credential metadata records are staged")]
+    fn scram_iteration_records(scram_iterations: &ScramIterationContract, count: usize) {
+        assert!(scram_iterations.records.len() == count);
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature", fixtures = [scram_iterations: ScramIterationContract]);
 
     #[test]
     fn process_upsertion_validates_boundaries_and_records_success() {

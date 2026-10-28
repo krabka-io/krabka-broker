@@ -12,13 +12,12 @@
 mod kafka_wire;
 
 mod support;
-#[path = "support/two_dir_topic.rs"]
-mod two_dir_topic;
 
 use {
-    crate::{
-        support::{storage::count_partition_dirs, wire::HeaderEncoding as RequestHeaderEncoding},
-        two_dir_topic::{PartitionReadiness, start},
+    crate::support::{
+        storage::{count_partition_dirs, start_two_dir_broker},
+        topics::{ConfiguredTopicSetup, TopicPartitionCount},
+        wire::HeaderEncoding as RequestHeaderEncoding,
     },
     assert2::assert,
     krabka_protocol::owned::{
@@ -53,52 +52,127 @@ fn count_topic_dirs(dir: &Path, topic: &str) -> usize {
     count_partition_dirs(fs::read_dir(dir).unwrap(), topic, true)
 }
 
-#[tokio::test]
-async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {
-    let n: i32 = 6;
-    let (handle, primary, extra, addr) = start()
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+struct JbodPlacement {
+    storage: Option<(BrokerHandle, TempDir, TempDir, SocketAddr)>,
+    topic: String,
+    report: Option<DescribeLogDirsResponse>,
+}
+#[fixture]
+fn placement() -> JbodPlacement {
+    // Start this scenario with fresh inputs and observations.
+
+    JbodPlacement {
+        storage: None,
+        topic: String::new(),
+        report: None,
+    }
+}
+#[given("one broker uses two independent log directories")]
+async fn two_directories(placement: &mut JbodPlacement) {
+    placement.storage = Some(start_two_dir_broker().await);
+}
+#[when("topic {topic} is created with {partitions} materialized local partitions")]
+async fn create(placement: &mut JbodPlacement, topic: String, partitions: i32) {
+    let (broker, _, _, address) = placement
+        .storage
+        .as_ref()
+        .expect("two directory broker started");
+    kafka_wire::create_configured_topic_plaintext()
+        .addr(*address)
         .client_id(CLIENT_ID)
-        .partitions(n)
-        .readiness(PartitionReadiness::LocalWriterPresent)
+        .topic(ConfiguredTopicSetup {
+            name: topic.clone(),
+            partitions: TopicPartitionCount(partitions),
+            ..Default::default()
+        })
         .call()
         .await;
-
-    // 1. Placement spread: both directories hold at least one partition of `t`.
-    let in_primary = count_topic_dirs(primary.path(), "t");
-    let in_extra = count_topic_dirs(extra.path(), "t");
+    for partition in 0..partitions {
+        broker
+            .wait_until_local_log_end_offset(&topic, partition, 0)
+            .await;
+    }
+    placement.topic = topic;
+}
+#[then("both log directories hold partitions totaling {partitions}")]
+fn spread(placement: &JbodPlacement, partitions: usize) {
+    let (_, primary, extra, _) = placement
+        .storage
+        .as_ref()
+        .expect("two directory broker started");
+    let primary = count_topic_dirs(primary.path(), &placement.topic);
+    let extra = count_topic_dirs(extra.path(), &placement.topic);
+    assert!(primary + extra == partitions, "all partitions on disk");
     assert!(
-        in_primary + in_extra == usize::try_from(n).unwrap(),
-        "all partitions on disk"
+        primary > 0 && extra > 0,
+        "partitions must spread across both dirs: primary={primary} extra={extra}"
     );
-    assert!(
-        in_primary > 0 && in_extra > 0,
-        "partitions must spread across both dirs: primary={in_primary} extra={in_extra}"
+}
+#[when("the client describes all configured log directories")]
+async fn inspect(placement: &mut JbodPlacement) {
+    placement.report = Some(
+        describe_log_dirs(
+            placement
+                .storage
+                .as_ref()
+                .expect("two directory broker started")
+                .3,
+        )
+        .await,
     );
-
-    // 2. DescribeLogDirs reports one result per configured dir, and the
-    //    union of `t` partitions across results is the full 0..n set.
-    let resp = describe_log_dirs(addr).await;
-    assert!(resp.error_code == 0);
-    assert!(resp.results.len() == 2, "one result per log dir");
-
-    let mut reported: Vec<i32> = Vec::new();
-    for result in &resp.results {
+}
+#[then(
+    "two successful directory reports contain nonfuture nonnegative partition sizes for exactly"
+)]
+fn report(placement: &JbodPlacement, datatable: Vec<Vec<String>>) {
+    let response = placement
+        .report
+        .as_ref()
+        .expect("DescribeLogDirs completed");
+    assert!(response.error_code == 0);
+    assert!(response.results.len() == 2, "one result per log dir");
+    let mut reported = Vec::new();
+    for result in &response.results {
         assert!(result.error_code == 0);
         for topic in &result.topics {
-            if topic.name == "t" {
-                for p in &topic.partitions {
-                    reported.push(p.partition_index);
-                    assert!(p.partition_size >= 0);
-                    assert!(!p.is_future_key);
+            if topic.name == placement.topic {
+                for partition in &topic.partitions {
+                    reported.push(partition.partition_index);
+                    assert!(partition.partition_size >= 0);
+                    assert!(!partition.is_future_key);
                 }
             }
         }
     }
     reported.sort_unstable();
-    assert!(
-        reported == (0..n).collect::<Vec<_>>(),
-        "all partitions reported"
-    );
-
-    handle.shutdown().await;
+    let expected: Vec<i32> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            row.into_iter()
+                .next()
+                .expect("expected partition")
+                .parse()
+                .expect("integer partition")
+        })
+        .collect();
+    assert!(reported == expected, "all partitions reported");
+}
+#[scenario(
+    path = "tests/features/migrated/tests/jbod.feature",
+    name = "New partitions spread across both directories and remain discoverable"
+)]
+#[tokio::test]
+async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them(
+    placement: JbodPlacement,
+) {
+    let (broker, _primary, _extra, _address) =
+        placement.storage.expect("two directory broker started");
+    broker.shutdown().await;
 }

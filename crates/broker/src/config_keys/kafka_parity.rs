@@ -70,6 +70,7 @@ use {
     },
     crate::api_catalog::UnstableApiVersions,
     assert2::{assert, check},
+    rstest_bdd::datatable::Rows,
     std::collections::BTreeMap,
 };
 
@@ -323,221 +324,359 @@ fn krabka_topic_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// The regression test for the `MirrorMaker` 2 defect: every key Kafka 4.3.1
-/// carries has to survive krabka's alter validator with a value Kafka's own
-/// validator accepts.
-///
-/// Before `compression.gzip.level`, `compression.lz4.level`,
-/// `compression.zstd.level` and `internal.segment.bytes` were added, this
-/// failed with an unknown-key refusal on each of them -- the same refusal
-/// `MirrorMaker` surfaced as `InvalidConfigurationException: unrecognized config
-/// key`.
-#[test]
-fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
-    for row in KAFKA_TOPIC_CONFIGS {
-        check!(
-            validate_topic_config(row.name, row.sample) == Ok(()),
-            "{}={}",
-            row.name,
-            row.sample
-        );
-    }
+struct TopicMetadataObservation {
+    oracle: &'static KafkaTopicConfig,
+    observed: Option<&'static registry::ConfigKey>,
 }
 
-/// Kafka trunk's topic keys follow `unstable.api.versions.enable`: refused
-/// with Kafka 4.3.1's `LogConfig.validateNames` text without it, accepted with
-/// it.
-#[test]
-fn kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {
-    for row in KAFKA_TRUNK_TOPIC_CONFIGS {
-        check!(
-            canonical_topic_config(row.name, row.sample, UnstableApiVersions::Disabled)
-                == Err(format!("Unknown topic config name: {}", row.name)),
-            "{}",
-            row.name
-        );
-        check!(
-            canonical_topic_config(row.name, row.sample, UnstableApiVersions::Enabled)
-                == Ok(row.sample.to_owned()),
-            "{}",
-            row.name
-        );
-    }
+struct TopicDefaultDivergence {
+    name: &'static str,
+    kafka_default: Option<&'static str>,
+    krabka_default: &'static str,
 }
 
-/// `MirrorMaker` sends the source topic's whole config set as one
-/// `IncrementalAlterConfigs`, so one unknown key loses every other key with
-/// it. The whole-map validator is the surface that call lands on: a 4.3.1
-/// set replays onto a default broker, and a trunk set only onto one with
-/// `unstable.api.versions.enable`.
-#[test]
-fn a_whole_kafka_config_set_replays_in_one_alter() {
-    let released: BTreeMap<String, String> = KAFKA_TOPIC_CONFIGS
+struct TopicValidationOutcome {
+    key: &'static str,
+    result: Result<(), String>,
+}
+
+struct TopicCanonicalOutcome {
+    key: &'static str,
+    result: Result<String, String>,
+}
+
+#[derive(Default)]
+struct TopicParityScenario {
+    samples: Vec<&'static KafkaTopicConfig>,
+    properties: BTreeMap<String, String>,
+    unstable: Option<UnstableApiVersions>,
+    per_key: Option<Vec<TopicValidationOutcome>>,
+    canonical_keys: Option<Vec<TopicCanonicalOutcome>>,
+    released_map: Option<Result<(), String>>,
+    opt_in_map: Option<Result<(), String>>,
+    registry_keys: Option<Vec<&'static str>>,
+    documented: Option<Vec<&'static str>>,
+    metadata: Option<Vec<TopicMetadataObservation>>,
+    divergences: Option<Vec<TopicDefaultDivergence>>,
+    key: String,
+    value: String,
+    single_validation: Option<Result<(), String>>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct TopicExtensionKey {
+    key: String,
+}
+
+#[rstest::fixture]
+fn topic_parity() -> TopicParityScenario {
+    // Each catalog corpus and alteration result belongs to one scenario.
+    TopicParityScenario::default()
+}
+
+#[rstest_bdd_macros::given("the topic properties captured from released Apache Kafka 4.3.1")]
+fn released_topic_properties(topic_parity: &mut TopicParityScenario) {
+    topic_parity.samples = KAFKA_TOPIC_CONFIGS.iter().collect();
+    topic_parity.properties = topic_parity
+        .samples
         .iter()
         .map(|row| (row.name.to_owned(), row.sample.to_owned()))
         .collect();
-    assert!(validate_topic_config_map(&released) == Ok(()));
-
-    let trunk: BTreeMap<String, String> = kafka_rosters()
-        .map(|row| (row.name.to_owned(), row.sample.to_owned()))
-        .collect();
-    assert!(
-        canonical_topic_config_map(
-            &trunk,
-            &TopicDefaults::default(),
-            true,
-            UnstableApiVersions::Enabled
-        )
-        .map(drop)
-            == Ok(())
-    );
-    assert!(validate_topic_config_map(&trunk).is_err());
 }
 
-/// Both directions of the diff at once. A Kafka key krabka lacks fails on the
-/// left; a krabka key nobody classified fails on the right.
-#[test]
-fn the_topic_key_sets_differ_only_by_the_rosters_below() {
-    let krabka: Vec<&str> = krabka_topic_keys();
-    let kafka: Vec<&str> = kafka_rosters().map(|row| row.name).collect();
+#[rstest_bdd_macros::given(
+    "the Kafka trunk topic properties together with the released property corpus"
+)]
+fn trunk_topic_properties(topic_parity: &mut TopicParityScenario) {
+    topic_parity.samples = KAFKA_TRUNK_TOPIC_CONFIGS.iter().collect();
+    topic_parity.properties = kafka_rosters()
+        .map(|row| (row.name.to_owned(), row.sample.to_owned()))
+        .collect();
+}
 
-    let missing: Vec<&str> = kafka
+#[rstest_bdd_macros::given("topic alteration unstable API versions are {enabled}")]
+fn topic_parity_unstable_mode(topic_parity: &mut TopicParityScenario, enabled: bool) {
+    topic_parity.unstable = Some(if enabled {
+        UnstableApiVersions::Enabled
+    } else {
+        UnstableApiVersions::Disabled
+    });
+}
+
+#[rstest_bdd_macros::given("the captured released and trunk topic-key reference catalogs")]
+fn all_topic_reference_metadata(topic_parity: &mut TopicParityScenario) {
+    topic_parity.samples = kafka_rosters().collect();
+}
+
+#[rstest_bdd_macros::given("an operator alters topic key {key} to quoted value {value}")]
+fn individual_topic_property(topic_parity: &mut TopicParityScenario, key: String, value: String) {
+    topic_parity.key = key;
+    topic_parity.value = serde_json::from_str(&value).expect("the topic value is quoted");
+}
+
+#[rstest_bdd_macros::when(
+    "the broker validates each released property and the complete released alteration"
+)]
+fn validate_released_topic_corpus(topic_parity: &mut TopicParityScenario) {
+    topic_parity.per_key = Some(
+        topic_parity
+            .samples
+            .iter()
+            .map(|row| TopicValidationOutcome {
+                key: row.name,
+                result: validate_topic_config(row.name, row.sample),
+            })
+            .collect(),
+    );
+    topic_parity.released_map = Some(validate_topic_config_map(&topic_parity.properties));
+}
+
+#[rstest_bdd_macros::when(
+    "the broker validates trunk properties and their complete MirrorMaker alteration"
+)]
+fn validate_trunk_topic_corpus(topic_parity: &mut TopicParityScenario) {
+    let unstable = topic_parity
+        .unstable
+        .expect("the unstable API policy was given");
+    topic_parity.canonical_keys = Some(
+        topic_parity
+            .samples
+            .iter()
+            .map(|row| TopicCanonicalOutcome {
+                key: row.name,
+                result: canonical_topic_config(row.name, row.sample, unstable),
+            })
+            .collect(),
+    );
+    topic_parity.opt_in_map = Some(
+        canonical_topic_config_map(
+            &topic_parity.properties,
+            &TopicDefaults::default(),
+            true,
+            unstable,
+        )
+        .map(drop),
+    );
+    topic_parity.released_map = Some(validate_topic_config_map(&topic_parity.properties));
+}
+
+#[rstest_bdd_macros::when(
+    "the topic registry and generated configuration descriptions are queried"
+)]
+fn query_topic_reference_metadata(topic_parity: &mut TopicParityScenario) {
+    topic_parity.registry_keys = Some(krabka_topic_keys());
+    topic_parity.documented = Some(topic_config_docs().iter().map(|doc| doc.key).collect());
+    topic_parity.metadata = Some(
+        topic_parity
+            .samples
+            .iter()
+            .map(|row| TopicMetadataObservation {
+                oracle: row,
+                observed: registry::lookup(ConfigScope::Topic, row.name),
+            })
+            .collect(),
+    );
+    topic_parity.divergences = Some(
+        DEFAULT_DIVERGENCES
+            .iter()
+            .map(|divergence| {
+                let kafka_default = kafka_rosters()
+                    .find(|row| row.name == divergence.name)
+                    .unwrap_or_else(|| panic!("{} is not a Kafka topic config", divergence.name))
+                    .default;
+                TopicDefaultDivergence {
+                    name: divergence.name,
+                    kafka_default,
+                    krabka_default: divergence.krabka_default,
+                }
+            })
+            .collect(),
+    );
+}
+
+#[rstest_bdd_macros::when("the released topic alteration validator checks the operator value")]
+fn validate_individual_topic_property(topic_parity: &mut TopicParityScenario) {
+    topic_parity.single_validation = Some(validate_topic_config(
+        &topic_parity.key,
+        &topic_parity.value,
+    ));
+}
+
+#[rstest_bdd_macros::then(
+    "every captured released property and the complete alteration are accepted"
+)]
+fn accepted_released_topic_corpus(topic_parity: &TopicParityScenario) {
+    let results = topic_parity
+        .per_key
+        .as_ref()
+        .expect("released properties were validated");
+    assert!(!results.is_empty());
+    for observation in results {
+        check!(observation.result == Ok(()), "{}", observation.key);
+    }
+    assert!(topic_parity.released_map == Some(Ok(())));
+}
+
+#[rstest_bdd_macros::then(
+    "every trunk key is refused with Kafka's exact unknown-topic-config message"
+)]
+fn refused_trunk_topic_keys(topic_parity: &TopicParityScenario) {
+    let results = topic_parity
+        .canonical_keys
+        .as_ref()
+        .expect("trunk properties were validated");
+    assert!(!results.is_empty());
+    for observation in results {
+        check!(
+            observation.result == Err(format!("Unknown topic config name: {}", observation.key)),
+            "{}",
+            observation.key
+        );
+    }
+    assert!(
+        topic_parity
+            .opt_in_map
+            .as_ref()
+            .expect("the whole map was validated")
+            .is_err()
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "every trunk property and the complete opted-in alteration preserve their values"
+)]
+fn accepted_trunk_topic_keys(topic_parity: &TopicParityScenario) {
+    let results = topic_parity
+        .canonical_keys
+        .as_ref()
+        .expect("trunk properties were validated");
+    assert!(results.len() == topic_parity.samples.len());
+    for (observation, sample) in results.iter().zip(&topic_parity.samples) {
+        check!(
+            observation.result == Ok(sample.sample.to_owned()),
+            "{}",
+            observation.key
+        );
+    }
+    assert!(topic_parity.opt_in_map == Some(Ok(())));
+}
+
+#[rstest_bdd_macros::then(
+    "the release-only validator refuses an alteration containing trunk properties"
+)]
+fn release_only_refuses_trunk_properties(topic_parity: &TopicParityScenario) {
+    assert!(
+        topic_parity
+            .released_map
+            .as_ref()
+            .expect("the released validator ran")
+            .is_err()
+    );
+}
+
+#[rstest_bdd_macros::then("no captured Kafka topic key is missing and the only extra keys are:")]
+fn complete_topic_key_surface(
+    topic_parity: &TopicParityScenario,
+    #[datatable] rows: Rows<TopicExtensionKey>,
+) {
+    let krabka = topic_parity
+        .registry_keys
+        .as_ref()
+        .expect("the registry was queried");
+    let kafka: Vec<_> = topic_parity.samples.iter().map(|row| row.name).collect();
+    let missing: Vec<_> = kafka
         .iter()
         .copied()
         .filter(|name| !krabka.contains(name))
         .collect();
-    let extra: Vec<&str> = krabka
+    let extra: Vec<_> = krabka
         .iter()
         .copied()
         .filter(|name| !kafka.contains(name))
         .collect();
-
+    let expected: Vec<_> = rows.into_iter().map(|row| row.key).collect();
     check!(missing == Vec::<&str>::new(), "Kafka keys krabka rejects");
-    check!(
-        extra == KRABKA_TOPIC_CONFIGS.to_vec(),
-        "krabka keys Kafka 4.3.1 has no row for"
-    );
+    check!(extra == KRABKA_TOPIC_CONFIGS.to_vec());
+    let extra: Vec<_> = extra.into_iter().map(str::to_owned).collect();
+    check!(extra == expected);
 }
 
-/// The type byte and default a Kafka key reports have to be Kafka's own: the
-/// JVM `AdminClient` parses `ConfigEntry.value()` with the type the broker
-/// hands back, and `kafka-configs --describe --all` prints the default.
-#[test]
-fn kafka_topic_key_types_and_defaults_match() {
-    for row in kafka_rosters() {
-        let Some(krabka_row) = registry::lookup(ConfigScope::Topic, row.name) else {
-            // `the_topic_key_sets_differ_only_by_the_rosters_below` reports a
-            // missing key; nothing to compare here.
-            continue;
-        };
+#[rstest_bdd_macros::then("every captured Kafka topic key is documented")]
+fn documented_topic_key_surface(topic_parity: &TopicParityScenario) {
+    let documented = topic_parity
+        .documented
+        .as_ref()
+        .expect("the configuration descriptions were queried");
+    for row in &topic_parity.samples {
+        check!(documented.contains(&row.name), "{}", row.name);
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "every captured topic key retains Kafka's type and its default or a documented divergence"
+)]
+fn kafka_topic_metadata(topic_parity: &TopicParityScenario) {
+    for observation in topic_parity
+        .metadata
+        .as_ref()
+        .expect("the metadata was queried")
+    {
+        let row = observation.oracle;
+        let actual = observation
+            .observed
+            .expect("every captured key is registered");
         let expected_default = DEFAULT_DIVERGENCES
             .iter()
-            .find(|divergence| divergence.name == row.name)
+            .find(|d| d.name == row.name)
             .map_or(row.default, |divergence| Some(divergence.krabka_default));
-
         check!(
-            (krabka_row.config_type, krabka_row.default) == (row.config_type, expected_default),
+            (actual.config_type, actual.default) == (row.config_type, expected_default),
             "{}",
             row.name
         );
     }
 }
 
-/// A divergence stops being one once it is closed, and the row here has to go
-/// with it. Without this, a fixed default would leave a row claiming a
-/// difference that no longer exists.
-#[test]
-fn every_recorded_divergence_is_still_a_divergence() {
-    for Divergence {
-        name,
-        krabka_default,
-    } in DEFAULT_DIVERGENCES
+#[rstest_bdd_macros::then("each documented default divergence is still an actual divergence")]
+fn real_topic_default_divergences(topic_parity: &TopicParityScenario) {
+    for divergence in topic_parity
+        .divergences
+        .as_ref()
+        .expect("divergences were inspected")
     {
-        let kafka_default = kafka_rosters()
-            .find(|row| row.name == *name)
-            .unwrap_or_else(|| panic!("{name} is not a Kafka 4.3.1 topic config"))
-            .default;
-        check!(kafka_default != Some(*krabka_default), "{name}");
+        check!(
+            divergence.kafka_default != Some(divergence.krabka_default),
+            "{}",
+            divergence.name
+        );
     }
 }
 
-/// Every Kafka key is on the generated reference page and in
-/// `DescribeConfigs`' typed metadata, which is the same projection of the
-/// registry. A key the validator accepts but the page never mentions would
-/// leave an operator reading `kafka-configs --describe` one story and the
-/// alter refusal another.
-#[test]
-fn every_kafka_topic_key_is_documented() {
-    let documented: Vec<&str> = topic_config_docs().iter().map(|doc| doc.key).collect();
-
-    for row in kafka_rosters() {
-        check!(documented.contains(&row.name), "{}", row.name);
-    }
-}
-
-/// Matching Kafka's key set is not the same as accepting anything. Each value
-/// below was refused by `LogConfig.validate` on the 4.3.1 jar, with the
-/// message quoted beside it, and krabka refuses it too.
-#[yare::parameterized(
-    message_downconversion_enable = { "message.downconversion.enable", "true" },
-    made_up_key = { "totally.made.up", "1" },
-    gzip_level_zero = { "compression.gzip.level", "0" },
-    lz4_level_too_high = { "compression.lz4.level", "18" },
-    lz4_level_zero = { "compression.lz4.level", "0" },
-    zstd_level_too_low = { "compression.zstd.level", "-131073" },
-    zstd_level_too_high = { "compression.zstd.level", "23" },
-    negative_max_message_bytes = { "max.message.bytes", "-1" },
-    segment_bytes_below_floor = { "segment.bytes", "1048575" },
-    segment_bytes_zero = { "segment.bytes", "0" },
-    compression_none = { "compression.type", "none" },
-)]
-fn kafka_refuses_what_krabka_refuses(name: &str, value: &str) {
+#[rstest_bdd_macros::then("the individual topic alteration is accepted")]
+fn accepted_topic_property(topic_parity: &TopicParityScenario) {
     check!(
-        validate_topic_config(name, value).is_err(),
-        "{name}={value} must be refused"
+        topic_parity.single_validation == Some(Ok(())),
+        "{}={}",
+        topic_parity.key,
+        topic_parity.value
     );
 }
 
-/// Not every Kafka key carries a validator. `LogConfig` declares
-/// `retention.bytes` as a bare `LONG` with a default and nothing else, so it
-/// accepts every value the type holds -- `-2` included, which `retention.ms`
-/// next to it refuses. A `MirrorMaker` replay of a source topic carrying one
-/// has to survive here, so krabka may not invent a floor Kafka does not have.
-#[yare::parameterized(
-    i64_min = { "-9223372036854775808" },
-    minus_two = { "-2" },
-    minus_one = { "-1" },
-    zero = { "0" },
-    i64_max = { "9223372036854775807" },
-)]
-fn a_key_kafka_gives_no_validator_accepts_every_value_of_its_type(value: &str) {
+#[rstest_bdd_macros::then("the individual topic alteration is refused")]
+fn refused_topic_property(topic_parity: &TopicParityScenario) {
     check!(
-        validate_topic_config("retention.bytes", value) == Ok(()),
-        "retention.bytes={value}"
+        topic_parity
+            .single_validation
+            .as_ref()
+            .expect("the topic alteration was validated")
+            .is_err(),
+        "{}={} must be refused",
+        topic_parity.key,
+        topic_parity.value
     );
 }
 
-#[test]
-fn retention_bytes_refuses_a_value_kafka_long_cannot_hold() {
-    check!(
-        validate_topic_config("retention.bytes", "9223372036854775808").is_err(),
-        "a value Kafka's LONG cannot hold is still refused"
-    );
-}
-
-/// The levels Kafka's own validators accept at each end of their range.
-#[yare::parameterized(
-    gzip_unlimited = { "compression.gzip.level", "-1" },
-    gzip_minimum = { "compression.gzip.level", "1" },
-    gzip_maximum = { "compression.gzip.level", "9" },
-    lz4_minimum = { "compression.lz4.level", "1" },
-    lz4_maximum = { "compression.lz4.level", "17" },
-    zstd_minimum = { "compression.zstd.level", "-131072" },
-    zstd_maximum = { "compression.zstd.level", "22" },
-)]
-fn codec_levels_accept_the_bounds_kafka_accepts(name: &str, value: &str) {
-    check!(
-        validate_topic_config(name, value) == Ok(()),
-        "{name}={value}"
-    );
-}
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/config_keys/kafka_parity",
+    fixtures = [topic_parity: TopicParityScenario]
+);

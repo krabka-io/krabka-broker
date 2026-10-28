@@ -16,83 +16,138 @@ use {
         txnver_harness::{admin_client, boot_single, create_topic, downgrade_transaction_version},
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    krabka_client_consumer::Consumer,
+    krabka_client_producer::Producer,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-/// Run a full transactional cycle at whatever `transaction.version` the
-/// cluster is currently finalized at: init → begin → send 3 → commit, then a
-/// fresh `read_committed` consumer must observe exactly `["a","b","c"]`.
-///
-/// The commit forces the coordinator to write `TransactionLogValue` records to
-/// `__transaction_state` at the resolved level (v0 for `TV_0`, v1 for `TV_1/TV_2`)
-/// across its state transitions. A successful produce→commit→read cycle
-/// therefore proves that the level's *encode* path runs and that the
-/// transaction commits and reads end-to-end. In-memory state drives the
-/// transitions within one broker lifetime. Unit tests in `txn::log_record`
-/// cover decode and recovery from disk.
-async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, group: &str) {
-    let consumer = {
-        let producer = transactional_producer(bootstrap.to_owned(), tid).await;
-        let txn = producer.begin_transaction().await.unwrap();
-        for v in ["a", "b", "c"] {
-            producer
-                .send(rec(topic, v))
-                .await
-                .expect("produce acknowledged");
-        }
-        txn.commit().await.unwrap();
-
-        let (consumer, seen) = committed_values(bootstrap.to_owned(), group, topic, None).await;
-        assert!(
-            seen == vec!["a", "b", "c"],
-            "tid={tid} level cycle: {seen:?}"
-        );
-
-        producer.close().await.map(|()| consumer)
-    }
-    .unwrap();
-    consumer.close().await.unwrap();
+#[derive(Default)]
+struct VersionedCycle {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    bootstrap: String,
+    topic: String,
+    transactional_id: String,
+    producer: Option<Producer>,
+    consumer: Option<Consumer>,
+    seen: Option<Vec<String>>,
 }
 
-/// Exercise the complete transactional cycle at both downgraded feature
-/// levels. `TV_1` writes flexible v1 log values and `TV_0` writes classic v0
-/// log values. In both cases a committed read proves that the selected encode
-/// path works end-to-end.
+#[fixture]
+fn versioned_cycle() -> VersionedCycle {
+    // Observe the same producer-to-reader cycle at each finalized feature level.
+    VersionedCycle::default()
+}
+
+#[given(
+    "transaction.version is finalized at {level} with topic {topic} and producer {transactional_id}"
+)]
+async fn downgraded_cycle(
+    versioned_cycle: &mut VersionedCycle,
+    level: i16,
+    topic: String,
+    transactional_id: String,
+) {
+    let (broker, bootstrap, directory) = boot_single().await;
+    let admin = admin_client(&bootstrap).await;
+    create_topic(&admin, &topic, TopicPartitionCount(1)).await;
+    downgrade_transaction_version(&admin, level).await;
+    support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, &transactional_id).await;
+    versioned_cycle.broker = Some(broker);
+    versioned_cycle.directory = Some(directory);
+    versioned_cycle.bootstrap = bootstrap;
+    versioned_cycle.topic = topic;
+    versioned_cycle.transactional_id = transactional_id;
+}
+
+#[when("the versioned producer commits a transaction containing a,b,c")]
+async fn commit_versioned_cycle(versioned_cycle: &mut VersionedCycle) {
+    versioned_cycle.producer = Some(
+        transactional_producer(
+            versioned_cycle.bootstrap.clone(),
+            &versioned_cycle.transactional_id,
+        )
+        .await,
+    );
+
+    let transaction = versioned_cycle
+        .producer
+        .as_ref()
+        .expect("initialized producer")
+        .begin_transaction()
+        .await
+        .unwrap();
+    for value in ["a", "b", "c"] {
+        versioned_cycle
+            .producer
+            .as_ref()
+            .expect("initialized producer")
+            .send(rec(&versioned_cycle.topic, value))
+            .await
+            .expect("produce acknowledged");
+    }
+    transaction.commit().await.unwrap();
+}
+
+#[when("a fresh read-committed group {group} consumes the versioned topic")]
+async fn read_versioned_cycle(versioned_cycle: &mut VersionedCycle, group: String) {
+    let (consumer, seen) = committed_values(
+        versioned_cycle.bootstrap.clone(),
+        &group,
+        &versioned_cycle.topic,
+        None,
+    )
+    .await;
+    versioned_cycle.consumer = Some(consumer);
+    versioned_cycle.seen = Some(seen);
+}
+
+#[then("the versioned committed read contains exactly a,b,c")]
+fn versioned_records(versioned_cycle: &VersionedCycle) {
+    assert!(
+        versioned_cycle
+            .seen
+            .as_ref()
+            .expect("committed topic consumed")
+            == &["a", "b", "c"]
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_full_cycle.feature",
+    name = "versioned full cycles commit and read"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn versioned_full_cycles_commit_and_read() {
-    struct Case {
-        level: i16,
-        topic: &'static str,
-        tid: &'static str,
-        group: &'static str,
-    }
-
-    let cases = [
-        Case {
-            level: 1,
-            topic: "tv1",
-            tid: "tv1-tid",
-            group: "tv1-g",
-        },
-        Case {
-            level: 0,
-            topic: "tv0",
-            tid: "tv0-tid",
-            group: "tv0-g",
-        },
-    ];
-
-    for case in cases {
-        let (broker, bootstrap, _dir) = boot_single().await;
-        let admin = admin_client(&bootstrap).await;
-        create_topic(&admin, case.topic, TopicPartitionCount(1)).await;
-        downgrade_transaction_version(&admin, case.level).await;
-        // The first lookup asks for `__transaction_state` and answers
-        // COORDINATOR_NOT_AVAILABLE. A Kafka producer retries it; the krabka
-        // producer does not, so the test makes the lookup a client makes.
-        support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, case.tid).await;
-
-        full_cycle_commit_and_read(&bootstrap, case.topic, case.tid, case.group).await;
-
-        broker.shutdown().await;
-    }
+async fn versioned_full_cycles_commit_and_read(
+    versioned_cycle: VersionedCycle,
+    level: i16,
+    topic: String,
+    transactional_id: String,
+    group: String,
+) {
+    let _ = (level, topic, transactional_id, group);
+    versioned_cycle
+        .producer
+        .take()
+        .expect("producer")
+        .close()
+        .await
+        .unwrap();
+    versioned_cycle
+        .consumer
+        .take()
+        .expect("consumer")
+        .close()
+        .await
+        .unwrap();
+    versioned_cycle
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(versioned_cycle);
 }

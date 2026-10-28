@@ -814,32 +814,44 @@ mod tests {
         check!(shares(0, 2) == vec![0, 0]);
     }
 
-    /// Kafka's `Errors.forException` for what `ReplicaManager.readFromLog`
-    /// catches.
-    #[test]
-    fn a_failed_log_read_maps_to_the_partition_error_kafka_gives() {
-        let io = || Error::other("disk");
-        let cases = [
-            (
-                BrokerError::Log(LogError::Io(io())),
-                codes::KAFKA_STORAGE_ERROR,
-            ),
-            (
-                BrokerError::Log(LogError::Corrupt("txn index".into())),
-                codes::CORRUPT_MESSAGE,
-            ),
-            (
-                BrokerError::Log(LogError::Records(RecordsError::BodyTooShort { needed: 1 })),
-                codes::CORRUPT_MESSAGE,
-            ),
-            (BrokerError::Io(io()), codes::UNKNOWN_SERVER_ERROR),
-        ];
-        let (got, want) = cases
-            .iter()
-            .map(|(err, code)| (read_failure_code(err), *code))
-            .unzip::<_, _, Vec<_>, Vec<_>>();
-        assert!(got == want);
+    #[derive(Default)]
+    struct ShareReadFailureScenario {
+        error: Option<BrokerError>,
+        code: Option<i16>,
     }
+    #[rstest::fixture]
+    fn share_read_failure() -> ShareReadFailureScenario {
+        let error = None;
+        ShareReadFailureScenario {
+            error,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("reading share records fails with {failure}")]
+    fn failed_share_read(share_read_failure: &mut ShareReadFailureScenario, failure: String) {
+        share_read_failure.error = Some(match failure.as_str() {
+            "a log disk I/O error" => BrokerError::Log(LogError::Io(Error::other("disk"))),
+            "a corrupt transaction index" => {
+                BrokerError::Log(LogError::Corrupt("txn index".into()))
+            }
+            "a record body shorter than one byte" => {
+                BrokerError::Log(LogError::Records(RecordsError::BodyTooShort { needed: 1 }))
+            }
+            "a broker I/O error" => BrokerError::Io(Error::other("disk")),
+            _ => panic!("unknown share read failure: {failure}"),
+        });
+    }
+    #[rstest_bdd_macros::when("ShareFetch maps the failed read to a partition response error")]
+    fn map_share_read_failure(share_read_failure: &mut ShareReadFailureScenario) {
+        share_read_failure.code = Some(read_failure_code(
+            share_read_failure.error.as_ref().unwrap(),
+        ));
+    }
+    #[rstest_bdd_macros::then("the ShareFetch partition error is {code}")]
+    fn check_share_read_failure(share_read_failure: &ShareReadFailureScenario, code: i16) {
+        assert!(share_read_failure.code.unwrap() == code);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_share_read_errors",fixtures=[share_read_failure:ShareReadFailureScenario]);
 
     #[test]
     fn remaining_record_budget_is_request_wide_and_saturating() {

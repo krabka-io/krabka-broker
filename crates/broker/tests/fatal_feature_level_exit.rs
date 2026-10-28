@@ -74,113 +74,127 @@ fn format_standalone(
     assert!(code == 0, "krabka-format exited {code}");
 }
 
-/// A topic record of `orders` with the topic id `id`.
-fn orders(id: u128) -> MetadataRecord {
-    MetadataRecord::V1Topic(TopicRecord {
-        name: "orders".into(),
-        topic_id: uuid::Uuid::from_u128(id),
-        partitions: 1,
-        replication_factor: 1,
-    })
+struct FatalControllerStartup {
+    directory: tempfile::TempDir,
+    controller_port: u16,
+    status: Option<ExitStatus>,
+    output: Option<Output>,
+    stdout: String,
 }
-
-/// One case: what it exercises, the format flags, the records seeded into the
-/// bootstrap records, and the fault on stderr.
-struct FatalFaultCase {
-    what: &'static str,
-    flags: &'static [&'static str],
-    extra: Vec<MetadataRecord>,
-    fault: &'static str,
-}
-
-#[test]
-fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault() {
-    let cases: [FatalFaultCase; 2] = [
-        FatalFaultCase {
-            what: "an unsupported feature level",
-            flags: &[
-                "--release-version",
-                "4.4-IV2",
-                "--unstable-feature-versions-enable",
-            ],
-            extra: vec![],
-            fault: "Encountered fatal fault: Tried to apply FeatureLevelRecord \
-             FeatureLevelRecord(name='metadata.version', featureLevel=33), \
-             but this controller only supports versions 7-30",
-        },
-        FatalFaultCase {
-            what: "a failed controller activation",
-            flags: &[],
-            extra: vec![orders(1), orders(2)],
-            fault: "Encountered fatal fault: exception while completing controller activation: \
-             metadata: topic 'orders' already exists",
-        },
-    ];
-    for FatalFaultCase {
-        what,
-        flags,
-        extra,
-        fault,
-    } in cases
-    {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let log_dir = tmp.path().join("data");
-        let controller_port = free_loopback_port();
-        format_standalone(&log_dir, controller_port, flags, extra);
-        // The logs go to a file, not to a pipe that nothing reads while the
-        // test polls for the exit.
-        let stdout_path = tmp.path().join("stdout.log");
-
-        let mut child = Command::new(env!("CARGO_BIN_EXE_krabka-broker"))
-            // The broker binds and registers its own client port, so there is
-            // no probe for it to race another process over.
-            .arg("--listen-addr=127.0.0.1:0")
-            .arg(format!(
-                "--controller-listen-addr=127.0.0.1:{controller_port}"
-            ))
-            .arg(format!("--log-dir={}", log_dir.display()))
-            .arg("--broker-id=1")
-            .arg("--metrics-listen-addr=none")
-            .arg("--health-listen-addr=none")
-            .stdout(Stdio::from(
-                File::create(&stdout_path).expect("create the stdout log"),
-            ))
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn krabka-broker");
-
-        // The broker stops on its own, within seconds: the fault ends its
-        // start at once. A hang is the failure, so a deadline turns it into
-        // one and kills the process it leaves behind. It is well under the
-        // two minutes that a start waits for its first unfence or for
-        // `metadata.version`, so a start that ignored the fault fails it.
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let status = loop {
-            if let Some(status) = child.try_wait().expect("poll krabka-broker") {
-                break Some(status);
-            }
-            if Instant::now() > deadline {
-                let _ = child.kill();
-                break None;
-            }
-            // intentional: waiting on a spawned krabka-broker subprocess to
-            // exit; no in-process handle exists to await instead.
-            thread::sleep(Duration::from_millis(100));
-        };
-        let output = child
-            .wait_with_output()
-            .expect("collect krabka-broker output");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        let status = status
-            .unwrap_or_else(|| panic!("{what}: krabka-broker kept running; stderr:\n{stderr}"));
-        // Kafka's `Exit.halt(1)`.
-        check!(status.code() == Some(1), "{what}: exit status {status}");
-        let stdout = fs::read_to_string(&stdout_path).expect("read the stdout log");
-        check!(
-            stdout.contains("halting: the metadata controller met a fatal fault"),
-            "{what}: stdout:\n{stdout}"
-        );
-        check!(stderr.contains(fault), "{what}: stderr:\n{stderr}");
+#[rstest::fixture]
+fn fatal_startup() -> FatalControllerStartup {
+    let directory = tempfile::tempdir().expect("process workspace");
+    FatalControllerStartup {
+        directory,
+        controller_port: free_loopback_port(),
+        status: None,
+        output: None,
+        stdout: String::new(),
     }
 }
+#[rstest_bdd_macros::given("standalone node 1 is formatted at unstable metadata release 4.4-IV2")]
+fn unsupported_controller_bootstrap(fatal_startup: &mut FatalControllerStartup) {
+    format_standalone(
+        &fatal_startup.directory.path().join("data"),
+        fatal_startup.controller_port,
+        &[
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable",
+        ],
+        Vec::new(),
+    );
+}
+#[rstest_bdd_macros::given("standalone node 1 is formatted with these bootstrap topic records")]
+fn duplicate_controller_bootstrap(
+    fatal_startup: &mut FatalControllerStartup,
+    datatable: Vec<Vec<String>>,
+) {
+    let records = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            MetadataRecord::V1Topic(TopicRecord {
+                name: cells[0].clone(),
+                topic_id: uuid::Uuid::from_u128(cells[1].parse().expect("topic UUID")),
+                partitions: cells[2].parse().expect("partitions"),
+                replication_factor: cells[3].parse().expect("replication factor"),
+            })
+        })
+        .collect();
+    format_standalone(
+        &fatal_startup.directory.path().join("data"),
+        fatal_startup.controller_port,
+        &[],
+        records,
+    );
+}
+#[rstest_bdd_macros::when(
+    "the broker binary starts node 1 without unstable feature versions enabled"
+)]
+fn boot_controller_with_fatal_records(fatal_startup: &mut FatalControllerStartup) {
+    let stdout_path = fatal_startup.directory.path().join("stdout.log");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_krabka-broker"))
+        .arg("--listen-addr=127.0.0.1:0")
+        .arg(format!(
+            "--controller-listen-addr=127.0.0.1:{}",
+            fatal_startup.controller_port
+        ))
+        .arg(format!(
+            "--log-dir={}",
+            fatal_startup.directory.path().join("data").display()
+        ))
+        .arg("--broker-id=1")
+        .arg("--metrics-listen-addr=none")
+        .arg("--health-listen-addr=none")
+        .stdout(Stdio::from(File::create(&stdout_path).expect("stdout log")))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn broker");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    fatal_startup.status = loop {
+        if let Some(status) = child.try_wait().expect("poll broker") {
+            break Some(status);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            break None;
+        }
+        // This test waits for an external process, which has no async broker handle.
+        thread::sleep(Duration::from_millis(100));
+    };
+    fatal_startup.output = Some(child.wait_with_output().expect("broker process output"));
+    fatal_startup.stdout = fs::read_to_string(stdout_path).expect("stdout log");
+}
+#[rstest_bdd_macros::then(
+    "the broker exits within 60 seconds with status 1 and reports a fatal controller halt"
+)]
+fn fatal_controller_exit(fatal_startup: &FatalControllerStartup) {
+    let output = fatal_startup.output.as_ref().expect("broker was started");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let status = fatal_startup
+        .status
+        .unwrap_or_else(|| panic!("broker kept running; stderr:\n{stderr}"));
+    check!(status.code() == Some(1), "exit status {status}");
+    check!(
+        fatal_startup
+            .stdout
+            .contains("halting: the metadata controller met a fatal fault"),
+        "stdout:\n{}",
+        fatal_startup.stdout
+    );
+}
+#[rstest_bdd_macros::then("stderr contains the Kafka fatal fault \"{fault}\"")]
+fn fatal_controller_diagnostic(fatal_startup: &FatalControllerStartup, fault: String) {
+    let stderr = String::from_utf8_lossy(
+        &fatal_startup
+            .output
+            .as_ref()
+            .expect("broker process output")
+            .stderr,
+    );
+    check!(stderr.contains(&fault), "stderr:\n{stderr}");
+}
+rstest_bdd_macros::scenarios!("tests/features/controller/fatal_startup.feature", fixtures = [fatal_startup: FatalControllerStartup]);
+
+use std::process::{ExitStatus, Output};

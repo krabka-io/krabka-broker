@@ -9,47 +9,43 @@ use {
     crate::{
         harness::metadata_probe,
         oauthbearer::{
-            now_unix_secs, oauthbearer_authenticate, oauthbearer_fixture, oauthbearer_initial,
-            oauthbearer_session_start, start_oauthbearer_broker, unsecured_jws,
+            OauthbearerSession, now_unix_secs, oauthbearer_authenticate, oauthbearer_fixture,
+            oauthbearer_initial, oauthbearer_session_start, start_oauthbearer_broker,
+            unsecured_jws,
         },
     },
     assert2::assert,
     base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64},
+    bytes::Bytes,
+    krabka_broker::BrokerHandle,
+    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
+    krabka_security::{OAuthBearerValidator, UnsecuredJwsValidator},
     ring::{
         rand::SystemRandom,
         signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
     },
-    std::{io, net::SocketAddr},
-    tokio::net::TcpStream,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
+    std::io,
+    tempfile::TempDir,
 };
 
 /// Happy path: a valid unsecured token authenticates in a single round.
 ///
 /// A post-auth Metadata round-trip proves that the connection survived and
 /// that the broker accepted the principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_happy_path() {
-    let (_log_dir, handle, addr) =
-        oauthbearer_fixture(krabka_security::OAuthBearerValidator::default(), None).await;
-
-    let result: Result<(), io::Error> = async {
-        let mut session = oauthbearer_session_start(addr).await?;
-
-        let token = unsecured_jws("svc-account", now_unix_secs() + 3600);
-        authenticate_success(
-            &mut session.stream,
-            &mut session.corr,
-            &token,
-            "unexpected challenge — token was rejected",
-        )
-        .await?;
-
-        metadata_probe(&mut session.stream, session.corr).await
-    }
-    .await;
-
-    handle.shutdown().await;
-    result.expect("OAUTHBEARER session must succeed end-to-end");
+async fn sasl_oauthbearer_happy_path(bearer: BearerTokenScenario) {
+    bearer
+        .broker
+        .expect("an OAUTHBEARER listener")
+        .shutdown()
+        .await;
 }
 
 /// Failure path: an expired token triggers the RFC 7628 two-round failure
@@ -58,23 +54,18 @@ async fn sasl_oauthbearer_happy_path() {
 /// Round 1 returns the `invalid_token` JSON with `error_code = 0` and keeps
 /// the connection open. Round 2, the client's `\x01` dummy, returns
 /// `SASL_AUTHENTICATION_FAILED` (58).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer invalid token two round failure"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_invalid_token_two_round_failure() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let validator =
-        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
-            allowable_clock_skew: krabka_units::secs(0),
-            ..Default::default()
-        });
-    let handle = start_oauthbearer_broker(log_dir.path(), validator).await;
-    let addr = handle.listen_addr();
-
-    // Expired token (exp an hour in the past, zero skew).
-    let token = unsecured_jws("admin", now_unix_secs() - 3600);
-    let result = invalid_token_session(addr, &token).await;
-
-    handle.shutdown().await;
-    result.expect("OAUTHBEARER failure handshake must complete");
+async fn sasl_oauthbearer_invalid_token_two_round_failure(bearer: BearerTokenScenario) {
+    bearer
+        .broker
+        .expect("an OAUTHBEARER listener")
+        .shutdown()
+        .await;
 }
 
 /// A signing key pair and the JWKS document that advertises its public key.
@@ -126,34 +117,18 @@ fn signed_validator(jwks_json: &str) -> krabka_security::OAuthBearerValidator {
 ///
 /// This proves that the `Signed` validator is wired through the live
 /// `SaslAuthenticate` path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer signed token happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_signed_token_happy_path() {
-    let Es256Key { key_pair: kp, jwks } = es256_key("k1");
-    let (_log_dir, handle, addr) = oauthbearer_fixture(signed_validator(&jwks), None).await;
-
-    let result: Result<(), io::Error> = async {
-        let mut session = oauthbearer_session_start(addr).await?;
-
-        let claims = format!(
-            "{{\"sub\":\"svc-account\",\"exp\":{}}}",
-            now_unix_secs() + 3600
-        );
-        let token = es256_token(&kp, "k1", &claims);
-        authenticate_success(
-            &mut session.stream,
-            &mut session.corr,
-            &token,
-            "signed success round must be empty",
-        )
-        .await?;
-
-        // Post-auth Metadata proves the connection survived authentication.
-        metadata_probe(&mut session.stream, session.corr).await
-    }
-    .await;
-
-    handle.shutdown().await;
-    result.expect("signed OAUTHBEARER session must succeed end-to-end");
+async fn sasl_oauthbearer_signed_token_happy_path(bearer: BearerTokenScenario) {
+    bearer
+        .broker
+        .expect("an OAUTHBEARER listener")
+        .shutdown()
+        .await;
 }
 
 /// Failure path: a token signed by a *different* key than the JWKS advertises
@@ -161,66 +136,213 @@ async fn sasl_oauthbearer_signed_token_happy_path() {
 ///
 /// Round 1 carries the `invalid_token` JSON. Round 2, the `\x01` dummy,
 /// returns 58.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer signed token wrong key two round failure"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
-    // JWKS advertises key A's public key; the token is signed by key B.
-    let Es256Key {
-        key_pair: _kp_a,
-        jwks: jwks_a,
-    } = es256_key("k1");
-    let Es256Key {
-        key_pair: kp_b,
-        jwks: _jwks_b,
-    } = es256_key("k1");
-    let (_log_dir, handle, addr) = oauthbearer_fixture(signed_validator(&jwks_a), None).await;
-
-    let claims = format!("{{\"sub\":\"admin\",\"exp\":{}}}", now_unix_secs() + 3600);
-    let token = es256_token(&kp_b, "k1", &claims);
-    let result = invalid_token_session(addr, &token).await;
-
-    handle.shutdown().await;
-    result.expect("signed OAUTHBEARER failure handshake must complete");
+async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure(bearer: BearerTokenScenario) {
+    bearer
+        .broker
+        .expect("an OAUTHBEARER listener")
+        .shutdown()
+        .await;
 }
 
-async fn expect_invalid_token(
-    stream: &mut TcpStream,
-    corr: &mut i32,
-    token: &str,
-) -> io::Result<()> {
-    let round1 = oauthbearer_authenticate(stream, corr, oauthbearer_initial(token)).await?;
-    assert!(round1.error_code == 0, "round 1 must not close yet");
+struct BearerTokenScenario {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    signing_key: Option<Es256Key>,
+    token: Option<String>,
+    session: Option<OauthbearerSession>,
+    initial_response: Option<io::Result<SaslAuthenticateResponse>>,
+    final_response: Option<io::Result<SaslAuthenticateResponse>>,
+    metadata: Option<io::Result<()>>,
+}
+
+#[fixture]
+fn bearer() -> BearerTokenScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    BearerTokenScenario {
+        broker: None,
+        directory: None,
+        signing_key: None,
+        token: None,
+        session: None,
+        initial_response: None,
+        final_response: None,
+        metadata: None,
+    }
+}
+
+#[given("an OAUTHBEARER listener accepting unsecured JWS tokens")]
+async fn unsecured_listener(bearer: &mut BearerTokenScenario) {
+    let (directory, broker, _addr) =
+        oauthbearer_fixture(OAuthBearerValidator::default(), None).await;
+    bearer.broker = Some(broker);
+    bearer.directory = Some(directory);
+}
+
+#[given("an unsecured OAUTHBEARER listener allowing zero clock skew")]
+async fn zero_skew_listener(bearer: &mut BearerTokenScenario) {
+    let directory = tempfile::tempdir().unwrap();
+    let validator = OAuthBearerValidator::Unsecured(UnsecuredJwsValidator {
+        allowable_clock_skew: krabka_units::secs(0),
+        ..Default::default()
+    });
+    bearer.broker = Some(start_oauthbearer_broker(directory.path(), validator).await);
+    bearer.directory = Some(directory);
+}
+
+#[given("an OAUTHBEARER listener trusting ES256 key A as kid k1 in an in-memory JWKS")]
+async fn signed_listener(bearer: &mut BearerTokenScenario) {
+    let key = es256_key("k1");
+    let (directory, broker, _addr) = oauthbearer_fixture(signed_validator(&key.jwks), None).await;
+    bearer.broker = Some(broker);
+    bearer.directory = Some(directory);
+    bearer.signing_key = Some(key);
+}
+
+#[given("an unsecured svc-account token expiring one hour from now")]
+fn valid_unsecured_token(bearer: &mut BearerTokenScenario) {
+    bearer.token = Some(unsecured_jws("svc-account", now_unix_secs() + 3600));
+}
+
+#[given("an unsecured admin token that expired one hour ago")]
+fn expired_token(bearer: &mut BearerTokenScenario) {
+    bearer.token = Some(unsecured_jws("admin", now_unix_secs() - 3600));
+}
+
+#[given("a svc-account ES256 token signed by key A and expiring one hour from now")]
+fn trusted_signed_token(bearer: &mut BearerTokenScenario) {
+    let key = bearer.signing_key.as_ref().expect("the trusted ES256 key");
+    let claims = format!(
+        "{{\"sub\":\"svc-account\",\"exp\":{}}}",
+        now_unix_secs() + 3600
+    );
+    bearer.token = Some(es256_token(&key.key_pair, "k1", &claims));
+}
+
+#[given("an admin ES256 token signed by different key B under the same kid k1")]
+fn wrong_signed_token(bearer: &mut BearerTokenScenario) {
+    let key = es256_key("k1");
+    let claims = format!("{{\"sub\":\"admin\",\"exp\":{}}}", now_unix_secs() + 3600);
+    bearer.token = Some(es256_token(&key.key_pair, "k1", &claims));
+}
+
+#[given("the client has selected OAUTHBEARER on a new connection")]
+async fn selected_bearer_session(bearer: &mut BearerTokenScenario) {
+    let addr = bearer
+        .broker
+        .as_ref()
+        .expect("an OAUTHBEARER listener")
+        .listen_addr();
+    bearer.session = Some(
+        oauthbearer_session_start(addr)
+            .await
+            .expect("the OAUTHBEARER handshake"),
+    );
+}
+
+#[when("the bearer token is sent as the initial SASL response")]
+async fn initial_token(bearer: &mut BearerTokenScenario) {
+    let token = bearer.token.as_ref().expect("a bearer token");
+    let session = bearer
+        .session
+        .as_mut()
+        .expect("a selected OAUTHBEARER session");
+    bearer.initial_response = Some(
+        oauthbearer_authenticate(
+            &mut session.stream,
+            &mut session.corr,
+            oauthbearer_initial(token),
+        )
+        .await,
+    );
+}
+
+#[then("the token is accepted in one round without challenge bytes")]
+fn bearer_accepted(bearer: &BearerTokenScenario) {
+    let response = bearer
+        .initial_response
+        .as_ref()
+        .expect("the initial bearer token was submitted")
+        .as_ref()
+        .expect("the OAUTHBEARER authentication round must complete");
     assert!(
-        &round1.auth_bytes[..] == br#"{"status":"invalid_token"}"#,
+        response.error_code == 0,
+        "authenticate failed: code={} msg={:?}",
+        response.error_code,
+        response.error_message
+    );
+    assert!(
+        response.auth_bytes.is_empty(),
+        "a successful token must not produce an OAUTHBEARER challenge"
+    );
+}
+
+#[when("the bearer-authenticated connection requests Metadata")]
+async fn bearer_metadata(bearer: &mut BearerTokenScenario) {
+    let session = bearer
+        .session
+        .as_mut()
+        .expect("an accepted OAUTHBEARER session");
+    bearer.metadata = Some(metadata_probe(&mut session.stream, session.corr).await);
+}
+
+#[then("Metadata succeeds after admitting the bearer principal")]
+fn usable_bearer_session(bearer: &BearerTokenScenario) {
+    bearer
+        .metadata
+        .as_ref()
+        .expect("the authenticated session requested Metadata")
+        .as_ref()
+        .expect("OAUTHBEARER session must succeed end-to-end");
+}
+
+#[then("round 1 keeps the connection open and returns only the invalid_token JSON challenge")]
+fn invalid_token_challenge(bearer: &BearerTokenScenario) {
+    let response = bearer
+        .initial_response
+        .as_ref()
+        .expect("the initial bearer token was submitted")
+        .as_ref()
+        .expect("OAUTHBEARER failure round 1 must complete");
+    assert!(response.error_code == 0, "round 1 must not close yet");
+    assert!(
+        &response.auth_bytes[..] == br#"{"status":"invalid_token"}"#,
         "round 1 must carry the RFC 7628 error JSON"
     );
-
-    // The client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
-    let round2 = oauthbearer_authenticate(stream, corr, bytes::Bytes::from_static(&[1u8])).await?;
-    assert!(round2.error_code == 58, "round 2 must fail the connection");
-    Ok(())
 }
 
-async fn invalid_token_session(addr: SocketAddr, token: &str) -> Result<(), io::Error> {
-    let mut session = oauthbearer_session_start(addr).await?;
-    expect_invalid_token(&mut session.stream, &mut session.corr, token).await?;
-    Ok(())
+#[when("the client sends the RFC 7628 dummy byte 1")]
+async fn bearer_failure_dummy(bearer: &mut BearerTokenScenario) {
+    let session = bearer
+        .session
+        .as_mut()
+        .expect("an OAUTHBEARER challenge session");
+    bearer.final_response = Some(
+        oauthbearer_authenticate(
+            &mut session.stream,
+            &mut session.corr,
+            Bytes::from_static(&[1u8]),
+        )
+        .await,
+    );
 }
 
-async fn authenticate_success(
-    stream: &mut TcpStream,
-    corr: &mut i32,
-    token: &str,
-    unexpected_challenge: &str,
-) -> Result<(), io::Error> {
-    let auth = oauthbearer_authenticate(stream, corr, oauthbearer_initial(token)).await?;
-    if auth.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "authenticate failed: code={} msg={:?}",
-            auth.error_code, auth.error_message,
-        )));
-    }
-    if !auth.auth_bytes.is_empty() {
-        return Err(io::Error::other(unexpected_challenge.to_owned()));
-    }
-    Ok(())
+#[then("round 2 returns SASL_AUTHENTICATION_FAILED")]
+fn bearer_failure_completed(bearer: &BearerTokenScenario) {
+    let response = bearer
+        .final_response
+        .as_ref()
+        .expect("the RFC 7628 dummy was submitted")
+        .as_ref()
+        .expect("OAUTHBEARER failure round 2 must complete");
+    assert!(
+        response.error_code == 58,
+        "round 2 must fail the connection"
+    );
 }

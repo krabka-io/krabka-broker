@@ -7,4 +7,7 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "authz")
 
-crate_tests(lib = "authz")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "authz",
+)

@@ -207,19 +207,32 @@ mod tests {
         assert!(records == expected);
     }
 
-    /// One row of the broker-resource table: the name, the configs, and the
-    /// outcome.
-    type Case<'a> = (
-        &'a str,
-        Vec<(&'a str, &'a str)>,
-        Result<Vec<MetadataRecord>, (i16, &'a str)>,
-    );
-
-    /// Kafka's `ConfigAdminManager` and `DynamicBrokerConfig` rules for a
-    /// `BROKER` resource, served by node 1 with node 2 also registered. Each
-    /// row is the resource name, the configs, and the whole expected outcome.
-    #[test]
-    fn broker_resources_follow_kafkas_name_and_dynamic_config_rules() {
+    #[derive(Default)]
+    struct BrokerReplacementScenario {
+        image: Option<krabka_metadata::MetadataImage>,
+        name: String,
+        configs: Vec<(String, String)>,
+        result: Option<Result<Vec<MetadataRecord>, (i16, String)>>,
+    }
+    #[rstest::fixture]
+    fn broker_replacement() -> BrokerReplacementScenario {
+        let image = None;
+        BrokerReplacementScenario {
+            image,
+            ..Default::default()
+        }
+    }
+    fn broker_config_fixture_value(value: &str) -> String {
+        value
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+            .unwrap_or(value)
+            .to_owned()
+    }
+    #[rstest_bdd_macros::given(
+        "brokers 1 and 2 are registered and broker 1 serves the configuration replacement"
+    )]
+    fn registered_replacement_brokers(broker_replacement: &mut BrokerReplacementScenario) {
         let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
@@ -227,125 +240,92 @@ mod tests {
                 ..broker_registration(krabka_raft::NodeId(2))
             },
         ));
-        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-        let rate = LEADER_THROTTLED_RATE_KEY;
-        let cases: Vec<Case<'_>> = vec![
-            (
-                "2",
-                vec![(rate, "1")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Unexpected broker id, expected 1, but received 2",
-                )),
-            ),
-            (
-                "7",
-                vec![(rate, "1")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Unexpected broker id, expected 1, but received 7",
-                )),
-            ),
-            (
-                "one",
-                vec![(rate, "1")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Node id must be an integer, but it is: one",
-                )),
-            ),
-            (
-                "",
-                vec![("log.retention.ms", "86400000"), ("plugin.key", "x")],
-                Ok(vec![
-                    record(cluster, "log.retention.ms", Some("86400000")),
-                    record(cluster, "plugin.key", Some("x")),
-                ]),
-            ),
-            (
-                "1",
-                vec![(config_keys::MIN_INSYNC_REPLICAS, "2")],
-                Ok(vec![record(
-                    SERVING,
-                    config_keys::MIN_INSYNC_REPLICAS,
-                    Some("2"),
-                )]),
-            ),
-            (
-                "",
-                vec![("log.dirs", "/tmp")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: [log.dirs]",
-                )),
-            ),
-            // Every `KafkaConfig` key that is not dynamic is refused, not
-            // only the ones krabka reads at startup.
-            (
-                "",
-                vec![("auto.leader.rebalance.enable", "false")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: [auto.leader.rebalance.enable]",
-                )),
-            ),
-            (
-                "1",
-                vec![("sasl.server.max.receive.size", "1048576")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: [sasl.server.max.receive.size]",
-                )),
-            ),
-            (
-                "",
-                vec![("connection.failed.authentication.delay.ms", "0")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: \
-                     [connection.failed.authentication.delay.ms]",
-                )),
-            ),
-            // A dynamic key is parsed against its `ConfigDef`.
-            (
-                "1",
-                vec![("num.io.threads", "abc")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Invalid value abc for configuration num.io.threads: Not a number of type INT",
-                )),
-            ),
-            // The record carries the string the client sent, as Kafka's does
-            // (`ConfigurationControlManager` stores the value it is given and
-            // `DynamicConfig.Broker.validate` drops the parse): a padded
-            // `INT`, a `DOUBLE` that prints as `1.0`, a `LONG` that
-            // `Double.toString` would print as `1.048576E8`, a spaced list.
-            (
-                "",
-                vec![
-                    ("max.connections", " 100 "),
-                    ("log.cleaner.min.cleanable.ratio", "1"),
-                    ("log.cleaner.io.max.bytes.per.second", "104857600"),
-                    ("log.cleanup.policy", "compact , delete"),
-                ],
-                Ok(vec![
-                    record(
-                        cluster,
-                        "log.cleaner.io.max.bytes.per.second",
-                        Some("104857600"),
-                    ),
-                    record(cluster, "log.cleaner.min.cleanable.ratio", Some("1")),
-                    record(cluster, "log.cleanup.policy", Some("compact , delete")),
-                    record(cluster, "max.connections", Some(" 100 ")),
-                ]),
-            ),
-        ];
-        for (name, configs, want) in cases {
-            let got = replacement_records(&image, name, &configs);
-            let want = want.map_err(|(code, message)| (code, message.to_owned()));
-            check!(got == want, "{name:?} {configs:?}");
-        }
+        broker_replacement.image = Some(image);
     }
+    #[rstest_bdd_macros::given(
+        "broker replacement targets {resource} with key {key} value {value}"
+    )]
+    fn broker_replacement_input(
+        broker_replacement: &mut BrokerReplacementScenario,
+        resource: String,
+        key: String,
+        value: String,
+    ) {
+        broker_replacement.name = if resource == "cluster-default" {
+            String::new()
+        } else {
+            resource
+        };
+        broker_replacement.configs = vec![(key, value)];
+    }
+    #[rstest_bdd_macros::given("broker replacement targets {resource} with configurations")]
+    fn broker_replacement_configs(
+        broker_replacement: &mut BrokerReplacementScenario,
+        resource: String,
+        datatable: Vec<Vec<String>>,
+    ) {
+        broker_replacement.name = if resource == "cluster-default" {
+            String::new()
+        } else {
+            resource
+        };
+        broker_replacement.configs = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [key, value] = row.as_slice() else {
+                    panic!("broker configuration key and value required")
+                };
+                (key.clone(), broker_config_fixture_value(value))
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when(
+        "the broker validates the complete dynamic configuration replacement"
+    )]
+    fn replace_broker_configurations(broker_replacement: &mut BrokerReplacementScenario) {
+        let configs: Vec<_> = broker_replacement
+            .configs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        broker_replacement.result = Some(replacement_records(
+            broker_replacement.image.as_ref().unwrap(),
+            &broker_replacement.name,
+            &configs,
+        ));
+    }
+    #[rstest_bdd_macros::then("broker replacement refuses with code {code} and message {message}")]
+    fn check_broker_replacement_refusal(
+        broker_replacement: &BrokerReplacementScenario,
+        code: i16,
+        message: String,
+    ) {
+        check!(broker_replacement.result.as_ref().unwrap() == &Err((code, message)));
+    }
+    #[rstest_bdd_macros::then("the exact ordered broker configuration records are")]
+    fn check_broker_replacement_records(
+        broker_replacement: &BrokerReplacementScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [node, key, value] = row.as_slice() else {
+                    panic!("broker node configuration key and value required")
+                };
+                let node = if node == "cluster" {
+                    krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                } else {
+                    NodeId(node.parse().unwrap())
+                };
+                record(node, key, Some(&broker_config_fixture_value(value)))
+            })
+            .collect();
+        check!(broker_replacement.result.as_ref().unwrap() == &Ok(expected));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_broker_config_replacement",fixtures=[broker_replacement:BrokerReplacementScenario]);
 
     #[test]
     fn broker_full_replacement_rejects_controller_managed_configs() {
@@ -410,4 +390,6 @@ mod tests {
                 ))
         );
     }
+
+    // BDD scenario entry points; acceptance steps are defined above.
 }

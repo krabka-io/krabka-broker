@@ -1,115 +1,194 @@
-//! The record round trip over one broker.
-//!
-//! A produce assigns base offsets, a fetch reads the batches back, and
-//! `ListOffsets` reports the ends of an empty partition. All three run against
-//! the same in-process broker.
+//! Record offsets and fetch visibility through one Kafka broker.
 
-/// Builds one `RecordBatch` that carries `n` empty records with sequential
-/// offset deltas.
-use crate::support::records::empty_record_batch as one_record_batch;
 use {
     crate::{
         harness::{create_topic, topic_id_for},
         support::{
-            self,
+            self, InProcess,
             fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
             offsets::{list_offset_partition, single_partition_list_offsets},
             produce::{SinglePartitionProduceSetup, batch_request},
+            records::empty_record_batch,
         },
     },
     assert2::{assert, check},
-    krabka_protocol::owned::list_offsets_request::ListOffsetsRequest,
+    krabka_protocol::{
+        owned::{
+            fetch_response::FetchResponse, list_offsets_request::ListOffsetsRequest,
+            list_offsets_response::ListOffsetsResponse, produce_response::ProduceResponse,
+        },
+        primitives::uuid::Uuid,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
-#[tokio::test]
-async fn produce_assigns_base_offsets() {
-    let p = support::start().await;
-    create_topic(&p, "prod", 1).await;
-    let topic_id = topic_id_for(&p.client, "prod").await;
-
-    // First produce: 3 records → base 0.
-    let req = batch_request(one_record_batch(3), SinglePartitionProduceSetup {
-        topic: ("prod").into(),
-        topic_id,
-        ..Default::default()
-    });
-    let resp = p.client.send(req).await.expect("Produce 1");
-    assert!(resp.responses.len() == 1);
-    assert!(resp.responses[0].partition_responses.len() == 1);
-    check!(resp.responses[0].partition_responses[0].error_code == 0);
-    check!(resp.responses[0].partition_responses[0].base_offset == 0);
-
-    // Second produce: 2 records → base 3.
-    let req2 = batch_request(one_record_batch(2), SinglePartitionProduceSetup {
-        topic: ("prod").into(),
-        topic_id,
-        ..Default::default()
-    });
-    let resp2 = p.client.send(req2).await.expect("Produce 2");
-    assert!(resp2.responses[0].partition_responses[0].error_code == 0);
-    assert!(resp2.responses[0].partition_responses[0].base_offset == 3);
-
-    p.broker.shutdown().await;
+#[derive(Default)]
+struct RecordRoundTrip {
+    broker: Option<InProcess>,
+    topic: String,
+    topic_id: Uuid,
+    produced: Vec<ProduceResponse>,
+    fetched: Option<FetchResponse>,
+    offsets: Vec<ListOffsetsResponse>,
 }
 
-/// The test client negotiates Produce v13, which carries only the topic id.
-/// A request with no id names no topic, so Kafka's
-/// `KafkaApis.handleProduceRequest` answers `UNKNOWN_TOPIC_ID` (100). The name
-/// path and its `UNKNOWN_TOPIC_OR_PARTITION` (3) belong to v12 and earlier.
-#[tokio::test]
-async fn produce_without_a_topic_id_returns_unknown_topic_id() {
-    let p = support::start().await;
-    let req = batch_request(one_record_batch(1), SinglePartitionProduceSetup {
-        topic: ("nope").into(),
-        ..Default::default()
-    });
-    let resp = p.client.send(req).await.expect("Produce unknown");
-    assert!(resp.responses[0].partition_responses[0].error_code == 100);
-    p.broker.shutdown().await;
+impl RecordRoundTrip {
+    fn broker(&self) -> &InProcess { self.broker.as_ref().expect("the record broker is running") }
+
+    async fn shutdown(self) {
+        self.broker
+            .expect("the record broker is running")
+            .broker
+            .shutdown()
+            .await;
+    }
 }
 
-#[tokio::test]
-async fn produce_then_fetch_round_trip() {
-    let p = support::start().await;
-    create_topic(&p, "round", 1).await;
-    let topic_id = topic_id_for(&p.client, "round").await;
+#[fixture]
+fn records() -> RecordRoundTrip {
+    // Each scenario owns fresh services and observations.
+    RecordRoundTrip {
+        broker: None,
+        ..Default::default()
+    }
+}
 
-    let prod = batch_request(one_record_batch(3), SinglePartitionProduceSetup {
-        topic: ("round").into(),
-        topic_id,
+#[given("a single broker for record requests")]
+async fn record_broker(records: &mut RecordRoundTrip) {
+    records.broker = Some(support::start().await);
+}
+
+#[given("an empty single-partition topic named {topic}")]
+async fn record_topic(records: &mut RecordRoundTrip, topic: String) {
+    create_topic(records.broker(), &topic, 1).await;
+    records.topic_id = topic_id_for(&records.broker().client, &topic).await;
+    records.topic = topic;
+}
+
+#[when("the client produces {count} records to the topic")]
+async fn append_records(records: &mut RecordRoundTrip, count: i32) {
+    let request = batch_request(empty_record_batch(count), SinglePartitionProduceSetup {
+        topic: records.topic.clone(),
+        topic_id: records.topic_id,
         ..Default::default()
     });
-    let presp = p.client.send(prod).await.expect("Produce");
-    assert!(presp.responses[0].partition_responses[0].error_code == 0);
+    let response = records
+        .broker()
+        .client
+        .send(request)
+        .await
+        .expect("Produce");
+    records.produced.push(response);
+}
 
-    let fetch = single_partition_fetch()
-        .topic("round".into())
-        .topic_id(topic_id)
+#[when("the client produces without a topic id")]
+async fn produce_missing_topic_id(records: &mut RecordRoundTrip) {
+    let request = batch_request(empty_record_batch(1), SinglePartitionProduceSetup {
+        topic: "nope".into(),
+        ..Default::default()
+    });
+    let response = records
+        .broker()
+        .client
+        .send(request)
+        .await
+        .expect("Produce unknown");
+    records.produced.push(response);
+}
+
+#[then("the latest produce response contains one successful partition at offset {offset}")]
+fn produced_offset(records: &RecordRoundTrip, offset: i64) {
+    let response = records.produced.last().expect("records were produced");
+    assert!(response.responses.len() == 1);
+    assert!(response.responses[0].partition_responses.len() == 1);
+    check!(response.responses[0].partition_responses[0].error_code == 0);
+    check!(response.responses[0].partition_responses[0].base_offset == offset);
+}
+
+#[then("produce without a topic id returns UNKNOWN_TOPIC_ID")]
+fn unknown_produce_topic(records: &RecordRoundTrip) {
+    assert!(
+        records
+            .produced
+            .last()
+            .expect("Produce completed")
+            .responses[0]
+            .partition_responses[0]
+            .error_code
+            == 100
+    );
+}
+
+#[when("the client fetches the topic from offset zero")]
+async fn fetch_records(records: &mut RecordRoundTrip) {
+    let request = single_partition_fetch()
+        .topic(records.topic.clone())
+        .topic_id(records.topic_id)
         .limits(FetchLimits::wait_for_data(RequestWaitMillis(100)))
         .call();
-    let fresp = p.client.send(fetch).await.expect("Fetch");
-    assert!(fresp.responses.len() == 1);
-    check_record_count(&fresp.responses[0].partitions[0], 3);
-
-    p.broker.shutdown().await;
+    records.fetched = Some(records.broker().client.send(request).await.expect("Fetch"));
 }
 
-#[tokio::test]
-async fn list_offsets_earliest_and_latest() {
-    let p = support::start().await;
-    create_topic(&p, "empty", 1).await;
+#[then("fetch returns one topic containing {count} records")]
+fn fetched_records(records: &RecordRoundTrip, count: usize) {
+    let response = records.fetched.as_ref().expect("Fetch completed");
+    assert!(response.responses.len() == 1);
+    check_record_count(&response.responses[0].partitions[0], count);
+}
 
-    let mk = |ts: i64| ListOffsetsRequest {
-        replica_id: -1,
-        ..single_partition_list_offsets("empty", list_offset_partition(0, ts))
-    };
-
-    let earliest = p.client.send(mk(-2)).await.expect("ListOffsets earliest");
-    let latest = p.client.send(mk(-1)).await.expect("ListOffsets latest");
-    for (label, resp) in [("earliest", &earliest), ("latest", &latest)] {
-        check!(resp.topics[0].partitions[0].error_code == 0, "{label}");
-        check!(resp.topics[0].partitions[0].offset == 0, "{label}");
+#[when("the client requests the earliest and latest offsets")]
+async fn request_offset_bounds(records: &mut RecordRoundTrip) {
+    for timestamp in [-2, -1] {
+        let request = ListOffsetsRequest {
+            replica_id: -1,
+            ..single_partition_list_offsets(&records.topic, list_offset_partition(0, timestamp))
+        };
+        let response = records
+            .broker()
+            .client
+            .send(request)
+            .await
+            .expect("ListOffsets");
+        records.offsets.push(response);
     }
-
-    p.broker.shutdown().await;
 }
+
+#[then("both offset bounds are zero without a Kafka error")]
+fn empty_offset_bounds(records: &RecordRoundTrip) {
+    for (label, response) in ["earliest", "latest"].into_iter().zip(&records.offsets) {
+        check!(response.topics[0].partitions[0].error_code == 0, "{label}");
+        check!(response.topics[0].partitions[0].offset == 0, "{label}");
+    }
+    assert!(records.offsets.len() == 2);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce assigns base offsets"
+)]
+#[tokio::test]
+async fn produce_assigns_base_offsets(records: RecordRoundTrip) { records.shutdown().await; }
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce without a topic id returns unknown topic id"
+)]
+#[tokio::test]
+async fn produce_without_a_topic_id_returns_unknown_topic_id(records: RecordRoundTrip) {
+    records.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce then fetch round trip"
+)]
+#[tokio::test]
+async fn produce_then_fetch_round_trip(records: RecordRoundTrip) { records.shutdown().await; }
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "list offsets earliest and latest"
+)]
+#[tokio::test]
+async fn list_offsets_earliest_and_latest(records: RecordRoundTrip) { records.shutdown().await; }

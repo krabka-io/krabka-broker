@@ -763,71 +763,58 @@ mod tests {
         assert!(s.recompute_hw_for_leader_append(o(100)) == o(30));
     }
 
-    /// Kafka's `Replica.updateFetchStateOrThrow`, fetch by fetch, for
-    /// follower 2 of an ISR installed at `t0`. Each step is a fetch at
-    /// `t0 + ms`: the follower's fetch offset, the leader's log end offset
-    /// when it arrived, and the whole follower state it leaves.
-    #[test]
-    fn follower_fetches_update_state_as_kafka_does() {
-        let t0 = Instant::now();
-        let at = |ms: u64| t0 + Duration::from_millis(ms);
-        let stats = |leo, last_fetch, last_fetch_leader_leo, last_caught_up| FollowerStats {
-            leo: o(leo),
-            last_fetch: Some(at(last_fetch)),
-            last_fetch_leader_leo: o(last_fetch_leader_leo),
-            last_caught_up,
+    struct FollowerProgress {
+        started: Instant,
+        state: Option<ReplicaState>,
+    }
+
+    #[rstest::fixture]
+    fn progress() -> FollowerProgress {
+        // Start this scenario with fresh inputs and observations.
+
+        FollowerProgress {
+            started: Instant::now(),
+            state: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("brokers 1 and 2 are installed in the ISR at time zero")]
+    fn initial_isr(progress: &mut FollowerProgress) {
+        progress.state = Some(fresh_with_isr(&[1, 2], progress.started));
+    }
+
+    #[rstest_bdd_macros::when(
+        "follower 2 fetches offset {offset} at {elapsed} milliseconds while the leader ends at {leader_end}"
+    )]
+    fn follower_fetch(progress: &mut FollowerProgress, offset: i64, elapsed: u64, leader_end: i64) {
+        let received = progress.started + Duration::from_millis(elapsed);
+        progress
+            .state
+            .as_mut()
+            .expect("the ISR was installed")
+            .update_follower_leo(NodeId(2), o(offset), o(leader_end), received);
+    }
+
+    #[rstest_bdd_macros::then(
+        "follower 2 has log end {end}, last fetch {fetched}, leader end {leader_end}, and caught-up time {caught_up}"
+    )]
+    fn follower_progress(
+        progress: &FollowerProgress,
+        end: i64,
+        fetched: u64,
+        leader_end: i64,
+        caught_up: u64,
+    ) {
+        let expected = FollowerStats {
+            leo: o(end),
+            last_fetch: Some(progress.started + Duration::from_millis(fetched)),
+            last_fetch_leader_leo: o(leader_end),
+            last_caught_up: Some(progress.started + Duration::from_millis(caught_up)),
             broker_epoch: None,
             fetched_since_isr_exit: true,
         };
-        let mut s = fresh_with_isr(&[1, 2], t0);
-        let steps = [
-            (
-                "the first fetch cannot credit a fetch this leader never saw",
-                100,
-                5,
-                10,
-                stats(5, 100, 10, Some(t0)),
-            ),
-            (
-                "a fetch short of the previous fetch's log end credits nothing",
-                200,
-                9,
-                20,
-                stats(9, 200, 20, Some(t0)),
-            ),
-            (
-                "a fetch reaching the previous fetch's log end credits that fetch",
-                300,
-                20,
-                30,
-                stats(20, 300, 30, Some(at(200))),
-            ),
-            (
-                "a fetch reaching the current log end credits itself",
-                400,
-                30,
-                30,
-                stats(30, 400, 30, Some(at(400))),
-            ),
-            (
-                "a later short fetch keeps the latest caught-up time",
-                500,
-                25,
-                40,
-                stats(25, 500, 40, Some(at(400))),
-            ),
-            (
-                "an overshooting fetch clamps to the leader's log end",
-                600,
-                99,
-                40,
-                stats(40, 600, 40, Some(at(600))),
-            ),
-        ];
-        for (label, ms, fetch_offset, leader_leo, expected) in steps {
-            s.update_follower_leo(NodeId(2), o(fetch_offset), o(leader_leo), at(ms));
-            check!(s.per_follower.get(&NodeId(2)) == Some(&expected), "{label}");
-        }
+        let state = progress.state.as_ref().expect("the ISR was installed");
+        check!(state.per_follower.get(&NodeId(2)) == Some(&expected));
     }
 
     /// A replica outside the ISR that this leader has not heard from starts
@@ -1173,6 +1160,8 @@ mod tests {
             );
         }
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/replica_state.feature", fixtures = [progress: FollowerProgress]);
 }
 
 #[cfg(test)]

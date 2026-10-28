@@ -124,19 +124,6 @@ max_time_skew = "17s"
         check!(g.max_time_skew == secs(17));
     }
 
-    #[test]
-    fn apply_to_gssapi_defaults_service_name_to_kafka() {
-        let src = r#"
-[gssapi]
-keytab_path = "/k/keytab"
-principal_to_local_rules = ["DEFAULT"]
-"#;
-        let cfg = configured_unwrap_parse(src).unwrap();
-        let gssapi = cfg.gssapi.unwrap();
-        assert!(gssapi.service_name == "kafka");
-        assert!(gssapi.max_time_skew == DEFAULT_GSSAPI_MAX_TIME_SKEW);
-    }
-
     /// Kafka's `sasl.kerberos.principal.to.local.rules` defaults to
     /// `["DEFAULT"]`, so a `[gssapi]` section with no rules maps a principal in
     /// the default realm to its first component. An explicit empty list is
@@ -235,24 +222,6 @@ type = "carrier-pigeon"
     }
 
     #[test]
-    fn apply_to_inter_broker_credentials_defaults_service_name_to_kafka() {
-        let src = r#"
-[inter_broker_credentials]
-type = "gssapi"
-keytab_path = "/k/keytab"
-client_principal = "kafka@EXAMPLE.COM"
-kdc_url = "tcp://kdc:88"
-"#;
-        let cfg = configured_unwrap_parse(src).unwrap();
-        match cfg.inter_broker_credentials.unwrap() {
-            InterBrokerCredentials::Gssapi { service_name, .. } => {
-                assert!(service_name == "kafka");
-            }
-            other => panic!("expected Gssapi, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn apply_to_inter_broker_credentials_oauthbearer_reads_redacted_token_file() {
         let (_dir, token_path) = oauth_token_file(OAuthTokenContents::Nonempty);
         let src = oauthbearer_source(&token_path);
@@ -279,4 +248,68 @@ kdc_url = "tcp://kdc:88"
             .expect_err("empty bearer token is rejected");
         assert!(error.to_string().contains("token must be non-empty"));
     }
+
+    #[derive(Default)]
+    struct KerberosConfigurationFile {
+        source: String,
+        applied: Option<BrokerConfig>,
+    }
+
+    #[rstest::fixture]
+    fn kerberos_configuration_file() -> KerberosConfigurationFile {
+        // Authentication defaults are selected from an independent file each time.
+        KerberosConfigurationFile::default()
+    }
+
+    #[rstest_bdd_macros::given("a Kerberos configuration file contains:")]
+    fn supplied_kerberos_configuration(
+        kerberos_configuration_file: &mut KerberosConfigurationFile,
+        docstring: String,
+    ) {
+        kerberos_configuration_file.source = docstring;
+    }
+
+    #[rstest_bdd_macros::when("the Kerberos file is parsed and applied to a default broker")]
+    fn apply_kerberos_configuration(kerberos_configuration_file: &mut KerberosConfigurationFile) {
+        let file: FileConfig =
+            toml::from_str(&kerberos_configuration_file.source).expect("parse Kerberos settings");
+        let mut broker = BrokerConfig::default();
+        file.apply_to(&mut broker).expect("apply Kerberos settings");
+        kerberos_configuration_file.applied = Some(broker);
+    }
+
+    #[rstest_bdd_macros::then(
+        "incoming Kerberos uses service kafka and the default maximum time skew"
+    )]
+    fn incoming_kerberos_defaults(kerberos_configuration_file: &KerberosConfigurationFile) {
+        let config = kerberos_configuration_file
+            .applied
+            .as_ref()
+            .expect("file was applied")
+            .gssapi
+            .as_ref()
+            .expect("incoming GSSAPI was configured");
+        assert!(config.service_name == "kafka");
+        assert!(config.max_time_skew == DEFAULT_GSSAPI_MAX_TIME_SKEW);
+    }
+
+    #[rstest_bdd_macros::then("inter-broker Kerberos credentials use service kafka")]
+    fn outgoing_kerberos_default(kerberos_configuration_file: &KerberosConfigurationFile) {
+        match kerberos_configuration_file
+            .applied
+            .as_ref()
+            .expect("file was applied")
+            .inter_broker_credentials
+            .as_ref()
+            .expect("inter-broker credentials were configured")
+        {
+            InterBrokerCredentials::Gssapi { service_name, .. } => assert!(service_name == "kafka"),
+            other => panic!("expected Gssapi, got {other:?}"),
+        }
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/gssapi.feature",
+        fixtures = [kerberos_configuration_file: KerberosConfigurationFile]
+    );
 }

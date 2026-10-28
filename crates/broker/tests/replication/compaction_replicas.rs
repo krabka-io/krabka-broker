@@ -16,7 +16,7 @@
 
 use {
     crate::{
-        cluster_lock,
+        Cluster, cluster_lock,
         support::{
             self,
             client::connect_with_context,
@@ -37,7 +37,11 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch},
     },
-    std::net::SocketAddr,
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
+    std::{mem::take, net::SocketAddr},
+    tokio::sync::MutexGuard,
 };
 
 const TOPIC: &str = "compaction-replicas";
@@ -46,23 +50,6 @@ const TOPIC: &str = "compaction-replicas";
 /// bytes, so a segment holds one batch and not two. Kafka refuses a batch that
 /// is larger than a segment with `RECORD_LIST_TOO_LARGE`.
 const SEGMENT_BYTES: u32 = 100;
-
-/// The idempotent producer.
-const IDEMPOTENT: ProducerIdentity = ProducerIdentity {
-    id: ProducerId(9_201),
-    epoch: ProducerEpoch(0),
-};
-
-/// The key and value of one record.
-#[derive(Clone, Copy)]
-struct KeyValue {
-    key: &'static str,
-    value: &'static str,
-}
-
-impl KeyValue {
-    const fn new(key: &'static str, value: &'static str) -> Self { Self { key, value } }
-}
 
 /// A producer identity and the sequence its batch starts at.
 #[derive(Clone, Copy)]
@@ -84,23 +71,6 @@ const NO_PRODUCER: SequencedProducer = SequencedProducer {
 // ones that carry the state of a producer, and the records.
 krabka_macros::compacted_batch!(Kept, plain);
 
-impl Kept {
-    /// The one-record batch of a client with no idempotence at `offset`.
-    fn plain(offset: i64, KeyValue { key, value }: KeyValue) -> Self {
-        Self {
-            base_offset: offset,
-            last_offset: offset,
-            producer_id: -1,
-            producer_epoch: -1,
-            base_sequence: -1,
-            records: vec![(
-                Some(Bytes::from_static(key.as_bytes())),
-                Some(Bytes::from_static(value.as_bytes())),
-            )],
-        }
-    }
-}
-
 use crate::support::records::now_ms;
 
 /// One connection to the broker that binds `address`, so that a request
@@ -118,7 +88,8 @@ async fn connect(address: SocketAddr) -> Connection {
 /// base sequence, or `None` for a client with no idempotence.
 fn record(
     producer: Option<SequencedProducer>,
-    KeyValue { key, value }: KeyValue,
+    key: &str,
+    value: &str,
     timestamp: i64,
 ) -> RecordBatch {
     let SequencedProducer {
@@ -132,8 +103,8 @@ fn record(
         producer_epoch: identity.epoch.0,
         base_sequence,
         ..batch_from_records(vec![Record {
-            key: Some(Bytes::from_static(key.as_bytes())),
-            value: Some(Bytes::from_static(value.as_bytes())),
+            key: Some(Bytes::copy_from_slice(key.as_bytes())),
+            value: Some(Bytes::copy_from_slice(value.as_bytes())),
             ..Record::default()
         }])
     }
@@ -167,20 +138,53 @@ async fn wait_for_the_topic_config(broker: &BrokerHandle) {
         .await;
 }
 
-/// An idempotent producer writes keys `a` and `b`, and a client with no
-/// idempotence then writes both keys again, so compaction removes every
-/// record of the producer. Each replica compacts its own log. Every replica
-/// keeps the last batch of the producer as an empty batch, which holds the
-/// sequence of the producer for a later leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
-    let _g = cluster_lock().lock().await;
-    let cluster = registered_cluster(3).await;
+#[derive(Default)]
+struct ReplicaCompaction {
+    cluster: Cluster,
+    guard: Option<MutexGuard<'static, ()>>,
+    leader: Option<Connection>,
+    topic: Option<WireUuid>,
+    errors: Vec<i16>,
+    kept: Vec<Vec<Kept>>,
+}
 
-    let admin =
-        connect_with_context(cluster[0].1.listen_addr.to_string(), None, "admin client").await;
-    // One batch for each segment, so that every batch except the last is in a
-    // sealed segment that a pass rewrites.
+#[fixture]
+fn replica_compaction() -> ReplicaCompaction {
+    // Observe each replica's actual compacted batches without sharing producer-state memory.
+    ReplicaCompaction::default()
+}
+
+#[derive(DataTableRow)]
+struct CompactionInput {
+    id: i64,
+    epoch: i16,
+    sequence: i32,
+    key: String,
+    value: String,
+}
+
+#[derive(DataTableRow)]
+struct CompactionExpectation {
+    base: i64,
+    last: i64,
+    id: i64,
+    epoch: i16,
+    sequence: i32,
+    records: String,
+    key: String,
+    value: String,
+}
+
+#[given("three compacted replicas use 100-byte segments so each record seals its own batch")]
+async fn compacted_replica_logs(replica_compaction: &mut ReplicaCompaction) {
+    replica_compaction.guard = Some(cluster_lock().lock().await);
+    replica_compaction.cluster = registered_cluster(3).await;
+    let admin = connect_with_context(
+        replica_compaction.cluster[0].1.listen_addr.to_string(),
+        None,
+        "admin client",
+    )
+    .await;
     let mut topic = support::topic_on(TOPIC, &[&[1, 2, 3]]);
     topic.configs = [
         ("cleanup.policy", "compact".to_owned()),
@@ -193,71 +197,110 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
         ..Default::default()
     })
     .collect();
-    let topic_id =
-        support::client::create_topic_spec(&admin, topic, CreateTopicRequestSetup::default()).await;
+    replica_compaction.topic = Some(
+        support::client::create_topic_spec(&admin, topic, CreateTopicRequestSetup::default()).await,
+    );
     support::partitions::wait_for_partition_on_all(
-        cluster.iter().map(|(handle, _, _)| handle),
+        replica_compaction
+            .cluster
+            .iter()
+            .map(|(broker, _, _)| broker),
         TOPIC,
         0,
     )
     .await;
-    for (handle, _, _) in &cluster {
-        wait_for_the_topic_config(handle).await;
+    for (broker, _, _) in &replica_compaction.cluster {
+        wait_for_the_topic_config(broker).await;
     }
-    cluster[0]
+    replica_compaction.cluster[0]
         .0
-        .wait_until_local_partition_leader(TOPIC, 0, cluster[0].1.node_id)
+        .wait_until_local_partition_leader(TOPIC, 0, replica_compaction.cluster[0].1.node_id)
         .await;
-    let leader = connect(cluster[0].0.listen_addr()).await;
+    replica_compaction.leader = Some(connect(replica_compaction.cluster[0].0.listen_addr()).await);
+}
 
-    let now = now_ms();
-    let sequenced = |base_sequence| SequencedProducer {
-        identity: IDEMPOTENT,
-        base_sequence,
-    };
-    let last_of_the_producer = record(Some(sequenced(1)), KeyValue::new("b", "p-b"), now);
-    let batches = [
-        record(Some(sequenced(0)), KeyValue::new("a", "p-a"), now),
-        last_of_the_producer.clone(),
-        record(None, KeyValue::new("a", "a-2"), now),
-        record(None, KeyValue::new("b", "b-3"), now),
-        record(None, KeyValue::new("c", "c-4"), now),
-    ];
-    let mut errors = Vec::new();
-    for batch in batches {
-        errors.push(produce(&leader, topic_id, batch).await);
+#[when("the leader appends these keyed batches at the same current timestamp")]
+async fn append_compaction_records(
+    replica_compaction: &mut ReplicaCompaction,
+    #[datatable] rows: Rows<CompactionInput>,
+) {
+    let timestamp = now_ms();
+    for row in rows {
+        let identity = (row.id >= 0).then_some(SequencedProducer {
+            identity: ProducerIdentity {
+                id: ProducerId(row.id),
+                epoch: ProducerEpoch(row.epoch),
+            },
+            base_sequence: row.sequence,
+        });
+        replica_compaction.errors.push(
+            produce(
+                replica_compaction
+                    .leader
+                    .as_ref()
+                    .expect("leader connection"),
+                replica_compaction.topic.expect("topic identity"),
+                record(identity, &row.key, &row.value, timestamp),
+            )
+            .await,
+        );
     }
-    assert!(errors == vec![codes::NONE; 5]);
-    for (handle, _, _) in &cluster {
-        handle.wait_until_local_log_end_offset(TOPIC, 0, 5).await;
-        handle.wait_until_high_watermark(TOPIC, 0, 5).await;
-    }
+}
 
-    let mut kept = Vec::new();
-    for (handle, _, _) in &cluster {
-        handle
+#[then("all five compacted-topic appends succeed")]
+fn compacted_replica_appends(replica_compaction: &ReplicaCompaction) {
+    assert!(replica_compaction.errors == vec![codes::NONE; 5]);
+}
+
+#[when("every replica commits through offset five and compacts its own local log")]
+async fn compact_replica_logs(replica_compaction: &mut ReplicaCompaction) {
+    for (broker, _, _) in &replica_compaction.cluster {
+        broker.wait_until_local_log_end_offset(TOPIC, 0, 5).await;
+        broker.wait_until_high_watermark(TOPIC, 0, 5).await;
+    }
+    for (broker, _, _) in &replica_compaction.cluster {
+        broker
             .compact_local_log_for_test(TOPIC, 0)
             .await
             .expect("compact");
-        let batches = handle
-            .local_batches_for_test(TOPIC, 0)
-            .expect("the local log");
-        kept.push(batches.iter().map(Kept::of).collect::<Vec<_>>());
+        let batches = broker.local_batches_for_test(TOPIC, 0).expect("local log");
+        replica_compaction
+            .kept
+            .push(batches.iter().map(Kept::of).collect());
     }
+}
 
-    let producer_header = Kept {
-        base_offset: 1,
-        last_offset: 1,
-        records: Vec::new(),
-        ..Kept::of(&last_of_the_producer)
-    };
-    let expected = vec![
-        producer_header,
-        Kept::plain(2, KeyValue::new("a", "a-2")),
-        Kept::plain(3, KeyValue::new("b", "b-3")),
-        Kept::plain(4, KeyValue::new("c", "c-4")),
-    ];
-    assert!(kept == vec![expected; 3]);
+#[then("every compacted replica retains exactly these ordered producer headers and records")]
+fn kept_replica_batches(
+    replica_compaction: &ReplicaCompaction,
+    #[datatable] rows: Rows<CompactionExpectation>,
+) {
+    let expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| Kept {
+            base_offset: row.base,
+            last_offset: row.last,
+            producer_id: row.id,
+            producer_epoch: row.epoch,
+            base_sequence: row.sequence,
+            records: match row.records.as_str() {
+                "empty" => vec![],
+                "one" => vec![(Some(Bytes::from(row.key)), Some(Bytes::from(row.value)))],
+                _ => panic!("unknown retained record count {}", row.records),
+            },
+        })
+        .collect();
+    assert!(replica_compaction.kept == vec![expected; 3]);
+}
 
-    shutdown_cluster(cluster).await;
+#[scenario(
+    path = "tests/features/migrated/tests/replication/compaction_replicas.feature",
+    name = "every replica keeps the last batch of an active producer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_replica_keeps_the_last_batch_of_an_active_producer(
+    replica_compaction: ReplicaCompaction,
+) {
+    shutdown_cluster(take(&mut replica_compaction.cluster)).await;
+    drop(replica_compaction);
 }

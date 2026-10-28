@@ -300,70 +300,125 @@ mod tests {
             .expect("seed share group");
     }
 
-    /// Kafka's `handleShareGroupDescribe` with an ACL authorizer: denied rows
-    /// come first, a missing group names itself in the message, topic names
-    /// come from the image (a topic it lacks is left out), the operations
-    /// bitfield is filled on request, and a group whose assignment names a
-    /// topic the caller cannot `Describe` is replaced by Kafka's
-    /// `TOPIC_AUTHORIZATION_FAILED` row.
-    #[tokio::test]
-    async fn handle_matches_kafka_with_acls() {
-        use krabka_protocol::owned::{
-            common::share_group_describe_response::{
-                assignment::Assignment, topic_partitions::TopicPartitions,
-            },
-            share_group_describe_response::Member,
-        };
-
-        let version = share_group_describe_response::MAX_VERSION;
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_share_broker()
+    #[derive(Default)]
+    struct ShareDescriptionScenario {
+        started: Option<HandlerStartedBroker>,
+        response: Option<ShareGroupDescribeResponse>,
+    }
+    #[rstest::fixture]
+    fn share_description() -> ShareDescriptionScenario {
+        let started = None;
+        ShareDescriptionScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "alice may Describe groups g, h and missing, and topic t with UUID 1, but not secret with UUID 2"
+    )]
+    async fn share_description_acls(share_description: &mut ShareDescriptionScenario) {
+        let started = start_share_broker()
             .authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new())))
             .call()
             .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let node = broker_handle.node_id();
-        let visible = uuid::Uuid::from_u128(1);
-        let hidden = uuid::Uuid::from_u128(2);
+        let broker = started.broker.broker_arc_for_test();
+        let node = krabka_raft::NodeId(started.broker.node_id());
         let mut records = vec![
             acl(ResourceType::Group, "g"),
             acl(ResourceType::Group, "h"),
             acl(ResourceType::Group, "missing"),
             acl(ResourceType::Topic, "t"),
         ];
-        records.extend(topic("t", visible, krabka_raft::NodeId(node)));
-        records.extend(topic("secret", hidden, krabka_raft::NodeId(node)));
+        records.extend(topic("t", uuid::Uuid::from_u128(1), node));
+        records.extend(topic("secret", uuid::Uuid::from_u128(2), node));
         broker
             .controller
             .submit_change(records)
             .await
             .expect("ACLs and topics");
-        seed_group(&broker, "g", &[visible]).await;
-        seed_group(&broker, "h", &[visible, hidden]).await;
-        krabka_macros::request_test_identity! {
-            bind(principal, peer, ctx);
-            user ["alice"];
-            client ["admin-client"];
-        };
+        share_description.started = Some(started);
+    }
+    #[rstest_bdd_macros::given(
+        "stable share groups at epoch 2 have member m1 at epoch 2, client client at /127.0.0.1 subscribed to t, with unknown UUID eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee and these partition-zero assignments"
+    )]
+    async fn share_description_members(
+        share_description: &mut ShareDescriptionScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let broker = share_description
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
+        for cells in datatable.into_iter().skip(1) {
+            let topics = cells[1]
+                .split(',')
+                .map(|id| uuid::Uuid::from_u128(id.parse().expect("topic UUID")))
+                .collect::<Vec<_>>();
+            seed_group(&broker, &cells[0], &topics).await;
+        }
+    }
+    #[rstest_bdd_macros::when(
+        "alice describes share groups {groups} including authorized operations"
+    )]
+    async fn describe_share_groups(
+        share_description: &mut ShareDescriptionScenario,
+        groups: String,
+    ) {
+        let broker = share_description
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
         let req = ShareGroupDescribeRequest {
-            group_ids: vec!["g".into(), "denied".into(), "h".into(), "missing".into()],
+            group_ids: groups.split(',').map(str::to_owned).collect(),
             include_authorized_operations: true,
             ..Default::default()
         };
-
-        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
-
-        let expected = ShareGroupDescribeResponse {
-            groups: vec![
-                DescribedGroup::error_row("denied", codes::GROUP_AUTHORIZATION_FAILED, None),
+        share_description.response = Some(
+            handle(
+                &broker,
+                req,
+                share_group_describe_response::MAX_VERSION,
+                &ctx,
+            )
+            .await
+            .expect("handle"),
+        );
+    }
+    #[rstest_bdd_macros::then("the complete ordered share group descriptions are")]
+    async fn share_group_descriptions(
+        share_description: &mut ShareDescriptionScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        use krabka_protocol::owned::{
+            common::share_group_describe_response::{
+                assignment::Assignment, topic_partitions::TopicPartitions,
+            },
+            share_group_describe_response::Member,
+        };
+        let groups = datatable
+            .into_iter()
+            .skip(1)
+            .map(|cells| {
+                let code: i16 = cells[1].parse().expect("group error code");
+                if code != 0 {
+                    return DescribedGroup::error_row(
+                        &cells[0],
+                        code,
+                        (cells[2] != "null").then(|| cells[2].clone()),
+                    );
+                }
                 DescribedGroup {
-                    group_id: "g".into(),
-                    group_state: "Stable".into(),
-                    group_epoch: 2,
-                    assignment_epoch: 2,
-                    assignor_name: "simple".into(),
+                    group_id: cells[0].clone(),
+                    group_state: cells[3].clone(),
+                    group_epoch: cells[4].parse().expect("group epoch"),
+                    assignment_epoch: cells[5].parse().expect("assignment epoch"),
+                    assignor_name: cells[6].clone(),
+                    authorized_operations: cells[7].parse().expect("authorized operations"),
                     members: vec![Member {
                         member_id: "m1".into(),
                         member_epoch: 2,
@@ -372,10 +427,8 @@ mod tests {
                         subscribed_topic_names: vec!["t".into()],
                         assignment: Assignment {
                             topic_partitions: vec![TopicPartitions {
-                                topic_id: Uuid(
-                                    *visible.as_bytes(),
-                                ),
-                                topic_name: "t".into(),
+                                topic_id: Uuid(*uuid::Uuid::from_u128(1).as_bytes()),
+                                topic_name: cells[8].clone(),
                                 partitions: vec![0],
                                 ..Default::default()
                             }],
@@ -383,26 +436,35 @@ mod tests {
                         },
                         ..Default::default()
                     }],
-                    // DESCRIBE (8) is the only group operation granted.
-                    authorized_operations: 1 << 8,
                     ..Default::default()
-                },
-                DescribedGroup::error_row(
-                    "h",
-                    codes::TOPIC_AUTHORIZATION_FAILED,
-                    Some("The group has described topic(s) that the client is not authorized to describe.".into()),
-                ),
-                DescribedGroup::error_row(
-                    "missing",
-                    codes::GROUP_ID_NOT_FOUND,
-                    Some("Group missing not found.".into()),
-                ),
-            ],
+                }
+            })
+            .collect();
+        let expected = ShareGroupDescribeResponse {
+            groups,
             ..Default::default()
         };
-        assert!(resp == expected);
-        broker_handle.shutdown().await;
+        assert!(
+            share_description
+                .response
+                .as_ref()
+                .expect("description response")
+                == &expected
+        );
+        share_description
+            .started
+            .take()
+            .expect("started broker")
+            .broker
+            .shutdown()
+            .await;
     }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_group_describe.feature",
+        name = "Group ACLs, topic ACLs and missing groups preserve Kafka response rows"
+    )]
+    #[tokio::test]
+    async fn handle_matches_kafka_with_acls(share_description: ShareDescriptionScenario) {}
 
     /// `INVALID_GROUP_ID` for an empty id, ahead of the shard rows, and
     /// Kafka's message for a group of another type.

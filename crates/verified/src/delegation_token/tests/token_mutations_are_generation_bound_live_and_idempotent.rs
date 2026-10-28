@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use std::vec;
 
 const RENEW_EXPECTED: TokenMutationFacts = TokenMutationFacts {
     kind: TokenMutationKind::Renew,
@@ -110,33 +112,60 @@ fn token_mutations_are_generation_bound_live_and_idempotent(
     check!(token_mutation_decision(facts) == expected, "{facts:?}");
 }
 
-/// `DelegationTokenControlManager.expireDelegationToken`: a negative period
-/// deletes before the expiry check, and a live token gets
-/// `min(max, now + period)` with a saturating sum.
-#[yare::parameterized(
-    zero_period_at_zero = { 0, 0, 150, 200, TokenExpireDecision::Update(0) },
-    zero_period = { 100, 0, 150, 200, TokenExpireDecision::Update(100) },
-    positive_period = { 100, 25, 150, 200, TokenExpireDecision::Update(125) },
-    period_capped_at_max = { 100, 500, 150, 200, TokenExpireDecision::Update(200) },
-    near_overflow_is_capped = { 100, i64::MAX - 100, 150, 200, TokenExpireDecision::Update(200) },
-    saturating_overflow = { 100, i64::MAX, 150, i64::MAX, TokenExpireDecision::Update(i64::MAX) },
-    zero_period_at_expiry = { 100, 0, 100, 200, TokenExpireDecision::Update(100) },
-    zero_period_at_max = { 100, 0, 100, 100, TokenExpireDecision::Update(100) },
-    negative_period_deletes_live = { 100, -1, 150, 200, TokenExpireDecision::Delete },
-    negative_period_deletes_expired = { 100, -1, 50, 60, TokenExpireDecision::Delete },
-    minimum_period_deletes = { 100, i64::MIN, 150, 200, TokenExpireDecision::Delete },
-    current_expiry_is_past = { 100, 0, 99, 200, TokenExpireDecision::Expired },
-    max_timestamp_is_past = { 100, 0, 150, 99, TokenExpireDecision::Expired },
-)]
-fn expire_matches_kafka_delete_expiry_and_saturation(
-    now: i64,
-    period: i64,
-    current: i64,
-    max: i64,
-    expected: TokenExpireDecision,
-) {
-    check!(expire_token_deadline(now, period, current, max) == expected);
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
+
+struct TokenExpiration {
+    deadlines: Option<(i64, i64)>,
+    outcome: Option<TokenExpireDecision>,
 }
+
+#[fixture]
+fn expiration() -> TokenExpiration {
+    // Start this scenario with fresh inputs and observations.
+
+    TokenExpiration {
+        deadlines: None,
+        outcome: None,
+    }
+}
+
+#[given("an expirable token with current deadline {current} ms and maximum timestamp {maximum} ms")]
+fn expirable_token(expiration: &mut TokenExpiration, current: String, maximum: String) {
+    expiration.deadlines = Some((token_millis(&current), token_millis(&maximum)));
+}
+
+#[when("token expiration is requested at {now} ms for a period of {period} ms")]
+fn expire_token(expiration: &mut TokenExpiration, now: String, period: String) {
+    let (current, maximum) = expiration.deadlines.expect("an expirable token was given");
+    expiration.outcome = Some(expire_token_deadline(
+        token_millis(&now),
+        token_millis(&period),
+        current,
+        maximum,
+    ));
+}
+
+#[then("token expiration is {outcome} with deadline {deadline} ms")]
+fn expired_token(expiration: &TokenExpiration, outcome: String, deadline: String) {
+    let expected = match outcome.as_str() {
+        "updated" => TokenExpireDecision::Update(token_millis(&deadline)),
+        "delete" => {
+            check!(deadline == "none");
+            TokenExpireDecision::Delete
+        }
+        "expired" => {
+            check!(deadline == "none");
+            TokenExpireDecision::Expired
+        }
+        _ => panic!("unknown token expiration outcome: {outcome}"),
+    };
+    check!(expiration.outcome == Some(expected));
+}
+
+scenarios!("tests/features/migrated/src/delegation_token/tests/token_mutations_are_generation_bound_live_and_idempotent.feature", fixtures = [expiration: TokenExpiration]);
 
 #[test]
 fn expiry_and_renewal_stay_within_the_token_maximum() {

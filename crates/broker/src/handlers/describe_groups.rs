@@ -673,24 +673,36 @@ mod tests {
         }
     }
 
-    /// The `GroupState` -> Kafka string projection is exhaustive; every state a
-    /// classic group can report has its own name on the wire.
-    #[test]
-    fn every_group_state_has_its_kafka_name() {
-        assert!(
-            [
-                GroupState::Empty,
-                GroupState::PreparingRebalance,
-                GroupState::CompletingRebalance,
-                GroupState::Stable,
-            ]
-            .map(GroupState::as_str)
-                == [
-                    "Empty",
-                    "PreparingRebalance",
-                    "CompletingRebalance",
-                    "Stable"
-                ]
-        );
+    #[derive(Default)]
+    struct GroupStateNameScenario {
+        state: Option<GroupState>,
+        name: Option<String>,
     }
+    #[rstest::fixture]
+    fn group_state_name() -> GroupStateNameScenario {
+        let state = None;
+        GroupStateNameScenario {
+            state,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("the classic group {condition}")]
+    fn classic_group_state(group_state_name: &mut GroupStateNameScenario, condition: String) {
+        group_state_name.state = Some(match condition.as_str() {
+            "has no members" => GroupState::Empty,
+            "is preparing a rebalance" => GroupState::PreparingRebalance,
+            "is completing a rebalance" => GroupState::CompletingRebalance,
+            "has a stable assignment" => GroupState::Stable,
+            _ => panic!("unknown classic group condition: {condition}"),
+        });
+    }
+    #[rstest_bdd_macros::when("DescribeGroups renders the classic group state")]
+    fn render_classic_group_state(group_state_name: &mut GroupStateNameScenario) {
+        group_state_name.name = Some(group_state_name.state.as_ref().unwrap().as_str().to_owned());
+    }
+    #[rstest_bdd_macros::then("the reported classic group state is {expected}")]
+    fn check_classic_group_state(group_state_name: &GroupStateNameScenario, expected: String) {
+        assert!(group_state_name.name.as_ref().unwrap() == &expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_classic_group_state",fixtures=[group_state_name:GroupStateNameScenario]);
 }

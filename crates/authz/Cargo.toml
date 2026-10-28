@@ -25,6 +25,10 @@ krabka-verified = { version = "1.1.1", path = "../verified" }
 tracing = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 proptest = { workspace = true }
 uuid = { workspace = true }
 yare = { workspace = true }

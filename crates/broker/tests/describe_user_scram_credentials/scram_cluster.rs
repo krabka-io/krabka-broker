@@ -97,3 +97,147 @@ pub async fn seed_scram_credential(
         .wait_for_image(|img| !img.scram_credentials_for_user(user).is_empty())
         .await;
 }
+
+use {
+    crate::scram_driver::drive_describe_user_scram_credentials_sasl,
+    std::time::{SystemTime, UNIX_EPOCH},
+};
+pub type ScramUserRows = Vec<(String, i16, Vec<(i8, i32)>)>;
+pub struct ScramDescriptions {
+    pub broker: Option<BrokerHandle>,
+    pub directory: Option<TempDir>,
+    pub principal: String,
+    pub password: String,
+    pub response: Option<(i16, ScramUserRows)>,
+}
+impl ScramDescriptions {
+    fn retain_principal(
+        &mut self,
+        principal: &str,
+        password: String,
+        (broker, directory, _): (BrokerHandle, TempDir, SocketAddr),
+    ) {
+        self.broker = Some(broker);
+        self.directory = Some(directory);
+        self.principal = principal.to_owned();
+        self.password = password;
+    }
+
+    pub async fn shutdown(self) {
+        self.broker
+            .expect("SCRAM description broker started")
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+pub fn scram() -> ScramDescriptions {
+    // Start this scenario with fresh inputs and observations.
+
+    ScramDescriptions {
+        broker: None,
+        directory: None,
+        principal: String::new(),
+        password: String::new(),
+        response: None,
+    }
+}
+#[rstest_bdd_macros::given("admin is a super user authenticated with its test password")]
+async fn scram_description_admin(scram: &mut ScramDescriptions) {
+    let password = admin_test_password();
+    let started =
+        start_single_broker_sasl_plaintext_with_users("admin", &[("admin", &password)]).await;
+    scram.retain_principal("admin", password, started);
+}
+#[rstest_bdd_macros::given("admin is a super user authenticated with a timestamped password")]
+async fn scram_description_unique_admin(scram: &mut ScramDescriptions) {
+    let password = format!(
+        "admin-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX_EPOCH")
+            .as_nanos()
+    );
+    let started =
+        start_single_broker_sasl_plaintext_with_users("admin", &[("admin", &password)]).await;
+    scram.retain_principal("admin", password, started);
+}
+#[rstest_bdd_macros::given(
+    "alice authenticates with her test password and no principal is a super user"
+)]
+async fn scram_description_alice(scram: &mut ScramDescriptions) {
+    let password = alice_test_password();
+    let started =
+        start_single_broker_sasl_plaintext_with_acl_authorizer(&[], &[("alice", &password)]).await;
+    scram.retain_principal("alice", password, started);
+}
+#[rstest_bdd_macros::given(
+    "alice authenticates with a fresh UUID password and no principal is a super user"
+)]
+async fn scram_description_unique_alice(scram: &mut ScramDescriptions) {
+    let password = uuid::Uuid::new_v4().to_string();
+    let started =
+        start_single_broker_sasl_plaintext_with_acl_authorizer(&[], &[("alice", &password)]).await;
+    scram.retain_principal("alice", password, started);
+}
+#[rstest_bdd_macros::given("alice has cluster Describe permission")]
+async fn scram_description_cluster_acl(scram: &mut ScramDescriptions) {
+    seed_cluster_acl(
+        scram
+            .broker
+            .as_ref()
+            .expect("SCRAM description broker started"),
+        "alice",
+        AclOperation::Describe,
+    )
+    .await;
+}
+#[rstest_bdd_macros::given("user {user} has a SHA 512 SCRAM credential at {iterations} iterations")]
+async fn scram_description_seed(scram: &mut ScramDescriptions, user: String, iterations: u32) {
+    seed_scram_credential(
+        scram
+            .broker
+            .as_ref()
+            .expect("SCRAM description broker started"),
+        &user,
+        SaslMechanism::ScramSha512,
+        iterations,
+    )
+    .await;
+}
+#[rstest_bdd_macros::when("the authenticated principal describes SCRAM users {users}")]
+async fn describe_scram_users(scram: &mut ScramDescriptions, users: String) {
+    let filter = if users == "all" {
+        None
+    } else {
+        Some(users.split(',').map(str::to_owned).collect())
+    };
+    scram.response = Some(
+        drive_describe_user_scram_credentials_sasl(
+            scram
+                .broker
+                .as_ref()
+                .expect("SCRAM description broker started")
+                .listen_addr(),
+            &scram.principal,
+            &scram.password,
+            filter,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the SCRAM description has top level error {error}")]
+fn scram_description_error(scram: &ScramDescriptions, error: i16) {
+    assert2::assert!(scram.response.as_ref().expect("SCRAM users described").0 == error);
+}
+#[rstest_bdd_macros::then("the SCRAM description has no per-user rows")]
+fn no_scram_description_users(scram: &ScramDescriptions) {
+    assert2::assert!(
+        scram
+            .response
+            .as_ref()
+            .expect("SCRAM users described")
+            .1
+            .is_empty()
+    );
+}

@@ -683,275 +683,208 @@ mod tests {
         super::*,
         crate::{api_catalog::UnstableApiVersions, file_config::RuntimeFileConfig},
         assert2::check,
+        krabka_units::{bytes, millis},
+        rstest_bdd::datatable::Rows,
+        serde_json::Value,
+        std::collections::BTreeSet,
     };
 
-    /// The keys whose value a default `BrokerConfig` runs differently from
-    /// Kafka 4.3.1's default: the 1 MiB socket buffers that the network layer
-    /// is tuned with, the 5 s follower fetch watchdog of the metadata quorum,
-    /// and the 3 s broker heartbeat. The Streams assignor is trunk-only and
-    /// has its own unstable-mode test below.
-    /// A key and a value, as the tables below write them.
-    struct KeyValue {
-        name: &'static str,
-        value: &'static str,
+    #[derive(Default)]
+    struct StaticConfigScenario {
+        config: BrokerConfig,
+        selected: Vec<&'static str>,
+        without_defaults: Option<Vec<&'static str>>,
+        names: Option<Vec<&'static str>>,
+        missing_runtime_fields: Option<Vec<&'static str>>,
+        stated: Option<Vec<(String, String)>>,
     }
 
-    /// A key and the value a config states for it.
-    #[derive(Debug, PartialEq, Eq)]
-    struct Stated {
-        name: &'static str,
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct StaticSetting {
+        key: String,
         value: String,
     }
 
-    const KRABKA_OWN_DEFAULTS: &[KeyValue] = &[
-        KeyValue {
-            name: "socket.send.buffer.bytes",
-            value: "1048576",
-        },
-        KeyValue {
-            name: "socket.receive.buffer.bytes",
-            value: "1048576",
-        },
-        KeyValue {
-            name: "broker.heartbeat.interval.ms",
-            value: "3000",
-        },
-    ];
-
-    /// Every key is one Kafka defines, or a group synonym that names a default,
-    /// or the streams assignor list, which Kafka 4.3.1 has no default for.
-    #[test]
-    fn every_key_has_a_kafka_default() {
-        let without: Vec<&str> = KAFKA_STATIC_KEYS
-            .iter()
-            .filter(|key| key.kafka_default().is_none())
-            .map(|key| key.name)
-            .collect();
-
-        check!(without == vec!["group.streams.assignors"]);
+    #[rstest::fixture]
+    fn static_config() -> StaticConfigScenario {
+        // Operator changes and their described values are isolated per scenario.
+        StaticConfigScenario::default()
     }
 
-    #[test]
-    fn no_key_is_listed_twice() {
-        let mut names: Vec<&str> = KAFKA_STATIC_KEYS.iter().map(|key| key.name).collect();
-        names.sort_unstable();
-        let count = names.len();
-        names.dedup();
-
-        check!(names.len() == count);
+    #[rstest_bdd_macros::given(
+        "the broker has no operator-supplied static configuration overrides"
+    )]
+    fn default_static_configuration(static_config: &mut StaticConfigScenario) {
+        static_config.config = BrokerConfig::default();
+        static_config.selected.clear();
     }
 
-    /// A `[runtime]` field named here has to exist, or a key the operator
-    /// names would never be recorded.
-    #[test]
-    fn every_runtime_field_is_one_the_table_has() {
-        let serde_json::Value::Object(fields) = serde_json::to_value(RuntimeFileConfig::default())
-            .expect("serialize the runtime table")
-        else {
-            panic!("the runtime table serializes as an object");
-        };
-        let missing: Vec<&str> = KAFKA_STATIC_KEYS
-            .iter()
-            .filter_map(|key| key.runtime_field)
-            .filter(|field| !fields.contains_key(*field))
-            .collect();
-
-        check!(missing.is_empty(), "{missing:?}");
-    }
-
-    /// A node that named nothing states a key only where krabka's own default
-    /// is not Kafka's, which is where it has to say what it runs.
-    #[test]
-    fn a_default_config_states_only_the_defaults_krabka_changed() {
-        let config = BrokerConfig::default();
-        let stated: Vec<Stated> = KAFKA_STATIC_KEYS
-            .iter()
-            .filter_map(|key| {
-                key.static_value(&config).map(|value| Stated {
-                    name: key.name,
-                    value,
-                })
-            })
-            .collect();
-        let expected: Vec<Stated> = KRABKA_OWN_DEFAULTS
-            .iter()
-            .map(|KeyValue { name, value }| Stated {
-                name,
-                value: (*value).to_owned(),
-            })
-            .collect();
-
-        check!(stated == expected);
-    }
-
-    #[test]
-    fn streams_assignors_is_disclosed_only_with_unstable_api_versions() {
-        let mut config = BrokerConfig::default();
-        let key = KAFKA_STATIC_KEYS
-            .iter()
-            .find(|key| key.name == "group.streams.assignors")
-            .expect("Streams assignor key");
-
-        check!(key.static_value(&config).is_none());
-        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
-        check!(key.static_value(&config).as_deref() == Some("auto"));
-    }
-
-    /// The five `MetadataLogConfig` keys state the value the metadata log
-    /// runs with, once it leaves Kafka's default. A retention limit that is
-    /// not set states Kafka's `-1`, which is how Kafka writes "no limit".
-    #[test]
-    fn the_metadata_log_keys_state_what_the_metadata_log_runs_with() {
-        use krabka_units::{bytes, hours, mebibytes, millis};
-
-        const METADATA_LOG_KEYS: [&str; 5] = [
+    #[rstest_bdd_macros::given("the static-config query selects metadata-log settings")]
+    fn select_metadata_log_settings(static_config: &mut StaticConfigScenario) {
+        static_config.selected = vec![
             "metadata.log.segment.bytes",
             "metadata.log.segment.ms",
             "metadata.max.retention.bytes",
             "metadata.max.retention.ms",
             "metadata.max.idle.interval.ms",
         ];
-        let stated = |metadata_log: krabka_raft::MetadataLogConfig| -> Vec<Stated> {
-            let config = BrokerConfig {
-                metadata_log,
-                ..BrokerConfig::default()
-            };
-            KAFKA_STATIC_KEYS
-                .iter()
-                .filter(|key| METADATA_LOG_KEYS.contains(&key.name))
-                .filter_map(|key| {
-                    key.static_value(&config).map(|value| Stated {
-                        name: key.name,
-                        value,
-                    })
-                })
-                .collect()
-        };
-        let cases = [
-            (
-                "Kafka's defaults",
-                krabka_raft::MetadataLogConfig::default(),
-                vec![],
-            ),
-            (
-                "the no-op records off, as the test profile runs",
-                krabka_raft::MetadataLogConfig {
-                    max_idle_interval: millis(0),
-                    ..krabka_raft::MetadataLogConfig::default()
-                },
-                vec![KeyValue {
-                    name: "metadata.max.idle.interval.ms",
-                    value: "0",
-                }],
-            ),
-            (
-                "no retention limit",
-                krabka_raft::MetadataLogConfig {
-                    max_retention_size: None,
-                    max_retention: None,
-                    ..krabka_raft::MetadataLogConfig::default()
-                },
-                vec![
-                    KeyValue {
-                        name: "metadata.max.retention.bytes",
-                        value: "-1",
-                    },
-                    KeyValue {
-                        name: "metadata.max.retention.ms",
-                        value: "-1",
-                    },
-                ],
-            ),
-            (
-                "every key changed",
-                krabka_raft::MetadataLogConfig {
-                    segment_size: mebibytes(16),
-                    segment_roll_interval: hours(1),
-                    max_retention_size: Some(bytes(0)),
-                    max_retention: Some(millis(0)),
-                    max_idle_interval: millis(250),
-                },
-                vec![
-                    KeyValue {
-                        name: "metadata.log.segment.bytes",
-                        value: "16777216",
-                    },
-                    KeyValue {
-                        name: "metadata.log.segment.ms",
-                        value: "3600000",
-                    },
-                    KeyValue {
-                        name: "metadata.max.retention.bytes",
-                        value: "0",
-                    },
-                    KeyValue {
-                        name: "metadata.max.retention.ms",
-                        value: "0",
-                    },
-                    KeyValue {
-                        name: "metadata.max.idle.interval.ms",
-                        value: "250",
-                    },
-                ],
-            ),
-        ];
-
-        for (label, metadata_log, expected) in cases {
-            let expected: Vec<Stated> = expected
-                .into_iter()
-                .map(|KeyValue { name, value }| Stated {
-                    name,
-                    value: value.to_owned(),
-                })
-                .collect();
-            check!(stated(metadata_log) == expected, "{label}");
-        }
     }
 
-    /// The follower fetch's two byte maximums state what the follower sends:
-    /// `replica.fetch.max.bytes` for each partition and
-    /// `replica.fetch.response.max.bytes` for the response.
-    #[test]
-    fn the_replica_fetch_keys_state_what_the_follower_requests() {
-        use krabka_units::mebibytes;
-
-        const REPLICA_FETCH_KEYS: [&str; 2] = [
+    #[rstest_bdd_macros::given("the static-config query selects follower-fetch limits")]
+    fn select_follower_fetch_settings(static_config: &mut StaticConfigScenario) {
+        static_config.selected = vec![
             "replica.fetch.max.bytes",
             "replica.fetch.response.max.bytes",
         ];
-        let stated = |fetch_max, fetch_response_max| -> Vec<Stated> {
-            let mut config = BrokerConfig::default();
-            config.replication.fetch_max = fetch_max;
-            config.replication.fetch_response_max = fetch_response_max;
+    }
+
+    #[rstest_bdd_macros::given("the static-config query selects the streams assignor list")]
+    fn select_streams_assignors(static_config: &mut StaticConfigScenario) {
+        static_config.selected = vec!["group.streams.assignors"];
+    }
+
+    #[rstest_bdd_macros::given("unstable API versions are enabled for static configuration")]
+    fn enable_unstable_static_configuration(static_config: &mut StaticConfigScenario) {
+        static_config.config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+    }
+
+    #[rstest_bdd_macros::given("the metadata log runs with these changed settings:")]
+    fn metadata_log_overrides(
+        static_config: &mut StaticConfigScenario,
+        #[datatable] rows: Rows<StaticSetting>,
+    ) {
+        let config = &mut static_config.config.metadata_log;
+        for row in rows {
+            let value = row.value.as_str();
+            match row.key.as_str() {
+                "metadata.log.segment.bytes" => {
+                    config.segment_size =
+                        bytes(value.parse::<u32>().expect("segment bytes are u32"));
+                }
+                "metadata.log.segment.ms" => {
+                    config.segment_roll_interval =
+                        millis(value.parse::<u32>().expect("roll interval is milliseconds"));
+                }
+                "metadata.max.retention.bytes" => {
+                    config.max_retention_size = if value == "-1" {
+                        None
+                    } else {
+                        Some(bytes(
+                            value.parse::<u32>().expect("retention bytes are u32"),
+                        ))
+                    }
+                }
+                "metadata.max.retention.ms" => {
+                    config.max_retention = if value == "-1" {
+                        None
+                    } else {
+                        Some(millis(
+                            value.parse::<u32>().expect("retention is milliseconds"),
+                        ))
+                    }
+                }
+                "metadata.max.idle.interval.ms" => {
+                    config.max_idle_interval =
+                        millis(value.parse::<u32>().expect("idle interval is milliseconds"));
+                }
+                key => panic!("unknown metadata log setting {key}"),
+            }
+        }
+    }
+
+    #[rstest_bdd_macros::given(
+        "the follower requests at most {partition} bytes per partition and {response} bytes per response"
+    )]
+    fn follower_fetch_limits(
+        static_config: &mut StaticConfigScenario,
+        partition: u32,
+        response: u32,
+    ) {
+        static_config.config.replication.fetch_max = bytes(partition);
+        static_config.config.replication.fetch_response_max = bytes(response);
+    }
+
+    #[rstest_bdd_macros::when("the static Kafka key catalog is enumerated")]
+    fn enumerate_static_keys(static_config: &mut StaticConfigScenario) {
+        static_config.names = Some(KAFKA_STATIC_KEYS.iter().map(|key| key.name).collect());
+        static_config.without_defaults = Some(
             KAFKA_STATIC_KEYS
                 .iter()
-                .filter(|key| REPLICA_FETCH_KEYS.contains(&key.name))
-                .filter_map(|key| {
-                    key.static_value(&config).map(|value| Stated {
-                        name: key.name,
-                        value,
-                    })
-                })
-                .collect()
-        };
-
-        check!(
-            stated(mebibytes(1), mebibytes(10)) == vec![],
-            "Kafka's defaults"
-        );
-        check!(
-            stated(mebibytes(2), mebibytes(20))
-                == vec![
-                    Stated {
-                        name: "replica.fetch.max.bytes",
-                        value: "2097152".to_owned(),
-                    },
-                    Stated {
-                        name: "replica.fetch.response.max.bytes",
-                        value: "20971520".to_owned(),
-                    },
-                ],
-            "both changed"
+                .filter(|key| key.kafka_default().is_none())
+                .map(|key| key.name)
+                .collect(),
         );
     }
+
+    #[rstest_bdd_macros::when(
+        "the catalog's runtime field names are resolved against the runtime configuration schema"
+    )]
+    fn resolve_static_runtime_fields(static_config: &mut StaticConfigScenario) {
+        let Value::Object(fields) = serde_json::to_value(RuntimeFileConfig::default())
+            .expect("serialize the runtime table")
+        else {
+            panic!("the runtime table serializes as an object");
+        };
+        static_config.missing_runtime_fields = Some(
+            KAFKA_STATIC_KEYS
+                .iter()
+                .filter_map(|key| key.runtime_field)
+                .filter(|field| !fields.contains_key(*field))
+                .collect(),
+        );
+    }
+
+    #[rstest_bdd_macros::when("the broker describes the selected static Kafka settings")]
+    fn describe_static_settings(static_config: &mut StaticConfigScenario) {
+        static_config.stated = Some(
+            KAFKA_STATIC_KEYS
+                .iter()
+                .filter(|key| {
+                    static_config.selected.is_empty() || static_config.selected.contains(&key.name)
+                })
+                .filter_map(|key| {
+                    key.static_value(&static_config.config)
+                        .map(|value| (key.name.to_owned(), value))
+                })
+                .collect(),
+        );
+    }
+
+    #[rstest_bdd_macros::then("only group.streams.assignors lacks a released Kafka default")]
+    fn known_static_defaults(static_config: &StaticConfigScenario) {
+        check!(static_config.without_defaults.as_ref() == Some(&vec!["group.streams.assignors"]));
+    }
+
+    #[rstest_bdd_macros::then("every static Kafka key name occurs exactly once")]
+    fn unique_static_key_names(static_config: &StaticConfigScenario) {
+        let names = static_config
+            .names
+            .as_ref()
+            .expect("the catalog was enumerated");
+        let unique: BTreeSet<_> = names.iter().collect();
+        check!(unique.len() == names.len());
+    }
+
+    #[rstest_bdd_macros::then("every referenced runtime configuration field exists")]
+    fn present_static_runtime_fields(static_config: &StaticConfigScenario) {
+        let missing = static_config
+            .missing_runtime_fields
+            .as_ref()
+            .expect("runtime fields were resolved");
+        check!(missing.is_empty(), "{missing:?}");
+    }
+
+    #[rstest_bdd_macros::then("the ordered stated static settings are:")]
+    fn stated_static_settings(
+        static_config: &StaticConfigScenario,
+        #[datatable] rows: Rows<StaticSetting>,
+    ) {
+        let expected: Vec<_> = rows.into_iter().map(|row| (row.key, row.value)).collect();
+        check!(static_config.stated.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config/kafka_static_keys.feature",
+        fixtures = [static_config: StaticConfigScenario]
+    );
 }

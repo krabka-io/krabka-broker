@@ -274,85 +274,208 @@ pub enum KafkaUuidError {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, assert2::check, std::iter};
 
-    /// Every accepted input renders as the string that
-    /// `org.apache.kafka.common.Uuid` in `kafka-clients-4.3.1.jar` prints for
-    /// it, and every input Kafka refuses is refused.
-    #[yare::parameterized(
-        kafka_cluster = { "AQIDBAUGBwgJCgsMDQ4PEA", Ok("AQIDBAUGBwgJCgsMDQ4PEA") },
-        kafka_directory = { "U-hCdTzaSPyFB3swwc7Qdw", Ok("U-hCdTzaSPyFB3swwc7Qdw") },
-        reserved_zero = { "AAAAAAAAAAAAAAAAAAAAAA", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        reserved_one = { "AAAAAAAAAAAAAAAAAAAAAQ", Ok("AAAAAAAAAAAAAAAAAAAAAQ") },
-        ignored_low_bits = { "_____________________x", Ok("_____________________w") },
-        rounded_low_bits = { "AAAAAAAAAAAAAAAAAAAAAB", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        padded = { "AAAAAAAAAAAAAAAAAAAAAA==", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        hyphenated_is_too_long = {
-            "01020304-0506-0708-090a-0b0c0d0e0f10",
-            Err(
-                "Input string with prefix `01020304-0506-0708-090a-` is too long to be decoded as a base64 UUID",
-            ),
-        },
-        unicode_too_long = {
-            "AAAAAAAAAAAAAAAAAAAAAAA😀",
-            Err(
-                "Input string with prefix `AAAAAAAAAAAAAAAAAAAAAAA?` is too long to be decoded as a base64 UUID",
-            ),
-        },
-        twenty_four_chars = {
-            "AAAAAAAAAAAAAAAAAAAAAAAA",
-            Err(
-                "Input string `AAAAAAAAAAAAAAAAAAAAAAAA` decoded as 18 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-            ),
-        },
-        empty = {
-            "",
-            Err(
-                "Input string `` decoded as 0 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-            ),
-        },
-        short = {
-            "AAAAAA",
-            Err(
-                "Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-            ),
-        },
-        bad_padding_length = {
-            "AAAAAAAAAAAAAAAAAAAA==",
-            Err(
-                "Input string `AAAAAAAAAAAAAAAAAAAA==` decoded as 15 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-            ),
-        },
-        twenty_one_chars = {
-            "AAAAAAAAAAAAAAAAAAAAA",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAA` is not base64url: Invalid input length: 21"),
-        },
-        invalid_plus = {
-            "AAAAAAAAAAAAAAAAAAAA+A",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAA+A` is not base64url: Invalid symbol 43, offset 20."),
-        },
-        bad_padding = {
-            "AAAAAAAAAAAAAAAAAAAAAA=",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAAA=` is not base64url: Invalid padding"),
-        },
-        non_ascii = {
-            "AAAAAAAAAAAAAAAAAAAAAé",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAAé` is not base64url: Invalid symbol 195, offset 21."),
-        },
-    )]
-    fn parse_and_render_match_kafka_uuid(input: &str, want: Result<&str, &str>) {
-        let want = want.map(str::to_owned).map_err(str::to_owned);
-        let as_cluster = input
-            .parse::<ClusterId>()
-            .map(|id| id.to_string())
-            .map_err(|e| e.to_string());
-        assert2::check!(as_cluster == want, "{input:?}");
-        let as_directory = input
-            .parse::<DirectoryId>()
-            .map(|id| id.to_string())
-            .map_err(|e| e.to_string());
-        assert2::check!(as_directory == want, "{input:?} as a directory id");
+    #[derive(Default)]
+    struct UuidTextScenario {
+        input: String,
+        cluster: Option<Result<String, String>>,
+        directory: Option<Result<String, String>>,
+        id: Uuid,
+        json: String,
+        decoded_cluster: Option<Result<ClusterId, String>>,
+        decoded_directory: Option<Result<DirectoryId, String>>,
     }
+    #[rstest::fixture]
+    fn uuid_text() -> UuidTextScenario {
+        let input = String::new();
+        UuidTextScenario {
+            input,
+            ..UuidTextScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("Kafka UUID input {input}")]
+    fn kafka_uuid_text(uuid_text: &mut UuidTextScenario, input: String) {
+        uuid_text.input = if input == "empty" {
+            String::new()
+        } else {
+            input
+        };
+    }
+    #[rstest_bdd_macros::when("the input is parsed and rendered as cluster and directory UUIDs")]
+    fn parse_render_uuid(uuid_text: &mut UuidTextScenario) {
+        uuid_text.cluster = Some(
+            uuid_text
+                .input
+                .parse::<ClusterId>()
+                .map(|id| id.to_string())
+                .map_err(|error| error.to_string()),
+        );
+        uuid_text.directory = Some(
+            uuid_text
+                .input
+                .parse::<DirectoryId>()
+                .map(|id| id.to_string())
+                .map_err(|error| error.to_string()),
+        );
+    }
+    #[rstest_bdd_macros::then("both UUID types render the canonical text {canonical}")]
+    fn canonical_uuid_text(uuid_text: &UuidTextScenario, canonical: String) {
+        check!(uuid_text.cluster == Some(Ok(canonical.clone())));
+        check!(uuid_text.directory == Some(Ok(canonical)));
+    }
+    #[rstest_bdd_macros::then("both UUID types report {error}")]
+    fn rejected_uuid_text(uuid_text: &UuidTextScenario, error: String) {
+        check!(
+            uuid_text.cluster == Some(Err(error.clone())),
+            "{:?}",
+            uuid_text.input
+        );
+        check!(
+            uuid_text.directory == Some(Err(error)),
+            "{:?} as a directory id",
+            uuid_text.input
+        );
+    }
+    #[rstest_bdd_macros::given("cluster UUID bytes 0102030405060708090a0b0c0d0e0f10")]
+    fn cluster_uuid_bytes(uuid_text: &mut UuidTextScenario) {
+        uuid_text.id = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    }
+    #[rstest_bdd_macros::when(
+        "cluster UUID JSON is saved and cluster and directory UUID strings are loaded"
+    )]
+    fn uuid_json_codec(uuid_text: &mut UuidTextScenario) {
+        uuid_text.json =
+            serde_json::to_string(&ClusterId(uuid_text.id)).expect("encode cluster UUID");
+        uuid_text.decoded_cluster = Some(
+            serde_json::from_str(r#""AQIDBAUGBwgJCgsMDQ4PEA""#).map_err(|error| error.to_string()),
+        );
+        uuid_text.decoded_directory = Some(
+            serde_json::from_str(r#""01020304-0506-0708-090a-0b0c0d0e0f10""#)
+                .map_err(|error| error.to_string()),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "JSON preserves the Kafka UUID string and rejects hyphenated directory UUIDs"
+    )]
+    fn uuid_json_contract(uuid_text: &UuidTextScenario) {
+        check!(uuid_text.json == r#""AQIDBAUGBwgJCgsMDQ4PEA""#);
+        check!(uuid_text.decoded_cluster == Some(Ok(ClusterId(uuid_text.id))));
+        check!(
+            uuid_text
+                .decoded_directory
+                .as_ref()
+                .expect("directory UUID decoded")
+                .is_err()
+        );
+    }
+
+    #[derive(Default)]
+    struct UuidRulesScenario {
+        id: Uuid,
+        sample_sizes: (usize, usize),
+        reserved: Option<(bool, bool)>,
+        plain: Vec<Uuid>,
+        clusters: Vec<ClusterId>,
+        directories: Vec<DirectoryId>,
+        leading_bytes: Vec<Uuid>,
+        dash_results: Vec<(bool, bool)>,
+    }
+    #[rstest::fixture]
+    fn uuid_rules() -> UuidRulesScenario {
+        let id = Uuid::nil();
+        UuidRulesScenario {
+            id,
+            ..UuidRulesScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("a UUID with high word {high} and low word {low}")]
+    fn uuid_words(uuid_rules: &mut UuidRulesScenario, high: u64, low: u64) {
+        uuid_rules.id = Uuid::from_u64_pair(high, low);
+    }
+    #[rstest_bdd_macros::when("cluster and directory UUID reservation rules are evaluated")]
+    fn uuid_reservations(uuid_rules: &mut UuidRulesScenario) {
+        uuid_rules.reserved = Some((
+            is_reserved(uuid_rules.id),
+            is_reserved_directory_id(uuid_rules.id),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "cluster reservation is {cluster} and directory reservation is {directory}"
+    )]
+    fn expected_reservations(uuid_rules: &UuidRulesScenario, cluster: bool, directory: bool) {
+        check!(
+            uuid_rules.reserved == Some((cluster, directory)),
+            "{}",
+            uuid_rules.id
+        );
+    }
+    #[rstest_bdd_macros::given(
+        "random UUID sample sizes {plain} plain and {wrappers} for each wrapper"
+    )]
+    fn random_uuid_rules(uuid_rules: &mut UuidRulesScenario, plain: usize, wrappers: usize) {
+        uuid_rules.sample_sizes = (plain, wrappers);
+    }
+    #[rstest_bdd_macros::when("the random UUID samples are generated")]
+    fn draw_random_uuids(uuid_rules: &mut UuidRulesScenario) {
+        uuid_rules.plain = iter::repeat_with(random_uuid)
+            .take(uuid_rules.sample_sizes.0)
+            .collect();
+        uuid_rules.clusters = iter::repeat_with(ClusterId::random)
+            .take(uuid_rules.sample_sizes.1)
+            .collect();
+        uuid_rules.directories = iter::repeat_with(DirectoryId::random)
+            .take(uuid_rules.sample_sizes.1)
+            .collect();
+    }
+    #[rstest_bdd_macros::then("all generated UUIDs avoid their reserved values and leading dashes")]
+    fn generated_uuid_rules(uuid_rules: &UuidRulesScenario) {
+        check!(uuid_rules.plain.len() == 5000);
+        check!(uuid_rules.clusters.len() == 500);
+        check!(uuid_rules.directories.len() == 500);
+        for plain in &uuid_rules.plain {
+            check!(!is_reserved(*plain));
+            check!(!encode(*plain).starts_with('-'));
+        }
+        for cluster in &uuid_rules.clusters {
+            check!(!is_reserved(cluster.0));
+            check!(!cluster.to_string().starts_with('-'));
+        }
+        for directory in &uuid_rules.directories {
+            check!(!directory.is_reserved());
+            check!(!directory.to_string().starts_with('-'));
+        }
+    }
+    #[rstest_bdd_macros::given("UUIDs spanning every possible leading byte")]
+    fn all_uuid_leading_bytes(uuid_rules: &mut UuidRulesScenario) {
+        uuid_rules.leading_bytes = (0..=u8::MAX)
+            .map(|first| {
+                let mut bytes = [0u8; 16];
+                bytes[0] = first;
+                Uuid::from_bytes(bytes)
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when(
+        "their leading-dash classification and base64 encodings are computed"
+    )]
+    fn classify_uuid_dash(uuid_rules: &mut UuidRulesScenario) {
+        uuid_rules.dash_results = uuid_rules
+            .leading_bytes
+            .iter()
+            .map(|id| (starts_with_dash(*id), encode(*id).starts_with('-')))
+            .collect();
+    }
+    #[rstest_bdd_macros::then(
+        "the leading-dash classifier agrees with Kafka encoding for every byte"
+    )]
+    fn all_uuid_dash_results(uuid_rules: &UuidRulesScenario) {
+        check!(uuid_rules.dash_results.len() == 256);
+        for (index, (classified, encoded)) in uuid_rules.dash_results.iter().enumerate() {
+            check!(classified == encoded, "{index:#x}");
+        }
+    }
+    rstest_bdd_macros::scenarios!("tests/features/kafka_uuid_contract", fixtures = [uuid_text: UuidTextScenario, uuid_rules: UuidRulesScenario]);
 
     /// The command line also takes the hyphenated form, and only a string of
     /// exactly that shape is read as hex.
@@ -382,71 +505,5 @@ mod tests {
             ClusterId::parse_cli("0102030405060708090a0b0c0d0e0f10"),
             Err(KafkaUuidError::TooLong { .. })
         ));
-    }
-
-    /// Serde carries the `Display` string and refuses the hyphenated form, so
-    /// a file holds only the Kafka form.
-    #[test]
-    fn serde_uses_the_kafka_string() {
-        let id = ClusterId(Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10));
-        check!(serde_json::to_string(&id).unwrap() == r#""AQIDBAUGBwgJCgsMDQ4PEA""#);
-        check!(serde_json::from_str::<ClusterId>(r#""AQIDBAUGBwgJCgsMDQ4PEA""#).unwrap() == id);
-        check!(
-            serde_json::from_str::<DirectoryId>(r#""01020304-0506-0708-090a-0b0c0d0e0f10""#)
-                .is_err()
-        );
-    }
-
-    /// The generators skip what Kafka's generators skip.
-    #[test]
-    fn random_ids_obey_kafka_generation_rules() {
-        // One draw in 64 starts with a dash before the rule applies, so
-        // 5000 draws would miss a missing rule with a chance of e^-78.
-        for _ in 0..5000 {
-            let plain = random_uuid();
-            check!(!is_reserved(plain));
-            check!(!encode(plain).starts_with('-'));
-        }
-        for _ in 0..500 {
-            let cluster = ClusterId::random();
-            check!(!is_reserved(cluster.0));
-            check!(!cluster.to_string().starts_with('-'));
-            let directory = DirectoryId::random();
-            check!(!directory.is_reserved());
-            check!(!directory.to_string().starts_with('-'));
-        }
-    }
-
-    /// The reservation and dash predicates agree with Kafka's definitions.
-    #[yare::parameterized(
-        zero = { Uuid::from_u64_pair(0, 0), true, true },
-        one = { Uuid::from_u64_pair(0, 1), true, true },
-        two = { Uuid::from_u64_pair(0, 2), false, true },
-        ninety_nine = { Uuid::from_u64_pair(0, 99), false, true },
-        one_hundred = { Uuid::from_u64_pair(0, 100), false, false },
-        low_bits_max = { Uuid::from_u64_pair(0, u64::MAX), false, true },
-        high_bits_one = { Uuid::from_u64_pair(1, 0), false, false },
-        high_and_low_one = { Uuid::from_u64_pair(1, 1), false, false },
-    )]
-    fn reservations_match_kafka(id: Uuid, reserved: bool, reserved_directory: bool) {
-        assert2::check!(
-            (is_reserved(id), is_reserved_directory_id(id)) == (reserved, reserved_directory),
-            "{id}"
-        );
-    }
-
-    /// Exhaustively checks each possible leading byte; this is a property
-    /// sweep over the byte domain, rather than a finite set of independent ids.
-    #[test]
-    fn dash_check_matches_kafka_for_every_first_byte() {
-        for first_byte in 0..=u8::MAX {
-            let mut bytes = [0u8; 16];
-            bytes[0] = first_byte;
-            let id = Uuid::from_bytes(bytes);
-            check!(
-                starts_with_dash(id) == encode(id).starts_with('-'),
-                "{first_byte:#x}"
-            );
-        }
     }
 }

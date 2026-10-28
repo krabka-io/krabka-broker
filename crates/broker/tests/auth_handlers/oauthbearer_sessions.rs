@@ -1,12 +1,12 @@
 //! SASL/OAUTHBEARER re-authentication (KIP-368) end-to-end.
 //!
-//! Six scenarios exercise the full session-lifetime and in-band re-auth
+//! Seven scenarios exercise the full session-lifetime and in-band re-auth
 //! surface: the response carries `session_lifetime_ms ~ exp - now`; a broker
 //! cap clamps it; a request past the token's `exp` closes the connection; an
 //! in-band re-auth with a fresh token re-arms the session even when it starts
 //! after the old token expired; an in-band re-auth with a different principal
 //! name returns 58 and closes the connection; an in-band attempt to switch
-//! mechanism returns 34; and, as a regression, a PLAIN listener reports
+//! mechanism answers the handshake then closes on the next frame; and, as a regression, a PLAIN listener reports
 //! `session_lifetime_ms = 0` and expires nothing.
 //!
 //! The expiry deadline is a wall-clock instant that the dispatch loop compares
@@ -35,7 +35,7 @@ use {
     },
     assert2::assert,
     bytes::BytesMut,
-    krabka_broker::Broker,
+    krabka_broker::{Broker, BrokerHandle},
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
@@ -45,7 +45,10 @@ use {
         },
     },
     krabka_security::SaslMechanism,
-    std::time::Duration,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
+    std::{io, time::Duration},
+    tempfile::TempDir,
     tokio::{io::AsyncReadExt, net::TcpStream, time},
 };
 
@@ -79,26 +82,18 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
 ///
 /// `session_lifetime_ms` is the KIP-368 wire field on
 /// `sasl_authenticate_response::SaslAuthenticateResponse v1+`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session lifetime ms set from token exp"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
-    let (_log_dir, handle, addr) =
-        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
-
-    let exp_secs = now_unix_secs() + 600;
-    let token = unsecured_jws("alice", exp_secs);
-
-    let (stream, session_lifetime_ms) = drive_sasl_oauthbearer_session_open(addr, &token)
-        .await
-        .expect("OAUTHBEARER session must succeed");
-    drop(stream);
-
-    // ~600_000 ms; allow generous wall-clock slop for CI.
-    assert!(
-        (590_000..605_000).contains(&session_lifetime_ms),
-        "session_lifetime_ms = {session_lifetime_ms}, expected ~600_000"
-    );
-
-    handle.shutdown().await;
+async fn oauthbearer_session_lifetime_ms_set_from_token_exp(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// The broker clamps `session_lifetime_ms` when the listener sets
@@ -107,38 +102,18 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
 /// The response value becomes `min(token_exp_ms - now_ms, cap * 1000)`. The
 /// dispatch loop anchors its deadline to the CLAMPED value, so the broker
 /// enforces what it told the client.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session capped by connections max reauth"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_capped_by_connections_max_reauth() {
-    let (_log_dir, handle, addr) = oauthbearer_fixture(
-        oauthbearer_zero_skew_validator(),
-        Some(krabka_units::millis(300)),
-    )
-    .await;
-
-    // Token exp = now + 600s. Cap = 300 ms. Expected session = 300 ms.
-    let exp_secs = now_unix_secs() + 600;
-    let token = unsecured_jws("alice", exp_secs);
-
-    let (mut stream, session_lifetime_ms) = drive_sasl_oauthbearer_session_open(addr, &token)
-        .await
-        .expect("OAUTHBEARER session must succeed");
-
-    // Cap should clamp the response.
-    assert!(
-        (200..=300).contains(&session_lifetime_ms),
-        "session_lifetime_ms = {session_lifetime_ms}, expected ~300 (capped)"
-    );
-
-    time::sleep(Duration::from_millis(500)).await;
-    send_metadata_on_expired_session(&mut stream).await;
-
-    let n = read_session_end(&mut stream).await;
-    assert!(
-        n == 0,
-        "expected EOF after cap-bounded session expiry, got {n} bytes"
-    );
-
-    handle.shutdown().await;
+async fn oauthbearer_session_capped_by_connections_max_reauth(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// Test #2: a request that arrives past the token's `exp` closes the TCP
@@ -147,33 +122,18 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
 /// The token is given a few seconds of life and the test waits it out, rather
 /// than jumping a paused tokio clock: the deadline is a wall-clock instant the
 /// dispatch loop compares each arriving request against, not a timer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session expires closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_expires_closes_connection() {
-    let (_log_dir, handle, addr) =
-        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
-
-    // `now_unix_secs` truncates to whole seconds, so `now + 1` left the
-    // handshake anywhere between zero and one second before the token expired,
-    // and under load it expired mid-handshake and the broker rejected it. The
-    // headroom below is for the open; the expiry this test is about is the one
-    // the wait below crosses.
-    let exp_secs = now_unix_secs() + 4;
-    let token = unsecured_jws("alice", exp_secs);
-
-    let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token)
-        .await
-        .expect("OAUTHBEARER session must succeed");
-
-    // Wait out whatever is left of the token, measured after the handshake
-    // rather than assumed before it, plus a margin to land past `exp`.
-    wait_past_expiration(exp_secs).await;
-    send_metadata_on_expired_session(&mut stream).await;
-
-    // Broker must have closed the connection. Read should EOF.
-    let n = read_session_end(&mut stream).await;
-    assert!(n == 0, "expected EOF after session expiry, got {n} bytes");
-
-    handle.shutdown().await;
+async fn oauthbearer_session_expires_closes_connection(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// Test #3: an in-band SaslHandshake/SaslAuthenticate pair with a fresh token
@@ -183,54 +143,18 @@ async fn oauthbearer_session_expires_closes_connection() {
 /// JVM client does: it picks a re-auth point inside the window but acts on it
 /// only when it next has a request to write. The broker must serve the
 /// exchange and then re-arm the session from token B's `exp`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with fresh token resets timer"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
-    let (_log_dir, handle, addr) =
-        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
-
-    // Token A gets a few seconds so the handshake cannot outlive it -- see the
-    // note in `oauthbearer_session_expires_closes_connection`. Token B lasts
-    // 600s. What this test needs is to re-auth *past* A's `exp`, which the
-    // computed wait below guarantees.
-    let exp_a = now_unix_secs() + 4;
-    let token_a = unsecured_jws("alice", exp_a);
-    let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_a)
-        .await
-        .expect("initial OAUTHBEARER must succeed");
-
-    wait_past_expiration(exp_a).await;
-    let token_b = unsecured_jws("alice", now_unix_secs() + 600);
-    drive_inband_reauth(&mut stream, &token_b)
-        .await
-        .expect("in-band re-auth with fresh token must succeed past token A's exp");
-
-    // Issue a Metadata RPC to prove the connection survived.
-    let md_req = metadata_request::MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req
-        .encode(&mut md_body, 12)
-        .expect("Metadata encode must succeed");
-    let md_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(99),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &md_body,
-    )
-    .await
-    .expect("Metadata RPC must succeed past original token expiry");
-    let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12)
-        .expect("Metadata decode must succeed");
-    assert!(
-        !md_resp.brokers.is_empty(),
-        "Metadata response must carry at least one broker"
-    );
-
-    handle.shutdown().await;
+async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// Test #4: the broker rejects an in-band re-auth with a token whose `sub`
@@ -240,30 +164,18 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
 /// `error_code = SASL_AUTHENTICATION_FAILED (58)`, and the connection closes.
 /// The client then reads EOF. KIP-368 forbids a change of principal across an
 /// in-band re-auth.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with different principal closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
-    let (_log_dir, handle, addr) =
-        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
-
-    let token_alice = unsecured_jws("alice", now_unix_secs() + 600);
-    let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_alice)
-        .await
-        .expect("initial OAUTHBEARER must succeed");
-
-    // Attempt re-auth with a token belonging to "bob".
-    let token_bob = unsecured_jws("bob", now_unix_secs() + 600);
-    let result = drive_inband_reauth(&mut stream, &token_bob).await;
-    let err = result.expect_err("re-auth with different principal must fail");
-    assert!(
-        err.to_string().contains("error_code=58"),
-        "expected SASL_AUTHENTICATION_FAILED (58); got {err}"
-    );
-
-    // Broker closes after the error response.
-    let n = read_session_end(&mut stream).await;
-    assert!(n == 0, "expected EOF after failed re-auth");
-
-    handle.shutdown().await;
+async fn oauthbearer_in_band_reauth_with_different_principal_closes(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// Test #5: the broker rejects an in-band `SaslHandshake` whose `mechanism`
@@ -273,74 +185,18 @@ async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
 /// (Kafka's `REAUTH_BAD_MECHANISM`). KIP-368 needs
 /// the same mechanism across an in-band re-auth, even when the broker would
 /// otherwise accept SCRAM on a fresh connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with different mechanism closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
-    // Enable both OAUTHBEARER + SCRAM-SHA-512 on the same listener so a
-    // fresh-connection SCRAM handshake WOULD succeed. The reject here
-    // must be due to the same-mechanism rule, not "mechanism unknown".
-    let (_log_dir, mut cfg) =
-        sasl_temp_config(vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512]);
-    cfg.oauthbearer_validator = oauthbearer_zero_skew_validator();
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let token = unsecured_jws("alice", now_unix_secs() + 600);
-    let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token)
-        .await
-        .expect("initial OAUTHBEARER must succeed");
-
-    // In-band SaslHandshake with SCRAM-SHA-512. Kafka answers it with NONE
-    // and the enabled list (the mechanism is enabled), moves to
-    // REAUTH_BAD_MECHANISM, and fails the connection on the next frame.
-    let sh_req = sasl_handshake_request::SaslHandshakeRequest {
-        mechanism: "SCRAM-SHA-512".to_owned(),
-        ..Default::default()
-    };
-    let mut sh_body = BytesMut::new();
-    sh_req
-        .encode(&mut sh_body, 1)
-        .expect("SaslHandshake encode must succeed");
-    let sh_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(200),
-            ..Default::default()
-        },
-        &sh_body,
-    )
-    .await
-    .expect("handshake round-trip");
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1)
-        .expect("SaslHandshake decode must succeed");
-    assert!(
-        sh_resp
-            == sasl_handshake_response::SaslHandshakeResponse {
-                error_code: 0,
-                mechanisms: vec!["OAUTHBEARER".to_owned(), "SCRAM-SHA-512".to_owned()],
-                ..Default::default()
-            }
-    );
-    // The next frame, whatever it is, gets no answer: the connection closes.
-    assert!(
-        round_trip(
-            &mut stream,
-            SocketExchangeSetup {
-                api_key: WireApiKey(17),
-                version: WireApiVersion(1),
-                correlation: WireCorrelationId(201),
-                ..Default::default()
-            },
-            &sh_body
-        )
-        .await
-        .is_err(),
-        "the connection must close on the frame after a mechanism switch"
-    );
-
-    handle.shutdown().await;
+async fn oauthbearer_in_band_reauth_with_different_mechanism_closes(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 /// Test #6: regression for PLAIN listeners.
@@ -359,96 +215,18 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
 /// one under test here -- `crates/broker/tests/connections_max_idle.rs` covers
 /// it. Leaving it at Kafka's ten minutes would close the connection for being
 /// idle and say nothing about the KIP-368 timer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "plain listener session lifetime ms is zero and no timer"
+)]
 #[tokio::test(flavor = "current_thread")]
-async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.connections_max_idle = Some(krabka_units::millis(0));
-
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("alice".to_owned(), alice_password());
-    let broker_stream = start_broker_stream(cfg).await;
-    let handle = broker_stream.broker;
-
-    // Inline a full PLAIN handshake (mirrors `drive_sasl_plain_session`)
-    // so we can capture the sasl_authenticate_response::SaslAuthenticateResponse and assert its
-    // `session_lifetime_ms` field directly.
-    let mut stream = broker_stream.stream;
-
-    let _: api_versions_response::ApiVersionsResponse = exchange()
-        .stream(&mut stream)
-        .request(&api_versions_request::ApiVersionsRequest::default())
-        .client_id("krabka-sasl-test")
-        .call()
-        .await
-        .expect("ApiVersions round-trip");
-
-    let sh_req = sasl_handshake_request::SaslHandshakeRequest {
-        mechanism: "PLAIN".to_owned(),
-        ..Default::default()
-    };
-    let mut sh_body = BytesMut::new();
-    sh_req.encode(&mut sh_body, 1).unwrap();
-    let sh_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(2),
-            ..Default::default()
-        },
-        &sh_body,
-    )
-    .await
-    .expect("SaslHandshake round-trip");
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = sasl_handshake_response::SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
-    assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
-
-    let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
-    let auth_resp_bytes = sasl_authenticate_round_trip(&mut stream, &auth_body)
-        .await
-        .expect("SaslAuthenticate round-trip");
-    let mut cur: &[u8] = &auth_resp_bytes;
-    let auth_resp =
-        sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();
-    assert!(auth_resp.error_code == 0, "PLAIN authenticate must succeed");
-    assert!(
-        auth_resp.session_lifetime_ms == 0,
-        "PLAIN listener must report session_lifetime_ms = 0 (no KIP-368 deadline)"
-    );
-
-    // Advance the tokio clock by an hour. The dispatch loop must NOT
-    // have armed a per-connection timer for this non-OAuth session, so
-    // the connection stays alive and serves further requests.
-    time::pause();
-    time::advance(Duration::from_hours(1)).await;
-    time::resume();
-
-    let md_req = metadata_request::MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req.encode(&mut md_body, 12).unwrap();
-    let md_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(5),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &md_body,
-    )
-    .await
-    .expect("Metadata RPC must succeed an hour after PLAIN auth");
-    let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = metadata_response::MetadataResponse::decode(&mut cur, 12).unwrap();
-    assert!(
-        !md_resp.brokers.is_empty(),
-        "Metadata response must carry at least one broker"
-    );
-
-    handle.shutdown().await;
+async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer(lifetime: TokenSession) {
+    lifetime
+        .broker
+        .expect("a session-lifetime broker")
+        .shutdown()
+        .await;
 }
 
 async fn read_session_end(stream: &mut TcpStream) -> usize {
@@ -463,4 +241,412 @@ async fn wait_past_expiration(expiration: i64) {
     let remaining = u64::try_from(expiration.saturating_sub(now_unix_secs()).max(0))
         .expect("a non-negative second count fits in u64");
     time::sleep(Duration::from_secs(remaining) + Duration::from_millis(500)).await;
+}
+
+struct TokenSession {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    stream: Option<TcpStream>,
+    token: Option<String>,
+    expiration: Option<i64>,
+    session_lifetime: Option<i64>,
+    reauthentication: Option<io::Result<()>>,
+    metadata: Option<metadata_response::MetadataResponse>,
+    bytes_read: Option<usize>,
+    handshake: Option<sasl_handshake_response::SaslHandshakeResponse>,
+    plain_authentication: Option<sasl_authenticate_response::SaslAuthenticateResponse>,
+    handshake_body: Vec<u8>,
+    next_frame: Option<io::Result<Vec<u8>>>,
+    metadata_correlation: i32,
+}
+
+#[fixture]
+fn lifetime() -> TokenSession {
+    // Start this scenario with fresh inputs and observations.
+
+    TokenSession {
+        broker: None,
+        directory: None,
+        stream: None,
+        token: None,
+        expiration: None,
+        session_lifetime: None,
+        reauthentication: None,
+        metadata: None,
+        bytes_read: None,
+        handshake: None,
+        plain_authentication: None,
+        handshake_body: Vec::new(),
+        next_frame: None,
+        metadata_correlation: 99,
+    }
+}
+
+#[given("an uncapped OAUTHBEARER listener with zero clock skew")]
+async fn uncapped_bearer(lifetime: &mut TokenSession) {
+    let (directory, broker, _addr) =
+        oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
+    lifetime.broker = Some(broker);
+    lifetime.directory = Some(directory);
+}
+
+#[given("an OAUTHBEARER listener capped at 300 milliseconds with zero clock skew")]
+async fn capped_bearer(lifetime: &mut TokenSession) {
+    let (directory, broker, _addr) = oauthbearer_fixture(
+        oauthbearer_zero_skew_validator(),
+        Some(krabka_units::millis(300)),
+    )
+    .await;
+    lifetime.broker = Some(broker);
+    lifetime.directory = Some(directory);
+}
+
+#[given("the listener enables OAUTHBEARER and SCRAM-SHA-512 with zero clock skew")]
+async fn dual_mechanism_bearer(lifetime: &mut TokenSession) {
+    let (directory, mut config) =
+        sasl_temp_config(vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512]);
+    config.oauthbearer_validator = oauthbearer_zero_skew_validator();
+    lifetime.broker = Some(Broker::start(config).await.expect("broker must start"));
+    lifetime.directory = Some(directory);
+}
+
+#[given("a token for {principal} expires in {seconds} seconds")]
+fn session_token(lifetime: &mut TokenSession, principal: String, seconds: i64) {
+    let expiration = now_unix_secs() + seconds;
+    lifetime.token = Some(unsecured_jws(&principal, expiration));
+    lifetime.expiration = Some(expiration);
+}
+
+#[when("the client authenticates using that bearer token")]
+async fn authenticate_bearer(lifetime: &mut TokenSession) {
+    let addr = lifetime
+        .broker
+        .as_ref()
+        .expect("an OAUTHBEARER listener")
+        .listen_addr();
+    let token = lifetime.token.as_ref().expect("a bearer token");
+    let (stream, session_lifetime) = drive_sasl_oauthbearer_session_open(addr, token)
+        .await
+        .expect("OAUTHBEARER session must succeed");
+    lifetime.stream = Some(stream);
+    lifetime.session_lifetime = Some(session_lifetime);
+}
+
+#[given("alice is bearer-authenticated with a token expiring in {seconds} seconds")]
+async fn established_bearer(lifetime: &mut TokenSession, seconds: i64) {
+    session_token(lifetime, "alice".into(), seconds);
+    authenticate_bearer(lifetime).await;
+}
+
+#[then("the bearer lifetime is at least {minimum} and below {maximum} milliseconds")]
+fn token_expiration_lifetime(lifetime: &TokenSession, minimum: i64, maximum: i64) {
+    let actual = lifetime
+        .session_lifetime
+        .expect("bearer authentication returned its lifetime");
+    assert!(
+        (minimum..maximum).contains(&actual),
+        "session_lifetime_ms = {actual}, expected {minimum}..{maximum}"
+    );
+}
+
+#[then("the capped bearer lifetime is between 200 and 300 milliseconds")]
+fn capped_token_lifetime(lifetime: &TokenSession) {
+    let actual = lifetime
+        .session_lifetime
+        .expect("bearer authentication returned its lifetime");
+    assert!(
+        (200..=300).contains(&actual),
+        "session_lifetime_ms = {actual}, expected ~300 (capped)"
+    );
+}
+
+#[when("500 milliseconds elapse before the bearer client requests Metadata")]
+async fn expired_capped_request(lifetime: &mut TokenSession) {
+    time::sleep(Duration::from_millis(500)).await;
+    expired_bearer_metadata(lifetime).await;
+}
+
+#[when("the current bearer token's expiration passes")]
+async fn expired_bearer_token(lifetime: &TokenSession) {
+    wait_past_expiration(
+        lifetime
+            .expiration
+            .expect("a token expiration was recorded"),
+    )
+    .await;
+}
+
+#[when("the expired bearer client requests Metadata")]
+async fn expired_bearer_metadata(lifetime: &mut TokenSession) {
+    send_metadata_on_expired_session(
+        lifetime
+            .stream
+            .as_mut()
+            .expect("an authenticated bearer connection"),
+    )
+    .await;
+}
+
+#[when("the bearer client reads the connection")]
+async fn read_bearer_end(lifetime: &mut TokenSession) {
+    lifetime.bytes_read = Some(
+        read_session_end(
+            lifetime
+                .stream
+                .as_mut()
+                .expect("an authenticated bearer connection"),
+        )
+        .await,
+    );
+}
+
+#[then("the expired or refused bearer connection reaches EOF")]
+fn ended_bearer_session(lifetime: &TokenSession) {
+    assert!(
+        lifetime.bytes_read == Some(0),
+        "expected EOF after session expiry or refused reauthentication, got {:?} bytes",
+        lifetime.bytes_read
+    );
+}
+
+#[when("the same connection reauthenticates with the new bearer token")]
+async fn refresh_bearer(lifetime: &mut TokenSession) {
+    let token = lifetime.token.as_ref().expect("a fresh bearer token");
+    lifetime.reauthentication = Some(
+        drive_inband_reauth(
+            lifetime
+                .stream
+                .as_mut()
+                .expect("an authenticated bearer connection"),
+            token,
+        )
+        .await,
+    );
+}
+
+#[then("in-band bearer reauthentication succeeds past the old token's expiration")]
+fn refreshed_bearer(lifetime: &TokenSession) {
+    lifetime
+        .reauthentication
+        .as_ref()
+        .expect("in-band reauthentication was attempted")
+        .as_ref()
+        .expect("in-band re-auth with fresh token must succeed past token A's exp");
+}
+
+#[when("the authenticated connection requests Metadata")]
+async fn live_bearer_metadata(lifetime: &mut TokenSession) {
+    let mut body = BytesMut::new();
+    metadata_request::MetadataRequest::default()
+        .encode(&mut body, 12)
+        .expect("Metadata encode must succeed");
+    let response = round_trip(
+        lifetime
+            .stream
+            .as_mut()
+            .expect("an authenticated connection"),
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(lifetime.metadata_correlation),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &body,
+    )
+    .await
+    .expect("Metadata RPC must succeed after authentication");
+    lifetime.metadata = Some(
+        metadata_response::MetadataResponse::decode(&mut &response[..], 12)
+            .expect("Metadata decode must succeed"),
+    );
+}
+
+#[then("the live session's Metadata response names at least one broker")]
+fn live_bearer_response(lifetime: &TokenSession) {
+    assert!(
+        !lifetime
+            .metadata
+            .as_ref()
+            .expect("Metadata was requested on the live connection")
+            .brokers
+            .is_empty(),
+        "Metadata response must carry at least one broker"
+    );
+}
+
+#[then("changing the bearer principal is refused with SASL_AUTHENTICATION_FAILED")]
+fn changed_bearer_principal(lifetime: &TokenSession) {
+    let result = lifetime
+        .reauthentication
+        .as_ref()
+        .expect("a different-principal reauthentication was attempted");
+    let error = result
+        .as_ref()
+        .expect_err("re-auth with different principal must fail");
+    assert!(
+        error.to_string().contains("error_code=58"),
+        "expected SASL_AUTHENTICATION_FAILED (58); got {error}"
+    );
+}
+
+#[when("the authenticated bearer client handshakes as SCRAM-SHA-512")]
+async fn switch_bearer_mechanism(lifetime: &mut TokenSession) {
+    let mut body = BytesMut::new();
+    sasl_handshake_request::SaslHandshakeRequest {
+        mechanism: "SCRAM-SHA-512".to_owned(),
+        ..Default::default()
+    }
+    .encode(&mut body, 1)
+    .expect("SaslHandshake encode must succeed");
+    let response = round_trip(
+        lifetime
+            .stream
+            .as_mut()
+            .expect("an authenticated bearer connection"),
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(200),
+            ..Default::default()
+        },
+        &body,
+    )
+    .await
+    .expect("handshake round-trip");
+    lifetime.handshake = Some(
+        sasl_handshake_response::SaslHandshakeResponse::decode(&mut &response[..], 1)
+            .expect("SaslHandshake decode must succeed"),
+    );
+    lifetime.handshake_body = body.to_vec();
+}
+
+#[then("the mechanism-switch handshake succeeds and lists both enabled mechanisms")]
+fn recognized_but_changed_mechanism(lifetime: &TokenSession) {
+    assert!(
+        lifetime.handshake.as_ref()
+            == Some(&sasl_handshake_response::SaslHandshakeResponse {
+                error_code: 0,
+                mechanisms: vec!["OAUTHBEARER".to_owned(), "SCRAM-SHA-512".to_owned()],
+                ..Default::default()
+            })
+    );
+}
+
+#[when("another frame follows the bearer mechanism switch")]
+async fn frame_after_mechanism_switch(lifetime: &mut TokenSession) {
+    lifetime.next_frame = Some(
+        round_trip(
+            lifetime
+                .stream
+                .as_mut()
+                .expect("a mechanism-switch connection"),
+            SocketExchangeSetup {
+                api_key: WireApiKey(17),
+                version: WireApiVersion(1),
+                correlation: WireCorrelationId(201),
+                ..Default::default()
+            },
+            &lifetime.handshake_body,
+        )
+        .await,
+    );
+}
+
+#[then("the frame after the mechanism switch receives no response")]
+fn changed_mechanism_closes(lifetime: &TokenSession) {
+    assert!(
+        lifetime
+            .next_frame
+            .as_ref()
+            .expect("a frame followed the mechanism switch")
+            .is_err(),
+        "the connection must close on the frame after a mechanism switch"
+    );
+}
+
+#[given("a PLAIN listener has neither idle expiry nor a reauthentication cap")]
+async fn untimed_plain_listener(lifetime: &mut TokenSession) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = sasl_plaintext_config(directory.path().to_path_buf());
+    config.connections_max_idle = Some(krabka_units::millis(0));
+    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    config
+        .plain_credentials
+        .insert("alice".to_owned(), alice_password());
+    let broker_stream = start_broker_stream(config).await;
+    lifetime.broker = Some(broker_stream.broker);
+    lifetime.directory = Some(directory);
+    lifetime.stream = Some(broker_stream.stream);
+    lifetime.metadata_correlation = 5;
+}
+
+#[when("alice authenticates with PLAIN and reads the session lifetime")]
+async fn untimed_plain_authentication(lifetime: &mut TokenSession) {
+    let stream = lifetime.stream.as_mut().expect("a PLAIN session socket");
+    let _: api_versions_response::ApiVersionsResponse = exchange()
+        .stream(stream)
+        .request(&api_versions_request::ApiVersionsRequest::default())
+        .client_id("krabka-sasl-test")
+        .call()
+        .await
+        .expect("ApiVersions round-trip");
+    let mut handshake = BytesMut::new();
+    sasl_handshake_request::SaslHandshakeRequest {
+        mechanism: "PLAIN".to_owned(),
+        ..Default::default()
+    }
+    .encode(&mut handshake, 1)
+    .unwrap();
+    let response = round_trip(
+        stream,
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            correlation: WireCorrelationId(2),
+            ..Default::default()
+        },
+        &handshake,
+    )
+    .await
+    .expect("SaslHandshake round-trip");
+    lifetime.handshake = Some(
+        sasl_handshake_response::SaslHandshakeResponse::decode(&mut &response[..], 1).unwrap(),
+    );
+    let token = plain_authentication_body("alice", alice_password().as_bytes());
+    let response = sasl_authenticate_round_trip(stream, &token)
+        .await
+        .expect("SaslAuthenticate round-trip");
+    lifetime.plain_authentication = Some(
+        sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut &response[..], 2)
+            .unwrap(),
+    );
+}
+
+#[then("PLAIN handshake and authentication succeed with session lifetime zero")]
+fn no_plain_deadline(lifetime: &TokenSession) {
+    assert!(
+        lifetime
+            .handshake
+            .as_ref()
+            .expect("a PLAIN handshake response")
+            .error_code
+            == 0,
+        "PLAIN handshake must succeed"
+    );
+    let response = lifetime
+        .plain_authentication
+        .as_ref()
+        .expect("a PLAIN authentication response");
+    assert!(response.error_code == 0, "PLAIN authenticate must succeed");
+    assert!(
+        response.session_lifetime_ms == 0,
+        "PLAIN listener must report session_lifetime_ms = 0 (no KIP-368 deadline)"
+    );
+}
+
+#[when("the Tokio clock advances by one hour")]
+async fn advance_plain_clock() {
+    time::pause();
+    time::advance(Duration::from_hours(1)).await;
+    time::resume();
 }

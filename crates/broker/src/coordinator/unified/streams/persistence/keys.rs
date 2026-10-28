@@ -152,28 +152,65 @@ mod tests {
         assert!(parse_streams_key(18, b"\x00\x02g1").is_err());
     }
 
-    #[test]
-    fn key_versions_match_kafka_api_keys() {
-        // apiKey of each schema at Apache Kafka tag 4.3.1, which defines no
-        // streams record type 18.
-        assert!(KEY_STREAMS_GROUP_METADATA == 17);
-        assert!(KEY_STREAMS_MEMBER_METADATA == 19);
-        assert!(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA == 20);
-        assert!(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER == 21);
-        assert!(KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT == 22);
-        assert!(KEY_STREAMS_TOPOLOGY == 23);
+    use {
+        crate::coordinator::unified::{
+            codec_observations::KafkaMetadataKey, test_support::wire_bytes,
+        },
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    type StreamsMetadataKeyScenario = KafkaMetadataKey;
+    #[rstest::fixture]
+    fn input() -> StreamsMetadataKeyScenario {
+        // Start this scenario with fresh inputs and observations.
+        StreamsMetadataKeyScenario::default()
     }
-
-    #[test]
-    fn group_metadata_key_bytes_match_kafka_schema() {
-        // i16 apiKey 17, then a non-flexible i16-length group id.
-        assert!(&encode_group_metadata_key("g1").unwrap()[..] == b"\x00\x11\x00\x02g1");
+    #[given("the Streams compacted log record kind is {kind}")]
+    fn metadata_record_kind(input: &mut StreamsMetadataKeyScenario, kind: String) {
+        input.kind = kind;
     }
-
-    #[test]
-    fn member_metadata_key_bytes_match_kafka_schema() {
-        assert!(
-            &encode_member_metadata_key("g1", "m1").unwrap()[..] == b"\x00\x13\x00\x02g1\x00\x02m1"
+    #[when("the Streams coordinator selects the record API key")]
+    fn metadata_api_key(input: &mut StreamsMetadataKeyScenario) {
+        input.version = Some(match input.kind.as_str() {
+            "group-metadata" => KEY_STREAMS_GROUP_METADATA,
+            "member-metadata" => KEY_STREAMS_MEMBER_METADATA,
+            "target-assignment-metadata" => KEY_STREAMS_TARGET_ASSIGNMENT_METADATA,
+            "target-assignment-member" => KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
+            "current-member-assignment" => KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT,
+            "topology" => KEY_STREAMS_TOPOLOGY,
+            _ => panic!("unknown metadata record kind"),
+        });
+    }
+    #[then("the Streams record API key is {version}")]
+    fn metadata_version(input: &StreamsMetadataKeyScenario, version: i16) {
+        assert!(input.version == Some(version));
+    }
+    #[given("a Streams {kind} metadata key for group {group} and member {member}")]
+    fn metadata_key_input(
+        input: &mut StreamsMetadataKeyScenario,
+        kind: String,
+        group: String,
+        member: String,
+    ) {
+        input.set_key_fields(kind, group, member);
+    }
+    #[when("the Streams coordinator encodes the metadata key")]
+    fn encode_metadata_key(input: &mut StreamsMetadataKeyScenario) {
+        input.encoded = Some(
+            match input.kind.as_str() {
+                "group" => encode_group_metadata_key(&input.group),
+                "member" => encode_member_metadata_key(
+                    &input.group,
+                    input.member.as_deref().expect("member identifier"),
+                ),
+                _ => panic!("unknown Streams key kind"),
+            }
+            .expect("encode Streams metadata key"),
         );
     }
+    #[then("the Streams metadata key has exact Kafka bytes {hex}")]
+    fn metadata_key_bytes(input: &StreamsMetadataKeyScenario, hex: String) {
+        let want = wire_bytes(&[&hex]);
+        input.assert_kafka_bytes(&want);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/keys.feature",fixtures=[input:StreamsMetadataKeyScenario]);
 }

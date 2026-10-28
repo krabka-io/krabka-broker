@@ -292,7 +292,16 @@ mod tests {
     use {
         super::*,
         assert2::assert,
-        std::{collections::BTreeSet, fs},
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        std::{
+            collections::BTreeSet,
+            fs,
+            panic::{AssertUnwindSafe, catch_unwind},
+            path::PathBuf,
+        },
+        tempfile::TempDir,
     };
 
     fn api(api_key: i16, min_version: i16, max_version: i16) -> ApiVersion {
@@ -319,157 +328,263 @@ mod tests {
         }],
     };
 
-    /// The sample intent for `api_key`, as `build_with` writes it.
-    fn intent(api_key: i16) -> Option<String> {
-        range_divergence_intent(SAMPLE, api_key, Verdict::RangeDiffers)
+    struct ReportScenario {
+        oracle: String,
+        krabka: Vec<ApiVersion>,
+        kafka: Vec<ApiVersion>,
+        intents: Option<Intents<'static>>,
+        listed_intents: Vec<(i16, String)>,
+        outcome: Option<Result<DivergenceReport, String>>,
+        directory: Option<TempDir>,
+        checked_in: Option<String>,
+        stored: Option<String>,
+        reloaded: Option<DivergenceReport>,
+        rebuilt: Option<DivergenceReport>,
     }
 
-    fn build(oracle: &str, krabka: &[ApiVersion], kafka: &[ApiVersion]) -> DivergenceReport {
-        DivergenceReport::build_with()
-            .krabka(krabka)
-            .kafka(kafka)
-            .intents(SAMPLE)
-            .oracle_image(oracle)
-            .call()
+    impl ReportScenario {
+        fn report(&self) -> &DivergenceReport {
+            self.outcome
+                .as_ref()
+                .expect("a report was constructed")
+                .as_ref()
+                .expect("a valid report")
+        }
     }
 
-    #[test]
-    fn join_covers_both_tables_and_labels_each_key() {
-        let krabka = vec![api(3, 0, 13), api(1, 4, 17), api(80, 0, 1)];
-        let kafka = vec![api(3, 0, 13), api(1, 4, 18), api(88, 0, 0)];
-        assert!(
-            build("oracle:1.2.3", &krabka, &kafka)
-                == DivergenceReport {
-                    oracle_image: "oracle:1.2.3".to_owned(),
-                    apis: vec![
-                        ApiRow {
-                            api_key: 1,
-                            name: "Fetch".to_owned(),
-                            krabka: Some(range(4, 17)),
-                            kafka: Some(range(4, 18)),
-                            verdict: Verdict::RangeDiffers,
-                            intent: intent(1),
-                        },
-                        ApiRow {
-                            api_key: 3,
-                            name: "Metadata".to_owned(),
-                            krabka: Some(range(0, 13)),
-                            kafka: Some(range(0, 13)),
-                            verdict: Verdict::Same,
-                            intent: None,
-                        },
-                        ApiRow {
-                            api_key: 80,
-                            name: "AddRaftVoter".to_owned(),
-                            krabka: Some(range(0, 1)),
-                            kafka: None,
-                            verdict: Verdict::KrabkaOnly,
-                            intent: None,
-                        },
-                        ApiRow {
-                            api_key: 88,
-                            name: "StreamsGroupHeartbeat".to_owned(),
-                            krabka: None,
-                            kafka: Some(range(0, 0)),
-                            verdict: Verdict::KafkaOnly,
-                            intent: None,
-                        },
-                    ],
-                }
-        );
+    #[fixture]
+    fn report() -> ReportScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        ReportScenario {
+            oracle: String::new(),
+            krabka: Vec::new(),
+            kafka: Vec::new(),
+            intents: None,
+            listed_intents: Vec::new(),
+            outcome: None,
+            directory: None,
+            checked_in: None,
+            stored: None,
+            reloaded: None,
+            rebuilt: None,
+        }
     }
 
-    /// A key is recorded in one table or the other, never both, and every
-    /// recorded sentence says something.
-    #[test]
-    fn every_recorded_intent_is_non_empty_and_keyed_once() {
-        let all: Vec<&RecordedIntent<'_>> = RANGE_DIVERGENCE_INTENTS
-            .iter()
-            .chain(SERVED_RANGE_DIVERGENCES)
+    #[given("oracle image {image} and sample Fetch-range and Produce-served-range explanations")]
+    fn sample_intents(report: &mut ReportScenario, image: String) {
+        report.oracle = image;
+        report.intents = Some(SAMPLE);
+    }
+
+    #[given("the checked-in API divergence explanations")]
+    fn recorded_intents(report: &mut ReportScenario) {
+        report.oracle = "oracle:1.2.3".into();
+        report.intents = Some(RECORDED);
+    }
+
+    #[derive(DataTableRow)]
+    struct AdvertisedRange {
+        key: i16,
+        minimum: i16,
+        maximum: i16,
+    }
+
+    #[given("krabka advertises:")]
+    fn krabka_ranges(report: &mut ReportScenario, #[datatable] rows: Rows<AdvertisedRange>) {
+        report.krabka = rows
+            .into_iter()
+            .map(|row| api(row.key, row.minimum, row.maximum))
             .collect();
-        let unique: BTreeSet<i16> = all.iter().map(|recorded| recorded.api_key).collect();
-        assert!(unique.len() == all.len());
-        assert!(
-            all.iter()
-                .all(|recorded| !recorded.intent.trim().is_empty())
+    }
+
+    #[given("Kafka advertises:")]
+    fn kafka_ranges(report: &mut ReportScenario, #[datatable] rows: Rows<AdvertisedRange>) {
+        report.kafka = rows
+            .into_iter()
+            .map(|row| api(row.key, row.minimum, row.maximum))
+            .collect();
+    }
+
+    #[when("the advertised tables are joined into a divergence report")]
+    fn join_tables(report: &mut ReportScenario) {
+        let intents = report.intents.expect("a divergence explanation table");
+        report.outcome = Some(
+            catch_unwind(AssertUnwindSafe(|| {
+                DivergenceReport::build_with()
+                    .krabka(&report.krabka)
+                    .kafka(&report.kafka)
+                    .intents(intents)
+                    .oracle_image(&report.oracle)
+                    .call()
+            }))
+            .map_err(|payload| {
+                payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&str>()
+                            .map(|message| (*message).to_owned())
+                    })
+                    .expect("a string panic from divergence report construction")
+            }),
         );
     }
 
-    /// #863: a key that advertises the oracle's own range, recorded as served
-    /// wider, still carries the reason.
-    #[test]
-    fn a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {
-        let report = build("oracle:1.2.3", &[api(0, 0, 13)], &[api(0, 0, 13)]);
+    #[when("all configured divergence explanations are enumerated")]
+    fn enumerate_intents(report: &mut ReportScenario) {
+        let intents = report.intents.expect("the checked-in explanation tables");
+        report.listed_intents = intents
+            .range
+            .iter()
+            .chain(intents.served)
+            .map(|recorded| (recorded.api_key, recorded.intent.to_owned()))
+            .collect();
+    }
+
+    #[then("every explanation has a unique API key and a nonempty reason")]
+    fn valid_intents(report: &ReportScenario) {
+        let unique: BTreeSet<i16> = report.listed_intents.iter().map(|(key, _)| *key).collect();
+        assert!(unique.len() == report.listed_intents.len());
         assert!(
-            report.apis
-                == vec![ApiRow {
-                    api_key: 0,
-                    name: "Produce".to_owned(),
-                    krabka: Some(range(0, 13)),
-                    kafka: Some(range(0, 13)),
-                    verdict: Verdict::RangeDiffers,
-                    intent: intent(0),
-                }]
+            report
+                .listed_intents
+                .iter()
+                .all(|(_, intent)| !intent.trim().is_empty())
         );
     }
 
-    /// A served-range entry describes a key whose advertised range matches;
-    /// once it does not, the sentence is about something else.
-    #[test]
-    #[should_panic(expected = "no longer does")]
-    fn a_served_range_divergence_whose_advertised_range_moves_panics() {
-        let _ = build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
+    #[derive(DataTableRow)]
+    struct ExpectedApi {
+        key: i16,
+        name: String,
+        krabka_minimum: String,
+        krabka_maximum: String,
+        kafka_minimum: String,
+        kafka_maximum: String,
+        verdict: String,
+        reason: String,
     }
 
-    /// A range that starts differing with nothing written for it fails the
-    /// differential suite rather than landing in the checked-in file.
-    #[test]
-    #[should_panic(expected = "no intent is recorded")]
-    fn an_unrecorded_range_divergence_panics() {
-        let _ = build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
+    fn expected_range(minimum: &str, maximum: &str) -> Option<VersionRange> {
+        if minimum == "absent" && maximum == "absent" {
+            None
+        } else {
+            Some(range(
+                minimum.parse().expect("a minimum API version"),
+                maximum.parse().expect("a maximum API version"),
+            ))
+        }
     }
 
-    /// #784: with nothing recorded, any range divergence at all fails the
-    /// suite, since krabka's default table is Kafka 4.3.1's.
-    #[test]
-    #[should_panic(expected = "no intent is recorded")]
-    fn the_recorded_tables_admit_no_range_divergence() {
-        let _ = DivergenceReport::build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
+    #[then("the report has exactly these API rows in key order:")]
+    fn report_rows(report: &ReportScenario, #[datatable] rows: Rows<ExpectedApi>) {
+        let apis = rows
+            .into_iter()
+            .map(|row| ApiRow {
+                api_key: row.key,
+                name: row.name,
+                krabka: expected_range(&row.krabka_minimum, &row.krabka_maximum),
+                kafka: expected_range(&row.kafka_minimum, &row.kafka_maximum),
+                verdict: match row.verdict.as_str() {
+                    "same" => Verdict::Same,
+                    "range-differs" => Verdict::RangeDiffers,
+                    "krabka-only" => Verdict::KrabkaOnly,
+                    "kafka-only" => Verdict::KafkaOnly,
+                    other => panic!("unknown divergence verdict: {other}"),
+                },
+                intent: (row.reason != "none").then_some(row.reason),
+            })
+            .collect();
+        let expected = DivergenceReport {
+            oracle_image: report.oracle.clone(),
+            apis,
+        };
+        assert!(report.report() == &expected);
     }
 
-    /// The checked-in fixture is byte-for-byte what [`DivergenceReport::store`]
-    /// writes for the report it decodes to.
-    ///
-    /// The differential suite needs Docker, so the file is sometimes edited by
-    /// hand between regenerations. This is what keeps such an edit from
-    /// producing a file the next regeneration would reformat, which would show
-    /// up as noise in the diff that is meant to be the change under review.
-    #[test]
-    fn the_checked_in_report_is_exactly_what_store_writes() {
-        // `include_str!` reads the fixture at compile time, which is what
-        // `compile_data` in //crates/broker:BUILD.bazel makes available.
-        // Keeping `CARGO_MANIFEST_DIR` for a runtime read instead would embed
-        // this checkout's absolute path in the test binary, and the Bazel
-        // build rejects that.
+    #[then("the report is rejected because {message}")]
+    fn report_rejected(report: &ReportScenario, message: String) {
+        let outcome = report
+            .outcome
+            .as_ref()
+            .expect("report construction was attempted");
+        let Err(actual) = outcome else {
+            panic!("report construction should fail because {message}: {outcome:?}")
+        };
+        assert!(
+            actual.contains(&message),
+            "expected report failure {message:?}, got {actual:?}"
+        );
+    }
+
+    #[given("the checked-in divergence report loaded from a temporary file")]
+    fn checked_in_report(report: &mut ReportScenario) {
         const CHECKED_IN: &str = include_str!("../fixtures/api_versions/divergence.json");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let decoded = dir.path().join("decoded.json");
-        fs::write(&decoded, CHECKED_IN).expect("write checked-in");
-        let report = DivergenceReport::load(&decoded);
-
-        let rewritten = dir.path().join("divergence.json");
-        report.store(&rewritten);
-
-        assert!(fs::read_to_string(&rewritten).expect("read rewritten") == CHECKED_IN);
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("decoded.json");
+        fs::write(&path, CHECKED_IN).expect("write checked-in");
+        report.outcome = Some(Ok(DivergenceReport::load(&path)));
+        report.checked_in = Some(CHECKED_IN.to_owned());
+        report.directory = Some(directory);
     }
 
-    #[test]
-    fn report_round_trips_through_json() {
-        let report = build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("nested").join("divergence.json");
-        report.store(&path);
-        assert!(DivergenceReport::load(&path) == report);
+    #[when("the public report builder rejoins the recorded advertised ranges")]
+    fn rebuild_recorded_report(report: &mut ReportScenario) {
+        let source = report.report();
+        let ours: Vec<_> = source
+            .apis
+            .iter()
+            .filter_map(|row| {
+                row.krabka
+                    .map(|range| api(row.api_key, range.min, range.max))
+            })
+            .collect();
+        let theirs: Vec<_> = source
+            .apis
+            .iter()
+            .filter_map(|row| {
+                row.kafka
+                    .map(|range| api(row.api_key, range.min, range.max))
+            })
+            .collect();
+        report.rebuilt = Some(DivergenceReport::build(
+            &source.oracle_image,
+            &ours,
+            &theirs,
+        ));
     }
+
+    #[then("the rebuilt report equals the complete reviewed report")]
+    fn rebuilt_recorded_report(report: &ReportScenario) {
+        assert!(report.rebuilt.as_ref().expect("public builder invoked") == report.report());
+    }
+
+    #[when("the report is stored in a fresh nested JSON path and reloaded")]
+    fn store_report(report: &mut ReportScenario) {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = directory.path().join("nested").join("divergence.json");
+        report.report().store(&path);
+        report.stored = Some(fs::read_to_string(&path).expect("read rewritten"));
+        report.reloaded = Some(DivergenceReport::load(&path));
+        report.directory = Some(directory);
+    }
+
+    #[then("the stored bytes exactly match the checked-in report")]
+    fn canonical_report(report: &ReportScenario) {
+        let stored = report.stored.as_ref().expect("the report was stored");
+        let checked_in = report
+            .checked_in
+            .as_ref()
+            .expect("the checked-in report was loaded");
+        assert!(stored == checked_in);
+    }
+
+    #[then("the reloaded report equals the original report")]
+    fn round_trip(report: &ReportScenario) {
+        assert!(report.reloaded.as_ref() == Some(report.report()));
+    }
+
+    scenarios!("tests/features/migrated/tests/api_versions_differential/divergence.feature", fixtures = [report: ReportScenario]);
 }

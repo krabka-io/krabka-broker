@@ -280,32 +280,6 @@ async fn probe(client: &Client, case: &Case, producer: &Identity, batch: ProbeBa
     .await
 }
 
-/// Error codes: the rejected batch live, the rejected batch after a restart,
-/// and the accepted batch after the restart.
-async fn codes_across_restart(case: &Case) -> [i16; 3] {
-    let directory = TempDir::new().expect("tempdir");
-    let log_dir = directory.path().to_path_buf();
-
-    let broker = Broker::start(config(log_dir.clone(), None))
-        .await
-        .expect("start broker");
-    let client = admin_client(&broker.listen_addr().to_string()).await;
-    create_topic(&client, case.topic, TopicPartitionCount(1)).await;
-    let producer = set_up(&client, case).await;
-    let live_rejected = probe(&client, case, &producer, case.rejected).await;
-    broker.shutdown().await;
-
-    let broker = Broker::start(config(log_dir, Some(BootstrapMode::Rejoin)))
-        .await
-        .expect("restart broker");
-    let client = admin_client(&broker.listen_addr().to_string()).await;
-    let recovered_rejected = probe(&client, case, &producer, case.rejected).await;
-    let recovered_accepted = probe(&client, case, &producer, case.accepted).await;
-    broker.shutdown().await;
-
-    [live_rejected, recovered_rejected, recovered_accepted]
-}
-
 /// A case whose probe at sequence 3 is out of order and whose probe at
 /// sequence 0 is accepted, both at the bumped epoch.
 fn epoch_bump_case(name: &'static str, topic: &'static str, setup: Setup) -> Case {
@@ -324,38 +298,153 @@ fn epoch_bump_case(name: &'static str, topic: &'static str, setup: Setup) -> Cas
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart() {
-    let cases = [
-        epoch_bump_case(
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct EpochSequence {
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    client: Option<Client>,
+    case: Option<Case>,
+    identity: Option<Identity>,
+    codes: Vec<i16>,
+}
+
+#[fixture]
+fn epoch_sequence() -> EpochSequence {
+    // Keep the producer identity stable while the broker restarts its durable log.
+    EpochSequence::default()
+}
+
+#[given("a producer has advanced its epoch through {setup}")]
+async fn epoch_boundary(epoch_sequence: &mut EpochSequence, setup: String) {
+    let case = match setup.as_str() {
+        "a TV2 transaction commit" => epoch_bump_case(
             "tv2-commit-bumps-the-epoch",
             "seq-tv2",
             Setup::Transaction { downgrade_to: None },
         ),
-        // The EndTxn v5 request of this client is a TV_2 client whatever
-        // `transaction.version` the cluster finalized (Kafka's
-        // `transactionVersionForEndTxn`), so the commit bumps the epoch as
-        // it does at TV_2.
-        epoch_bump_case(
+        "a TV1 cluster EndTxn-v5 commit" => epoch_bump_case(
             "tv1-cluster-v5-commit-bumps-the-epoch",
             "seq-tv1",
             Setup::Transaction {
                 downgrade_to: Some(TransactionFeatureLevel(1)),
             },
         ),
-        epoch_bump_case("idempotent-epoch-bump", "seq-idempotent", Setup::Idempotent),
-    ];
-    for case in &cases {
-        let codes = codes_across_restart(case).await;
-        assert!(
-            codes
-                == [
-                    OUT_OF_ORDER_SEQUENCE_NUMBER,
-                    OUT_OF_ORDER_SEQUENCE_NUMBER,
-                    0
-                ],
-            "{}: [live rejected, recovered rejected, recovered accepted]",
-            case.name
-        );
-    }
+        "an idempotent local epoch bump" => {
+            epoch_bump_case("idempotent-epoch-bump", "seq-idempotent", Setup::Idempotent)
+        }
+        _ => panic!("unknown epoch setup {setup}"),
+    };
+    let directory = TempDir::new().expect("tempdir");
+    let broker = Broker::start(config(directory.path().to_path_buf(), None))
+        .await
+        .expect("start broker");
+    let client = admin_client(&broker.listen_addr().to_string()).await;
+    create_topic(&client, case.topic, TopicPartitionCount(1)).await;
+    epoch_sequence.identity = Some(set_up(&client, &case).await);
+    epoch_sequence.directory = Some(directory);
+    epoch_sequence.broker = Some(broker);
+    epoch_sequence.client = Some(client);
+    epoch_sequence.case = Some(case);
+}
+
+#[when("the producer sends sequence 3 at the new epoch before restart")]
+async fn live_epoch_sequence(epoch_sequence: &mut EpochSequence) {
+    let case = epoch_sequence.case.as_ref().expect("epoch boundary case");
+    epoch_sequence.codes.push(
+        probe(
+            epoch_sequence.client.as_ref().expect("live client"),
+            case,
+            epoch_sequence.identity.as_ref().expect("advanced identity"),
+            case.rejected,
+        )
+        .await,
+    );
+}
+
+#[then("the latest epoch probe returns OUT_OF_ORDER_SEQUENCE_NUMBER")]
+fn rejected_epoch_sequence(epoch_sequence: &EpochSequence) {
+    assert!(
+        epoch_sequence.codes.last() == Some(&OUT_OF_ORDER_SEQUENCE_NUMBER),
+        "{:?}",
+        epoch_sequence.codes
+    );
+}
+
+#[when("the broker restarts on the same data directory")]
+async fn restart_epoch_log(epoch_sequence: &mut EpochSequence) {
+    epoch_sequence
+        .broker
+        .take()
+        .expect("live broker")
+        .shutdown()
+        .await;
+    let broker = Broker::start(config(
+        epoch_sequence
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path()
+            .to_path_buf(),
+        Some(BootstrapMode::Rejoin),
+    ))
+    .await
+    .expect("restart broker");
+    epoch_sequence.client = Some(admin_client(&broker.listen_addr().to_string()).await);
+    epoch_sequence.broker = Some(broker);
+}
+
+#[when("the producer sends sequence 3 at the same new epoch after restart")]
+async fn recovered_bad_epoch_sequence(epoch_sequence: &mut EpochSequence) {
+    live_epoch_sequence(epoch_sequence).await;
+}
+
+#[when("the producer sends sequence 0 at the new epoch after restart")]
+async fn recovered_good_epoch_sequence(epoch_sequence: &mut EpochSequence) {
+    let case = epoch_sequence.case.as_ref().expect("epoch boundary case");
+    epoch_sequence.codes.push(
+        probe(
+            epoch_sequence.client.as_ref().expect("recovered client"),
+            case,
+            epoch_sequence.identity.as_ref().expect("advanced identity"),
+            case.accepted,
+        )
+        .await,
+    );
+}
+
+#[then("the complete live and recovered sequence results are 45,45,0")]
+fn consistent_epoch_sequence(epoch_sequence: &EpochSequence) {
+    assert!(
+        epoch_sequence.codes
+            == [
+                OUT_OF_ORDER_SEQUENCE_NUMBER,
+                OUT_OF_ORDER_SEQUENCE_NUMBER,
+                0
+            ]
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_sequence_epoch_bump.feature",
+    name = "first sequence at a new epoch gets the same answer before and after restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart(
+    epoch_sequence: EpochSequence,
+    setup: String,
+) {
+    let _ = setup;
+    epoch_sequence
+        .broker
+        .take()
+        .expect("recovered broker")
+        .shutdown()
+        .await;
+    drop(epoch_sequence);
 }

@@ -188,177 +188,98 @@ mod tests {
         assert2::{assert, check},
     };
 
-    const fn facts() -> HeartbeatFacts {
-        HeartbeatFacts {
-            wants: HeartbeatWants {
-                fence: false,
-                shut_down: false,
-            },
-            caught_up: true,
-            has_leaderships: false,
-            controlled_shutdown_offset: None,
-            lowest_active_offset: i64::MAX,
+    #[derive(serde::Deserialize)]
+    struct ReportedHeartbeatIntent {
+        fence: bool,
+        shutdown: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ReportedHeartbeatFacts {
+        #[serde(flatten)]
+        intent: ReportedHeartbeatIntent,
+        caught_up: bool,
+        leaderships: bool,
+        shutdown_offset: Option<i64>,
+        lowest_active_offset: i64,
+    }
+
+    #[derive(Default)]
+    struct BrokerShutdownHeartbeat {
+        current: Option<BrokerControlState>,
+        facts: Option<HeartbeatFacts>,
+        next: Option<BrokerControlState>,
+    }
+
+    #[rstest::fixture]
+    fn broker_shutdown_heartbeat() -> BrokerShutdownHeartbeat {
+        // Each controller heartbeat has its own current state and observed facts.
+        BrokerShutdownHeartbeat::default()
+    }
+
+    fn named_broker_control_state(state: &str) -> BrokerControlState {
+        match state {
+            "Fenced" => Fenced,
+            "Unfenced" => Unfenced,
+            "ControlledShutdown" => ControlledShutdown,
+            "ShutdownNow" => ShutdownNow,
+            _ => panic!("unknown broker control state {state}"),
         }
     }
 
-    /// krabka-io/krabka-broker#824: the transitions of Kafka's
-    /// `BrokerHeartbeatManager.calculateNextBrokerState`, one row per branch.
-    #[test]
-    fn the_next_state_follows_kafka() {
-        struct Case {
-            what: &'static str,
-            current: BrokerControlState,
-            facts: HeartbeatFacts,
-            expected: BrokerControlState,
-        }
-        let cases: &[Case] = &[
-            Case {
-                what: "fenced, caught up",
-                current: Fenced,
-                facts: facts(),
-                expected: Unfenced,
-            },
-            Case {
-                what: "fenced, behind its registration",
-                current: Fenced,
-                facts: HeartbeatFacts {
-                    caught_up: false,
-                    ..facts()
-                },
-                expected: Fenced,
-            },
-            Case {
-                what: "fenced, asking to stay fenced",
-                current: Fenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: true,
-                        shut_down: false,
-                    },
-                    ..facts()
-                },
-                expected: Fenced,
-            },
-            Case {
-                what: "fenced, asking to shut down",
-                current: Fenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: false,
-                        shut_down: true,
-                    },
-                    has_leaderships: true,
-                    ..facts()
-                },
-                expected: ShutdownNow,
-            },
-            Case {
-                what: "unfenced",
-                current: Unfenced,
-                facts: facts(),
-                expected: Unfenced,
-            },
-            Case {
-                what: "unfenced, asking to be fenced",
-                current: Unfenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: true,
-                        shut_down: false,
-                    },
-                    ..facts()
-                },
-                expected: Fenced,
-            },
-            Case {
-                what: "unfenced, asking to be fenced and to shut down",
-                current: Unfenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: true,
-                        shut_down: true,
-                    },
-                    has_leaderships: true,
-                    ..facts()
-                },
-                expected: ShutdownNow,
-            },
-            Case {
-                what: "unfenced, asking to shut down with leaderships",
-                current: Unfenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: false,
-                        shut_down: true,
-                    },
-                    has_leaderships: true,
-                    ..facts()
-                },
-                expected: ControlledShutdown,
-            },
-            Case {
-                what: "unfenced, asking to shut down with no leadership",
-                current: Unfenced,
-                facts: HeartbeatFacts {
-                    wants: HeartbeatWants {
-                        fence: false,
-                        shut_down: true,
-                    },
-                    lowest_active_offset: 0,
-                    ..facts()
-                },
-                expected: ShutdownNow,
-            },
-            Case {
-                what: "in controlled shutdown with leaderships",
-                current: ControlledShutdown,
-                facts: HeartbeatFacts {
-                    has_leaderships: true,
-                    controlled_shutdown_offset: Some(10),
-                    ..facts()
-                },
-                expected: ControlledShutdown,
-            },
-            Case {
-                what: "in controlled shutdown, an active broker behind",
-                current: ControlledShutdown,
-                facts: HeartbeatFacts {
-                    controlled_shutdown_offset: Some(10),
-                    lowest_active_offset: 9,
-                    ..facts()
-                },
-                expected: ControlledShutdown,
-            },
-            Case {
-                what: "in controlled shutdown, every active broker at the offset",
-                current: ControlledShutdown,
-                facts: HeartbeatFacts {
-                    controlled_shutdown_offset: Some(10),
-                    lowest_active_offset: 10,
-                    ..facts()
-                },
-                expected: ShutdownNow,
-            },
-            Case {
-                what: "in controlled shutdown, no active broker",
-                current: ControlledShutdown,
-                facts: HeartbeatFacts {
-                    controlled_shutdown_offset: Some(10),
-                    ..facts()
-                },
-                expected: ShutdownNow,
-            },
-        ];
-        for Case {
-            what,
-            current,
-            facts,
-            expected,
-        } in cases
-        {
-            check!(next_broker_state(*current, *facts) == *expected, "{what}");
-        }
+    #[rstest_bdd_macros::given("the broker control state is {current}")]
+    fn supplied_broker_control_state(
+        broker_shutdown_heartbeat: &mut BrokerShutdownHeartbeat,
+        current: String,
+    ) {
+        broker_shutdown_heartbeat.current = Some(named_broker_control_state(&current));
     }
+
+    #[rstest_bdd_macros::given(
+        "the heartbeat request and controller replication facts are JSON {facts}"
+    )]
+    fn supplied_broker_heartbeat_facts(
+        broker_shutdown_heartbeat: &mut BrokerShutdownHeartbeat,
+        facts: String,
+    ) {
+        let reported: ReportedHeartbeatFacts = serde_json::from_str(&facts)
+            .expect("explicit heartbeat intent and replication observations");
+        broker_shutdown_heartbeat.facts = Some(HeartbeatFacts {
+            wants: HeartbeatWants {
+                fence: reported.intent.fence,
+                shut_down: reported.intent.shutdown,
+            },
+            caught_up: reported.caught_up,
+            has_leaderships: reported.leaderships,
+            controlled_shutdown_offset: reported.shutdown_offset,
+            lowest_active_offset: reported.lowest_active_offset,
+        });
+    }
+
+    #[rstest_bdd_macros::when("the controller calculates the broker's next heartbeat state")]
+    fn calculate_broker_heartbeat_state(broker_shutdown_heartbeat: &mut BrokerShutdownHeartbeat) {
+        broker_shutdown_heartbeat.next = Some(next_broker_state(
+            broker_shutdown_heartbeat
+                .current
+                .expect("current broker state was given"),
+            broker_shutdown_heartbeat
+                .facts
+                .expect("heartbeat facts were given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the next broker control state is {expected}")]
+    fn expected_broker_heartbeat_state(
+        broker_shutdown_heartbeat: &BrokerShutdownHeartbeat,
+        expected: String,
+    ) {
+        check!(broker_shutdown_heartbeat.next == Some(named_broker_control_state(&expected)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/heartbeat/controller_state/shutdown.feature",
+        fixtures = [broker_shutdown_heartbeat: BrokerShutdownHeartbeat]
+    );
 
     /// The lowest active offset reads only alive, unfenced brokers that are not
     /// in controlled shutdown, and a fence takes a broker out of controlled

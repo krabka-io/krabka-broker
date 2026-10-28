@@ -14,9 +14,10 @@
 
 use {
     crate::{
-        N_RECORDS, SITE_C, TOPIC, cluster_lock, within,
-        witness_cluster::{client_at, shutdown, start_stretch_cluster, wait_for_witness_isr},
-        witness_wire::{consumer_fetch, create_topic, produce_error, produce_response},
+        N_RECORDS, SITE_C, TOPIC, WitnessTopic, within,
+        witness_cluster::client_at,
+        witness_topic,
+        witness_wire::{consumer_fetch, produce_error, produce_response},
     },
     assert2::check,
     krabka_broker::codes,
@@ -31,39 +32,52 @@ use {
 /// arrived on, so this is the endpoint name the refusals must answer with.
 const PLAINTEXT_LISTENER: &str = "PLAINTEXT";
 
-/// A client `Produce` and a consumer `Fetch` that reach the witness are
-/// refused, while replication to that same witness keeps advancing: its local
-/// log reaches the produced offset and it stays in the ISR.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_refuses_client_traffic_while_replication_advances() {
-    let _guard = cluster_lock().lock().await;
-    let cluster = start_stretch_cluster().await;
+#[rstest_bdd_macros::when("leader 1 receives five records with acks all")]
+async fn witness_replicated_produce(witness_topic: &mut WitnessTopic) {
+    witness_topic.committed =
+        Some(produce_error(witness_topic.leader(), witness_topic.topic_id(), N_RECORDS).await);
+}
 
-    let leader = client_at(&cluster[0].1.listen_addr.to_string()).await;
-    let topic_id = create_topic(&leader).await;
-    wait_for_witness_isr(&cluster, TOPIC).await;
-
+#[rstest_bdd_macros::then("the leader succeeds and witness 3 replicates through log end offset 5")]
+async fn witness_replication_progress(witness_topic: &WitnessTopic) {
     check!(
-        produce_error(&leader, topic_id, N_RECORDS).await == codes::NONE,
+        witness_topic.committed == Some(codes::NONE),
         "acks=all commits on the leader with all three sites up"
     );
-
-    // Replication to the witness advances: it holds the records. This is a
-    // FOLLOWER fetch the witness itself issued, so it is the half of the fetch
-    // path that must keep working.
-    let witness_handle = &cluster[2].0;
     within(
         "the witness replicates every record",
-        witness_handle.wait_until_local_log_end_offset(TOPIC, 0, i64::from(N_RECORDS)),
+        witness_topic.cluster[2]
+            .0
+            .wait_until_local_log_end_offset(TOPIC, 0, i64::from(N_RECORDS)),
     )
     .await;
+}
 
-    let witness = client_at(&cluster[2].1.listen_addr.to_string()).await;
+#[rstest_bdd_macros::when(
+    "a client sends Produce and a site-C consumer Fetch directly to witness 3"
+)]
+async fn witness_client_requests(witness_topic: &mut WitnessTopic) {
+    witness_topic.witness =
+        Some(client_at(&witness_topic.cluster[2].1.listen_addr.to_string()).await);
+    witness_topic.produced =
+        Some(produce_response(witness_topic.witness(), witness_topic.topic_id(), N_RECORDS).await);
+    witness_topic.fetched = Some(
+        witness_topic
+            .witness()
+            .send(consumer_fetch(witness_topic.topic_id(), SITE_C))
+            .await
+            .expect("consumer Fetch to the witness"),
+    );
+}
 
+#[rstest_bdd_macros::then(
+    "both requests return NOT_LEADER_OR_FOLLOWER and the complete leader endpoint, Fetch names the current leader, and ISR remains 1,2,3"
+)]
+fn refused_witness_clients(witness_topic: &WitnessTopic) {
     // The address both refusals must advertise for the leader, read out of the
     // image of the broker that answers them. That broker is the witness, which
     // never leads, so nothing here can come from its own listener config.
-    let image = cluster[2].0.controller_image_for_test();
+    let image = witness_topic.cluster[2].0.controller_image_for_test();
     let leader = image
         .partition(TOPIC, 0)
         .expect("the witness image knows the partition")
@@ -76,7 +90,10 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         .expect("the leader advertises a PLAINTEXT endpoint");
     let leader_id = i32::try_from(leader.0).expect("broker ids fit an i32");
 
-    let produced = produce_response(&witness, topic_id, N_RECORDS).await;
+    let produced = witness_topic
+        .produced
+        .as_ref()
+        .expect("witness Produce response");
     check!(
         produced.responses[0].partition_responses[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Produce to the witness is refused"
@@ -94,10 +111,10 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         produced.node_endpoints
     );
 
-    let fetched = witness
-        .send(consumer_fetch(topic_id, SITE_C))
-        .await
-        .expect("consumer Fetch to the witness");
+    let fetched = witness_topic
+        .fetched
+        .as_ref()
+        .expect("witness Fetch response");
     check!(
         fetched.responses[0].partitions[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Fetch to the witness is refused"
@@ -123,7 +140,7 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
     // The refusals are client-facing only. The witness is still a full ISR
     // member, which is what keeps `min.insync.replicas=2` satisfiable when a
     // data site is lost.
-    let isr: BTreeSet<u64> = cluster[0]
+    let isr: BTreeSet<u64> = witness_topic.cluster[0]
         .0
         .partition_isr_for_test(TOPIC, 0)
         .expect("the leader knows the partition")
@@ -133,6 +150,14 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         isr == maplit::btreeset! {1, 2, 3},
         "the witness stays in the ISR after refusing client traffic"
     );
+}
 
-    shutdown(cluster).await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/witness_role/witness_client_traffic.feature",
+    name = "witness refuses client traffic while replication advances"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn witness_refuses_client_traffic_while_replication_advances(witness_topic: WitnessTopic) {
+    witness_topic.shutdown().await;
+    drop(witness_topic);
 }

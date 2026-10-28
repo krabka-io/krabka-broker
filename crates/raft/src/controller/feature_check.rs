@@ -123,79 +123,81 @@ mod tests {
         )
     }
 
-    /// Kafka 4.3's latest production `metadata.version` is `4.3-IV0` (30), and
-    /// `4.4-IV2` (33) is one of trunk's unstable levels.
-    #[yare::parameterized(
-        latest_production = {
-            "the latest production level",
-            &[finalized("metadata.version", 30)][..],
-            UnstableFeatureVersions::Disabled,
-            None,
-        },
-        unstable_off = {
-            "an unstable level with the flag off",
-            &[finalized("metadata.version", 33)][..],
-            UnstableFeatureVersions::Disabled,
-            Some(refusal("metadata.version", 33, "7-30")),
-        },
-        unstable_on = {
-            "an unstable level with the flag on",
-            &[finalized("metadata.version", 33)][..],
-            UnstableFeatureVersions::Enabled,
-            None,
-        },
-        feature_above_range = {
-            "a feature above its range",
-            &[finalized("share.version", 5)][..],
-            UnstableFeatureVersions::Enabled,
-            Some(refusal("share.version", 5, "0-2")),
-        },
-        level_below_range = {
-            "a level below the range",
-            &[finalized("metadata.version", 3)][..],
-            UnstableFeatureVersions::Enabled,
-            Some(refusal("metadata.version", 3, "7-34")),
-        },
-        first_refusal = {
-            "the first of two refused features",
-            &[finalized("metadata.version", 33), finalized("share.version", 5)][..],
-            UnstableFeatureVersions::Disabled,
-            Some(refusal("metadata.version", 33, "7-30")),
-        },
-        unknown_feature = {
-            "a feature this controller does not know",
-            &[finalized("some.future.feature", 9)][..],
-            UnstableFeatureVersions::Disabled,
-            Some(refusal("some.future.feature", 9, "0")),
-        },
-        unknown_feature_with_flag = {
-            "a feature this controller does not know, with the flag on",
-            &[finalized("some.future.feature", 1)][..],
-            UnstableFeatureVersions::Enabled,
-            Some(refusal("some.future.feature", 1, "0")),
-        },
-        known_beside_unknown = {
-            "a known feature at a level it supports beside an unknown one",
-            &[finalized("metadata.version", 30), finalized("some.future.feature", 2)][..],
-            UnstableFeatureVersions::Disabled,
-            Some(refusal("some.future.feature", 2, "0")),
-        },
-        no_finalized_feature = {
-            "no finalized feature",
-            &[][..],
-            UnstableFeatureVersions::Disabled,
-            None,
-        },
-    )]
-    fn a_level_outside_the_supported_range_is_refused_with_kafkas_message(
-        what: &str,
-        levels: &[FeatureLevelRecord],
-        unstable: UnstableFeatureVersions,
-        expected: Option<String>,
-    ) {
-        check!(
-            unsupported_feature_level(&image_at(levels), unstable) == expected,
-            "{what}"
-        );
+    use {
+        rstest::fixture,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+
+    struct RecoveredFeatures {
+        image: Option<MetadataImage>,
+        unstable: Option<UnstableFeatureVersions>,
+        refusal: Slot<Option<String>>,
     }
+
+    #[fixture]
+    fn recovered() -> RecoveredFeatures {
+        // Start this scenario with fresh inputs and observations.
+
+        RecoveredFeatures {
+            image: None,
+            unstable: None,
+            refusal: Slot::default(),
+        }
+    }
+
+    #[given("unstable feature versions are enabled: {enabled}")]
+    fn feature_policy(recovered: &mut RecoveredFeatures, enabled: bool) {
+        recovered.unstable = Some(if enabled {
+            UnstableFeatureVersions::Enabled
+        } else {
+            UnstableFeatureVersions::Disabled
+        });
+    }
+
+    #[derive(DataTableRow)]
+    struct FinalizedFeature {
+        name: String,
+        level: i16,
+    }
+
+    #[given("the recovered metadata image finalizes these feature levels:")]
+    fn recovered_image(
+        recovered: &mut RecoveredFeatures,
+        #[datatable] rows: Rows<FinalizedFeature>,
+    ) {
+        let levels: Vec<_> = rows
+            .into_iter()
+            .map(|row| finalized(&row.name, row.level))
+            .collect();
+        recovered.image = Some(image_at(&levels));
+    }
+
+    #[when("the controller checks recovered feature compatibility")]
+    fn check_recovered_features(recovered: &mut RecoveredFeatures) {
+        recovered.refusal.set(unsupported_feature_level(
+            recovered
+                .image
+                .as_ref()
+                .expect("a recovered image was given"),
+            recovered.unstable.expect("feature policy was configured"),
+        ));
+    }
+
+    #[then("every recovered feature level is supported")]
+    fn supported_recovered_image(recovered: &RecoveredFeatures) {
+        check!(recovered.refusal.get() == Some(None));
+    }
+
+    #[then("feature {name} at level {level} is refused with Kafka supported range {range}")]
+    fn refused_recovered_image(
+        recovered: &RecoveredFeatures,
+        name: String,
+        level: i16,
+        range: String,
+    ) {
+        check!(recovered.refusal.get() == Some(Some(refusal(&name, level, &range))));
+    }
+
+    scenarios!("tests/features/migrated/src/controller/feature_check.feature", fixtures = [recovered: RecoveredFeatures]);
 }

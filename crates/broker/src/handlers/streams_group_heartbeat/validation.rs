@@ -186,14 +186,6 @@ mod tests {
         }]
     }
 
-    /// A request, the error that Kafka gives it (or `None` for a valid
-    /// request), and the name a failure reports.
-    struct Row {
-        name: &'static str,
-        request: StreamsGroupHeartbeatRequest,
-        expected: Option<RequestError>,
-    }
-
     fn invalid(message: &str) -> RequestError {
         RequestError {
             code: codes::INVALID_REQUEST,
@@ -201,198 +193,113 @@ mod tests {
         }
     }
 
-    /// The rows of the checks on every request and on a join.
-    fn join_rows() -> Vec<Row> {
-        vec![
-            Row {
-                name: "a valid join",
-                request: join(),
-                expected: None,
-            },
-            Row {
-                name: "a valid heartbeat",
-                request: heartbeat(3),
-                expected: None,
-            },
-            Row {
-                name: "an empty member id",
-                request: StreamsGroupHeartbeatRequest {
-                    member_id: String::new(),
-                    ..join()
-                },
-                expected: Some(invalid("MemberId can't be empty.")),
-            },
-            Row {
-                name: "a blank group id",
-                request: StreamsGroupHeartbeatRequest {
-                    group_id: " \t".into(),
-                    ..join()
-                },
-                expected: Some(invalid("GroupId can't be empty.")),
-            },
-            Row {
-                name: "an empty instance id",
-                request: StreamsGroupHeartbeatRequest {
-                    instance_id: Some(String::new()),
-                    ..join()
-                },
-                expected: Some(invalid("InstanceId can't be empty.")),
-            },
-            Row {
-                name: "an empty rack id",
-                request: StreamsGroupHeartbeatRequest {
-                    rack_id: Some(String::new()),
-                    ..join()
-                },
-                expected: Some(invalid("RackId can't be empty.")),
-            },
-            Row {
-                name: "a join without a rebalance timeout",
-                request: StreamsGroupHeartbeatRequest {
-                    rebalance_timeout_ms: -1,
-                    ..join()
-                },
-                expected: Some(invalid(
-                    "RebalanceTimeoutMs must be provided in first request.",
-                )),
-            },
-            Row {
-                name: "a join with active tasks",
-                request: StreamsGroupHeartbeatRequest {
-                    active_tasks: Some(task()),
-                    ..join()
-                },
-                expected: Some(invalid("ActiveTasks must be empty when (re-)joining.")),
-            },
-            Row {
-                name: "a join with a null active task list",
-                request: StreamsGroupHeartbeatRequest {
-                    active_tasks: None,
-                    ..join()
-                },
-                expected: Some(invalid("ActiveTasks must be empty when (re-)joining.")),
-            },
-            Row {
-                name: "a join with standby tasks",
-                request: StreamsGroupHeartbeatRequest {
-                    standby_tasks: Some(task()),
-                    ..join()
-                },
-                expected: Some(invalid("StandbyTasks must be empty when (re-)joining.")),
-            },
-            Row {
-                name: "a join with warmup tasks",
-                request: StreamsGroupHeartbeatRequest {
-                    warmup_tasks: Some(task()),
-                    ..join()
-                },
-                expected: Some(invalid("WarmupTasks must be empty when (re-)joining.")),
-            },
-            Row {
-                name: "a join without a topology",
-                request: StreamsGroupHeartbeatRequest {
-                    topology: None,
-                    ..join()
-                },
-                expected: Some(invalid("Topology must be non-null when (re-)joining.")),
-            },
-        ]
+    #[derive(Default)]
+    struct StreamsRequestValidation {
+        request: Option<StreamsGroupHeartbeatRequest>,
+        observations: Vec<Option<RequestError>>,
     }
-
-    /// The rows of the topology checks and of the checks on a heartbeat.
-    fn topology_and_heartbeat_rows() -> Vec<Row> {
-        vec![
-            Row {
-                name: "a changelog topic with a partition count",
-                request: StreamsGroupHeartbeatRequest {
-                    topology: Some(Topology {
-                        subtopologies: vec![Subtopology {
-                            state_changelog_topics: vec![TopicInfo {
-                                name: "store-changelog".into(),
-                                partitions: 2,
-                                ..Default::default()
-                            }],
-                            ..topology().subtopologies[0].clone()
-                        }],
-                        ..topology()
-                    }),
-                    ..join()
-                },
-                expected: Some(RequestError {
-                    code: codes::STREAMS_INVALID_TOPOLOGY,
-                    message: "Changelog topic store-changelog must have an undefined partition \
-                              count, but it is set to 2."
-                        .into(),
-                }),
-            },
-            Row {
-                name: "a source topic regex",
-                request: StreamsGroupHeartbeatRequest {
-                    member_id: String::new(),
-                    topology: Some(Topology {
-                        subtopologies: vec![Subtopology {
-                            source_topic_regex: vec!["in-.*".into()],
-                            ..topology().subtopologies[0].clone()
-                        }],
-                        ..topology()
-                    }),
-                    ..join()
-                },
-                expected: Some(invalid(
-                    "Regular expressions for source topics are not supported yet.",
-                )),
-            },
-            Row {
-                name: "epoch -3",
-                request: heartbeat(-3),
-                expected: Some(invalid(
-                    "MemberEpoch is -3, but must be greater than or equal to -2.",
-                )),
-            },
-            Row {
-                name: "epoch -2 without an instance id",
-                request: heartbeat(-2),
-                expected: Some(invalid("InstanceId can't be null.")),
-            },
-            Row {
-                name: "one task list without the others",
-                request: StreamsGroupHeartbeatRequest {
-                    active_tasks: Some(vec![]),
-                    ..heartbeat(3)
-                },
-                expected: Some(invalid(
-                    "If one task-type is non-null, all must be non-null.",
-                )),
-            },
-            Row {
-                name: "a topology on a heartbeat",
-                request: StreamsGroupHeartbeatRequest {
-                    topology: Some(topology()),
-                    ..heartbeat(3)
-                },
-                expected: Some(invalid("Topology can only be provided when (re-)joining.")),
-            },
-        ]
-    }
-
-    /// Each row is a request and the error that Kafka's
-    /// `GroupCoordinatorService` gives it, or `None` for a valid request. The
-    /// rows name an instance id in one place, and trunk accepts that, so they
-    /// run with `unstable.api.versions.enable` on.
-    #[test]
-    fn request_checks_follow_kafka() {
-        for Row {
-            name,
+    #[rstest::fixture]
+    fn streams_validation() -> StreamsRequestValidation {
+        let request = None;
+        StreamsRequestValidation {
             request,
-            expected,
-        } in join_rows().into_iter().chain(topology_and_heartbeat_rows())
-        {
-            check!(
-                request_error(&request, UnstableApiVersions::Enabled) == expected,
-                "{name}"
-            );
+            ..Default::default()
         }
     }
+    #[rstest_bdd_macros::given("a streams heartbeat at member epoch {epoch}")]
+    fn streams_member_epoch(streams_validation: &mut StreamsRequestValidation, epoch: i32) {
+        streams_validation.request = Some(if epoch == 0 { join() } else { heartbeat(epoch) });
+    }
+    #[rstest_bdd_macros::given("the streams request contains these fields")]
+    fn streams_request_fields(
+        streams_validation: &mut StreamsRequestValidation,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let request = streams_validation.request.as_mut().expect("request epoch");
+        for cells in datatable.into_iter().skip(1) {
+            let value = cells[1].as_str();
+            match cells[0].as_str() {
+                "member_id" => request.member_id = value.to_owned(),
+                "group_id" => {
+                    request.group_id = if value == "space-tab" {
+                        " \t".to_owned()
+                    } else {
+                        value.to_owned()
+                    }
+                }
+                "instance_id" => request.instance_id = Some(value.to_owned()),
+                "rack_id" => request.rack_id = Some(value.to_owned()),
+                "rebalance_timeout_ms" => {
+                    request.rebalance_timeout_ms = value.parse().expect("rebalance timeout");
+                }
+                "active_tasks" | "standby_tasks" | "warmup_tasks" => {
+                    let tasks = match value {
+                        "null" => None,
+                        "empty" => Some(Vec::new()),
+                        "subtopology 0 partition 0" => Some(task()),
+                        other => panic!("unknown tasks {other}"),
+                    };
+                    match cells[0].as_str() {
+                        "active_tasks" => request.active_tasks = tasks,
+                        "standby_tasks" => request.standby_tasks = tasks,
+                        _ => request.warmup_tasks = tasks,
+                    }
+                }
+                "topology" => {
+                    request.topology = match value {
+                        "null" => None,
+                        "epoch 1 source in" => Some(topology()),
+                        other => panic!("unknown topology {other}"),
+                    }
+                }
+                "changelog_partitions" => {
+                    request
+                        .topology
+                        .as_mut()
+                        .expect("join topology")
+                        .subtopologies[0]
+                        .state_changelog_topics = vec![TopicInfo {
+                        name: "store-changelog".into(),
+                        partitions: value.parse().expect("partition count"),
+                        ..Default::default()
+                    }];
+                }
+                "source_topic_regex" => {
+                    request
+                        .topology
+                        .as_mut()
+                        .expect("join topology")
+                        .subtopologies[0]
+                        .source_topic_regex = vec![value.to_owned()];
+                }
+                other => panic!("unknown request field {other}"),
+            }
+        }
+    }
+    #[rstest_bdd_macros::when("Kafka trunk streams heartbeat validation runs")]
+    fn validate_streams_request(streams_validation: &mut StreamsRequestValidation) {
+        streams_validation.observations.push(request_error(
+            streams_validation.request.as_ref().expect("request"),
+            UnstableApiVersions::Enabled,
+        ));
+    }
+    #[rstest_bdd_macros::then("the streams request is accepted")]
+    fn accepted_streams_request(streams_validation: &StreamsRequestValidation) {
+        check!(streams_validation.observations.as_slice() == [None]);
+    }
+    #[rstest_bdd_macros::then(
+        "the streams request is refused with code {code} and message \"{message}\""
+    )]
+    fn refused_streams_request(
+        streams_validation: &StreamsRequestValidation,
+        code: i16,
+        message: String,
+    ) {
+        check!(
+            streams_validation.observations.as_slice() == [Some(RequestError { code, message })]
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_streams_request_validation.feature", fixtures = [streams_validation: StreamsRequestValidation]);
 
     /// Kafka 4.3.1's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
     /// refuses, in this order, an instance id, task offsets, task end offsets,

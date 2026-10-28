@@ -13,68 +13,84 @@ use {
         oracle::OracleComparison,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
     std::{
         io::Write as _,
+        process::Output,
         thread,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
 };
 
-/// `kafka-consumer-groups --list` and `--describe` round-trip after a
-/// real consumer has joined a group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_consumer_groups_list_describe() {
-    const TOPIC: &str = "krabka-cg-list-itest";
-    const GROUP: &str = "krabka-cg-list-grp";
+struct ConsoleAdministration {
+    broker: Option<(BrokerHandle, TempDir)>,
+    topic: String,
+    group: String,
+    output: Option<Output>,
+    description: Option<Output>,
+}
+#[rstest::fixture]
+fn console() -> ConsoleAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-    let (_broker, _dir) = start_console_group(TOPIC, GROUP, 1).await;
-
-    let list_out = docker_run_kafka_tool(&[
+    ConsoleAdministration {
+        broker: None,
+        topic: String::new(),
+        group: String::new(),
+        output: None,
+        description: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "console group {group} consumes alpha from topic {topic} with {partitions} partitions and closes"
+)]
+async fn console_group(
+    console: &mut ConsoleAdministration,
+    group: String,
+    topic: String,
+    partitions: i32,
+) {
+    console.broker = Some(start_console_group(&topic, &group, partitions).await);
+    console.topic = topic;
+    console.group = group;
+}
+#[rstest_bdd_macros::when("the group tool lists groups and describes the console group")]
+fn group_listing(console: &mut ConsoleAdministration) {
+    console.output = Some(docker_run_kafka_tool(&[
         "kafka-consumer-groups",
         "--list",
         "--bootstrap-server",
         broker0_advertised(),
-    ]);
-    let s = String::from_utf8_lossy(&list_out.stdout);
-    assert!(s.contains(GROUP), "list output missing {GROUP}: {s}");
-
-    let desc_out = describe_console_group(GROUP);
-    let s = String::from_utf8_lossy(&desc_out.stdout);
+    ]));
+    console.description = Some(describe_console_group(&console.group));
+}
+#[rstest_bdd_macros::then("the listing contains the group and its description contains the topic")]
+fn group_visible(console: &ConsoleAdministration) {
     assert!(
-        s.contains(TOPIC),
-        "describe output missing topic {TOPIC}: {s}"
+        String::from_utf8_lossy(&console.output.as_ref().expect("listing").stdout)
+            .contains(&console.group)
+    );
+    assert!(
+        String::from_utf8_lossy(&console.description.as_ref().expect("description").stdout)
+            .contains(&console.topic)
     );
 }
-
-/// `kafka-consumer-groups --delete-offsets` exercises `OffsetDelete`
-/// (`api_key` 47, KIP-496) end-to-end against `cp-kafka:6.1.1`. The JVM
-/// `AdminClient` flow under this CLI runs `FindCoordinator` →
-/// `DescribeGroups` → `OffsetDelete`. After the consumer exits, the group
-/// is `Empty`, so the KIP-496 subscription guard skips and the tombstone
-/// path runs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_consumer_groups_delete_offsets() {
-    const TOPIC: &str = "krabka-cg-delete-offsets-itest";
-    const GROUP: &str = "krabka-cg-delete-offsets-grp";
-
-    let (_broker, _dir) = start_console_group(TOPIC, GROUP, 2).await;
-
-    // Sanity: --describe before delete should list TOPIC for GROUP. If this
-    // fails, the failure is on the commit/coordinator path — not on
-    // OffsetDelete — and the test would otherwise pass-by-accident below.
-    let pre_desc = describe_console_group(GROUP);
-    let pre_s = String::from_utf8_lossy(&pre_desc.stdout);
+#[rstest_bdd_macros::when("the administrator describes the console group's committed offsets")]
+fn describe_commits(console: &mut ConsoleAdministration) {
+    console.description = Some(describe_console_group(&console.group));
+}
+#[rstest_bdd_macros::then("the group's committed offset description contains its topic")]
+fn committed_topic(console: &ConsoleAdministration) {
     assert!(
-        pre_s.contains(TOPIC),
-        "pre-delete --describe missing {TOPIC}: {pre_s}"
+        String::from_utf8_lossy(&console.description.as_ref().expect("description").stdout)
+            .contains(&console.topic)
     );
-
-    // Run --delete-offsets via a piped-stdin spawn so any Y/N prompt the
-    // 2.7 build may emit is satisfied. `kafka-consumer-groups` in 2.7
-    // generally does not prompt for --delete-offsets when all flags are
-    // supplied; the piped "y\n" is defensive and ignored otherwise.
+}
+#[rstest_bdd_macros::when(
+    "the Kafka 2.7 tool deletes that group's topic offsets with a piped yes confirmation"
+)]
+fn delete_offsets(console: &mut ConsoleAdministration) {
     let mut child = jvm_spawn_piped(
         &mut jvm_docker_command()
             .image(KAFKA_IMAGE)
@@ -84,9 +100,9 @@ async fn kafka_consumer_groups_delete_offsets() {
                 broker0_advertised(),
                 "--delete-offsets",
                 "--group",
-                GROUP,
+                &console.group,
                 "--topic",
-                TOPIC,
+                &console.topic,
             ])
             .input(ContainerInput::Attached)
             .call(),
@@ -98,34 +114,57 @@ async fn kafka_consumer_groups_delete_offsets() {
     }
     drop(child.stdin.take());
     let out = child.wait_with_output().expect("wait delete-offsets");
+    console.output = Some(out);
+    console.description = Some(describe_console_group(&console.group));
+}
+#[rstest_bdd_macros::then(
+    "offset deletion succeeds, identifies success or the topic, and no group-topic row remains"
+)]
+fn offsets_removed(console: &ConsoleAdministration) {
+    let output = console.output.as_ref().expect("delete attempted");
     assert!(
-        out.status.success(),
-        "delete-offsets failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
+        output.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    let s = String::from_utf8_lossy(&out.stdout);
-    // Kafka 2.7 prints a "TOPIC | PARTITION | STATUS" table with
-    // "Successful" per row on success. Be lenient: any of the indicators
-    // is enough since header formatting drifts across CLI versions.
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Successful") || text.contains(&console.topic));
+    let described = String::from_utf8_lossy(
+        &console
+            .description
+            .as_ref()
+            .expect("post delete description")
+            .stdout,
+    );
     assert!(
-        s.contains("Successful") || s.contains(TOPIC),
-        "delete-offsets stdout missing success indicator: {s}"
+        !described
+            .lines()
+            .any(|line| line.starts_with(&console.group) && line.contains(&console.topic))
     );
-
-    // Post-delete --describe: no data row should reference TOPIC for
-    // GROUP. Header text may still mention column names, so guard with a
-    // line-level check that the line both belongs to GROUP and refers to
-    // TOPIC.
-    let post_desc = describe_console_group(GROUP);
-    let post_s = String::from_utf8_lossy(&post_desc.stdout);
-    let leaked = post_s
-        .lines()
-        .any(|l| l.starts_with(GROUP) && l.contains(TOPIC));
-    assert!(
-        !leaked,
-        "post-delete --describe still shows {TOPIC} for {GROUP}: {post_s}"
-    );
+}
+async fn shutdown_console(console: &mut ConsoleAdministration) {
+    console.broker.take().expect("broker").0.shutdown().await;
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "kafka consumer groups list describe"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_consumer_groups_list_describe(console: ConsoleAdministration) {
+    shutdown_console(&mut console).await;
+    drop(console);
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "kafka consumer groups delete offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_consumer_groups_delete_offsets(console: ConsoleAdministration) {
+    shutdown_console(&mut console).await;
+    drop(console);
 }
 
 // ── `--reset-offsets` and `--delete`, against the stock broker ──────────────
@@ -275,89 +314,6 @@ fn committed_offset(side: &Side<'_>, group: &str) -> Option<i64> {
         })
 }
 
-/// One `--reset-offsets` mode: its label, the arguments that select it and the
-/// offset it must land on.
-struct ResetMode {
-    label: &'static str,
-    arguments: &'static [&'static str],
-    expected: i64,
-}
-
-/// Every `--reset-offsets` mode, the arguments that select it, and the offset
-/// it must land on given the seeded shape.
-///
-/// The expected offset is stated even though the oracle is also consulted,
-/// because the two answer different questions. The oracle says krabka agrees
-/// with Kafka; the number says the pair agree on the *right* thing, and stops
-/// a case from passing on two brokers that are wrong in the same way -- which
-/// is exactly what would happen if the seeding above quietly produced nothing.
-const RESET_MODES: &[ResetMode] = &[
-    ResetMode {
-        label: "--to-earliest",
-        arguments: &["--to-earliest"],
-        expected: 0,
-    },
-    ResetMode {
-        label: "--to-latest",
-        arguments: &["--to-latest"],
-        expected: RESET_RECORDS,
-    },
-    ResetMode {
-        label: "--to-current",
-        arguments: &["--to-current"],
-        expected: RESET_CURRENT,
-    },
-    ResetMode {
-        label: "--to-offset",
-        arguments: &["--to-offset", "2"],
-        expected: 2,
-    },
-    ResetMode {
-        label: "--shift-by backwards",
-        arguments: &["--shift-by", "-1"],
-        expected: RESET_CURRENT - 1,
-    },
-    ResetMode {
-        label: "--shift-by forwards",
-        arguments: &["--shift-by", "2"],
-        expected: RESET_CURRENT + 2,
-    },
-    // Past the end of the log. Kafka clamps to the log end offset rather than
-    // committing an offset no fetch could ever use, and says so on stderr.
-    ResetMode {
-        label: "--shift-by past the end",
-        arguments: &["--shift-by", "100"],
-        expected: RESET_RECORDS,
-    },
-    // No record predates the epoch, so the first offset at or after it is the
-    // first record.
-    ResetMode {
-        label: "--to-datetime before the log",
-        arguments: &["--to-datetime", "1970-01-01T00:00:00.000"],
-        expected: 0,
-    },
-    // No record follows it either, so there is no offset for the timestamp and
-    // the tool falls back to the log end offset.
-    ResetMode {
-        label: "--to-datetime after the log",
-        arguments: &["--to-datetime", "2999-01-01T00:00:00.000"],
-        expected: RESET_RECORDS,
-    },
-    // `now`, which is after every record: the same fallback as above, reached
-    // through the duration arithmetic instead of a literal.
-    ResetMode {
-        label: "--by-duration zero",
-        arguments: &["--by-duration", "P0DT0H0M0S"],
-        expected: RESET_RECORDS,
-    },
-    // Ten years ago, which is before every record.
-    ResetMode {
-        label: "--by-duration a decade",
-        arguments: &["--by-duration", "P3650DT0H0M0S"],
-        expected: 0,
-    },
-];
-
 /// The rows a mode must produce, given the group it was run for.
 fn expected_rows(group: &str, new_offset: i64) -> Vec<ResetRow> {
     vec![ResetRow {
@@ -368,284 +324,336 @@ fn expected_rows(group: &str, new_offset: i64) -> Vec<ResetRow> {
     }]
 }
 
-/// Every `--reset-offsets` mode, `--dry-run` against `--execute`, and the
-/// `--export` / `--from-file` round trip, compared with Apache Kafka.
-///
-/// `--dry-run` is what lets the whole table share one group: it prints the
-/// offset it would commit and commits nothing, so eleven modes cost eleven
-/// invocations rather than eleven groups. The two cases that must change
-/// something -- the `--execute` control and the file round trip -- take their
-/// own groups afterwards.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn reset_offsets_modes_match_apache_kafka() {
-    const DRY_GROUP: &str = "krabka-reset-dry-grp";
-    const EXECUTE_GROUP: &str = "krabka-reset-execute-grp";
-    const FILE_GROUP: &str = "krabka-reset-file-grp";
+struct OffsetAdministration {
+    comparison: Option<OracleComparison>,
+    dry_group: String,
+    execute_group: String,
+    file_group: String,
+    dry: Vec<(CliRun, Option<i64>)>,
+    executed: Vec<(CliRun, Option<i64>)>,
+    exports: Vec<CliRun>,
+    restored: Vec<(CliRun, CliRun, Option<i64>)>,
+}
+#[rstest::fixture]
+fn resets() -> OffsetAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-    // Kafka first. A wrong rule fails here, on somebody else's broker, before
-    // krabka is asked the same question.
-    let comparison = OracleComparison::start("reset-offsets").await;
-    let [oracle_side, krabka_side] = comparison.sides();
-
-    for side in [&oracle_side, &krabka_side] {
-        seed_topic(side);
-        for group in [DRY_GROUP, EXECUTE_GROUP, FILE_GROUP] {
-            seed_group(side, group);
+    OffsetAdministration {
+        comparison: None,
+        dry_group: String::new(),
+        execute_group: String::new(),
+        file_group: String::new(),
+        dry: Vec::new(),
+        executed: Vec::new(),
+        exports: Vec::new(),
+        restored: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "Kafka and Krabka have six records on krabka-reset-offsets-itest and these groups parked at offset 3"
+)]
+async fn reset_groups(resets: &mut OffsetAdministration, datatable: Vec<Vec<String>>) {
+    resets.comparison = Some(OracleComparison::start("reset-offsets").await);
+    let groups: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [group]: [String; 1] = row.try_into().expect("group");
+            group
+        })
+        .collect();
+    let [dry, execute, file]: [String; 3] = groups.try_into().expect("three groups");
+    for side in resets.comparison.as_ref().expect("comparison").sides() {
+        seed_topic(&side);
+        for group in [&dry, &execute, &file] {
+            seed_group(&side, group);
         }
     }
-
-    for ResetMode {
-        label,
-        arguments: mode,
-        expected,
-    } in RESET_MODES
-    {
-        let mut answers = Vec::new();
-        for side in [&oracle_side, &krabka_side] {
+    resets.dry_group = dry;
+    resets.execute_group = execute;
+    resets.file_group = file;
+}
+#[rstest_bdd_macros::when("both group tools dry-run these reset arguments in order")]
+fn dry_modes(resets: &mut OffsetAdministration, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [mode]: [String; 1] = row.try_into().expect("mode arguments");
+        for side in resets.comparison.as_ref().expect("comparison").sides() {
             let mut args = vec![
                 "--group",
-                DRY_GROUP,
+                &resets.dry_group,
                 "--topic",
                 RESET_TOPIC,
                 "--reset-offsets",
             ];
-            args.extend_from_slice(mode);
+            args.extend(mode.split_whitespace());
             args.push("--dry-run");
-            let run = consumer_groups(side, &args).expect_success();
-            let rows = parse_reset_table(&run.stdout);
-            assert!(
-                rows == expected_rows(DRY_GROUP, *expected),
-                "{}: {label} must resolve to offset {expected}, got {rows:?}\n{}",
-                side.label(),
-                run.text(),
-            );
-            answers.push(rows);
-        }
-        assert!(
-            answers[0] == answers[1],
-            "{label}: krabka and Apache Kafka disagreed: {answers:?}",
-        );
-        // A dry run commits nothing, which is the premise the shared group
-        // rests on. Without this the modes after the first would be reading a
-        // group some earlier mode had moved.
-        for side in [&oracle_side, &krabka_side] {
-            let parked = committed_offset(side, DRY_GROUP);
-            assert!(
-                parked == Some(RESET_CURRENT),
-                "{}: {label} --dry-run must not commit anything, got {parked:?}",
-                side.label(),
-            );
+            let output = consumer_groups(&side, &args);
+            let commit = committed_offset(&side, &resets.dry_group);
+            resets.dry.push((output, commit));
         }
     }
-
-    // `--execute` is the same command with the other verb, and it must move
-    // the commit the dry run described.
-    for side in [&oracle_side, &krabka_side] {
-        let run = consumer_groups(side, &[
+}
+#[rstest_bdd_macros::then(
+    "both tools propose these offsets in order and every dry run leaves committed offset 3 unchanged"
+)]
+fn dry_results(resets: &OffsetAdministration, datatable: Vec<Vec<String>>) {
+    let expected: Vec<i64> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [offset]: [String; 1] = row.try_into().expect("offset");
+            offset.parse().expect("offset number")
+        })
+        .collect();
+    assert!(resets.dry.len() == expected.len() * 2);
+    for (pair, offset) in resets.dry.as_chunks::<2>().0.iter().zip(expected) {
+        for (output, commit) in pair {
+            assert!(output.succeeded(), "{}", output.text());
+            assert!(parse_reset_table(&output.stdout) == expected_rows(&resets.dry_group, offset));
+            assert!(*commit == Some(3));
+        }
+        assert!(parse_reset_table(&pair[0].0.stdout) == parse_reset_table(&pair[1].0.stdout));
+    }
+}
+#[rstest_bdd_macros::when("both tools execute to-earliest for the execute group")]
+fn execute_earliest(resets: &mut OffsetAdministration) {
+    for side in resets.comparison.as_ref().expect("comparison").sides() {
+        let output = consumer_groups(&side, &[
             "--group",
-            EXECUTE_GROUP,
+            &resets.execute_group,
             "--topic",
             RESET_TOPIC,
             "--reset-offsets",
             "--to-earliest",
             "--execute",
-        ])
-        .expect_success();
-        let rows = parse_reset_table(&run.stdout);
-        assert!(
-            rows == expected_rows(EXECUTE_GROUP, 0),
-            "{}: --execute must print the row it committed, got {rows:?}",
-            side.label(),
-        );
-        let parked = committed_offset(side, EXECUTE_GROUP);
-        assert!(
-            parked == Some(0),
-            "{}: --execute must commit what it printed, got {parked:?}",
-            side.label(),
-        );
+        ]);
+        let commit = committed_offset(&side, &resets.execute_group);
+        resets.executed.push((output, commit));
     }
-
-    // `--export` writes the CSV that `--from-file` reads back, so the pair is
-    // one round trip: park the group somewhere else, then restore it from the
-    // file and land back where the export was taken.
-    let mut exports = Vec::new();
-    for side in [&oracle_side, &krabka_side] {
-        let exported = consumer_groups(side, &[
+}
+#[rstest_bdd_macros::then("both execution tables and committed offsets become 0")]
+fn execute_results(resets: &OffsetAdministration) {
+    assert!(resets.executed.len() == 2);
+    for (output, commit) in &resets.executed {
+        assert!(output.succeeded(), "{}", output.text());
+        assert!(parse_reset_table(&output.stdout) == expected_rows(&resets.execute_group, 0));
+        assert!(*commit == Some(0));
+    }
+}
+#[rstest_bdd_macros::when("both tools export the file group's current offsets")]
+fn export_offsets(resets: &mut OffsetAdministration) {
+    for side in resets.comparison.as_ref().expect("comparison").sides() {
+        resets.exports.push(consumer_groups(&side, &[
             "--group",
-            FILE_GROUP,
+            &resets.file_group,
             "--topic",
             RESET_TOPIC,
             "--reset-offsets",
             "--to-current",
             "--export",
-        ])
-        .expect_success();
-        let rows = parse_export_csv(&exported.stdout);
-        assert!(
-            rows.len() == 1 && rows[0].topic == RESET_TOPIC && rows[0].offset == RESET_CURRENT,
-            "{}: --export must describe the committed offset, got {rows:?}",
-            side.label(),
-        );
-        exports.push((rows, exported.stdout));
+        ]));
+    }
+}
+#[rstest_bdd_macros::then("both exports contain one matching topic row at offset 3")]
+fn export_results(resets: &OffsetAdministration) {
+    assert!(resets.exports.len() == 2);
+    for output in &resets.exports {
+        assert!(output.succeeded(), "{}", output.text());
+        let rows = parse_export_csv(&output.stdout);
+        assert!(rows.len() == 1 && rows[0].topic == RESET_TOPIC && rows[0].offset == 3);
     }
     assert!(
-        exports[0].0 == exports[1].0,
-        "--export: krabka and Apache Kafka disagreed: {:?}",
-        exports.iter().map(|(rows, _)| rows).collect::<Vec<_>>(),
+        parse_export_csv(&resets.exports[0].stdout) == parse_export_csv(&resets.exports[1].stdout)
     );
-
-    for (side, (_, csv)) in [&oracle_side, &krabka_side].into_iter().zip(&exports) {
-        consumer_groups(side, &[
+}
+#[rstest_bdd_macros::when("both file groups move to earliest and execute from their exported CSV")]
+fn restore_offsets(resets: &mut OffsetAdministration) {
+    for (side, exported) in resets
+        .comparison
+        .as_ref()
+        .expect("comparison")
+        .sides()
+        .into_iter()
+        .zip(&resets.exports)
+    {
+        let moved = consumer_groups(&side, &[
             "--group",
-            FILE_GROUP,
+            &resets.file_group,
             "--topic",
             RESET_TOPIC,
             "--reset-offsets",
             "--to-earliest",
             "--execute",
-        ])
-        .expect_success();
-        let restored = consumer_groups_with_file(side, csv, &[
+        ]);
+        let restored = consumer_groups_with_file(&side, &exported.stdout, &[
             "--group",
-            FILE_GROUP,
+            &resets.file_group,
             "--reset-offsets",
             "--from-file",
             OFFSETS_CSV,
             "--execute",
-        ])
-        .expect_success();
-        let rows = parse_reset_table(&restored.stdout);
-        assert!(
-            rows == expected_rows(FILE_GROUP, RESET_CURRENT),
-            "{}: --from-file must restore the exported offset, got {rows:?}\n{}",
-            side.label(),
-            restored.text(),
-        );
-        let parked = committed_offset(side, FILE_GROUP);
-        assert!(
-            parked == Some(RESET_CURRENT),
-            "{}: --from-file --execute must commit the file's offset, got {parked:?}",
-            side.label(),
-        );
+        ]);
+        let commit = committed_offset(&side, &resets.file_group);
+        resets.restored.push((moved, restored, commit));
     }
-
-    comparison.broker.shutdown().await;
+}
+#[rstest_bdd_macros::then("both from-file result tables and committed offsets return to 3")]
+fn restore_results(resets: &OffsetAdministration) {
+    assert!(resets.restored.len() == 2);
+    for (moved, restored, commit) in &resets.restored {
+        assert!(moved.succeeded(), "{}", moved.text());
+        assert!(restored.succeeded(), "{}", restored.text());
+        assert!(parse_reset_table(&restored.stdout) == expected_rows(&resets.file_group, 3));
+        assert!(*commit == Some(3));
+    }
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "reset offsets modes match apache kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reset_offsets_modes_match_apache_kafka(resets: OffsetAdministration) {
+    resets
+        .comparison
+        .take()
+        .expect("comparison")
+        .broker
+        .shutdown()
+        .await;
+    drop(resets);
 }
 
-/// A live group refuses a reset and refuses a delete, an absent group refuses
-/// a delete, and an empty one accepts it -- all four as Apache Kafka does.
-///
-/// The three outcomes are one case because they share the expensive half: a
-/// consumer that is actually joined. A group is only ever not `Empty` while
-/// somebody is in it, and the two refusals are about exactly that state.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn group_delete_and_reset_refusals_match_apache_kafka() {
-    const LIVE_GROUP: &str = "krabka-group-live-grp";
-    const EMPTY_GROUP: &str = "krabka-group-empty-grp";
-    const ABSENT_GROUP: &str = "krabka-group-absent-grp";
+struct GroupLifecycle {
+    comparison: Option<OracleComparison>,
+    live: String,
+    empty: String,
+    absent: String,
+    live_runs: Vec<(CliRun, CliRun)>,
+    final_runs: Vec<(CliRun, CliRun, CliRun)>,
+}
+#[rstest::fixture]
+fn lifecycle() -> GroupLifecycle {
+    // Start this scenario with fresh inputs and observations.
 
-    let comparison = OracleComparison::start("group-lifecycle").await;
-    let [oracle_side, krabka_side] = comparison.sides();
-
-    for side in [&oracle_side, &krabka_side] {
-        seed_topic(side);
-        seed_group(side, EMPTY_GROUP);
+    GroupLifecycle {
+        comparison: None,
+        live: String::new(),
+        empty: String::new(),
+        absent: String::new(),
+        live_runs: Vec::new(),
+        final_runs: Vec::new(),
     }
-
-    for side in [&oracle_side, &krabka_side] {
-        // A consumer that stays. `--timeout-ms` is deliberately absent: the
-        // consumer must still be in the group when the two refusals below run,
-        // and the container is removed when the handle is dropped.
-        let _consumer = side.run_detached("kafka-console-consumer", &[
+}
+#[rstest_bdd_macros::given(
+    "Kafka and Krabka have six records, empty group {empty}, absent group {absent}, and a future live group {live}"
+)]
+async fn lifecycle_groups(
+    lifecycle: &mut GroupLifecycle,
+    empty: String,
+    absent: String,
+    live: String,
+) {
+    lifecycle.comparison = Some(OracleComparison::start("group-lifecycle").await);
+    for side in lifecycle.comparison.as_ref().expect("comparison").sides() {
+        seed_topic(&side);
+        seed_group(&side, &empty);
+    }
+    lifecycle.empty = empty;
+    lifecycle.absent = absent;
+    lifecycle.live = live;
+}
+#[rstest_bdd_macros::when(
+    "a detached consumer joins each live group and both tools try to reset then delete it"
+)]
+fn reject_live(lifecycle: &mut GroupLifecycle) {
+    for side in lifecycle.comparison.as_ref().expect("comparison").sides() {
+        let consumer = side.run_detached("kafka-console-consumer", &[
             "--bootstrap-server",
             side.bootstrap(),
             "--topic",
             RESET_TOPIC,
             "--group",
-            LIVE_GROUP,
+            &lifecycle.live,
             "--from-beginning",
         ]);
-        wait_until_group_is_live(side, LIVE_GROUP);
-
-        let reset = consumer_groups(side, &[
+        wait_until_group_is_live(&side, &lifecycle.live);
+        let reset = consumer_groups(&side, &[
             "--group",
-            LIVE_GROUP,
+            &lifecycle.live,
             "--topic",
             RESET_TOPIC,
             "--reset-offsets",
             "--to-earliest",
             "--dry-run",
         ]);
-        // The exit status is not the signal here: apache/kafka:4.3.1 prints
-        // this refusal, then prints the empty NEW-OFFSET header and exits 0.
-        // What the tool does promise is that it names the state it refused on
-        // and proposes nothing, so that is what both sides are held to.
+        let delete = consumer_groups(&side, &["--delete", "--group", &lifecycle.live]);
+        lifecycle.live_runs.push((reset, delete));
+        drop(consumer);
+    }
+}
+#[rstest_bdd_macros::then(
+    "live resets propose no offsets and explain can only be reset if the group while deletions report {exception}"
+)]
+fn live_refusals(lifecycle: &GroupLifecycle, exception: String) {
+    assert!(lifecycle.live_runs.len() == 2);
+    for (reset, delete) in &lifecycle.live_runs {
+        assert!(reset.text().contains("can only be reset if the group"));
+        assert!(parse_reset_table(&reset.text()).is_empty());
         assert!(
-            reset.text().contains("can only be reset if the group"),
-            "{}: the refusal must name the group's state, got:\n{}",
-            side.label(),
-            reset.text(),
-        );
-        assert!(
-            parse_reset_table(&reset.text()) == Vec::<ResetRow>::new(),
-            "{}: a refused reset must propose no offsets, got:\n{}",
-            side.label(),
-            reset.text(),
-        );
-
-        let delete_live = consumer_groups(side, &["--delete", "--group", LIVE_GROUP]);
-        assert!(
-            parse_delete_groups(&delete_live.text())
+            parse_delete_groups(&delete.text())
                 == vec![DeleteOutcome {
-                    group: LIVE_GROUP.to_owned(),
-                    failure: Some(
-                        "org.apache.kafka.common.errors.GroupNotEmptyException".to_owned()
-                    ),
-                }],
-            "{}: deleting a live group must report NON_EMPTY_GROUP, got:\n{}",
-            side.label(),
-            delete_live.text(),
+                    group: lifecycle.live.clone(),
+                    failure: Some(exception.clone())
+                }]
         );
     }
-
-    // The remaining two states need no consumer, so they run after both
-    // detached containers are gone.
-    for side in [&oracle_side, &krabka_side] {
-        let absent = consumer_groups(side, &["--delete", "--group", ABSENT_GROUP]);
+}
+#[rstest_bdd_macros::when(
+    "both tools delete the absent and empty groups then list remaining groups"
+)]
+fn delete_remaining(lifecycle: &mut GroupLifecycle) {
+    for side in lifecycle.comparison.as_ref().expect("comparison").sides() {
+        lifecycle.final_runs.push((
+            consumer_groups(&side, &["--delete", "--group", &lifecycle.absent]),
+            consumer_groups(&side, &["--delete", "--group", &lifecycle.empty]),
+            consumer_groups(&side, &["--list"]),
+        ));
+    }
+}
+#[rstest_bdd_macros::then(
+    "absent groups report {exception} while empty groups delete successfully and disappear from successful listings"
+)]
+fn lifecycle_results(lifecycle: &GroupLifecycle, exception: String) {
+    assert!(lifecycle.final_runs.len() == 2);
+    for (absent, empty, listed) in &lifecycle.final_runs {
         assert!(
             parse_delete_groups(&absent.text())
                 == vec![DeleteOutcome {
-                    group: ABSENT_GROUP.to_owned(),
-                    failure: Some(
-                        "org.apache.kafka.common.errors.GroupIdNotFoundException".to_owned()
-                    ),
-                }],
-            "{}: deleting a group that never existed must report GROUP_ID_NOT_FOUND, got:\n{}",
-            side.label(),
-            absent.text(),
+                    group: lifecycle.absent.clone(),
+                    failure: Some(exception.clone())
+                }]
         );
-
-        // The positive control. A delete that refused everything would pass
-        // both cases above.
-        let empty = consumer_groups(side, &["--delete", "--group", EMPTY_GROUP]);
-        assert!(
-            empty.succeeded() && kafka_exceptions(&empty.text()).is_empty(),
-            "{}: an empty group must be deletable, got:\n{}",
-            side.label(),
-            empty.text(),
-        );
-        let listed = consumer_groups(side, &["--list"]).expect_success();
-        assert!(
-            !listed.stdout.contains(EMPTY_GROUP),
-            "{}: the deleted group must be gone from --list, got:\n{}",
-            side.label(),
-            listed.stdout,
-        );
+        assert!(empty.succeeded() && kafka_exceptions(&empty.text()).is_empty());
+        assert!(listed.succeeded());
+        assert!(!listed.stdout.contains(&lifecycle.empty));
     }
-
-    comparison.broker.shutdown().await;
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "group delete and reset refusals match apache kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn group_delete_and_reset_refusals_match_apache_kafka(lifecycle: GroupLifecycle) {
+    lifecycle
+        .comparison
+        .take()
+        .expect("comparison")
+        .broker
+        .shutdown()
+        .await;
+    drop(lifecycle);
 }
 
 /// Poll `--describe --state` until `group` reports `Stable`.

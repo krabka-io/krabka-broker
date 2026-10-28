@@ -1,173 +1,179 @@
-//! End-to-end tests of the `DescribeShareGroupOffsets` handler against a
-//! running broker, driven over the wire encoding.
-//!
-//! Each case pins the whole decoded response, so the per-group and
-//! per-partition rows KIP-932 asks for -- feature disabled, group
-//! denied, topic unknown -- stay exactly what the JVM admin client reads.
-
-#[cfg(test)]
-use crate::handlers::test_support::{ShareRefusalCase, ShareRefusalPolicy};
+//! Full wire responses for share offset feature gates, group ACLs and missing topics.
 use {
     super::*,
-    crate::{authorizer::AllowAllAuthorizer, test_support::ShareApiSupport},
-    krabka_protocol::{
-        owned::{
-            describe_share_group_offsets_request::{
-                DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
-            },
-            describe_share_group_offsets_response::{
-                self, DescribeShareGroupOffsetsResponseGroup,
-                DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
-            },
+    crate::{
+        authorizer::{AllowAllAuthorizer, Authorizer},
+        handlers::test_support::StartedBroker,
+        test_support::{DenyAll, ShareApiSupport, start_share_broker},
+    },
+    krabka_protocol::owned::{
+        describe_share_group_offsets_request::{
+            DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
         },
-        primitives::uuid::Uuid,
+        describe_share_group_offsets_response::{
+            self, DescribeShareGroupOffsetsResponseGroup,
+            DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
+        },
     },
     std::sync::Arc,
 };
-
-/// A requested topic and the partitions of it that the request names.
-struct RequestTopic<'a> {
-    topic_name: &'a str,
-    partitions: Vec<i32>,
+#[derive(Default)]
+struct ShareOffsetsDescription {
+    started: Option<StartedBroker>,
+    response: Option<DescribeShareGroupOffsetsResponse>,
 }
-
-/// A requested group and the topics of it that the request names.
-struct RequestGroup<'a> {
-    group_id: &'a str,
-    topics: Vec<RequestTopic<'a>>,
+#[rstest::fixture]
+fn share_offsets_description() -> ShareOffsetsDescription {
+    let started = None;
+    ShareOffsetsDescription {
+        started,
+        ..Default::default()
+    }
 }
-
-fn request(groups: &[RequestGroup<'_>]) -> DescribeShareGroupOffsetsRequest {
-    DescribeShareGroupOffsetsRequest {
-        groups: groups
-            .iter()
-            .map(|group| DescribeShareGroupOffsetsRequestGroup {
-                group_id: group.group_id.into(),
-                topics: Some(
-                    group
-                        .topics
-                        .iter()
-                        .map(|topic| DescribeShareGroupOffsetsRequestTopic {
-                            topic_name: topic.topic_name.into(),
-                            partitions: topic.partitions.clone(),
-                            ..Default::default()
-                        })
+#[rstest_bdd_macros::given(
+    "a share offsets broker with API enabled {enabled} and group access allowed {allowed}"
+)]
+async fn describe_share_offsets_policy(
+    share_offsets_description: &mut ShareOffsetsDescription,
+    enabled: bool,
+    allowed: bool,
+) {
+    let authorizer: Arc<dyn Authorizer> = if allowed {
+        Arc::new(AllowAllAuthorizer)
+    } else {
+        Arc::new(ControllerPeerAllowed(DenyAll))
+    };
+    let started = start_share_broker()
+        .authorizer(authorizer)
+        .support(if enabled {
+            ShareApiSupport::Enabled
+        } else {
+            ShareApiSupport::Disabled
+        })
+        .call()
+        .await;
+    share_offsets_description.started = Some(StartedBroker {
+        broker: started.broker,
+        dir: started.dir,
+    });
+}
+#[rstest_bdd_macros::when("DescribeShareGroupOffsets requests these groups and partitions")]
+async fn describe_share_offsets_request(
+    share_offsets_description: &mut ShareOffsetsDescription,
+    datatable: Vec<Vec<String>>,
+) {
+    let request = DescribeShareGroupOffsetsRequest {
+        groups: datatable
+            .into_iter()
+            .skip(1)
+            .map(|cells| DescribeShareGroupOffsetsRequestGroup {
+                group_id: cells[0].clone(),
+                topics: Some(vec![DescribeShareGroupOffsetsRequestTopic {
+                    topic_name: cells[1].clone(),
+                    partitions: cells[2]
+                        .split(',')
+                        .map(|p| p.parse().expect("partition index"))
                         .collect(),
-                ),
+                    ..Default::default()
+                }]),
                 ..Default::default()
             })
             .collect(),
         ..Default::default()
-    }
-}
-
-fn group_error(group_id: &str, error_code: i16) -> DescribeShareGroupOffsetsResponseGroup {
-    krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
-        group_id: group_id.into(),
-        topics: Vec::new(),
-        error_code,
-        error_message: None,
-    })
-}
-
-krabka_macros::wire_codec_helpers! {
-    test_context ["admin-client"];
-}
-
-#[tokio::test]
-async fn handle_error_scenarios_preserve_expected_rows() {
-    let version = describe_share_group_offsets_response::MAX_VERSION;
-    let cases: Vec<ShareRefusalCase<Vec<RequestGroup<'_>>, DescribeShareGroupOffsetsResponse>> = vec![
-        ShareRefusalPolicy::unsupported("disabled feature preserves group error rows").with_input(
-            vec![
-                RequestGroup {
-                    group_id: "g1",
-                    topics: vec![RequestTopic {
-                        topic_name: "t1",
-                        partitions: vec![0],
-                    }],
-                },
-                RequestGroup {
-                    group_id: "g2",
-                    topics: vec![RequestTopic {
-                        topic_name: "t2",
-                        partitions: vec![1],
-                    }],
-                },
-            ],
-            krabka_macros::unthrottled_wire!(DescribeShareGroupOffsetsResponse {
-                groups: vec![
-                    group_error("g1", codes::UNSUPPORTED_VERSION),
-                    group_error("g2", codes::UNSUPPORTED_VERSION),
-                ],
-            }),
-        ),
-        ShareRefusalPolicy::group_denied("denied group preserves group id and error code")
-            .with_input(
-                vec![RequestGroup {
-                    group_id: "g1",
-                    topics: vec![RequestTopic {
-                        topic_name: "missing",
-                        partitions: vec![0],
-                    }],
-                }],
-                krabka_macros::unthrottled_wire!(DescribeShareGroupOffsetsResponse {
-                    groups: vec![group_error("g1", codes::GROUP_AUTHORIZATION_FAILED)],
-                }),
-            ),
-        ShareRefusalCase {
-            name: "an unknown topic has no data and no error",
-            authorizer: Arc::new(AllowAllAuthorizer),
-            enabled: ShareApiSupport::Enabled,
-            input: vec![RequestGroup {
-                group_id: "g1",
-                topics: vec![RequestTopic {
-                    topic_name: "missing-topic",
-                    partitions: vec![3, 5],
-                }],
-            }],
-            expected: krabka_macros::unthrottled_wire!(DescribeShareGroupOffsetsResponse {
-                groups: vec![krabka_macros::tagged_wire!(
-                    DescribeShareGroupOffsetsResponseGroup {
-                        group_id: "g1".into(),
-                        topics: vec![krabka_macros::tagged_wire!(
-                            DescribeShareGroupOffsetsResponseTopic {
-                                topic_name: "missing-topic".into(),
-                                topic_id: Uuid::default(),
-                                partitions: vec![
-                                    krabka_macros::tagged_wire!(
-                                        DescribeShareGroupOffsetsResponsePartition {
-                                            partition_index: 3,
-                                            start_offset: -1,
-                                            leader_epoch: 0,
-                                            lag: -1,
-                                            error_code: codes::NONE,
-                                            error_message: None,
-                                        }
-                                    ),
-                                    krabka_macros::tagged_wire!(
-                                        DescribeShareGroupOffsetsResponsePartition {
-                                            partition_index: 5,
-                                            start_offset: -1,
-                                            leader_epoch: 0,
-                                            lag: -1,
-                                            error_code: codes::NONE,
-                                            error_message: None,
-                                        }
-                                    ),
-                                ],
-                            }
-                        )],
-                        error_code: codes::NONE,
-                        error_message: None,
-                    }
-                )],
-            }),
-        },
-    ];
-    krabka_macros::share_refusal_matrix! {
-        case(row) [cases];
-        bind(broker_handle, _dir, broker, ctx, resp);
-        invoke [handle(&broker, request(&row.input), version, &ctx)];
     };
+    let broker = share_offsets_description
+        .started
+        .as_ref()
+        .expect("started broker")
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
+    share_offsets_description.response = Some(
+        handle(
+            &broker,
+            request,
+            describe_share_group_offsets_response::MAX_VERSION,
+            &ctx,
+        )
+        .await
+        .expect("handle"),
+    );
 }
+#[rstest_bdd_macros::then("the complete share offset response contains these group rows")]
+async fn describe_share_offsets_results(
+    share_offsets_description: &mut ShareOffsetsDescription,
+    datatable: Vec<Vec<String>>,
+) {
+    let groups = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            let code = cells[1].parse().expect("group error code");
+            let topics = if cells[2] == "none" {
+                Vec::new()
+            } else {
+                vec![DescribeShareGroupOffsetsResponseTopic {
+                    topic_name: cells[2].clone(),
+                    partitions: cells[3]
+                        .split(',')
+                        .map(|partition| DescribeShareGroupOffsetsResponsePartition {
+                            partition_index: partition.parse().expect("partition index"),
+                            start_offset: -1,
+                            leader_epoch: 0,
+                            lag: -1,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }]
+            };
+            DescribeShareGroupOffsetsResponseGroup {
+                group_id: cells[0].clone(),
+                error_code: code,
+                topics,
+                ..Default::default()
+            }
+        })
+        .collect();
+    let expected = DescribeShareGroupOffsetsResponse {
+        groups,
+        ..Default::default()
+    };
+    assert2::assert!(
+        share_offsets_description
+            .response
+            .as_ref()
+            .expect("description response")
+            == &expected
+    );
+    share_offsets_description
+        .started
+        .take()
+        .expect("started broker")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_describe_share_offsets.feature",
+    name = "Disabled API retains every requested group"
+)]
+#[tokio::test]
+async fn describe_share_offset_case_0(share_offsets_description: ShareOffsetsDescription) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_describe_share_offsets.feature",
+    name = "Group ACL denial preserves its identity"
+)]
+#[tokio::test]
+async fn describe_share_offset_case_1(share_offsets_description: ShareOffsetsDescription) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_describe_share_offsets.feature",
+    name = "Missing topics report uninitialized data without errors"
+)]
+#[tokio::test]
+async fn describe_share_offset_case_2(share_offsets_description: ShareOffsetsDescription) {}
+
+use crate::test_support::ControllerPeerAllowed;

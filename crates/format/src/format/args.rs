@@ -296,25 +296,44 @@ mod tests {
         assert2::check!(got == want, "{argv:?}");
     }
 
-    /// A node id is Kafka's `int` without a sign: 0 through 2147483647.
-    /// Everything else is an error rather than a silent zero.
-    #[yare::parameterized(
-        ordinary = { "7", Ok(7) },
-        trims_spaces = { "  7  ", Ok(7) },
-        zero = { "0", Ok(0) },
-        max_i32 = { "2147483647", Ok(2_147_483_647) },
-        overflow = { "2147483648", Err("node id: number too large to fit in target type") },
-        negative = { "-1", Err("You must specify a valid non-negative node ID.") },
-        empty = { "", Err("node id: cannot parse integer from empty string") },
-        decimal = { "1.0", Err("node id: invalid digit found in string") },
-        hex = { "0x7", Err("node id: invalid digit found in string") },
-    )]
-    fn parse_node_id_takes_kafkas_node_id_range(input: &str, want: Result<u64, &str>) {
-        assert2::check!(
-            parse_node_id(input).map(|n| n.0) == want.map_err(str::to_owned),
-            "{input:?}"
-        );
+    #[derive(Default)]
+    struct FormatterNodeScenario {
+        input: String,
+        parsed: Option<Result<u64, String>>,
     }
+    #[rstest::fixture]
+    fn formatter_node() -> FormatterNodeScenario {
+        let input = String::new();
+        FormatterNodeScenario {
+            input,
+            ..FormatterNodeScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("formatter node ID text {input}")]
+    fn formatter_node_text(formatter_node: &mut FormatterNodeScenario, input: String) {
+        formatter_node.input = input;
+    }
+    #[rstest_bdd_macros::given("formatter node ID {value} surrounded by spaces")]
+    fn spaced_formatter_node(formatter_node: &mut FormatterNodeScenario, value: u64) {
+        formatter_node.input = format!("  {value}  ");
+    }
+    #[rstest_bdd_macros::given("an empty formatter node ID")]
+    fn empty_formatter_node(formatter_node: &mut FormatterNodeScenario) {
+        formatter_node.input.clear();
+    }
+    #[rstest_bdd_macros::when("the formatter node ID is parsed")]
+    fn parse_formatter_node(formatter_node: &mut FormatterNodeScenario) {
+        formatter_node.parsed = Some(parse_node_id(&formatter_node.input).map(|node| node.0));
+    }
+    #[rstest_bdd_macros::then("the formatter node ID equals {value}")]
+    fn formatter_node_value(formatter_node: &FormatterNodeScenario, value: u64) {
+        assert2::check!(formatter_node.parsed == Some(Ok(value)));
+    }
+    #[rstest_bdd_macros::then("the formatter node ID error is {error}")]
+    fn formatter_node_error(formatter_node: &FormatterNodeScenario, error: String) {
+        assert2::check!(formatter_node.parsed == Some(Err(error)));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/node_id_arguments", fixtures = [formatter_node: FormatterNodeScenario]);
 
     /// `--directory-id` takes either id form and refuses the ids that Kafka
     /// reserves, which the broker would refuse at startup.

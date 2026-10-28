@@ -1079,83 +1079,82 @@ mod tests {
         ]
     }
 
-    /// Kafka's `ClientQuotaManager` ranks every `user=U` level above every
-    /// `user=<default>` level (#677). Each row sets two or more levels and
-    /// expects the higher one, with the bucket key Kafka's metric tags give.
-    #[test]
-    fn precedence_matches_kafkas_client_quota_manager() {
-        type Level = Vec<QuotaEntityInput<'static>>;
-        /// A level and the rate configured at it.
-        struct ConfiguredLevel {
-            entity: Level,
-            rate: f64,
-        }
-        /// A case name, the configured levels and rates, and the expected
-        /// bucket key and rate.
-        struct Row {
-            name: String,
-            configured: Vec<ConfiguredLevel>,
-            expected: MatchedQuota,
-        }
-        let at = |entity: Level, rate: f64| ConfiguredLevel { entity, rate };
-        let pair: EntityKey = vec![
-            ("client-id".into(), Some("app".into())),
-            ("user".into(), Some("alice".into())),
-        ];
-        let user: EntityKey = vec![("user".into(), Some("alice".into()))];
-        let client: EntityKey = vec![("client-id".into(), Some("app".into()))];
-        let levels: [Level; 8] = uc_candidates("alice", "app");
-        // Every adjacent pair: level N and N+1 both set, level N wins.
-        let bucket_for_level = [&pair, &pair, &user, &pair, &pair, &user, &client, &client];
-        let mut rows: Vec<Row> = (0..7)
-            .map(|n| Row {
-                name: format!("levels {} and {}", n + 1, n + 2),
-                configured: vec![
-                    at(levels[n].clone(), 1000.0),
-                    at(levels[n + 1].clone(), 5000.0),
-                ],
-                expected: MatchedQuota::new(bucket_for_level[n].clone(), 1000.0),
-            })
-            .collect();
-        // The four examples from the issue.
-        rows.extend([
-            Row {
-                name: "user=alice over the default pair".to_owned(),
-                configured: vec![at(levels[2].clone(), 1000.0), at(levels[4].clone(), 5000.0)],
-                expected: MatchedQuota::new(user.clone(), 1000.0),
-            },
-            Row {
-                name: "user=alice,client-id=default over user=default,client-id=app".to_owned(),
-                configured: vec![at(levels[1].clone(), 1000.0), at(levels[3].clone(), 5000.0)],
-                expected: MatchedQuota::new(pair.clone(), 1000.0),
-            },
-            Row {
-                name: "user=alice over user=default,client-id=app".to_owned(),
-                configured: vec![at(levels[2].clone(), 1000.0), at(levels[3].clone(), 5000.0)],
-                expected: MatchedQuota::new(user.clone(), 1000.0),
-            },
-            Row {
-                name: "user=default over client-id=app".to_owned(),
-                configured: vec![at(levels[5].clone(), 1000.0), at(levels[6].clone(), 5000.0)],
-                expected: MatchedQuota::new(user.clone(), 1000.0),
-            },
-        ]);
-        for Row {
-            name,
-            configured,
-            expected,
-        } in rows
-        {
-            let img = img_with(
-                configured
-                    .into_iter()
-                    .map(|ConfiguredLevel { entity, rate }| rec().entity(entity).value(rate).call())
-                    .collect(),
-            );
-            let got = matched_quota(&img, "alice", Some("app"), "producer_byte_rate");
-            assert2::check!(got == Some(expected), "{name}");
-        }
+    #[derive(Default)]
+    struct ProducerQuotaPrecedence {
+        image: Option<MetadataImage>,
+        matched: rstest_bdd::Slot<Option<MatchedQuota>>,
     }
+
+    #[rstest::fixture]
+    fn producer_quota_precedence() -> ProducerQuotaPrecedence {
+        // Every client quota lookup starts from an independent configuration image.
+        ProducerQuotaPrecedence::default()
+    }
+
+    #[rstest_bdd_macros::given("the cluster has no configured producer quotas")]
+    fn empty_producer_quota_image(producer_quota_precedence: &mut ProducerQuotaPrecedence) {
+        producer_quota_precedence.image = Some(img_with(Vec::new()));
+    }
+
+    #[rstest_bdd_macros::given(
+        "producer quota entity JSON {entity} permits {rate} bytes per second"
+    )]
+    fn supplied_producer_quota_entity(
+        producer_quota_precedence: &mut ProducerQuotaPrecedence,
+        entity: String,
+        rate: f64,
+    ) {
+        use krabka_metadata::{MetadataRecord, QuotaEntity};
+        let entity: EntityKey = serde_json::from_str(&entity)
+            .expect("explicit quota entity components with nullable defaults");
+        let record = ClientQuotaRecord {
+            entity: entity
+                .into_iter()
+                .map(|(entity_type, entity_name)| QuotaEntity {
+                    entity_type,
+                    entity_name,
+                })
+                .collect(),
+            config_key: "producer_byte_rate".to_owned(),
+            config_value: Some(rate),
+        };
+        producer_quota_precedence
+            .image
+            .as_mut()
+            .expect("cluster quota image was given")
+            .apply(&MetadataRecord::V1ClientQuota(record));
+    }
+
+    #[rstest_bdd_macros::when("the producer quota for user alice and client app is resolved")]
+    fn resolve_producer_quota_precedence(producer_quota_precedence: &mut ProducerQuotaPrecedence) {
+        producer_quota_precedence.matched.set(matched_quota(
+            producer_quota_precedence
+                .image
+                .as_ref()
+                .expect("cluster quota image was given"),
+            "alice",
+            Some("app"),
+            "producer_byte_rate",
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the quota uses bucket JSON {bucket} at {rate} bytes per second")]
+    fn expected_producer_quota_precedence(
+        producer_quota_precedence: &ProducerQuotaPrecedence,
+        bucket: String,
+        rate: f64,
+    ) {
+        let bucket: EntityKey =
+            serde_json::from_str(&bucket).expect("independent canonical metric-tag bucket key");
+        check!(
+            producer_quota_precedence.matched.get() == Some(Some(MatchedQuota::new(bucket, rate)))
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/quota/lookup.feature",
+        fixtures = [producer_quota_precedence: ProducerQuotaPrecedence]
+    );
 
     /// Distinct per-candidate sentinel values, where the index is the priority.
     /// The value alone then identifies the matched candidate, with no int→float

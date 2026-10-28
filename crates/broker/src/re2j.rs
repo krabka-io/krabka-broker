@@ -524,7 +524,7 @@ pub fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, assert2::check, rstest_bdd::Slot};
 
     /// The patterns Kafka's RE2J takes, and the ones it refuses.
     #[yare::parameterized(
@@ -646,12 +646,71 @@ mod tests {
         check!(compile_full_match(pattern).err().as_deref() == Some(message));
     }
 
-    #[test]
-    fn rejects_patterns_over_kafka_string_bound_before_translation() {
-        let pattern = format!("\\Q{}\\E", "x".repeat(MAX_PATTERN_BYTES));
-        let error = compile_full_match(&pattern).expect_err("oversized pattern rejected");
+    #[derive(Default)]
+    struct KafkaPatternScenario {
+        pattern: String,
+        compilation_error: Slot<Option<String>>,
+        unsupported_flag: Slot<Option<char>>,
+    }
+
+    #[rstest::fixture]
+    fn kafka_pattern() -> KafkaPatternScenario {
+        // Each client pattern is compiled or scanned independently.
+        KafkaPatternScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "a quoted RE2J pattern contains the Kafka-limit number of literal x characters"
+    )]
+    fn oversized_quoted_pattern(kafka_pattern: &mut KafkaPatternScenario) {
+        kafka_pattern.pattern = format!("\\Q{}\\E", "x".repeat(MAX_PATTERN_BYTES));
+    }
+
+    #[rstest_bdd_macros::given("the client-supplied RE2J pattern is:")]
+    fn supplied_kafka_pattern(kafka_pattern: &mut KafkaPatternScenario, docstring: String) {
+        kafka_pattern.pattern = docstring.trim_matches('\n').to_owned();
+    }
+
+    #[rstest_bdd_macros::when("the broker compiles the pattern for a full Kafka match")]
+    fn compile_kafka_pattern(kafka_pattern: &mut KafkaPatternScenario) {
+        kafka_pattern
+            .compilation_error
+            .set(compile_full_match(&kafka_pattern.pattern).err());
+    }
+
+    #[rstest_bdd_macros::when("the broker scans the pattern for unsupported inline flags")]
+    fn scan_kafka_pattern_flags(kafka_pattern: &mut KafkaPatternScenario) {
+        kafka_pattern
+            .unsupported_flag
+            .set(unsupported_inline_flag(&kafka_pattern.pattern));
+    }
+
+    #[rstest_bdd_macros::then("the pattern is rejected for exceeding the Kafka string limit")]
+    fn kafka_string_pattern_limit(kafka_pattern: &KafkaPatternScenario) {
+        let error = kafka_pattern
+            .compilation_error
+            .get()
+            .expect("compilation was attempted")
+            .expect("oversized pattern rejected");
         check!(error.contains("Kafka string limit"));
     }
+
+    #[rstest_bdd_macros::then(
+        "pattern compilation reports Kafka's invalid or unsupported Perl syntax message"
+    )]
+    fn kafka_inline_flag_error(kafka_pattern: &KafkaPatternScenario) {
+        check!(kafka_pattern.compilation_error.get() == Some(Some(INVALID_PERL_OP.to_owned())));
+    }
+
+    #[rstest_bdd_macros::then("no unsupported inline flag is reported")]
+    fn no_unsupported_pattern_flag(kafka_pattern: &KafkaPatternScenario) {
+        check!(kafka_pattern.unsupported_flag.get() == Some(None));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/re2j.feature",
+        fixtures = [kafka_pattern: KafkaPatternScenario]
+    );
 
     /// `Matcher.matches()` matches the whole input, and an inline `(?m)` does
     /// not change that.
@@ -665,12 +724,5 @@ mod tests {
         let multiline = compile_full_match("(?m)^txn$").expect("compiles");
         check!(multiline.is_match("txn"));
         check!(!multiline.is_match("other\ntxn"));
-    }
-
-    #[test]
-    fn an_unsupported_flag_carries_kafkas_message() {
-        check!(compile_full_match("(?x)txn").err() == Some(INVALID_PERL_OP.to_owned()));
-        check!(unsupported_inline_flag("[(?x)]").is_none());
-        check!(unsupported_inline_flag("\\(?x)").is_none());
     }
 }

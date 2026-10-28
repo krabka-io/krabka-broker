@@ -172,27 +172,13 @@ mod tests {
                     PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
                     expected_empty_match_filter,
                 },
-                acl_wire::PATTERN_MATCHING_FIXTURE,
+                test_support::StartedBroker,
             },
         },
         assert2::{assert, check},
-        krabka_metadata::AclOperation,
+        krabka_metadata::{AclOperation, PatternType},
     };
     const VERSION: i16 = 3;
-
-    /// A listed resource pattern: its name and wire pattern type.
-    struct ListedPattern {
-        resource_name: &'static str,
-        pattern_type: i8,
-    }
-
-    /// A describe-table row: the filter pattern type and name, and the
-    /// resource patterns the listing must hold.
-    struct PatternRow {
-        pattern_type: i8,
-        name: Option<&'static str>,
-        want: &'static [ListedPattern],
-    }
 
     /// A request corruption applied to one axis of the filter, labelled by that axis.
     struct CorruptRequestCase {
@@ -459,197 +445,157 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// The table from issue #770: `MATCH` lists every binding that applies to
-    /// the named resource, and only a null name is a wildcard.
-    #[tokio::test]
-    async fn handle_matches_patterns_the_way_kafka_does() {
-        krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [acl_fixtures::start_configured_acls().entries(|| PATTERN_MATCHING_FIXTURE.iter().map(|seed| AclEntry { pattern_type: seed.pattern_type, ..acl().resource_name(seed.name).call() }).collect()).call()];
-        user ["admin"];
-        };
-
-        let all: &[ListedPattern] = &[
-            ListedPattern {
-                resource_name: "*",
-                pattern_type: PATTERN_TYPE_LITERAL,
+    #[derive(Default)]
+    struct AclPatternListingScenario {
+        started: Option<StartedBroker>,
+        request: Option<DescribeAclsRequest>,
+        response: Option<DescribeAclsResponse>,
+    }
+    #[rstest::fixture]
+    fn acl_pattern_listing() -> AclPatternListingScenario {
+        let started = None;
+        AclPatternListingScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    fn described_acl_pattern_code(pattern: &str) -> i8 {
+        match pattern {
+            "any" => PATTERN_TYPE_ANY,
+            "match" => PATTERN_TYPE_MATCH,
+            "literal" => PATTERN_TYPE_LITERAL,
+            "prefixed" => PATTERN_TYPE_PREFIXED,
+            _ => panic!("unknown ACL pattern filter: {pattern}"),
+        }
+    }
+    #[rstest_bdd_macros::given("topic read ACLs for User:alice contain these resource patterns")]
+    async fn stored_acl_patterns(
+        acl_pattern_listing: &mut AclPatternListingScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let entries = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [pattern, name] = row.as_slice() else {
+                    panic!("ACL pattern type and name required")
+                };
+                let pattern_type = match pattern.as_str() {
+                    "literal" => PatternType::Literal,
+                    "prefixed" => PatternType::Prefixed,
+                    _ => panic!("concrete ACL pattern required"),
+                };
+                AclEntry {
+                    pattern_type,
+                    ..acl().resource_name(name.as_str()).call()
+                }
+            })
+            .collect();
+        acl_pattern_listing.started = Some(
+            acl_fixtures::start_configured_acls()
+                .entries(move || entries)
+                .call()
+                .await,
+        );
+    }
+    #[rstest_bdd_macros::given(
+        "DescribeAcls filters pattern type {pattern} and resource name {name}"
+    )]
+    fn requested_acl_pattern_listing(
+        acl_pattern_listing: &mut AclPatternListingScenario,
+        pattern: String,
+        name: String,
+    ) {
+        acl_pattern_listing.request = Some(DescribeAclsRequest {
+            resource_type_filter: RESOURCE_TYPE_TOPIC,
+            resource_name_filter: match name.as_str() {
+                "null" => None,
+                "empty" => Some(String::new()),
+                _ => Some(name),
             },
-            ListedPattern {
-                resource_name: "bar",
-                pattern_type: PATTERN_TYPE_PREFIXED,
-            },
-            ListedPattern {
-                resource_name: "f",
-                pattern_type: PATTERN_TYPE_PREFIXED,
-            },
-            ListedPattern {
-                resource_name: "fo",
-                pattern_type: PATTERN_TYPE_PREFIXED,
-            },
-            ListedPattern {
-                resource_name: "foo",
-                pattern_type: PATTERN_TYPE_LITERAL,
-            },
-            ListedPattern {
-                resource_name: "food",
-                pattern_type: PATTERN_TYPE_LITERAL,
-            },
-        ];
-        let cases: [PatternRow; 12] = [
-            PatternRow {
-                pattern_type: PATTERN_TYPE_ANY,
-                name: None,
-                want: all,
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_ANY,
-                name: Some(""),
-                want: &[],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_ANY,
-                name: Some("foo"),
-                want: &[ListedPattern {
-                    resource_name: "foo",
-                    pattern_type: PATTERN_TYPE_LITERAL,
-                }],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_MATCH,
-                name: None,
-                want: all,
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_MATCH,
-                name: Some(""),
-                want: &[ListedPattern {
-                    resource_name: "*",
-                    pattern_type: PATTERN_TYPE_LITERAL,
-                }],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_MATCH,
-                name: Some("foo"),
-                want: &[
-                    ListedPattern {
-                        resource_name: "*",
-                        pattern_type: PATTERN_TYPE_LITERAL,
-                    },
-                    ListedPattern {
-                        resource_name: "f",
-                        pattern_type: PATTERN_TYPE_PREFIXED,
-                    },
-                    ListedPattern {
-                        resource_name: "fo",
-                        pattern_type: PATTERN_TYPE_PREFIXED,
-                    },
-                    ListedPattern {
-                        resource_name: "foo",
-                        pattern_type: PATTERN_TYPE_LITERAL,
-                    },
-                ],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_LITERAL,
-                name: None,
-                want: &[
-                    ListedPattern {
-                        resource_name: "*",
-                        pattern_type: PATTERN_TYPE_LITERAL,
-                    },
-                    ListedPattern {
-                        resource_name: "foo",
-                        pattern_type: PATTERN_TYPE_LITERAL,
-                    },
-                    ListedPattern {
-                        resource_name: "food",
-                        pattern_type: PATTERN_TYPE_LITERAL,
-                    },
-                ],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_LITERAL,
-                name: Some(""),
-                want: &[],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_LITERAL,
-                name: Some("foo"),
-                want: &[ListedPattern {
-                    resource_name: "foo",
-                    pattern_type: PATTERN_TYPE_LITERAL,
-                }],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_PREFIXED,
-                name: None,
-                want: &[
-                    ListedPattern {
-                        resource_name: "bar",
-                        pattern_type: PATTERN_TYPE_PREFIXED,
-                    },
-                    ListedPattern {
-                        resource_name: "f",
-                        pattern_type: PATTERN_TYPE_PREFIXED,
-                    },
-                    ListedPattern {
-                        resource_name: "fo",
-                        pattern_type: PATTERN_TYPE_PREFIXED,
-                    },
-                ],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_PREFIXED,
-                name: Some(""),
-                want: &[],
-            },
-            PatternRow {
-                pattern_type: PATTERN_TYPE_PREFIXED,
-                name: Some("foo"),
-                want: &[],
-            },
-        ];
-        for PatternRow {
-            pattern_type,
-            name,
-            want,
-        } in cases
-        {
-            let req = DescribeAclsRequest {
-                resource_type_filter: RESOURCE_TYPE_TOPIC,
-                resource_name_filter: name.map(Into::into),
-                pattern_type_filter: pattern_type,
-                principal_filter: None,
-                host_filter: None,
-                operation: OPERATION_ANY,
-                permission_type: PERMISSION_ANY,
-                ..Default::default()
-            };
-            let mut resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
-            resp.resources
-                .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
-
-            let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
-                error_code: codes::NONE,
-                error_message: Some(String::new()),
-                resources: want
-                    .iter()
-                    .map(|listed| krabka_macros::tagged_wire!(DescribeAclsResource {
+            pattern_type_filter: described_acl_pattern_code(&pattern),
+            principal_filter: None,
+            host_filter: None,
+            operation: OPERATION_ANY,
+            permission_type: PERMISSION_ANY,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when(
+        "an admin describes matching ACLs and the result is sorted by resource name"
+    )]
+    fn describe_matching_acl_patterns(acl_pattern_listing: &mut AclPatternListingScenario) {
+        let broker = acl_pattern_listing
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        let mut response = handle(
+            &broker,
+            acl_pattern_listing.request.as_ref().unwrap(),
+            VERSION,
+            &ctx,
+        )
+        .expect("handle");
+        response
+            .resources
+            .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
+        acl_pattern_listing.response = Some(response);
+    }
+    #[rstest_bdd_macros::then("the complete ACL description contains patterns {listed}")]
+    async fn check_described_acl_patterns(
+        acl_pattern_listing: &mut AclPatternListingScenario,
+        listed: String,
+    ) {
+        let resources = if listed == "none" {
+            Vec::new()
+        } else {
+            listed
+                .split(';')
+                .map(|row| {
+                    let (pattern, name) = row.split_once(':').unwrap();
+                    krabka_macros::tagged_wire!(DescribeAclsResource {
                         resource_type: RESOURCE_TYPE_TOPIC,
-                        resource_name: listed.resource_name.into(),
-                        pattern_type: listed.pattern_type,
+                        resource_name: name.into(),
+                        pattern_type: described_acl_pattern_code(pattern),
                         acls: vec![krabka_macros::tagged_wire!(AclDescription {
                             principal: "User:alice".into(),
                             host: "*".into(),
                             operation: OPERATION_READ,
-                            permission_type: PERMISSION_ALLOW,
-                        })],
-                    }))
-                    .collect(),
-            });
-            check!(resp == expected, "pattern {pattern_type} name {name:?}");
-        }
-        broker_handle.shutdown().await;
+                            permission_type: PERMISSION_ALLOW
+                        })]
+                    })
+                })
+                .collect()
+        };
+        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+            error_code: codes::NONE,
+            error_message: Some(String::new()),
+            resources
+        });
+        check!(acl_pattern_listing.response.as_ref().unwrap() == &expected);
+        acl_pattern_listing
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_describe_acl_patterns/patterns.feature",
+        name = "Pattern filters distinguish null names exact names and matching prefixes"
+    )]
+    #[tokio::test]
+    async fn handle_matches_patterns_the_way_kafka_does(
+        acl_pattern_listing: AclPatternListingScenario,
+        pattern: String,
+        name: String,
+        listed: String,
+    ) {
+        let _ = (acl_pattern_listing, pattern, name, listed);
     }
 
     /// Only a null principal or host is a wildcard. An empty string matches

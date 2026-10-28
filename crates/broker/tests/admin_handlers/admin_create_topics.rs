@@ -11,13 +11,18 @@
 use {
     crate::{
         RESOURCE_TYPE_TOPIC,
-        support::{configs::describe_resource, start_n_node_client, topics},
+        admin_harness::{AdminCluster, admin},
+        support::{configs::describe_resource, topics},
     },
     assert2::{assert, check},
     krabka_protocol::owned::{
         create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
+        create_topics_response::CreateTopicsResponse,
         describe_configs_request::DescribeConfigsRequest,
+        describe_configs_response::DescribeConfigsResponse,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
 /// `ConfigSource.DYNAMIC_TOPIC_CONFIG`, the source a value the create request
@@ -68,17 +73,41 @@ macro_rules! config_entries {
     };
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_topics_returns_the_configs_describe_configs_reports() {
-    let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
+#[derive(Default)]
+struct TopicCreation {
+    name: String,
+    retention: String,
+    created: Option<CreateTopicsResponse>,
+    described: Option<DescribeConfigsResponse>,
+}
 
-    let create = CreateTopicsRequest {
+#[fixture]
+fn topic() -> TopicCreation {
+    // Start this scenario with fresh inputs and observations.
+
+    TopicCreation {
+        name: String::new(),
+        retention: String::new(),
+        created: None,
+        described: None,
+    }
+}
+
+#[given("topic {name} requests retention.ms {retention}")]
+fn topic_override(topic: &mut TopicCreation, name: String, retention: String) {
+    topic.name = name;
+    topic.retention = retention;
+}
+
+#[when("the admin creates the topic with one partition and one replica")]
+async fn create_topic(admin: &AdminCluster, topic: &mut TopicCreation) {
+    let request = CreateTopicsRequest {
         topics: vec![
             topics::creatable_topic_with_configs()
-                .name("t-kip525".into())
+                .name(topic.name.clone())
                 .configs(vec![CreatableTopicConfig {
                     name: "retention.ms".into(),
-                    value: Some("60000".into()),
+                    value: Some(topic.retention.clone()),
                     ..Default::default()
                 }])
                 .call(),
@@ -86,8 +115,12 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
         timeout_ms: 5_000,
         ..Default::default()
     };
-    let created = client.send(create).await.expect("create_topics");
+    topic.created = Some(admin.client().send(request).await.expect("create_topics"));
+}
 
+#[then("the topic is created with its effective retention override in the response")]
+fn creation_response(topic: &TopicCreation) {
+    let created = topic.created.as_ref().expect("the topic was created");
     let row = &created.topics[0];
     assert!(
         row.error_code == 0,
@@ -97,37 +130,65 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
     check!(row.topic_config_error_code == 0);
     check!(row.num_partitions == 1);
     check!(row.replication_factor == 1);
-    let from_create = config_entries!(row.configs.as_ref().expect("KIP-525 configs list"));
+    let configs = config_entries!(row.configs.as_ref().expect("KIP-525 configs list"));
+    check!(!configs.is_empty(), "the list carries the topic's values");
     check!(
-        !from_create.is_empty(),
-        "the list carries the topic's values"
-    );
-    check!(
-        from_create.contains(&ConfigEntry {
+        configs.contains(&ConfigEntry {
             name: "retention.ms".to_owned(),
-            value: Some("60000".to_owned()),
+            value: Some(topic.retention.clone()),
             source: DYNAMIC_TOPIC_CONFIG,
             is_sensitive: false,
             read_only: false,
         }),
         "the request's own override, at DYNAMIC_TOPIC_CONFIG"
     );
+}
 
-    let described = client
-        .send(DescribeConfigsRequest {
-            resources: vec![describe_resource(RESOURCE_TYPE_TOPIC, "t-kip525", None)],
-            ..Default::default()
-        })
-        .await
-        .expect("describe_configs");
+#[when("the admin describes the created topic configuration")]
+async fn describe_created_topic(admin: &AdminCluster, topic: &mut TopicCreation) {
+    topic.described = Some(
+        admin
+            .client()
+            .send(DescribeConfigsRequest {
+                resources: vec![describe_resource(RESOURCE_TYPE_TOPIC, &topic.name, None)],
+                ..Default::default()
+            })
+            .await
+            .expect("describe_configs"),
+    );
+}
 
+#[then("DescribeConfigs succeeds and returns exactly the effective create configuration")]
+fn matching_descriptions(topic: &TopicCreation) {
+    let created = topic.created.as_ref().expect("the topic was created");
+    let described = topic
+        .described
+        .as_ref()
+        .expect("the topic configuration was described");
     let result = &described.results[0];
     assert!(
         result.error_code == 0,
         "describe_configs: {:?}",
         result.error_message
     );
+    let from_create = config_entries!(
+        created.topics[0]
+            .configs
+            .as_ref()
+            .expect("KIP-525 configs list")
+    );
     let from_describe = config_entries!(&result.configs);
-
     assert!(from_create == from_describe);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_create_topics.feature",
+    name = "create topics returns the configs describe configs reports"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_topics_returns_the_configs_describe_configs_reports(
+    admin: AdminCluster,
+    topic: TopicCreation,
+) {
+    admin.shutdown().await;
 }

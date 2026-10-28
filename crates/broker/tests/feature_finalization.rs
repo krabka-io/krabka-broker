@@ -23,203 +23,6 @@ use {
     krabka_protocol::owned::update_features_request::UpdateFeaturesRequest,
 };
 
-fn metadata_version_update(level: i16) -> UpdateFeaturesRequest {
-    UpdateFeaturesRequest {
-        feature_updates: vec![feature_update("metadata.version", level, 1)],
-        ..Default::default()
-    }
-}
-
-/// Starts a broker with Kafka's `unstable.feature.versions.enable` on, the
-/// setting a node needs to support trunk's `metadata.version` levels.
-async fn start_with_unstable_features() -> support::InProcess {
-    support::start_configured(|config| {
-        config.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
-    })
-    .await
-}
-
-/// #784: by default a node supports `metadata.version` only up to 4.3.1's
-/// latest production level, so trunk's 4.5-IV0 is refused with the text a
-/// Kafka 4.3.1 controller answers (`QuorumFeatures.reasonNotSupported`) and the
-/// supported range `ApiVersions` advertises stops at 30.
-#[tokio::test]
-async fn an_unstable_metadata_version_is_refused_by_default() {
-    let p = support::start().await;
-    let resp = p
-        .client
-        .send(metadata_version_update(METADATA_VERSION_MAX))
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        resp.error_message.as_deref()
-            == Some(
-                format!(
-                    "The update failed for all features since the following feature had an \
-                     error: Invalid update version {METADATA_VERSION_MAX} for feature \
-                     metadata.version. Local controller 1 only supports versions 7-30"
-                )
-                .as_str()
-            ),
-        "{resp:?}"
-    );
-    assert_feature_error(&resp, "metadata.version");
-    let av = p
-        .client
-        .send(api_versions_request_for("krabka-test", "0.0.0"))
-        .await
-        .expect("ApiVersions");
-    let supported = av
-        .supported_features
-        .iter()
-        .find(|f| f.name == "metadata.version")
-        .map(|f| (f.min_version, f.max_version));
-    assert!(
-        supported == Some((7, LATEST_PRODUCTION_METADATA_VERSION)),
-        "{av:?}"
-    );
-    p.broker.shutdown().await;
-}
-
-/// A cluster bootstraps at 4.3-IV0 and, on a node that supports unstable
-/// feature levels, opts into Kafka trunk's 4.4 levels by finalizing them.
-#[tokio::test]
-async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
-    let p = start_with_unstable_features().await;
-
-    let resp = p
-        .client
-        .send(metadata_version_update(METADATA_VERSION_MAX))
-        .await
-        .expect("UpdateFeatures");
-    assert!(resp.error_code == 0, "{resp:?}");
-    if let Some(row) = resp
-        .results
-        .iter()
-        .find(|r| r.feature == "metadata.version")
-    {
-        assert!(row.error_code == 0, "{resp:?}");
-    }
-
-    // ApiVersions now surfaces the finalized feature with a real epoch.
-    let av = p
-        .client
-        .send(api_versions_request_for("krabka-test", "0.0.0"))
-        .await
-        .expect("ApiVersions");
-    let fin = av
-        .finalized_features
-        .iter()
-        .find(|f| f.name == "metadata.version")
-        .expect("metadata.version finalized");
-    assert!(fin.max_version_level == METADATA_VERSION_MAX, "{av:?}");
-    assert!(av.finalized_features_epoch >= 0, "{av:?}");
-
-    p.broker.shutdown().await;
-}
-
-fn share_version_update(level: i16) -> UpdateFeaturesRequest {
-    UpdateFeaturesRequest {
-        feature_updates: vec![feature_update("share.version", level, 1)],
-        ..Default::default()
-    }
-}
-
-/// The supported max and finalized level of `share.version` in `ApiVersions`.
-#[derive(Debug, PartialEq)]
-struct ShareVersion {
-    supported_max: Option<i16>,
-    finalized: Option<i16>,
-}
-
-impl ShareVersion {
-    fn new(supported_max: i16, finalized: i16) -> Self {
-        Self {
-            supported_max: Some(supported_max),
-            finalized: Some(finalized),
-        }
-    }
-}
-
-async fn share_version_in_api_versions(p: &support::InProcess) -> ShareVersion {
-    let av = p
-        .client
-        .send(api_versions_request_for("krabka-test", "0.0.0"))
-        .await
-        .expect("ApiVersions");
-    ShareVersion {
-        supported_max: av
-            .supported_features
-            .iter()
-            .find(|f| f.name == "share.version")
-            .map(|f| f.max_version),
-        finalized: av
-            .finalized_features
-            .iter()
-            .find(|f| f.name == "share.version")
-            .map(|f| f.max_version_level),
-    }
-}
-
-/// KIP-1191: `share.version` 2 is trunk's `SV_2`. A default node supports
-/// 0-1 as Kafka 4.3.1 does and refuses level 2.
-#[tokio::test]
-async fn share_version_two_is_refused_by_default() {
-    let p = support::start().await;
-    assert!(share_version_in_api_versions(&p).await == ShareVersion::new(1, 1));
-
-    let resp = p
-        .client
-        .send(share_version_update(2))
-        .await
-        .expect("UpdateFeatures");
-    assert_feature_error(&resp, "share.version");
-    assert!(
-        resp.error_message
-            .as_deref()
-            .is_some_and(|message| message.ends_with(
-                "Invalid update version 2 for feature share.version. \
-                 Local controller 1 only supports versions 0-1"
-            )),
-        "{resp:?}"
-    );
-    p.broker.shutdown().await;
-}
-
-/// KIP-1191: with `unstable.feature.versions.enable` on, `ApiVersions`
-/// advertises `share.version` 0-2, `UpdateFeatures` finalizes level 2, and
-/// `validate_only` persists nothing.
-#[tokio::test]
-async fn share_version_two_is_finalizable_under_unstable_feature_versions() {
-    let p = start_with_unstable_features().await;
-    assert!(share_version_in_api_versions(&p).await == ShareVersion::new(2, 1));
-
-    let mut validate_only = share_version_update(2);
-    validate_only.validate_only = true;
-    let resp = p.client.send(validate_only).await.expect("UpdateFeatures");
-    assert!(resp.error_code == 0, "{resp:?}");
-    assert!(
-        share_version_in_api_versions(&p).await == ShareVersion::new(2, 1),
-        "validate_only must not finalize level 2"
-    );
-
-    let resp = p
-        .client
-        .send(share_version_update(2))
-        .await
-        .expect("UpdateFeatures");
-    assert!(resp.error_code == 0, "{resp:?}");
-    assert!(share_version_in_api_versions(&p).await == ShareVersion::new(2, 2));
-
-    let resp = p
-        .client
-        .send(share_version_update(3))
-        .await
-        .expect("UpdateFeatures");
-    assert_feature_error(&resp, "share.version");
-    p.broker.shutdown().await;
-}
-
 /// Kafka answers a failed feature with `INVALID_UPDATE_VERSION` (95) at the
 /// top level, a message naming the feature, and no rows, at every version.
 fn assert_feature_error(resp: &UpdateFeaturesResponse, feature: &str) {
@@ -235,28 +38,6 @@ fn assert_feature_error(resp: &UpdateFeaturesResponse, feature: &str) {
     );
 }
 
-#[tokio::test]
-async fn rejects_unsupported_feature() {
-    let p = support::start().await;
-    let mut req = metadata_version_update(1);
-    req.feature_updates[0].feature = "not.a.feature".into();
-    let resp = p.client.send(req).await.expect("UpdateFeatures");
-    assert_feature_error(&resp, "not.a.feature");
-    p.broker.shutdown().await;
-}
-
-#[tokio::test]
-async fn rejects_level_above_supported_max() {
-    let p = support::start().await;
-    let resp = p
-        .client
-        .send(metadata_version_update(99))
-        .await
-        .expect("UpdateFeatures");
-    assert_feature_error(&resp, "metadata.version");
-    p.broker.shutdown().await;
-}
-
 fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
     api_versions
         .finalized_features
@@ -266,57 +47,297 @@ fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
         .max_version_level
 }
 
-#[tokio::test]
-async fn validate_only_does_not_persist() {
-    let p = start_with_unstable_features().await;
-
-    // A self-bootstrapped broker already finalizes metadata.version=4.3-IV0, so
-    // emptiness no longer signals "nothing persisted". Capture the level + epoch
-    // BEFORE, send a validate_only request that WOULD change metadata.version,
-    // then assert neither moved — validate_only must run the checks without
-    // persisting (no epoch bump, no level change).
-    let api_versions = || {
-        p.client
+struct FeatureFinalization {
+    broker: Option<support::InProcess>,
+    update: Option<UpdateFeaturesResponse>,
+    versions: Option<ApiVersionsResponse>,
+    baseline: Option<ApiVersionsResponse>,
+}
+impl FeatureFinalization {
+    async fn versions(&self) -> ApiVersionsResponse {
+        self.broker
+            .as_ref()
+            .expect("feature broker started")
+            .client
             .send(api_versions_request_for("krabka-test", "0.0.0"))
-    };
+            .await
+            .expect("ApiVersions")
+    }
 
-    let before = api_versions().await.expect("ApiVersions");
+    async fn shutdown(self) {
+        self.broker
+            .expect("feature broker started")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+fn finalization() -> FeatureFinalization {
+    // Start this scenario with fresh inputs and observations.
+
+    FeatureFinalization {
+        broker: None,
+        update: None,
+        versions: None,
+        baseline: None,
+    }
+}
+#[rstest_bdd_macros::given("unstable feature versions are enabled {enabled}")]
+async fn feature_support_policy(finalization: &mut FeatureFinalization, enabled: bool) {
+    finalization.broker = Some(
+        support::start_configured(|config| {
+            config.features.unstable_feature_versions = if enabled {
+                krabka_raft::UnstableFeatureVersions::Enabled
+            } else {
+                krabka_raft::UnstableFeatureVersions::Disabled
+            };
+        })
+        .await,
+    );
+}
+#[rstest_bdd_macros::when(
+    "metadata.version is upgraded to the trunk maximum with validate only {validate}"
+)]
+async fn finalize_trunk_metadata(finalization: &mut FeatureFinalization, validate: bool) {
+    finalization.update = Some(
+        finalization
+            .broker
+            .as_ref()
+            .expect("feature broker started")
+            .client
+            .send(UpdateFeaturesRequest {
+                feature_updates: vec![feature_update("metadata.version", METADATA_VERSION_MAX, 1)],
+                validate_only: validate,
+                ..Default::default()
+            })
+            .await
+            .expect("UpdateFeatures"),
+    );
+}
+#[rstest_bdd_macros::when(
+    "feature {feature} is upgraded to level {level} with validate only {validate}"
+)]
+async fn finalize_feature_level(
+    finalization: &mut FeatureFinalization,
+    feature: String,
+    level: i16,
+    validate: bool,
+) {
+    finalization.update = Some(
+        finalization
+            .broker
+            .as_ref()
+            .expect("feature broker started")
+            .client
+            .send(UpdateFeaturesRequest {
+                feature_updates: vec![feature_update(&feature, level, 1)],
+                validate_only: validate,
+                ..Default::default()
+            })
+            .await
+            .expect("UpdateFeatures"),
+    );
+}
+#[rstest_bdd_macros::then("the update succeeds for feature {feature}")]
+fn feature_update_succeeded(finalization: &FeatureFinalization, feature: String) {
+    let response = finalization
+        .update
+        .as_ref()
+        .expect("feature update requested");
+    assert!(response.error_code == 0, "{response:?}");
+    if let Some(row) = response.results.iter().find(|row| row.feature == feature) {
+        assert!(row.error_code == 0, "{response:?}");
+    }
+}
+#[rstest_bdd_macros::then(
+    "the update fails with error 95 no result rows and a message naming feature {feature}"
+)]
+fn feature_update_failed(finalization: &FeatureFinalization, feature: String) {
+    assert_feature_error(
+        finalization
+            .update
+            .as_ref()
+            .expect("feature update requested"),
+        &feature,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the metadata refusal exactly names the requested trunk level and controller supported range 7-30"
+)]
+fn unstable_metadata_refusal(finalization: &FeatureFinalization) {
+    let resp = finalization
+        .update
+        .as_ref()
+        .expect("feature update requested");
+    assert!(resp.error_message.as_deref() == Some(format!(
+        "The update failed for all features since the following feature had an error: Invalid update version {METADATA_VERSION_MAX} for feature metadata.version. Local controller 1 only supports versions 7-30").as_str()), "{resp:?}");
+}
+#[rstest_bdd_macros::then("the share refusal names level 2 and controller supported range 0-1")]
+fn unstable_share_refusal(finalization: &FeatureFinalization) {
+    let resp = finalization
+        .update
+        .as_ref()
+        .expect("feature update requested");
+    assert!(resp.error_message.as_deref().is_some_and(|message| message.ends_with(
+        "Invalid update version 2 for feature share.version. Local controller 1 only supports versions 0-1")), "{resp:?}");
+}
+#[rstest_bdd_macros::when("the client reads API versions and feature levels")]
+async fn read_finalized_features(finalization: &mut FeatureFinalization) {
+    finalization.versions = Some(finalization.versions().await);
+}
+#[rstest_bdd_macros::when("the client records baseline API versions and feature levels")]
+async fn capture_finalized_features(finalization: &mut FeatureFinalization) {
+    finalization.baseline = Some(finalization.versions().await);
+}
+#[rstest_bdd_macros::then(
+    "metadata supported levels remain 7 through the latest production version"
+)]
+fn production_metadata_support(finalization: &FeatureFinalization) {
+    let av = finalization
+        .versions
+        .as_ref()
+        .expect("API versions requested");
+    let supported = av
+        .supported_features
+        .iter()
+        .find(|feature| feature.name == "metadata.version")
+        .map(|feature| (feature.min_version, feature.max_version));
     assert!(
-        metadata_version(&before) == LATEST_PRODUCTION_METADATA_VERSION,
+        supported == Some((7, LATEST_PRODUCTION_METADATA_VERSION)),
+        "{av:?}"
+    );
+}
+#[rstest_bdd_macros::then(
+    "the finalized metadata level is the trunk maximum with a nonnegative epoch"
+)]
+fn trunk_metadata_finalized(finalization: &FeatureFinalization) {
+    let av = finalization
+        .versions
+        .as_ref()
+        .expect("API versions requested");
+    let feature = av
+        .finalized_features
+        .iter()
+        .find(|feature| feature.name == "metadata.version")
+        .expect("metadata.version finalized");
+    assert!(feature.max_version_level == METADATA_VERSION_MAX, "{av:?}");
+    assert!(av.finalized_features_epoch >= 0, "{av:?}");
+}
+#[rstest_bdd_macros::then(
+    "share.version supported maximum is {maximum} and finalized level is {level}"
+)]
+fn share_feature_levels(finalization: &FeatureFinalization, maximum: i16, level: i16) {
+    let av = finalization
+        .versions
+        .as_ref()
+        .expect("API versions requested");
+    let supported = av
+        .supported_features
+        .iter()
+        .find(|feature| feature.name == "share.version")
+        .map(|feature| feature.max_version);
+    let finalized = av
+        .finalized_features
+        .iter()
+        .find(|feature| feature.name == "share.version")
+        .map(|feature| feature.max_version_level);
+    assert!(
+        supported == Some(maximum) && finalized == Some(level),
+        "{av:?}"
+    );
+}
+#[rstest_bdd_macros::then(
+    "baseline metadata is at the latest production level with a nonnegative epoch"
+)]
+fn initial_metadata_level(finalization: &FeatureFinalization) {
+    let before = finalization
+        .baseline
+        .as_ref()
+        .expect("baseline API versions requested");
+    assert!(
+        metadata_version(before) == LATEST_PRODUCTION_METADATA_VERSION,
         "{before:?}"
     );
-    let epoch_before = before.finalized_features_epoch;
-    assert!(epoch_before >= 0, "{before:?}");
-
-    // Request an upgrade with validate_only; it would change
-    // metadata.version if persisted.
-    let mut req = metadata_version_update(METADATA_VERSION_MAX);
-    req.validate_only = true;
-    let resp = p.client.send(req).await.expect("UpdateFeatures");
-    assert!(resp.error_code == 0, "{resp:?}");
-
-    // Nothing changed: same level, same epoch.
-    let after = api_versions().await.expect("ApiVersions");
+    assert!(before.finalized_features_epoch >= 0, "{before:?}");
+}
+#[rstest_bdd_macros::then(
+    "validation leaves the production metadata level and finalized epoch unchanged"
+)]
+fn feature_validation_not_persisted(finalization: &FeatureFinalization) {
+    let before = finalization
+        .baseline
+        .as_ref()
+        .expect("baseline API versions requested");
+    let after = finalization.versions.as_ref().expect("API versions reread");
     assert!(
-        metadata_version(&after) == LATEST_PRODUCTION_METADATA_VERSION,
-        "validate_only must not change the level: {after:?}",
+        metadata_version(after) == LATEST_PRODUCTION_METADATA_VERSION,
+        "validate_only must not change the level: {after:?}"
     );
     assert!(
-        after.finalized_features_epoch == epoch_before,
-        "validate_only must not bump the epoch: {after:?}",
+        after.finalized_features_epoch == before.finalized_features_epoch,
+        "validate_only must not bump the epoch: {after:?}"
     );
-    p.broker.shutdown().await;
 }
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "an unstable metadata version is refused by default"
+)]
 #[tokio::test]
-async fn rejects_level_below_min_floor() {
-    let p = support::start().await;
-    // Level 6 is below the supported minimum (METADATA_VERSION_MIN = 7).
-    let resp = p
-        .client
-        .send(metadata_version_update(6))
-        .await
-        .expect("UpdateFeatures");
-    assert_feature_error(&resp, "metadata.version");
-    p.broker.shutdown().await;
+async fn an_unstable_metadata_version_is_refused_by_default(finalization: FeatureFinalization) {
+    finalization.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "finalizes metadata version and surfaces in api versions"
+)]
+#[tokio::test]
+async fn finalizes_metadata_version_and_surfaces_in_api_versions(
+    finalization: FeatureFinalization,
+) {
+    finalization.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "share version two is refused by default"
+)]
+#[tokio::test]
+async fn share_version_two_is_refused_by_default(finalization: FeatureFinalization) {
+    finalization.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "share version two is finalizable under unstable feature versions"
+)]
+#[tokio::test]
+async fn share_version_two_is_finalizable_under_unstable_feature_versions(
+    finalization: FeatureFinalization,
+) {
+    finalization.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "validate only does not persist"
+)]
+#[tokio::test]
+async fn validate_only_does_not_persist(finalization: FeatureFinalization) {
+    finalization.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "unsupported feature names and out of range levels are refused"
+)]
+#[tokio::test]
+async fn unsupported_feature_update(
+    finalization: FeatureFinalization,
+    feature: String,
+    level: i16,
+) {
+    let _ = (feature, level);
+    finalization.shutdown().await;
 }

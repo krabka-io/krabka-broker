@@ -138,12 +138,46 @@ mod tests {
         assert2::assert!(n > 0);
     }
 
-    #[test]
-    fn rejects_wrong_scenario_id() {
-        let mut t = template(bytes(64));
-        let b = stamp_into(&mut t, 42);
-        assert2::assert!(read_send_nanos(&b, 7).is_none());
+    #[derive(Debug, PartialEq, Eq)]
+    enum TimestampObservation {
+        Observed(u64),
+        ForeignScenario,
     }
+
+    struct PayloadScenario {
+        record: Bytes,
+        timestamp: Option<TimestampObservation>,
+    }
+
+    #[rstest::fixture]
+    fn payload() -> PayloadScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        PayloadScenario {
+            record: Bytes::new(),
+            timestamp: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("a 64-byte benchmark record stamped for scenario {scenario}")]
+    fn stamped_payload(payload: &mut PayloadScenario, scenario: u64) {
+        payload.record = stamp_into(&mut template(bytes(64)), scenario);
+    }
+
+    #[rstest_bdd_macros::when("the record timestamp is read as scenario {scenario}")]
+    fn read_payload_timestamp(payload: &mut PayloadScenario, scenario: u64) {
+        payload.timestamp = Some(read_send_nanos(&payload.record, scenario).map_or(
+            TimestampObservation::ForeignScenario,
+            TimestampObservation::Observed,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the foreign scenario record has no benchmark timestamp")]
+    fn foreign_scenario(payload: &PayloadScenario) {
+        assert2::assert!(payload.timestamp == Some(TimestampObservation::ForeignScenario));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/record_isolation", fixtures = [payload: PayloadScenario]);
 
     #[test]
     fn rejects_short() {

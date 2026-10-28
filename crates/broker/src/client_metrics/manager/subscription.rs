@@ -419,147 +419,6 @@ mod tests {
         check!(m.metrics == vec!["*".to_owned()]);
     }
 
-    /// Kafka's `createClientInstance` caps the interval at 300000, lets every
-    /// matched subscription lower it, and full-matches the last pattern of
-    /// each selector (#712).
-    #[test]
-    fn subscription_matches_kafkas_client_metrics_manager() {
-        struct Subscription {
-            name: &'static str,
-            configs: Vec<ConfigEntry<'static>>,
-        }
-        struct Row {
-            name: &'static str,
-            subscriptions: Vec<Subscription>,
-            client: ClientAttributes,
-            expected: ComputedSubscription,
-        }
-        let with = |client_id: &str, software: &str| ClientAttributes {
-            client_id: client_id.into(),
-            software_name: software.into(),
-            ..attrs()
-        };
-        let subscription =
-            |name: &'static str, configs: &[(&'static str, &'static str)]| Subscription {
-                name,
-                configs: configs
-                    .iter()
-                    .map(|&(key, value)| ConfigEntry { key, value })
-                    .collect(),
-            };
-        let rows: Vec<Row> = vec![
-            Row {
-                name: "an interval above the default is capped",
-                subscriptions: vec![subscription("s1", &[
-                    ("metrics", "a."),
-                    ("interval.ms", "600000"),
-                ])],
-                client: attrs(),
-                expected: ComputedSubscription {
-                    metrics: vec!["a.".into()],
-                    push_interval_ms: 300_000,
-                },
-            },
-            Row {
-                name: "a matched subscription with no metrics lowers the interval",
-                subscriptions: vec![
-                    subscription("s1", &[("metrics", "a."), ("interval.ms", "60000")]),
-                    subscription("s2", &[("metrics", ""), ("interval.ms", "1000")]),
-                ],
-                client: attrs(),
-                expected: ComputedSubscription {
-                    metrics: vec!["a.".into()],
-                    push_interval_ms: 1_000,
-                },
-            },
-            Row {
-                name: "no subscription",
-                subscriptions: vec![],
-                client: attrs(),
-                expected: ComputedSubscription {
-                    metrics: vec![],
-                    push_interval_ms: 300_000,
-                },
-            },
-            Row {
-                name: "an alternation full-matches its longer branch",
-                subscriptions: vec![subscription("s1", &[
-                    ("metrics", "*"),
-                    ("match", "client_id=app|app-1"),
-                ])],
-                client: with("app-1", "apache-kafka-java"),
-                expected: ComputedSubscription {
-                    metrics: vec!["*".into()],
-                    push_interval_ms: 300_000,
-                },
-            },
-            Row {
-                name: "a partial match does not match",
-                subscriptions: vec![subscription("s1", &[
-                    ("metrics", "*"),
-                    ("match", "client_id=app"),
-                ])],
-                client: with("app-1", "apache-kafka-java"),
-                expected: ComputedSubscription {
-                    metrics: vec![],
-                    push_interval_ms: 300_000,
-                },
-            },
-            Row {
-                name: "a missing KIP-511 name is unknown",
-                subscriptions: vec![subscription("s1", &[
-                    ("metrics", "*"),
-                    ("match", "client_software_name=unknown"),
-                ])],
-                client: with("svc-1", "unknown"),
-                expected: ComputedSubscription {
-                    metrics: vec!["*".into()],
-                    push_interval_ms: 300_000,
-                },
-            },
-            Row {
-                name: "a repeated selector keeps its last pattern",
-                subscriptions: vec![subscription("s1", &[
-                    ("metrics", "*"),
-                    ("match", "client_id=a,client_id=b"),
-                ])],
-                client: with("b", "apache-kafka-java"),
-                expected: ComputedSubscription {
-                    metrics: vec!["*".into()],
-                    push_interval_ms: 300_000,
-                },
-            },
-        ];
-        for Row {
-            name,
-            subscriptions,
-            client,
-            expected,
-        } in rows
-        {
-            let mut img = MetadataImage::new(Uuid::nil());
-            for Subscription {
-                name: sub_name,
-                configs,
-            } in subscriptions
-            {
-                img.apply(&MetadataRecord::V1ClientMetricsConfig(
-                    ClientMetricsConfigRecord {
-                        name: sub_name.into(),
-                        configs: configs
-                            .into_iter()
-                            .map(|ConfigEntry { key, value }| (key.to_owned(), value.to_owned()))
-                            .collect(),
-                    },
-                ));
-            }
-            check!(
-                compute_subscription(&img, &client) == expected,
-                "row {name}"
-            );
-        }
-    }
-
     /// The id is pinned: brokers of two versions in one cluster must hand a
     /// client the same id for the same subscription, so the CRC-32C
     /// implementation behind it must not change the value.
@@ -667,4 +526,79 @@ mod tests {
         };
         check!(id1 != subscription_id(&s3, a.client_instance_id));
     }
+    type MetricsSubscriptionConfig = (String, Vec<(String, String)>);
+
+    #[derive(serde::Deserialize)]
+    struct SubscriptionInput {
+        subscriptions: Vec<MetricsSubscriptionConfig>,
+        client_id: String,
+        software_name: String,
+    }
+    #[derive(Default)]
+    struct MetricsSubscription {
+        image: Option<MetadataImage>,
+        client: Option<ClientAttributes>,
+        computed: Option<ComputedSubscription>,
+    }
+    #[rstest::fixture]
+    fn metrics_subscription() -> MetricsSubscription {
+        // No metadata or compiled subscription is shared between clients.
+        MetricsSubscription::default()
+    }
+    #[rstest_bdd_macros::given("client metrics subscriptions and client attributes {input}")]
+    fn subscription_metadata(metrics_subscription: &mut MetricsSubscription, input: String) {
+        let input: SubscriptionInput = serde_json::from_str(&input).expect("subscription inputs");
+        let mut image = MetadataImage::new(Uuid::nil());
+        for (name, configs) in input.subscriptions {
+            image.apply(&MetadataRecord::V1ClientMetricsConfig(
+                ClientMetricsConfigRecord {
+                    name,
+                    configs: configs.into_iter().collect(),
+                },
+            ));
+        }
+        metrics_subscription.image = Some(image);
+        metrics_subscription.client = Some(ClientAttributes {
+            client_id: input.client_id,
+            software_name: input.software_name,
+            ..attrs()
+        });
+    }
+    #[rstest_bdd_macros::when("the broker computes the client's metrics subscription")]
+    fn compute_client_subscription(metrics_subscription: &mut MetricsSubscription) {
+        metrics_subscription.computed = Some(compute_subscription(
+            metrics_subscription
+                .image
+                .as_ref()
+                .expect("subscription metadata"),
+            metrics_subscription
+                .client
+                .as_ref()
+                .expect("client attributes"),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the client receives metrics {metrics} at interval {interval} milliseconds"
+    )]
+    fn client_subscription(
+        metrics_subscription: &MetricsSubscription,
+        metrics: String,
+        interval: i32,
+    ) {
+        let metrics: Vec<String> = serde_json::from_str(&metrics).expect("expected metrics");
+        assert!(
+            metrics_subscription
+                .computed
+                .as_ref()
+                .expect("computed subscription")
+                == &ComputedSubscription {
+                    metrics,
+                    push_interval_ms: interval,
+                }
+        );
+    }
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/client_metrics/manager/subscription.feature",
+        fixtures = [metrics_subscription: MetricsSubscription],
+    );
 }

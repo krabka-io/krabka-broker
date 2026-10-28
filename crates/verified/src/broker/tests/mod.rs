@@ -21,17 +21,6 @@ const PREFERRED_BACK: PreferredLeaderChange = PreferredLeaderChange {
     leader_is_witness: false,
 };
 
-/// A partition with an open transaction at 6, a high watermark of 8 and
-/// two uncommitted records beyond it. Nothing is scheduled, so the delivery
-/// watermark sits at the high watermark.
-const OPEN_TXN: FetchWatermarks = FetchWatermarks {
-    log_start: 2,
-    hw: 8,
-    lso: 6,
-    log_end: 10,
-    deliverable: 8,
-};
-
 mod replica_fetch_mutation_fences_every_input_and_selects_one_action;
 
 mod fetch_visibility_matches_kafka_fetch_scenarios;

@@ -268,25 +268,25 @@ mod tests {
         })
     }
 
-    /// A topic of a request filter and the partition indexes it names.
-    #[derive(Clone, Copy)]
-    struct FilterTopic<'a> {
-        name: &'a str,
-        indexes: &'a [i32],
+    #[derive(Default)]
+    struct ReassignmentListingScenario {
+        started: Option<HandlerStartedBroker>,
+        request: Option<ListPartitionReassignmentsRequest>,
+        response: Option<ListPartitionReassignmentsResponse>,
     }
-
-    /// Kafka's `ReplicationControlManager.listPartitionReassignments` and
-    /// `listReassigningTopic`: null topics list every reassigning partition,
-    /// a named topic lists only its requested indexes that are reassigning,
-    /// in request order and once per occurrence, and a topic with none (an
-    /// empty index list, an idle partition, an unknown topic) gives no row.
-    #[tokio::test]
-    async fn success_response_lists_what_kafka_lists() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        broker_handle
+    #[rstest::fixture]
+    fn reassignment_listing() -> ReassignmentListingScenario {
+        let started = None;
+        ReassignmentListingScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("topic t has reassigning partitions 0 and 1 and idle partition 2")]
+    async fn active_reassignments(reassignment_listing: &mut ReassignmentListingScenario) {
+        let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        started
+            .broker
             .broker_arc_for_test()
             .controller
             .submit_change(vec![
@@ -302,123 +302,112 @@ mod tests {
             ])
             .await
             .expect("seed reassignments");
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
-
-        let row = |partition_index: i32| {
-            krabka_macros::tagged_wire!(OngoingPartitionReassignment {
-                partition_index,
-                replicas: vec![1, 2, 3],
-                adding_replicas: vec![3],
-                removing_replicas: vec![],
-            })
-        };
-        let topic = |name: &str, partitions: &[i32]| {
-            krabka_macros::tagged_wire!(OngoingTopicReassignment {
-                name: name.to_owned(),
-                partitions: partitions.iter().map(|&p| row(p)).collect(),
-            })
-        };
-        let filter = |topics: &[FilterTopic<'_>]| {
+        reassignment_listing.started = Some(started);
+    }
+    #[rstest_bdd_macros::given("the reassignment request filters {filter}")]
+    fn reassignment_filter(reassignment_listing: &mut ReassignmentListingScenario, filter: String) {
+        let topics = if filter == "all topics" {
+            None
+        } else {
             Some(
-                topics
-                    .iter()
-                    .map(
-                        |&FilterTopic { name, indexes }| ListPartitionReassignmentsTopics {
+                filter
+                    .split(';')
+                    .map(|entry| {
+                        let (name, indexes) = entry.split_once(':').unwrap();
+                        ListPartitionReassignmentsTopics {
                             name: name.into(),
-                            partition_indexes: indexes.to_vec(),
+                            partition_indexes: if indexes == "none" {
+                                Vec::new()
+                            } else {
+                                indexes
+                                    .split(',')
+                                    .map(|index| index.parse().unwrap())
+                                    .collect()
+                            },
                             ..Default::default()
-                        },
-                    )
+                        }
+                    })
                     .collect(),
             )
         };
-        let cases = vec![
-            ("null topics", None, vec![topic("t", &[0, 1])]),
-            (
-                "empty index list",
-                filter(&[FilterTopic {
-                    name: "t",
-                    indexes: &[],
-                }]),
-                vec![],
-            ),
-            (
-                "one index",
-                filter(&[FilterTopic {
-                    name: "t",
-                    indexes: &[1],
-                }]),
-                vec![topic("t", &[1])],
-            ),
-            (
-                "repeated index",
-                filter(&[FilterTopic {
-                    name: "t",
-                    indexes: &[1, 1],
-                }]),
-                vec![topic("t", &[1, 1])],
-            ),
-            (
-                "request order",
-                filter(&[FilterTopic {
-                    name: "t",
-                    indexes: &[1, 0],
-                }]),
-                vec![topic("t", &[1, 0])],
-            ),
-            (
-                "idle partition",
-                filter(&[FilterTopic {
-                    name: "t",
-                    indexes: &[2],
-                }]),
-                vec![],
-            ),
-            (
-                "unknown topic",
-                filter(&[FilterTopic {
-                    name: "u",
-                    indexes: &[0],
-                }]),
-                vec![],
-            ),
-            (
-                "repeated topic",
-                filter(&[
-                    FilterTopic {
-                        name: "t",
-                        indexes: &[0],
-                    },
-                    FilterTopic {
-                        name: "t",
-                        indexes: &[1],
-                    },
-                ]),
-                vec![topic("t", &[0]), topic("t", &[1])],
-            ),
-        ];
-        for (name, topics, expected_topics) in cases {
-            let resp = handle(
-                &broker,
-                &ListPartitionReassignmentsRequest {
-                    topics,
-                    ..Default::default()
-                },
-                VERSION,
-                &ctx,
-            );
-
-            let expected = krabka_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
-                error_code: 0,
-                error_message: None,
-                topics: expected_topics,
-            });
-            assert2::check!(resp == expected, "case {name}");
-        }
-        broker_handle.shutdown().await;
+        reassignment_listing.request = Some(ListPartitionReassignmentsRequest {
+            topics,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when("the controller lists the requested reassignments")]
+    fn list_requested_reassignments(reassignment_listing: &mut ReassignmentListingScenario) {
+        let broker = reassignment_listing
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        reassignment_listing.response = Some(handle(
+            &broker,
+            reassignment_listing.request.as_ref().unwrap(),
+            VERSION,
+            &ctx,
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the complete reassignment listing contains ordered topic partitions {expected}"
+    )]
+    async fn check_reassignment_listing(
+        reassignment_listing: &mut ReassignmentListingScenario,
+        expected: String,
+    ) {
+        let topics = if expected == "none" {
+            Vec::new()
+        } else {
+            expected
+                .split(';')
+                .map(|entry| {
+                    let (name, indexes) = entry.split_once(':').unwrap();
+                    krabka_macros::tagged_wire!(OngoingTopicReassignment {
+                        name: name.into(),
+                        partitions: indexes
+                            .split(',')
+                            .map(|index| krabka_macros::tagged_wire!(
+                                OngoingPartitionReassignment {
+                                    partition_index: index.parse().unwrap(),
+                                    replicas: vec![1, 2, 3],
+                                    adding_replicas: vec![3],
+                                    removing_replicas: vec![]
+                                }
+                            ))
+                            .collect()
+                    })
+                })
+                .collect()
+        };
+        assert2::check!(
+            reassignment_listing.response.as_ref().unwrap()
+                == &krabka_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
+                    error_code: 0,
+                    error_message: None,
+                    topics
+                })
+        );
+        reassignment_listing
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_list_reassignments/list.feature",
+        name = "Reassignment listings preserve request order occurrences and ongoing status"
+    )]
+    #[tokio::test]
+    async fn success_response_lists_what_kafka_lists(
+        reassignment_listing: ReassignmentListingScenario,
+        filter: String,
+        expected: String,
+    ) {
+        let _ = (reassignment_listing, filter, expected);
     }
 }

@@ -296,6 +296,8 @@ fn validate_share_group_order(share: &ShareGroupConfig) -> Result<(), FileConfig
 
 #[cfg(test)]
 mod tests {
+    use rstest_bdd::datatable::Rows;
+
     fn applied_runtime(body: &str) -> Result<BrokerConfig, String> {
         let file: FileConfig =
             toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
@@ -310,198 +312,106 @@ mod tests {
         assert2::assert,
     };
 
-    fn with(change: fn(&mut ShareGroupConfig)) -> Result<ShareGroupConfig, String> {
-        let mut config = ShareGroupConfig::default();
-        change(&mut config);
-        if config == ShareGroupConfig::default() {
-            return Err("the row changes nothing".to_owned());
-        }
-        Ok(config)
+    #[derive(Default)]
+    struct CoordinatorProperties {
+        body: String,
+        applied: Option<Result<BrokerConfig, String>>,
     }
-
-    fn refused(message: &str) -> Result<ShareGroupConfig, String> {
-        Err(format!("invalid config: {message}"))
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct SharePolicyField {
+        field: String,
+        value: String,
     }
-
-    /// Kafka 4.3.1's `ShareGroupConfig` and `GroupCoordinatorConfig` ranges
-    /// and `require` checks over the share keys: each `[runtime]` body gives
-    /// the applied share config or the startup error.
-    #[test]
-    fn share_group_keys_follow_kafkas_ranges_and_order() {
-        struct Row {
-            label: &'static str,
-            body: &'static str,
-            want: Result<ShareGroupConfig, String>,
-        }
-        let rows: Vec<Row> = vec![
-            Row {
-                label: "defaults",
-                body: "",
-                want: Ok(ShareGroupConfig::default()),
-            },
-            Row {
-                label: "record lock limit at its floor",
-                body: "share_group_partition_max_record_locks = 100",
-                want: with(|c| c.max_inflight_records = 100),
-            },
-            Row {
-                label: "record lock limit below 100",
-                body: "share_group_partition_max_record_locks = 99",
-                want: refused("share_group_partition_max_record_locks: must be within 100..=10000"),
-            },
-            Row {
-                label: "record lock limit above 10000",
-                body: "share_group_partition_max_record_locks = 10001",
-                want: refused("share_group_partition_max_record_locks: must be within 100..=10000"),
-            },
-            Row {
-                label: "record lock limit above its maximum",
-                body: "share_group_partition_max_record_locks = 5000",
-                want: refused(
-                    "share_group_max_partition_max_record_locks: must be greater than or equal \
-                     to share_group_partition_max_record_locks",
-                ),
-            },
-            Row {
-                label: "record lock limit raised with its maximum",
-                body: "share_group_partition_max_record_locks = 5000\n\
-                 share_group_max_partition_max_record_locks = 5000",
-                want: with(|c| {
-                    c.max_inflight_records = 5000;
-                    c.max_partition_max_record_locks = 5000;
-                }),
-            },
-            Row {
-                label: "record lock limit below its minimum",
-                body: "share_group_partition_max_record_locks = 200\n\
-                 share_group_min_partition_max_record_locks = 300",
-                want: refused(
-                    "share_group_partition_max_record_locks: must be greater than or equal to \
-                     share_group_min_partition_max_record_locks",
-                ),
-            },
-            Row {
-                label: "delivery count limit of 1",
-                body: "share_group_delivery_count_limit = 1",
-                want: refused("share_group_delivery_count_limit: must be within 2..=10"),
-            },
-            Row {
-                label: "delivery count limit of 11",
-                body: "share_group_delivery_count_limit = 11",
-                want: refused("share_group_delivery_count_limit: must be within 2..=10"),
-            },
-            Row {
-                label: "delivery count limit above its maximum",
-                body: "share_group_delivery_count_limit = 8\nshare_group_max_delivery_count_limit = 6",
-                want: refused(
-                    "share_group_max_delivery_count_limit: must be greater than or equal to \
-                     share_group_delivery_count_limit",
-                ),
-            },
-            Row {
-                label: "maximum delivery count limit of 25",
-                body: "share_group_max_delivery_count_limit = 25",
-                want: with(|c| c.max_delivery_count_limit = 25),
-            },
-            Row {
-                label: "record lock duration below 1s",
-                body: "share_group_record_lock_duration = \"999ms\"",
-                want: refused(
-                    "share_group_record_lock_duration: must be within 1000ms..=3600000ms",
-                ),
-            },
-            Row {
-                label: "record lock duration above its maximum",
-                body: "share_group_record_lock_duration = \"90s\"",
-                want: refused(
-                    "share_group_max_record_lock_duration: must be greater than or equal to \
-                     share_group_record_lock_duration",
-                ),
-            },
-            Row {
-                label: "record lock duration below its minimum",
-                body: "share_group_record_lock_duration = \"10s\"",
-                want: refused(
-                    "share_group_record_lock_duration: must be greater than or equal to \
-                     share_group_min_record_lock_duration",
-                ),
-            },
-            Row {
-                label: "record lock duration and its minimum lowered",
-                body: "share_group_record_lock_duration = \"10s\"\n\
-                 share_group_min_record_lock_duration = \"5s\"",
-                want: with(|c| {
-                    c.record_lock_duration = Duration::from_secs(10);
-                    c.min_record_lock_duration = Duration::from_secs(5);
-                }),
-            },
-            Row {
-                label: "minimum record lock duration above 30s",
-                body: "share_group_min_record_lock_duration = \"31s\"",
-                want: refused(
-                    "share_group_min_record_lock_duration: must be within 1000ms..=30000ms",
-                ),
-            },
-            Row {
-                label: "session timeout above its maximum",
-                body: "share_group_session_timeout = \"61s\"",
-                want: refused(
-                    "share_group_session_timeout: must be less than or equal to \
-                     share_group_max_session_timeout",
-                ),
-            },
-            Row {
-                label: "session bounds widened",
-                body: "share_group_min_session_timeout = \"10s\"\n\
-                 share_group_max_session_timeout = \"2min\"\n\
-                 share_group_session_timeout = \"90s\"",
-                want: with(|c| {
-                    c.min_session_timeout = Duration::from_secs(10);
-                    c.max_session_timeout = Duration::from_mins(2);
-                    c.session_timeout = Duration::from_secs(90);
-                }),
-            },
-            Row {
-                label: "heartbeat interval below its minimum",
-                body: "share_group_heartbeat_interval = \"4s\"",
-                want: refused(
-                    "share_group_heartbeat_interval: must be greater than or equal to \
-                     share_group_min_heartbeat_interval",
-                ),
-            },
-            Row {
-                label: "heartbeat bounds inverted",
-                body: "share_group_min_heartbeat_interval = \"20s\"",
-                want: refused(
-                    "share_group_max_heartbeat_interval: must be greater than or equal to \
-                     share_group_min_heartbeat_interval",
-                ),
-            },
-            Row {
-                label: "heartbeat interval not below the session timeout",
-                body: "share_group_min_session_timeout = \"10s\"\n\
-                 share_group_session_timeout = \"15s\"\n\
-                 share_group_heartbeat_interval = \"15s\"",
-                want: refused(
-                    "share_group_heartbeat_interval: must be less than \
-                     share_group_session_timeout",
-                ),
-            },
-            Row {
-                label: "share group of 1001 members",
-                body: "share_group_max_size = 1001",
-                want: refused("share_group_max_size: must be within 1..=1000"),
-            },
-        ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for Row { label, body, want } in rows {
-            let applied = applied_runtime(body).map(|cfg| (*cfg.share_group).clone());
-            actual.push((label, applied));
-            expected.push((label, want));
-        }
-        assert!(actual == expected);
+    #[rstest::fixture]
+    fn coordinator_properties() -> CoordinatorProperties {
+        // A property set and its complete application outcome belong to this scenario.
+        CoordinatorProperties::default()
     }
+    #[rstest_bdd_macros::given("the runtime coordinator properties are")]
+    fn coordinator_property_source(
+        coordinator_properties: &mut CoordinatorProperties,
+        docstring: String,
+    ) {
+        coordinator_properties.body = docstring;
+    }
+    #[rstest_bdd_macros::when("the broker validates and applies the coordinator properties")]
+    fn apply_coordinator_properties(coordinator_properties: &mut CoordinatorProperties) {
+        coordinator_properties.applied = Some(applied_runtime(&coordinator_properties.body));
+    }
+    #[rstest_bdd_macros::then("the entire Share group policy equals Kafka defaults except")]
+    fn share_group_policy(
+        coordinator_properties: &CoordinatorProperties,
+        #[datatable] datatable: Rows<SharePolicyField>,
+    ) {
+        let config = coordinator_properties
+            .applied
+            .as_ref()
+            .expect("properties applied")
+            .as_ref()
+            .expect("valid policy");
+        let mut expected = ShareGroupConfig::default();
+        for row in datatable {
+            match row.field.as_str() {
+                "max_inflight_records" => {
+                    expected.max_inflight_records = row.value.parse().expect("integer bound");
+                }
+                "max_partition_max_record_locks" => {
+                    expected.max_partition_max_record_locks =
+                        row.value.parse().expect("integer bound");
+                }
+                "max_delivery_count_limit" => {
+                    expected.max_delivery_count_limit = row.value.parse().expect("integer bound");
+                }
+                "record_lock_duration" => {
+                    expected.record_lock_duration =
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
+                }
+                "min_record_lock_duration" => {
+                    expected.min_record_lock_duration =
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
+                }
+                "min_session_timeout" => {
+                    expected.min_session_timeout =
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
+                }
+                "max_session_timeout" => {
+                    expected.max_session_timeout =
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
+                }
+                "session_timeout" => {
+                    expected.session_timeout =
+                        Duration::from_millis(row.value.parse().expect("millisecond duration"));
+                }
+                unknown => panic!("unknown Share policy field {unknown}"),
+            }
+        }
+        assert!(config.share_group.as_ref() == &expected);
+    }
+    #[rstest_bdd_macros::then("coordinator properties are refused with")]
+    fn coordinator_property_error(
+        coordinator_properties: &CoordinatorProperties,
+        docstring: String,
+    ) {
+        let actual = coordinator_properties
+            .applied
+            .as_ref()
+            .expect("properties applied")
+            .as_ref()
+            .expect_err("invalid policy refused");
+        assert!(actual == docstring.trim());
+    }
+    #[rstest_bdd_macros::then("the Streams rack tags are exactly {tags}")]
+    fn streams_rack_tags(coordinator_properties: &CoordinatorProperties, tags: String) {
+        let config = coordinator_properties
+            .applied
+            .as_ref()
+            .expect("properties applied")
+            .as_ref()
+            .expect("valid rack tags");
+        let expected: Vec<String> = serde_json::from_str(&tags).expect("JSON array of rack tags");
+        assert!(config.streams_group.rack_aware_assignment_tags == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/file_config/runtime_coordinators.feature", fixtures = [coordinator_properties: CoordinatorProperties]);
 
     /// Kafka's `group.streams.min.session.timeout.ms` and its three siblings
     /// move the bounds, and the session timeout and the heartbeat interval
@@ -588,77 +498,5 @@ mod tests {
             });
             assert!(applied == want.map_err(str::to_owned), "{label}");
         }
-    }
-
-    /// Kafka trunk's `group.streams.rack.aware.assignment.tags`: the TOML
-    /// entries stand for the comma-joined Kafka value, an empty entry fails
-    /// `ValidList` and a repeated one fails `GroupCoordinatorConfig`, with
-    /// the empty check first as in Kafka.
-    #[test]
-    fn streams_group_rack_aware_assignment_tags_follow_kafka() {
-        const EMPTY: &str = "invalid config: streams_group_rack_aware_assignment_tags: \
-                             Configuration 'group.streams.rack.aware.assignment.tags' values \
-                             must not be empty.";
-        const DUPLICATE: &str = "invalid config: streams_group_rack_aware_assignment_tags: \
-                                 group.streams.rack.aware.assignment.tags must not contain \
-                                 duplicate tag keys.";
-        struct Row {
-            value: &'static str,
-            want: Result<Vec<&'static str>, &'static str>,
-        }
-        let rows: [Row; 8] = [
-            Row {
-                value: "[]",
-                want: Ok(vec![]),
-            },
-            Row {
-                value: "[\"\"]",
-                want: Ok(vec![]),
-            },
-            Row {
-                value: "[\"zone\"]",
-                want: Ok(vec!["zone"]),
-            },
-            Row {
-                value: "[\" zone \", \"rack\"]",
-                want: Ok(vec!["zone", "rack"]),
-            },
-            Row {
-                value: "[\"zone,rack\"]",
-                want: Ok(vec!["zone", "rack"]),
-            },
-            Row {
-                value: "[\"zone\", \"\"]",
-                want: Err(EMPTY),
-            },
-            Row {
-                value: "[\"zone\", \"rack\", \"zone\"]",
-                want: Err(DUPLICATE),
-            },
-            Row {
-                value: "[\"zone\", \"zone\", \"\"]",
-                want: Err(EMPTY),
-            },
-        ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for Row { value, want } in rows {
-            let file: FileConfig = toml::from_str(&format!(
-                "[runtime]\nstreams_group_rack_aware_assignment_tags = {value}\n"
-            ))
-            .expect("parse runtime config");
-            let mut cfg = BrokerConfig::default();
-            let applied = file
-                .apply_to(&mut cfg)
-                .map(|()| cfg.streams_group.rack_aware_assignment_tags.clone())
-                .map_err(|error| error.to_string());
-            actual.push((value, applied));
-            expected.push((
-                value,
-                want.map(|tags| tags.into_iter().map(str::to_owned).collect())
-                    .map_err(str::to_owned),
-            ));
-        }
-        assert!(actual == expected);
     }
 }

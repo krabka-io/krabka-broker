@@ -8,7 +8,7 @@
 //! authorization id included.
 
 use {
-    super::{ClientFirst, ScramExtension, decode_sasl_name},
+    super::{ClientFirst, decode_sasl_name},
     crate::{
         network::auth::{
             ConnectionAuth, ScramDisconnect, handle_authenticate_scram, state::SaslExchange,
@@ -542,57 +542,6 @@ fn tokenauth_extension_selects_the_credential_store() {
     }
 }
 
-/// `ScramSaslServer` refuses a stored credential below
-/// `ScramMechanism.minIterations` (4096) with a `SaslException`, after the
-/// authorization id check, for both mechanisms.
-#[test]
-fn a_credential_below_kafkas_iteration_floor_is_refused() {
-    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
-        let source = FakeMetadataSource::builder()
-            .records(&[
-                scram_user_with_iterations("weak", mechanism, 4095),
-                scram_user_with_iterations("floor", mechanism, 4096),
-            ])
-            .build();
-        let user = USER_PASSWORD.as_bytes();
-        let secret = token_secret();
-        let cases: [ExchangeCase<'_>; 3] = [
-            // `ScramSaslServer` refuses a stored credential below 4096
-            // iterations with a `SaslException`, so the client gets the
-            // generic text.
-            ExchangeCase {
-                case: "credential below the iteration floor",
-                authorization_id: None,
-                sasl_name: "weak",
-                extensions: "",
-                password: user,
-                expected: Outcome::FirstRoundFailed(None),
-            },
-            ExchangeCase {
-                case: "credential at the iteration floor",
-                authorization_id: None,
-                sasl_name: "floor",
-                extensions: "",
-                password: user,
-                expected: Outcome::Authenticated {
-                    principal: principal("floor", mechanism),
-                    via_token: false,
-                },
-            },
-            // Kafka checks the authorization id before the iterations.
-            ExchangeCase {
-                case: "authorization id mismatch wins over a weak credential",
-                authorization_id: Some("mallory"),
-                sasl_name: "weak",
-                extensions: "",
-                password: user,
-                expected: authorization_id_mismatch(),
-            },
-        ];
-        run_cases(&source, &secret, mechanism, cases);
-    }
-}
-
 /// A token session carries the token expiry from round 1 to round 2.
 /// A client-final proof that does not decode to the mechanism's hash length
 /// makes Kafka's `ScramFormatter.xor` throw `IllegalArgumentException`, and
@@ -851,86 +800,6 @@ fn token_password_is_recomputed_from_the_secret_key() {
     }
 }
 
-/// `ClientFirst::parse` follows Kafka's `ClientFirstMessage` pattern.
-#[test]
-fn client_first_parses_as_kafka_does() {
-    /// A client-first message and what parsing it gives.
-    struct ParseCase<'a> {
-        message: &'a str,
-        expected: Option<ClientFirst<'a>>,
-    }
-    let parsed = |authorization_id, sasl_name, extensions| {
-        Some(ClientFirst {
-            authorization_id,
-            sasl_name,
-            extensions,
-        })
-    };
-    let cases: [ParseCase<'_>; 11] = [
-        ParseCase {
-            message: "n,,n=alice,r=abc",
-            expected: parsed(None, "alice", vec![]),
-        },
-        ParseCase {
-            message: "n,a=alice,n=alice,r=abc",
-            expected: parsed(Some("alice"), "alice", vec![]),
-        },
-        ParseCase {
-            message: "n,,m=ext,n=alice,r=abc",
-            expected: parsed(None, "alice", vec![]),
-        },
-        ParseCase {
-            message: "n,,n=tok,r=abc,tokenauth=true,other=x",
-            expected: parsed(None, "tok", vec![
-                ScramExtension {
-                    key: "tokenauth",
-                    value: "true",
-                },
-                ScramExtension {
-                    key: "other",
-                    value: "x",
-                },
-            ]),
-        },
-        ParseCase {
-            message: "n,,n=a=2Cb=3Dc,r=abc",
-            expected: parsed(None, "a=2Cb=3Dc", vec![]),
-        },
-        // Only the `n` GS2 flag, a non-empty name and nonce, and alphabetic
-        // extension keys match.
-        ParseCase {
-            message: "y,,n=alice,r=abc",
-            expected: None,
-        },
-        ParseCase {
-            message: "n,,n=,r=abc",
-            expected: None,
-        },
-        ParseCase {
-            message: "n,,n=alice,r=",
-            expected: None,
-        },
-        ParseCase {
-            message: "n,,n=a=41,r=abc",
-            expected: None,
-        },
-        ParseCase {
-            message: "n,,n=alice,r=abc,token_auth=true",
-            expected: None,
-        },
-        ParseCase {
-            message: "n,,r=abc,n=alice",
-            expected: None,
-        },
-    ];
-    for ParseCase { message, expected } in cases {
-        check!(
-            ClientFirst::parse(message.as_bytes()) == expected,
-            "{message}"
-        );
-    }
-}
-
 /// `ScramFormatter.username`.
 #[yare::parameterized(
     plain = { "alice", Some("alice") },
@@ -959,3 +828,251 @@ fn active_token_source() -> ActiveTokenSource {
         .build();
     ActiveTokenSource { expiry, source }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedScramIdentity {
+    authorization_id: Option<String>,
+    sasl_name: String,
+    extensions: Vec<(String, String)>,
+}
+
+#[derive(Default)]
+struct ScramClientFirstMessage {
+    message: String,
+    parsed: rstest_bdd::Slot<Option<ParsedScramIdentity>>,
+}
+
+#[rstest::fixture]
+fn scram_client_first_message() -> ScramClientFirstMessage {
+    // Every client-first message has an independent parsed identity observation.
+    ScramClientFirstMessage::default()
+}
+
+#[rstest_bdd_macros::given("a SCRAM client sends first message {message}")]
+fn supplied_scram_client_first(
+    scram_client_first_message: &mut ScramClientFirstMessage,
+    message: String,
+) {
+    scram_client_first_message.message = message;
+}
+
+#[rstest_bdd_macros::when("the broker parses the SCRAM client-first identity and extensions")]
+fn parse_supplied_scram_client_first(scram_client_first_message: &mut ScramClientFirstMessage) {
+    scram_client_first_message.parsed.set(
+        ClientFirst::parse(scram_client_first_message.message.as_bytes()).map(|parsed| {
+            ParsedScramIdentity {
+                authorization_id: parsed.authorization_id.map(str::to_owned),
+                sasl_name: parsed.sasl_name.to_owned(),
+                extensions: parsed
+                    .extensions
+                    .into_iter()
+                    .map(|extension| (extension.key.to_owned(), extension.value.to_owned()))
+                    .collect(),
+            }
+        }),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the SCRAM identity has authorization id {authorization_id}, SASL name {name}, and JSON extensions {extensions}"
+)]
+fn expected_scram_client_first(
+    scram_client_first_message: &ScramClientFirstMessage,
+    authorization_id: String,
+    name: String,
+    extensions: String,
+) {
+    let extensions =
+        serde_json::from_str(&extensions).expect("explicit ordered SCRAM extension pairs");
+    check!(
+        scram_client_first_message.parsed.get()
+            == Some(Some(ParsedScramIdentity {
+                authorization_id: if authorization_id == "unset" {
+                    None
+                } else {
+                    Some(authorization_id)
+                },
+                sasl_name: name,
+                extensions,
+            }))
+    );
+}
+
+#[rstest_bdd_macros::then("the SCRAM client-first message is refused")]
+fn refused_scram_client_first(scram_client_first_message: &ScramClientFirstMessage) {
+    check!(scram_client_first_message.parsed.get() == Some(None));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/network/auth/scram/parser.feature",
+    fixtures = [scram_client_first_message: ScramClientFirstMessage]
+);
+
+#[derive(Default)]
+struct StoredScramCredential {
+    source: Option<FakeMetadataSource>,
+    secret: Option<SecretBytes>,
+    mechanism: Option<SaslMechanism>,
+    authorization_id: Option<String>,
+    sasl_name: String,
+    auth: Option<ConnectionAuth>,
+    first_response: Option<SaslAuthenticateResponse>,
+    final_response: Option<SaslAuthenticateResponse>,
+}
+
+#[rstest::fixture]
+fn stored_scram_credential() -> StoredScramCredential {
+    // A fresh metadata store and connection exercise each credential independently.
+    StoredScramCredential::default()
+}
+
+#[rstest_bdd_macros::given(
+    "the {mechanism} credential store contains weak at 4095 iterations and floor at 4096"
+)]
+fn supplied_scram_iteration_credentials(
+    stored_scram_credential: &mut StoredScramCredential,
+    mechanism: String,
+) {
+    let mechanism = match mechanism.as_str() {
+        "SCRAM-SHA-256" => SaslMechanism::ScramSha256,
+        "SCRAM-SHA-512" => SaslMechanism::ScramSha512,
+        _ => panic!("unknown SCRAM mechanism {mechanism}"),
+    };
+    stored_scram_credential.source = Some(
+        FakeMetadataSource::builder()
+            .records(&[
+                scram_user_with_iterations("weak", mechanism, 4095),
+                scram_user_with_iterations("floor", mechanism, 4096),
+            ])
+            .build(),
+    );
+    stored_scram_credential.mechanism = Some(mechanism);
+    stored_scram_credential.secret = Some(token_secret());
+}
+
+#[rstest_bdd_macros::given(
+    "the SCRAM client authenticates user {user} with authorization id {authorization_id}"
+)]
+fn supplied_scram_iteration_identity(
+    stored_scram_credential: &mut StoredScramCredential,
+    user: String,
+    authorization_id: String,
+) {
+    stored_scram_credential.sasl_name = user;
+    stored_scram_credential.authorization_id = if authorization_id == "unset" {
+        None
+    } else {
+        Some(authorization_id)
+    };
+}
+
+#[rstest_bdd_macros::when(
+    "the SCRAM client completes every round the broker permits using the stored password"
+)]
+fn authenticate_stored_scram_credential(stored_scram_credential: &mut StoredScramCredential) {
+    let mechanism = stored_scram_credential
+        .mechanism
+        .expect("SCRAM mechanism was configured");
+    let source = stored_scram_credential
+        .source
+        .as_ref()
+        .expect("credential store was given");
+    let secret = stored_scram_credential
+        .secret
+        .as_ref()
+        .expect("broker token secret was configured");
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism,
+        exchange: SaslExchange::ScramPending,
+        pending_token_expiry_ms: None,
+    };
+    let FirstMessage { client, message } = KafkaScramClient::first(
+        mechanism,
+        stored_scram_credential.authorization_id.as_deref(),
+        &stored_scram_credential.sasl_name,
+        "",
+        USER_PASSWORD.as_bytes(),
+    );
+    let first = authenticate(source, Some(secret), &mut auth, message);
+    if first.error_code == 0 {
+        stored_scram_credential.final_response = Some(authenticate(
+            source,
+            Some(secret),
+            &mut auth,
+            client.last(&first.auth_bytes),
+        ));
+    }
+    stored_scram_credential.first_response = Some(first);
+    stored_scram_credential.auth = Some(auth);
+}
+
+#[rstest_bdd_macros::then(
+    "the first SCRAM round refuses the credential with generic authentication text"
+)]
+fn refused_weak_scram_credential(stored_scram_credential: &StoredScramCredential) {
+    assert_failed_authenticate_response(
+        stored_scram_credential
+            .first_response
+            .as_ref()
+            .expect("first SCRAM round ran"),
+        None,
+    );
+    check!(stored_scram_credential.final_response.is_none());
+}
+
+#[rstest_bdd_macros::then("the first SCRAM round refuses the authorization id with {message}")]
+fn refused_scram_authorization_id(
+    stored_scram_credential: &StoredScramCredential,
+    message: String,
+) {
+    assert_failed_authenticate_response(
+        stored_scram_credential
+            .first_response
+            .as_ref()
+            .expect("first SCRAM round ran"),
+        Some(&message),
+    );
+    check!(stored_scram_credential.final_response.is_none());
+}
+
+#[rstest_bdd_macros::then(
+    "the floor user is authenticated through the configured SCRAM mechanism without a token"
+)]
+fn authenticated_floor_scram_credential(stored_scram_credential: &StoredScramCredential) {
+    check!(
+        stored_scram_credential
+            .first_response
+            .as_ref()
+            .expect("first SCRAM round ran")
+            .error_code
+            == 0
+    );
+    check!(
+        stored_scram_credential
+            .final_response
+            .as_ref()
+            .expect("SCRAM proof round ran")
+            .error_code
+            == 0
+    );
+    let Some(ConnectionAuth::Authenticated {
+        principal: actual,
+        mechanism: actual_mechanism,
+        authenticated_via_token,
+        ..
+    }) = &stored_scram_credential.auth
+    else {
+        panic!("successful proof must authenticate the connection");
+    };
+    let mechanism = stored_scram_credential
+        .mechanism
+        .expect("configured mechanism");
+    check!(*actual == principal("floor", mechanism));
+    check!(*actual_mechanism == mechanism);
+    check!(!*authenticated_via_token);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/network/auth/scram/iterations.feature",
+    fixtures = [stored_scram_credential: StoredScramCredential]
+);

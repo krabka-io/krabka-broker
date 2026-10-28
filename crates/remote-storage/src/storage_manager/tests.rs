@@ -73,26 +73,184 @@ fn metadata(
     .unwrap()
 }
 
-fn sample() -> RemoteLogSegmentMetadata {
-    metadata()
-        .partition(7)
-        .segment_id(Uuid::from_u128(0xfe))
-        .base_offset(11)
-        .call()
+#[derive(Debug, PartialEq, Eq)]
+enum KafkaUuidObservation {
+    Decoded(Uuid),
+    Malformed,
 }
 
-#[yare::parameterized(
-    offset = { IndexType::Offset, ".index" },
-    timestamp = { IndexType::Timestamp, ".timeindex" },
-    producer_snapshot = { IndexType::ProducerSnapshot, ".snapshot" },
-    leader_epoch = { IndexType::LeaderEpoch, ".leader_epoch_checkpoint" },
-    transaction = { IndexType::Transaction, ".txnindex" },
-)]
-fn index_suffixes_match_kafka(index_type: IndexType, want: &str) {
-    // Filesystem-backed stores key files off these exact suffixes.
-    check!(index_type.suffix() == want, "{index_type:?}");
-    check!(IndexType::from_suffix(want) == Some(index_type));
+struct RemoteNameScenario {
+    metadata: Option<RemoteLogSegmentMetadata>,
+    kind: Option<IndexType>,
+    suffix: String,
+    rendered_suffix: String,
+    parsed_kind: Option<IndexType>,
+    partition_name: String,
+    segment_name: String,
+    parsed_partition: Option<PartitionDirName>,
+    parsed_segment: Option<(i64, Uuid, String)>,
+    uuid_input: String,
+    decoded_uuid: Option<KafkaUuidObservation>,
 }
+
+#[rstest::fixture]
+fn remote_names() -> RemoteNameScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    RemoteNameScenario {
+        metadata: None,
+        kind: None,
+        suffix: String::new(),
+        rendered_suffix: String::new(),
+        parsed_kind: None,
+        partition_name: String::new(),
+        segment_name: String::new(),
+        parsed_partition: None,
+        parsed_segment: None,
+        uuid_input: String::new(),
+        decoded_uuid: None,
+    }
+}
+
+#[rstest_bdd_macros::given("remote index kind {kind} with Kafka suffix {suffix}")]
+fn remote_index(remote_names: &mut RemoteNameScenario, kind: String, suffix: String) {
+    remote_names.kind = Some(match kind.as_str() {
+        "offset" => IndexType::Offset,
+        "timestamp" => IndexType::Timestamp,
+        "producer-snapshot" => IndexType::ProducerSnapshot,
+        "leader-epoch" => IndexType::LeaderEpoch,
+        "transaction" => IndexType::Transaction,
+        _ => panic!("unknown remote index {kind}"),
+    });
+    remote_names.suffix = suffix;
+}
+
+#[rstest_bdd_macros::when("the remote index suffix is rendered and parsed")]
+fn index_suffix(remote_names: &mut RemoteNameScenario) {
+    remote_names.rendered_suffix = remote_names.kind.expect("index kind given").suffix().into();
+    remote_names.parsed_kind = IndexType::from_suffix(&remote_names.suffix);
+}
+
+#[rstest_bdd_macros::then("the remote index suffix and kind match Kafka in both directions")]
+fn compatible_index(remote_names: &RemoteNameScenario) {
+    check!(remote_names.rendered_suffix == remote_names.suffix);
+    check!(remote_names.parsed_kind == remote_names.kind);
+}
+
+#[rstest_bdd_macros::given(
+    "orders partition {partition} starts at offset {offset} with topic ID 1 and segment ID {segment}"
+)]
+fn remote_segment_metadata(
+    remote_names: &mut RemoteNameScenario,
+    partition: i32,
+    offset: i64,
+    segment: u128,
+) {
+    remote_names.metadata = Some(
+        metadata()
+            .partition(partition)
+            .base_offset(offset)
+            .segment_id(Uuid::from_u128(segment))
+            .call(),
+    );
+}
+
+#[rstest_bdd_macros::when("remote tier names are rendered for suffix {suffix}")]
+fn remote_layout(remote_names: &mut RemoteNameScenario, suffix: String) {
+    let metadata = remote_names
+        .metadata
+        .as_ref()
+        .expect("segment metadata given");
+    remote_names.partition_name = partition_dir_name(metadata);
+    remote_names.segment_name = segment_file_name(metadata, &suffix);
+}
+
+#[rstest_bdd_macros::then("the remote partition directory is {name}")]
+fn partition_layout(remote_names: &RemoteNameScenario, name: String) {
+    check!(remote_names.partition_name == name);
+}
+
+#[rstest_bdd_macros::then("the remote segment file is {name}")]
+fn segment_layout(remote_names: &RemoteNameScenario, name: String) {
+    check!(remote_names.segment_name == name);
+}
+
+#[rstest_bdd_macros::given(
+    "Kafka remote partition directory {partition} and segment file {segment}"
+)]
+fn kafka_remote_names(remote_names: &mut RemoteNameScenario, partition: String, segment: String) {
+    remote_names.partition_name = partition;
+    remote_names.segment_name = segment;
+}
+
+#[rstest_bdd_macros::when("the Kafka remote tier names are parsed")]
+fn parse_remote_names(remote_names: &mut RemoteNameScenario) {
+    remote_names.parsed_partition = parse_partition_dir_name(&remote_names.partition_name);
+    remote_names.parsed_segment =
+        parse_segment_file_name(&remote_names.segment_name).map(|parsed| {
+            (
+                parsed.base_offset,
+                parsed.segment_id,
+                parsed.suffix.to_owned(),
+            )
+        });
+}
+
+#[rstest_bdd_macros::then("the names identify orders partition 7 with topic ID 1")]
+fn parsed_remote_partition(remote_names: &RemoteNameScenario) {
+    check!(
+        remote_names.parsed_partition
+            == Some(PartitionDirName {
+                topic: "orders".to_owned(),
+                partition: 7,
+                topic_id: Uuid::from_u128(1)
+            })
+    );
+}
+
+#[rstest_bdd_macros::then("the segment starts at {offset} with ID {segment} and suffix {suffix}")]
+fn parsed_remote_segment(
+    remote_names: &RemoteNameScenario,
+    offset: i64,
+    segment: u128,
+    suffix: String,
+) {
+    let parsed = remote_names
+        .parsed_segment
+        .as_ref()
+        .expect("Kafka segment name parsed");
+    check!(parsed.0 == offset);
+    check!(parsed.1 == Uuid::from_u128(segment));
+    check!(parsed.2 == suffix);
+}
+
+#[rstest_bdd_macros::given("Kafka UUID text {encoded}")]
+fn remote_uuid_input(remote_names: &mut RemoteNameScenario, encoded: String) {
+    remote_names.uuid_input = if encoded == "empty" {
+        String::new()
+    } else {
+        encoded
+    };
+}
+
+#[rstest_bdd_macros::when("the remote Kafka UUID is decoded")]
+fn remote_uuid_decode(remote_names: &mut RemoteNameScenario) {
+    remote_names.decoded_uuid = Some(decode_kafka_uuid(&remote_names.uuid_input).map_or(
+        KafkaUuidObservation::Malformed,
+        KafkaUuidObservation::Decoded,
+    ));
+}
+
+#[rstest_bdd_macros::then("the malformed Kafka UUID is rejected")]
+fn remote_uuid_rejected(remote_names: &RemoteNameScenario) {
+    check!(
+        remote_names.decoded_uuid == Some(KafkaUuidObservation::Malformed),
+        "{:?}",
+        remote_names.uuid_input
+    );
+}
+
+rstest_bdd_macros::scenarios!("tests/features/remote_tier_names", fixtures = [remote_names: RemoteNameScenario]);
 
 #[yare::parameterized(
     log = { LOG_FILE_SUFFIX },
@@ -103,57 +261,6 @@ fn index_suffixes_match_kafka(index_type: IndexType, want: &str) {
 )]
 fn from_suffix_rejects_non_index_suffixes(suffix: &str) {
     check!(IndexType::from_suffix(suffix) == None, "{suffix:?}");
-}
-
-#[test]
-fn local_tiered_storage_names_match_kafka() {
-    let metadata = sample();
-
-    check!(partition_dir_name(&metadata) == "orders-7-AAAAAAAAAAAAAAAAAAAAAQ");
-    check!(
-        segment_file_name(&metadata, IndexType::ProducerSnapshot.suffix())
-            == "00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot"
-    );
-}
-
-#[test]
-fn object_store_key_components_match_kafka() {
-    // The two halves of the S3 key that the object-store backend writes.
-    let metadata = metadata().call();
-
-    check!(partition_dir_name(&metadata) == "orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
-    check!(
-        segment_file_name(&metadata, LOG_FILE_SUFFIX)
-            == "00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log"
-    );
-}
-
-#[test]
-fn parses_the_pinned_kafka_names() {
-    check!(
-        parse_partition_dir_name("orders-7-AAAAAAAAAAAAAAAAAAAAAQ")
-            == Some(PartitionDirName {
-                topic: "orders".to_owned(),
-                partition: 7,
-                topic_id: Uuid::from_u128(1),
-            })
-    );
-    check!(
-        parse_segment_file_name("00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot")
-            == Some(SegmentFileName {
-                base_offset: 11,
-                segment_id: Uuid::from_u128(0xfe),
-                suffix: ".snapshot",
-            })
-    );
-    check!(
-        parse_segment_file_name("00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log")
-            == Some(SegmentFileName {
-                base_offset: 0,
-                segment_id: Uuid::from_u128(30),
-                suffix: ".log",
-            })
-    );
 }
 
 #[test]
@@ -202,16 +309,6 @@ fn parse_partition_dir_name_rejects_malformed_names(name: &str) {
 )]
 fn parse_segment_file_name_rejects_malformed_names(name: &str) {
     check!(parse_segment_file_name(name) == None, "{name:?}");
-}
-
-#[yare::parameterized(
-    empty = { "" },
-    short = { "AAAA" },
-    long = { "AAAAAAAAAAAAAAAAAAAAAQAA" },
-    invalid_tail = { "A" },
-)]
-fn decode_kafka_uuid_rejects_wrong_length_base64(encoded: &str) {
-    check!(decode_kafka_uuid(encoded) == None, "{encoded:?}");
 }
 
 proptest! {

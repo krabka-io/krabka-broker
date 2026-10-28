@@ -149,107 +149,199 @@ async fn join_and_load(
     member
 }
 
-/// `latest`, loaded on one leader and never acknowledged there, is resolved
-/// again by the next leader against the high watermark it finds, and the
-/// first acknowledgement persists that second resolution.
-///
-/// 1. Three records, then a first load: the start resolves to 3 in memory,
-///    and the persisted start stays `-1`. Describe reports start and lag
-///    `-1`, as Kafka's `shouldComputeSharePartitionLag` is false.
-/// 2. Two more records, then a restart: the next load resolves `latest` to 5,
-///    not the 3 that the first leader resolved, and the next fetch acquires
-///    the records produced after it, 5 and 6, only.
-/// 3. Accepting 6 alone leaves the SPSO at 5, so the persisted state is start
-///    5 with one delivered record, and the lag is `7 - 5 - 1`. The restart
-///    re-elected the broker at a higher leader epoch, and the second load
-///    stored it.
-///
-/// Each load stores the epoch of the leader that ran it, and Describe reports
-/// the stored epoch. The test reads the epochs instead of assuming 0 and 1,
-/// because a fence and re-election on a loaded host raises them too.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
-    // The permit and the directory stay bound to the end of the test: the
-    // permit holds this test's broker slot and the directory backs both boots.
-    let RestartDirectory {
-        permit: _permit,
-        dir: _dir,
-        path: log_dir,
-    } = restart_directory().await;
-    let tid;
-    let first_epoch;
-    let before_restart;
-    {
-        let (broker, client, topic) = start_topic()
-            .cfg(broker_config(log_dir.clone()))
-            .call()
-            .await;
-        tid = topic;
-        broker.wait_until_group_coordinator_ready().await;
-        broker.wait_until_share_coordinator_ready().await;
-        set_auto_offset_reset(&client, GROUP, "latest").await;
-        produce_n()
-            .client(&client)
-            .topic_id(tid)
-            .count(3)
-            .call()
-            .await;
+use {
+    krabka_broker::BrokerHandle,
+    krabka_protocol::owned::share_fetch_response::PartitionData,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+};
 
-        let leading = settled_leader_epoch(&broker, None).await;
-        join_and_load(&broker, &client, tid).await;
+#[derive(Default)]
+struct LatestShareStart {
+    directory: Option<RestartDirectory>,
+    broker: Option<BrokerHandle>,
+    client: Option<Arc<Client>>,
+    topic: Option<uuid::Uuid>,
+    leading: Option<LeaderEpoch>,
+    first_epoch: Option<i32>,
+    second_epoch: Option<i32>,
+    first_snapshot: Option<(i64, DescribeShareGroupOffsetsResponseGroup)>,
+    loaded_start: Option<i64>,
+    durable: Option<((i64, i32), DescribeShareGroupOffsetsResponseGroup)>,
+    member: Option<String>,
+    acquired: Option<PartitionData>,
+}
 
-        first_epoch = stored_leader_epoch(&broker, tid).await;
-        assert!(first_epoch >= leading.0);
-        let first_leader = (
-            persisted_start(&broker, tid).await.0,
-            describe_offsets(&client, GROUP, "t", vec![0]).await,
-        );
-        assert!(
-            first_leader
-                == (
-                    UNINITIALIZED_START_OFFSET,
-                    described(tid, (UNINITIALIZED_START_OFFSET, first_epoch, -1))
-                )
-        );
+#[fixture]
+fn latest_share_start() -> LatestShareStart {
+    // Retain each leader's actual epoch and persisted observations across the restart.
+    LatestShareStart::default()
+}
 
-        produce_n()
-            .client(&client)
-            .topic_id(tid)
-            .count(2)
-            .call()
-            .await;
-        before_restart = broker
-            .controller_image_for_test()
-            .partition("t", 0)
-            .expect("t-0 is in the image")
-            .leader_epoch;
-        broker.shutdown().await;
-    }
+impl LatestShareStart {
+    fn broker(&self) -> &BrokerHandle { self.broker.as_ref().expect("share broker") }
 
-    // The restart keeps the group's `share.auto.offset.reset=latest`.
-    let (broker, client) = restart_broker(log_dir).await;
-    // The rejoined broker leads the partition at its old epoch until the
-    // controller re-elects it above that. Loading or acknowledging before then
-    // reads or writes the share state at the old epoch.
-    let leading = settled_leader_epoch(&broker, Some(before_restart)).await;
-    let member = join_and_load(&broker, &client, tid).await;
-    assert!(persisted_start(&broker, tid).await.0 == UNINITIALIZED_START_OFFSET);
+    fn client(&self) -> &Client { self.client.as_ref().expect("share client") }
+
+    fn topic(&self) -> uuid::Uuid { self.topic.expect("topic identity") }
+}
+
+#[given("a latest-reset share group g1 whose topic t contains three records")]
+async fn latest_share_group(latest_share_start: &mut LatestShareStart) {
+    latest_share_start.directory = Some(restart_directory().await);
+    let (broker, client, topic) = start_topic()
+        .cfg(broker_config(
+            latest_share_start
+                .directory
+                .as_ref()
+                .expect("durable directory")
+                .path
+                .clone(),
+        ))
+        .call()
+        .await;
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
+    set_auto_offset_reset(&client, GROUP, "latest").await;
     produce_n()
         .client(&client)
-        .topic_id(tid)
+        .topic_id(topic)
+        .count(3)
+        .call()
+        .await;
+    latest_share_start.leading = Some(settled_leader_epoch(&broker, None).await);
+    latest_share_start.broker = Some(broker);
+    latest_share_start.client = Some(client);
+    latest_share_start.topic = Some(topic);
+}
+
+#[when("the first leader loads the latest share partition")]
+async fn load_first_latest_start(latest_share_start: &mut LatestShareStart) {
+    join_and_load(
+        latest_share_start.broker(),
+        latest_share_start.client(),
+        latest_share_start.topic(),
+    )
+    .await;
+    latest_share_start.first_epoch =
+        Some(stored_leader_epoch(latest_share_start.broker(), latest_share_start.topic()).await);
+    latest_share_start.first_snapshot = Some((
+        persisted_start(latest_share_start.broker(), latest_share_start.topic())
+            .await
+            .0,
+        describe_offsets(latest_share_start.client(), GROUP, "t", vec![0]).await,
+    ));
+}
+
+#[then(
+    "the first load stores its leader epoch while start offset and described lag remain uninitialized"
+)]
+fn first_latest_start(latest_share_start: &LatestShareStart) {
+    let epoch = latest_share_start.first_epoch.expect("first stored epoch");
+    assert!(epoch >= latest_share_start.leading.expect("first leader epoch").0);
+    assert!(
+        latest_share_start
+            .first_snapshot
+            .as_ref()
+            .expect("first load observed")
+            == &(
+                UNINITIALIZED_START_OFFSET,
+                described(
+                    latest_share_start.topic(),
+                    (UNINITIALIZED_START_OFFSET, epoch, -1)
+                )
+            )
+    );
+}
+
+#[when("two more records arrive and the broker restarts under a newer partition leader epoch")]
+async fn restart_unwritten_latest_start(latest_share_start: &mut LatestShareStart) {
+    produce_n()
+        .client(latest_share_start.client())
+        .topic_id(latest_share_start.topic())
         .count(2)
         .call()
         .await;
-    let row = fetch_until_acquired(
-        &client,
-        share_fetch_req()
-            .session(ShareSessionSetup::opening(&member, tid))
-            .call(),
-        FetchSessionMode::Initial,
+    let prior = latest_share_start
+        .broker()
+        .controller_image_for_test()
+        .partition("t", 0)
+        .expect("partition in image")
+        .leader_epoch;
+    latest_share_start
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let (broker, client) = restart_broker(
+        latest_share_start
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path
+            .clone(),
     )
     .await;
+    latest_share_start.leading = Some(settled_leader_epoch(&broker, Some(prior)).await);
+    latest_share_start.broker = Some(broker);
+    latest_share_start.client = Some(client);
+}
+
+#[when("the new leader loads latest again without acknowledging records")]
+async fn load_second_latest_start(latest_share_start: &mut LatestShareStart) {
+    latest_share_start.member = Some(
+        join_and_load(
+            latest_share_start.broker(),
+            latest_share_start.client(),
+            latest_share_start.topic(),
+        )
+        .await,
+    );
+    latest_share_start.loaded_start = Some(
+        persisted_start(latest_share_start.broker(), latest_share_start.topic())
+            .await
+            .0,
+    );
+}
+
+#[then("the new load still leaves the persisted start offset uninitialized")]
+fn second_latest_start(latest_share_start: &LatestShareStart) {
+    assert!(latest_share_start.loaded_start == Some(UNINITIALIZED_START_OFFSET));
+}
+
+#[when("two further records arrive and the reloaded member fetches")]
+async fn fetch_second_latest_start(latest_share_start: &mut LatestShareStart) {
+    produce_n()
+        .client(latest_share_start.client())
+        .topic_id(latest_share_start.topic())
+        .count(2)
+        .call()
+        .await;
+    latest_share_start.acquired = Some(
+        fetch_until_acquired(
+            latest_share_start.client(),
+            share_fetch_req()
+                .session(ShareSessionSetup::opening(
+                    latest_share_start.member.as_ref().expect("reloaded member"),
+                    latest_share_start.topic(),
+                ))
+                .call(),
+            FetchSessionMode::Initial,
+        )
+        .await,
+    );
+}
+
+#[then("only offsets 5 and 6 are acquired at delivery count one")]
+fn second_latest_acquisition(latest_share_start: &LatestShareStart) {
     assert!(
-        row.acquired_records
+        latest_share_start
+            .acquired
+            .as_ref()
+            .expect("latest records acquired")
+            .acquired_records
             == vec![AcquiredRecords {
                 first_offset: 5,
                 last_offset: 6,
@@ -257,23 +349,66 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
                 ..Default::default()
             }]
     );
+}
 
+#[when("the reloaded member accepts offset 6 and waits for its delivery-complete record")]
+async fn persist_second_latest_start(latest_share_start: &mut LatestShareStart) {
     acknowledge_success(
-        &client,
-        ShareAck::single_for(&member, tid, krabka_ids::Offset(6)),
+        latest_share_start.client(),
+        ShareAck::single_for(
+            latest_share_start.member.as_ref().expect("reloaded member"),
+            latest_share_start.topic(),
+            krabka_ids::Offset(6),
+        ),
     )
     .await;
-    broker
-        .wait_until_share_delivery_complete(GROUP, tid, 0, 1)
+    latest_share_start
+        .broker()
+        .wait_until_share_delivery_complete(GROUP, latest_share_start.topic(), 0, 1)
         .await;
+    latest_share_start.second_epoch =
+        Some(stored_leader_epoch(latest_share_start.broker(), latest_share_start.topic()).await);
+    latest_share_start.durable = Some((
+        persisted_start(latest_share_start.broker(), latest_share_start.topic()).await,
+        describe_offsets(latest_share_start.client(), GROUP, "t", vec![0]).await,
+    ));
+}
 
-    let second_epoch = stored_leader_epoch(&broker, tid).await;
-    assert!(second_epoch >= leading.0);
-    assert!(second_epoch > first_epoch);
-    let durable = (
-        persisted_start(&broker, tid).await,
-        describe_offsets(&client, GROUP, "t", vec![0]).await,
+#[then("the newer epoch durably reports start 5, one completed record, and lag one")]
+fn durable_second_latest_start(latest_share_start: &LatestShareStart) {
+    let epoch = latest_share_start
+        .second_epoch
+        .expect("recovered stored epoch");
+    assert!(
+        epoch
+            >= latest_share_start
+                .leading
+                .expect("recovered leader epoch")
+                .0
     );
-    assert!(durable == ((5, 1), described(tid, (5, second_epoch, 1))));
-    broker.shutdown().await;
+    assert!(epoch > latest_share_start.first_epoch.expect("first stored epoch"));
+    assert!(
+        latest_share_start
+            .durable
+            .as_ref()
+            .expect("durable state observed")
+            == &((5, 1), described(latest_share_start.topic(), (5, epoch, 1)))
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/first_load.feature",
+    name = "an unwritten start is resolved again and the first ack persists it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it(
+    latest_share_start: LatestShareStart,
+) {
+    latest_share_start
+        .broker
+        .take()
+        .expect("recovered broker")
+        .shutdown()
+        .await;
+    drop(latest_share_start);
 }

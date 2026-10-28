@@ -32,9 +32,9 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
-    std::{sync::Arc, time::Duration},
+    std::{mem, sync::Arc, time::Duration},
     tempfile::TempDir,
-    tokio::time,
+    tokio::{sync::MutexGuard, time},
 };
 
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
@@ -366,58 +366,103 @@ async fn assert_only_coordinator_exports(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rf_three_remote_leader_uses_committed_high_watermark() {
-    let _guard = test_lock().lock().await;
-    let mut cluster = start_cluster().await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+#[derive(Default)]
+struct RemoteBacklog {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: Cluster,
+    admin: Option<Arc<Client>>,
+    coordinator_client: Option<Arc<Client>>,
+    topic_id: Option<uuid::Uuid>,
+    placement: Option<Placement>,
+    group: String,
+}
 
-    let admin = Arc::new(
+#[rstest::fixture]
+fn backlog_rf3() -> RemoteBacklog {
+    // Coordinator and data leadership must be distinct in this scenario.
+    RemoteBacklog::default()
+}
+
+impl RemoteBacklog {
+    fn admin(&self) -> &Arc<Client> { self.admin.as_ref().expect("RF3 admin") }
+
+    fn coordinator_client(&self) -> &Arc<Client> {
+        self.coordinator_client
+            .as_ref()
+            .expect("share coordinator client")
+    }
+
+    async fn shutdown(&mut self) {
+        let Self {
+            guard,
+            cluster,
+            admin,
+            coordinator_client,
+            ..
+        } = mem::take(self);
+        drop(admin);
+        drop(coordinator_client);
+        shutdown_cluster(cluster).await;
+        drop(guard);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "an initialized RF3 share group has backlog 0 and its coordinator differs from the data leader"
+)]
+async fn remote_backlog_group(backlog_rf3: &mut RemoteBacklog) {
+    backlog_rf3.guard = Some(test_lock().lock().await);
+    backlog_rf3.cluster = start_cluster().await;
+    support::wait_for_all_brokers_registered(&backlog_rf3.cluster, 3).await;
+
+    backlog_rf3.admin = Some(Arc::new(
         connect_client(
-            cluster[0].0.listen_addr().to_string(),
+            backlog_rf3.cluster[0].0.listen_addr().to_string(),
             Some("backlog-rf3-admin"),
         )
         .await,
-    );
-    create_topic(&admin, 1, 3).await;
-    for (broker, _, _) in &cluster {
+    ));
+    create_topic(backlog_rf3.admin(), 1, 3).await;
+    for (broker, _, _) in &backlog_rf3.cluster {
         broker.wait_until_partition_present(TOPIC, 0).await;
     }
-    let topic_id = cluster[0]
+    let topic_id = backlog_rf3.cluster[0]
         .0
         .controller_image_for_test()
         .topic(TOPIC)
         .expect("topic metadata")
         .topic_id;
-    wait_for_coordinators(&cluster, &admin, topic_id).await;
+    wait_for_coordinators(&backlog_rf3.cluster, backlog_rf3.admin(), topic_id).await;
 
-    let placement = find_placement(&cluster);
+    let placement = find_placement(&backlog_rf3.cluster);
     let Placement {
         offsets_partitions,
         offsets_partition,
         coordinator_id,
         data_partition,
-        stopped_id,
         ..
     } = placement;
-    let coordinator_index = broker_index(&cluster, coordinator_id);
+    let coordinator_index = broker_index(&backlog_rf3.cluster, coordinator_id);
     let group_id = group_for_partition(offsets_partition, offsets_partitions);
-    let coordinator_client = Arc::new(
+    backlog_rf3.coordinator_client = Some(Arc::new(
         connect_client(
-            cluster[coordinator_index].0.listen_addr().to_string(),
+            backlog_rf3.cluster[coordinator_index]
+                .0
+                .listen_addr()
+                .to_string(),
             Some("backlog-rf3-coordinator"),
         )
         .await,
-    );
+    ));
     support::find_coordinator(
-        &coordinator_client,
+        backlog_rf3.coordinator_client(),
         support::KEY_TYPE_SHARE,
         &share_coordinator_key(&group_id, topic_id, data_partition),
     )
     .await;
     join_until_initialized(
-        &cluster,
-        &coordinator_client,
+        &backlog_rf3.cluster,
+        backlog_rf3.coordinator_client(),
         &group_id,
         topic_id,
         data_partition,
@@ -433,7 +478,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     // partition does. The group coordinator records the partition as
     // initialized only when its write to `__consumer_offsets` commits, after
     // the share state commits. The follower stays up until that point.
-    cluster[coordinator_index]
+    backlog_rf3.cluster[coordinator_index]
         .0
         .wait_for_metrics("initial RF=3 backlog sample", |metrics| {
             metrics
@@ -443,37 +488,77 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         })
         .await;
 
-    let stopped_index = broker_index(&cluster, stopped_id);
-    let (stopped, _, _) = cluster.remove(stopped_index);
+    backlog_rf3.topic_id = Some(topic_id);
+    backlog_rf3.placement = Some(placement);
+    backlog_rf3.group = group_id;
+}
+
+#[rstest_bdd_macros::when(
+    "the third replica stops and the data leader appends five records that cannot reach the committed high watermark"
+)]
+async fn append_uncommitted_backlog(backlog_rf3: &mut RemoteBacklog) {
+    let placement = backlog_rf3.placement.expect("remote coordinator placement");
+    let stopped_id = placement.stopped_id;
+    let topic_id = backlog_rf3.topic_id.expect("RF3 topic");
+    let stopped_index = broker_index(&backlog_rf3.cluster, stopped_id);
+    let (stopped, _, _) = backlog_rf3.cluster.remove(stopped_index);
     stopped.shutdown().await;
 
-    let data_leader_index = broker_index(&cluster, placement.data_leader_id);
-    let coordinator_index = broker_index(&cluster, coordinator_id);
-    produce_uncommitted(&cluster, placement, topic_id).await;
+    produce_uncommitted(&backlog_rf3.cluster, placement, topic_id).await;
+}
 
+#[rstest_bdd_macros::then(
+    "a fresh backlog sample is 0 while all three replicas remain in ISR and only the coordinator exports the series"
+)]
+async fn committed_remote_backlog(backlog_rf3: &RemoteBacklog) {
+    let placement = backlog_rf3.placement.expect("remote coordinator placement");
+    let coordinator_id = placement.coordinator_id;
+    let data_partition = placement.data_partition;
+    let data_leader_index = broker_index(&backlog_rf3.cluster, placement.data_leader_id);
+    let coordinator_index = broker_index(&backlog_rf3.cluster, coordinator_id);
+    let group_id = &backlog_rf3.group;
+    let label = ShareGroupLabel {
+        group_id: group_id.clone(),
+        topic: TOPIC.into(),
+        partition: data_partition,
+    };
     // A sentinel makes the poll completion observable: the next real sample
     // must replace it with HWM(0) - SPSO/log-start(0), not the leader LEO(5).
-    cluster[coordinator_index]
+    backlog_rf3.cluster[coordinator_index]
         .0
         .metrics()
         .share_group_backlog
         .get_or_create(&label)
         .set(99);
-    cluster[coordinator_index]
+    backlog_rf3.cluster[coordinator_index]
         .0
         .wait_for_metrics("remote RF=3 committed-HWM sample", |metrics| {
             metrics.share_group_backlog.get_or_create(&label).get() == 0
         })
         .await;
     assert!(
-        cluster[data_leader_index]
+        backlog_rf3.cluster[data_leader_index]
             .0
             .partition_isr_for_test(TOPIC, data_partition)
             .is_some_and(|isr| isr.len() == 3),
         "the committed-HWM sample must land before ISR shrink can expose LEO"
     );
 
-    assert_only_coordinator_exports(&cluster, coordinator_index, &group_id, data_partition).await;
+    assert_only_coordinator_exports(
+        &backlog_rf3.cluster,
+        coordinator_index,
+        group_id,
+        data_partition,
+    )
+    .await;
+}
 
-    shutdown_cluster(cluster).await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/sharegroup_backlog/rf_three.feature",
+    name = "rf three remote leader uses committed high watermark"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rf_three_remote_leader_uses_committed_high_watermark(backlog_rf3: RemoteBacklog) {
+    backlog_rf3.shutdown().await;
+    drop(backlog_rf3);
 }

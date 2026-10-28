@@ -5,7 +5,7 @@
 //! condition, or on expiry, so a Fetch asking for more bytes than the log
 //! holds waits out its whole `fetch.max.wait.ms` and then answers with what is
 //! there. This suite sends one wire exchange -- the same
-//! [`wire::min_bytes_exchange`] the hermetic `fetch_min_bytes` suite sends --
+//! [`wire::SeededTopic`] the hermetic `fetch_min_bytes` suite sends --
 //! to a pinned Apache Kafka broker and to krabka, and compares the two answers
 //! as one value, plus the bound on how long each was held.
 //!
@@ -29,11 +29,13 @@ mod wire;
 use {
     crate::{
         support::discovery::topic_metadata_request,
-        wire::{HELD_AT_LEAST, min_bytes_exchange},
+        wire::{FetchFacts, SeededTopic},
     },
     assert2::assert,
     base64::{Engine as _, engine::general_purpose},
     krabka_client_core::Client,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{
         error::Error,
         fs,
@@ -187,20 +189,83 @@ impl Oracle {
     }
 }
 
-/// Both brokers hold the same under-`min_bytes` Fetch for the same wait, and
-/// then answer it with the same records.
-#[tokio::test]
-#[ignore = "requires Docker"]
-async fn krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes() {
+#[derive(Default)]
+struct DifferentialFetch {
+    oracle: Option<Oracle>,
+    broker: Option<support::InProcess>,
+    kafka_topic: Option<SeededTopic>,
+    krabka_topic: Option<SeededTopic>,
+    kafka: Option<(Duration, FetchFacts)>,
+    krabka: Option<(Duration, FetchFacts)>,
+}
+
+#[fixture]
+fn differential() -> DifferentialFetch {
+    // Start this scenario with fresh inputs and observations.
+
+    DifferentialFetch {
+        oracle: None,
+        broker: None,
+        kafka_topic: None,
+        krabka_topic: None,
+        kafka: None,
+        krabka: None,
+    }
+}
+
+#[given("Kafka 4.3.1 and krabka each have topic {topic} containing the first small record")]
+async fn seed(differential: &mut DifferentialFetch, topic: String) {
     let oracle = Oracle::start();
     oracle.wait_until_ready().await;
-    let (kafka_held, kafka_facts) = min_bytes_exchange(&oracle.bootstrap, "fetch-min-bytes").await;
+    differential.kafka_topic = Some(SeededTopic::create(&oracle.bootstrap, &topic).await);
+    differential.oracle = Some(oracle);
+    let broker = support::start().await;
+    differential.krabka_topic =
+        Some(SeededTopic::create(&broker.broker.listen_addr().to_string(), &topic).await);
+    differential.broker = Some(broker);
+}
 
-    let krabka = support::start().await;
-    let bootstrap = krabka.broker.listen_addr().to_string();
-    let (krabka_held, krabka_facts) = min_bytes_exchange(&bootstrap, "fetch-min-bytes").await;
+#[when(
+    "each Fetch requests at least {minimum} bytes for {wait} ms while another small record arrives after {delay} ms"
+)]
+async fn fetch_both(differential: &mut DifferentialFetch, minimum: i32, wait: i32, delay: u64) {
+    differential.kafka = Some(
+        differential
+            .kafka_topic
+            .as_ref()
+            .unwrap()
+            .fetch(minimum, wait, delay)
+            .await,
+    );
+    differential.krabka = Some(
+        differential
+            .krabka_topic
+            .as_ref()
+            .unwrap()
+            .fetch(minimum, wait, delay)
+            .await,
+    );
+}
 
-    assert!(kafka_held >= HELD_AT_LEAST);
-    assert!(krabka_held >= HELD_AT_LEAST);
+#[then(
+    "both answers wait at least {minimum_wait} ms and return identical errors, watermarks, and batch offsets"
+)]
+fn compare(differential: &DifferentialFetch, minimum_wait: u64) {
+    let (kafka_held, kafka_facts) = differential.kafka.as_ref().unwrap();
+    let (krabka_held, krabka_facts) = differential.krabka.as_ref().unwrap();
+    assert!(*kafka_held >= Duration::from_millis(minimum_wait));
+    assert!(*krabka_held >= Duration::from_millis(minimum_wait));
     assert!(krabka_facts == kafka_facts);
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/fetch_min_bytes_jvm.feature",
+    name = "krabka and kafka both hold a fetch below its min bytes"
+)]
+#[tokio::test]
+async fn krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes(differential: DifferentialFetch) {
+    drop(differential.krabka_topic);
+    drop(differential.kafka_topic);
+    differential.broker.unwrap().broker.shutdown().await;
 }

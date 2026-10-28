@@ -57,15 +57,53 @@ fn production_timings(config: &mut BrokerConfig) {
     config.heartbeat_timeout = defaults.heartbeat_timeout;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
-    let _g = support::cluster_lock().lock().await;
-    let mut cluster =
+#[derive(Default)]
+struct GracefulControllerFailover {
+    lock: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(krabka_broker::BrokerHandle, BrokerConfig, tempfile::TempDir)>,
+    old_leader: Option<krabka_broker::NodeId>,
+    new_leader: Option<krabka_broker::NodeId>,
+    drain_result: Option<Result<(), krabka_broker::BrokerError>>,
+    served_after: Option<Duration>,
+}
+#[rstest::fixture]
+fn graceful_controller_failover() -> GracefulControllerFailover {
+    let lock = None;
+    GracefulControllerFailover {
+        lock,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "three combined brokers are registered using production controller fetch, election and heartbeat timings"
+)]
+async fn production_controller_quorum(
+    graceful_controller_failover: &mut GracefulControllerFailover,
+) {
+    graceful_controller_failover.lock = Some(support::cluster_lock().lock().await);
+    let cluster =
         start_n_node_customized_with_retry(3, |_, config| production_timings(config), "cluster")
             .await;
     wait_for_all_brokers_registered(&cluster, 3).await;
-
-    let old = cluster[0].0.wait_until_controller_leader().await.unwrap();
+    graceful_controller_failover.old_leader = Some(
+        cluster[0]
+            .0
+            .wait_until_controller_leader()
+            .await
+            .expect("active controller"),
+    );
+    graceful_controller_failover.cluster = cluster;
+}
+#[rstest_bdd_macros::when(
+    "the active controller shuts down gracefully and both survivors create a one-partition topic replicated twice"
+)]
+async fn gracefully_replace_controller(
+    graceful_controller_failover: &mut GracefulControllerFailover,
+) {
+    let mut cluster = mem::take(&mut graceful_controller_failover.cluster);
+    let old = graceful_controller_failover
+        .old_leader
+        .expect("active controller");
     let index = cluster
         .iter()
         .position(|(_, config, _)| config.node_id.0 == old.0)
@@ -137,13 +175,38 @@ async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
         old.0, new.0
     );
 
+    graceful_controller_failover.cluster = cluster;
+    graceful_controller_failover.new_leader = Some(new);
+    graceful_controller_failover.drain_result = Some(drained);
+    graceful_controller_failover.served_after = Some(served);
+}
+#[rstest_bdd_macros::then(
+    "the old controller drains successfully and both survivor mutations succeed within 1800ms of shutdown starting"
+)]
+async fn controller_failover_bound(graceful_controller_failover: &mut GracefulControllerFailover) {
+    let drained = graceful_controller_failover
+        .drain_result
+        .as_ref()
+        .expect("shutdown result");
     assert!(
         drained.is_ok(),
         "the leadership drain completes: {drained:?}"
     );
-    assert!(
-        served < FAILOVER_BOUND,
-        "elected after {elected:?}, served after {served:?}"
-    );
-    shutdown_cluster(cluster).await;
+    let served = graceful_controller_failover
+        .served_after
+        .expect("mutation completion time");
+    assert!(served < FAILOVER_BOUND, "mutations served after {served:?}");
+    assert!(graceful_controller_failover.new_leader != graceful_controller_failover.old_leader);
+    shutdown_cluster(mem::take(&mut graceful_controller_failover.cluster)).await;
 }
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/graceful_failover.feature",
+    name = "Graceful resignation replaces the controller before the fetch timeout"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_gracefully_stopped_controller_is_replaced_within_the_bound(
+    graceful_controller_failover: GracefulControllerFailover,
+) {
+}
+
+use {std::mem, tokio::sync::MutexGuard};

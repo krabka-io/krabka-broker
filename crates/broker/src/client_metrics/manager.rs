@@ -612,106 +612,6 @@ mod tests {
         })
     }
 
-    /// Kafka's `validatePushRequest` order after a `GetTelemetrySubscriptions`
-    /// at T: terminating, throttle, subscription id, compression, size. The
-    /// push timestamp moves once the throttle check passes (#678).
-    #[test]
-    fn push_checks_follow_kafkas_order_and_timestamps() {
-        let m = manager();
-        let img = all_metrics_img("60000");
-        let attrs = attrs();
-        let t = Instant::now();
-        let right = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
-        let wrong = right ^ 0x5555;
-        let secs = |s| t + Duration::from_secs(s);
-        let steps = [
-            (
-                "first push after the get",
-                secs(1),
-                push(TelemetrySubscriptionId(right)),
-                accept(),
-            ),
-            (
-                "early push",
-                secs(2),
-                push(TelemetrySubscriptionId(right)),
-                reject_push(KafkaErrorCode(codes::THROTTLING_QUOTA_EXCEEDED)),
-            ),
-            (
-                "early push with a wrong id is throttled first",
-                secs(3),
-                push(TelemetrySubscriptionId(wrong)),
-                reject_push(KafkaErrorCode(codes::THROTTLING_QUOTA_EXCEEDED)),
-            ),
-            (
-                "timely push with a wrong id",
-                secs(61),
-                push(TelemetrySubscriptionId(wrong)),
-                reject_push(KafkaErrorCode(codes::UNKNOWN_SUBSCRIPTION_ID)),
-            ),
-            (
-                "the rejected push moved the push timestamp",
-                secs(62),
-                push(TelemetrySubscriptionId(right)),
-                reject_push(KafkaErrorCode(codes::THROTTLING_QUOTA_EXCEEDED)),
-            ),
-            (
-                "unsupported compression",
-                secs(122),
-                PushCheck {
-                    compression_supported: false,
-                    payload_len: 4096,
-                    ..push(TelemetrySubscriptionId(right))
-                },
-                reject_push(KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE)),
-            ),
-            (
-                "oversized payload",
-                secs(183),
-                PushCheck {
-                    payload_len: 1025,
-                    ..push(TelemetrySubscriptionId(right))
-                },
-                reject_push(KafkaErrorCode(codes::TELEMETRY_TOO_LARGE)),
-            ),
-            (
-                "a payload of exactly telemetry.max.bytes",
-                secs(244),
-                PushCheck {
-                    payload_len: 1024,
-                    ..push(TelemetrySubscriptionId(right))
-                },
-                accept(),
-            ),
-            (
-                "an early terminating push skips the throttle",
-                secs(245),
-                PushCheck {
-                    terminating: true,
-                    ..push(TelemetrySubscriptionId(right))
-                },
-                accept(),
-            ),
-            (
-                "nothing is accepted after a terminating push",
-                secs(400),
-                push(TelemetrySubscriptionId(right)),
-                reject_push(KafkaErrorCode(codes::INVALID_REQUEST)),
-            ),
-        ];
-        for (name, at, check, expected) in steps {
-            assert_push_at(
-                &m,
-                &img,
-                &attrs,
-                at,
-                check,
-                &expected,
-                &format!("step {name}"),
-            );
-        }
-    }
-
     /// Where Kafka records the terminating flag (#1246). 4.3.1 records it in
     /// a `finally`, after the checks read the old flag, on every push: a
     /// rejected terminating push locks the instance out, and the push that the
@@ -943,73 +843,6 @@ mod tests {
         }
     }
 
-    /// Kafka's `validateGetRequest`: a get inside the interval since the last
-    /// get or push is throttled, unless the last push asked the client to
-    /// fetch again. A throttled get leaves the timestamps alone.
-    #[test]
-    fn get_throttle_follows_kafka() {
-        let m = manager();
-        let img = all_metrics_img("100");
-        let attrs = attrs();
-        let t = Instant::now();
-        let ms = |n| t + Duration::from_millis(n);
-        let id = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
-        let assigned = Outcome::Get(SubscriptionDecision::Assign(SubscriptionAssignment {
-            client_instance_id: attrs.client_instance_id,
-            subscription_id: id,
-            push_interval_ms: 100,
-            metrics: vec!["*".into()],
-        }));
-        let throttled = || reject_get(KafkaErrorCode(codes::THROTTLING_QUOTA_EXCEEDED));
-        let steps = [
-            ("get at 99 ms", ms(99), Step::Get, throttled()),
-            ("get at the interval", ms(100), Step::Get, assigned.clone()),
-            (
-                "push at 150 ms",
-                ms(150),
-                Step::Push(push(TelemetrySubscriptionId(id))),
-                accept(),
-            ),
-            ("get after a recent push", ms(200), Step::Get, throttled()),
-            (
-                "push with a wrong id",
-                ms(260),
-                Step::Push(push(TelemetrySubscriptionId(id ^ 1))),
-                reject_push(KafkaErrorCode(codes::UNKNOWN_SUBSCRIPTION_ID)),
-            ),
-            ("early get after 117", ms(261), Step::Get, assigned.clone()),
-            (
-                "the recovered get did not move the get timestamp",
-                ms(262),
-                Step::Get,
-                throttled(),
-            ),
-            (
-                "push with an unsupported codec",
-                ms(400),
-                Step::Push(PushCheck {
-                    compression_supported: false,
-                    ..push(TelemetrySubscriptionId(id))
-                }),
-                reject_push(KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE)),
-            ),
-            ("early get after 76", ms(401), Step::Get, assigned),
-        ];
-        for (name, at, step, expected) in steps {
-            assert!(
-                run()
-                    .m(&m)
-                    .img(&img)
-                    .attrs(&attrs)
-                    .now(at)
-                    .step(step)
-                    .call()
-                    == expected,
-                "step {name}"
-            );
-        }
-    }
-
     /// A zero id asks for a new one, and any other id is kept (#665).
     #[test]
     fn get_answers_with_the_instance_id_it_used() {
@@ -1163,4 +996,117 @@ mod tests {
             "the rebuilt instance is still locked after a closed"
         );
     }
+    struct TelemetryTimeline {
+        manager: ClientMetricsManager,
+        image: Option<MetadataImage>,
+        attributes: ClientAttributes,
+        origin: Instant,
+        assignment: Option<SubscriptionAssignment>,
+        outcome: Option<Outcome>,
+    }
+    #[rstest::fixture]
+    fn telemetry_timeline() -> TelemetryTimeline {
+        // Every sequence has its own manager, client instance and monotonic clock.
+        TelemetryTimeline {
+            manager: manager(),
+            image: None,
+            attributes: attrs(),
+            origin: Instant::now(),
+            assignment: None,
+            outcome: None,
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a client gets all metrics at time zero with interval {interval} milliseconds"
+    )]
+    fn initial_telemetry_assignment(telemetry_timeline: &mut TelemetryTimeline, interval: i32) {
+        let image = all_metrics_img(&interval.to_string());
+        let assignment = expect_assignment(telemetry_timeline.manager.get_subscription_at(
+            &image,
+            &telemetry_timeline.attributes,
+            telemetry_timeline.origin,
+        ));
+        telemetry_timeline.image = Some(image);
+        telemetry_timeline.assignment = Some(assignment);
+    }
+    #[derive(serde::Deserialize)]
+    struct TelemetryPush {
+        id_xor: i32,
+        compression_supported: bool,
+        payload_len: usize,
+        terminating: bool,
+    }
+    #[rstest_bdd_macros::when("the client pushes at {at} milliseconds with {request}")]
+    fn timed_telemetry_push(telemetry_timeline: &mut TelemetryTimeline, at: u64, request: String) {
+        let request: TelemetryPush = serde_json::from_str(&request).expect("push request");
+        let assignment = telemetry_timeline
+            .assignment
+            .as_ref()
+            .expect("assigned subscription");
+        let check = PushCheck {
+            subscription_id: assignment.subscription_id ^ request.id_xor,
+            compression_supported: request.compression_supported,
+            payload_len: request.payload_len,
+            terminating: request.terminating,
+            unstable: UnstableApiVersions::Disabled,
+        };
+        telemetry_timeline.outcome = Some(Outcome::Push(
+            telemetry_timeline.manager.authorize_push_at(
+                telemetry_timeline
+                    .image
+                    .as_ref()
+                    .expect("subscription metadata"),
+                &telemetry_timeline.attributes,
+                check,
+                telemetry_timeline.origin + Duration::from_millis(at),
+            ),
+        ));
+    }
+    #[rstest_bdd_macros::when("the client requests its subscription at {at} milliseconds")]
+    fn timed_subscription_get(telemetry_timeline: &mut TelemetryTimeline, at: u64) {
+        telemetry_timeline.outcome = Some(Outcome::Get(
+            telemetry_timeline.manager.get_subscription_at(
+                telemetry_timeline
+                    .image
+                    .as_ref()
+                    .expect("subscription metadata"),
+                &telemetry_timeline.attributes,
+                telemetry_timeline.origin + Duration::from_millis(at),
+            ),
+        ));
+    }
+    #[rstest_bdd_macros::then("the telemetry push returns Kafka code {code}")]
+    fn timed_push_response(telemetry_timeline: &TelemetryTimeline, code: i16) {
+        let expected = if code == 0 {
+            accept()
+        } else {
+            reject_push(KafkaErrorCode(code))
+        };
+        assert!(telemetry_timeline.outcome.as_ref().expect("push executed") == &expected);
+    }
+    #[rstest_bdd_macros::then("the subscription request returns Kafka code {code}")]
+    fn timed_get_response(telemetry_timeline: &TelemetryTimeline, code: i16) {
+        let expected = if code == 0 {
+            Outcome::Get(SubscriptionDecision::Assign(
+                telemetry_timeline
+                    .assignment
+                    .as_ref()
+                    .expect("initial subscription")
+                    .clone(),
+            ))
+        } else {
+            reject_get(KafkaErrorCode(code))
+        };
+        assert!(
+            telemetry_timeline
+                .outcome
+                .as_ref()
+                .expect("subscription requested")
+                == &expected
+        );
+    }
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/client_metrics/manager.feature",
+        fixtures = [telemetry_timeline: TelemetryTimeline],
+    );
 }

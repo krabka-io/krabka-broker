@@ -230,6 +230,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        rstest_bdd::datatable::Rows,
     };
 
     fn peek_type(buf: &[u8]) -> i16 {
@@ -363,92 +364,151 @@ mod tests {
         assert!(parse_state_key(&b.freeze()).is_err());
     }
 
-    /// The bytes of each value, derived field by field from Kafka's
-    /// `ShareSnapshotValue.json` and `ShareUpdateValue.json` at version 0:
-    /// the `i16` version, the fixed fields in schema order, a compact batch
-    /// array whose batches each end with an empty tag trailer, and a message
-    /// trailer that carries tag 0 only when `DeliveryCompleteCount` is not
-    /// `-1`.
-    #[test]
-    fn snapshot_values_match_the_kafka_layout() {
-        let rows = [
-            (
-                ShareSnapshotValue {
-                    snapshot_epoch: 0,
-                    state_epoch: 1,
-                    leader_epoch: 0,
-                    start_offset: Offset(-1),
-                    delivery_complete_count: -1,
-                    create_timestamp: 1000,
-                    write_timestamp: 1000,
-                    state_batches: vec![],
-                },
-                "0000 00000000 00000001 00000000 ffffffffffffffff \
-                 00000000000003e8 00000000000003e8 01 00",
-            ),
-            (
-                ShareSnapshotValue {
-                    snapshot_epoch: 3,
-                    state_epoch: 2,
-                    leader_epoch: 4,
-                    start_offset: Offset(10),
-                    delivery_complete_count: 5,
-                    create_timestamp: 1000,
-                    write_timestamp: 2000,
-                    state_batches: vec![
-                        state_batch().bounds(Offset(10)..=Offset(19)).call(),
-                        state_batch()
-                            .bounds(Offset(20)..=Offset(29))
-                            .delivery(FixtureDeliveryState::Acknowledged)
-                            .attempts(DeliveryAttemptCount(3))
-                            .call(),
-                    ],
-                },
-                "0000 00000003 00000002 00000004 000000000000000a \
-                 00000000000003e8 00000000000007d0 03 \
-                 000000000000000a 0000000000000013 00 0001 00 \
-                 0000000000000014 000000000000001d 02 0003 00 \
-                 01 00 04 00000005",
-            ),
-        ];
-        for (value, expected) in rows {
-            let bytes = value.encode();
-            check!(bytes.as_ref() == hex(expected).as_slice());
-            check!(ShareSnapshotValue::decode(&bytes).unwrap() == value);
+    #[derive(Default)]
+    struct ShareValueScenario {
+        snapshot: Option<ShareSnapshotValue>,
+        update: Option<ShareUpdateValue>,
+        encoded: Option<Bytes>,
+        decoded_snapshot: Option<ShareSnapshotValue>,
+        decoded_update: Option<ShareUpdateValue>,
+    }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct BatchLayout {
+        first: i64,
+        last: i64,
+        delivery: String,
+        attempts: i16,
+    }
+
+    #[rstest::fixture]
+    fn share_value() -> ShareValueScenario {
+        // Keep share value inputs and observations fresh for each scenario.
+        ShareValueScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "a share snapshot has snapshot epoch {snapshot}, state epoch {state}, leader epoch {leader}, and start offset {start}"
+    )]
+    fn share_snapshot_fields(
+        share_value: &mut ShareValueScenario,
+        snapshot: i32,
+        state: i32,
+        leader: i32,
+        start: i64,
+    ) {
+        share_value.snapshot = Some(ShareSnapshotValue {
+            snapshot_epoch: snapshot,
+            state_epoch: state,
+            leader_epoch: leader,
+            start_offset: Offset(start),
+            delivery_complete_count: -1,
+            create_timestamp: 0,
+            write_timestamp: 0,
+            state_batches: Vec::new(),
+        });
+    }
+
+    #[rstest_bdd_macros::given(
+        "snapshot creation time is {created}, write time is {written}, and delivery-complete count is {complete}"
+    )]
+    fn share_snapshot_timestamps(
+        share_value: &mut ShareValueScenario,
+        created: i64,
+        written: i64,
+        complete: i32,
+    ) {
+        let snapshot = share_value.snapshot.as_mut().expect("a snapshot was given");
+        snapshot.create_timestamp = created;
+        snapshot.write_timestamp = written;
+        snapshot.delivery_complete_count = complete;
+    }
+
+    #[rstest_bdd_macros::given(
+        "a share update has snapshot epoch {snapshot}, leader epoch {leader}, start offset {start}, and delivery-complete count {complete}"
+    )]
+    fn share_update_fields(
+        share_value: &mut ShareValueScenario,
+        snapshot: i32,
+        leader: i32,
+        start: i64,
+        complete: i32,
+    ) {
+        share_value.update = Some(ShareUpdateValue {
+            snapshot_epoch: snapshot,
+            leader_epoch: leader,
+            start_offset: Offset(start),
+            delivery_complete_count: complete,
+            state_batches: Vec::new(),
+        });
+    }
+
+    #[rstest_bdd_macros::given("the persisted share-state batches are:")]
+    fn share_state_batches(
+        share_value: &mut ShareValueScenario,
+        #[datatable] rows: Rows<BatchLayout>,
+    ) {
+        let batches: Vec<_> = rows
+            .into_iter()
+            .map(|row| {
+                let delivery = match row.delivery.as_str() {
+                    "available" => FixtureDeliveryState::Available,
+                    "acknowledged" => FixtureDeliveryState::Acknowledged,
+                    other => panic!("unknown delivery state: {other}"),
+                };
+                state_batch()
+                    .bounds(Offset(row.first)..=Offset(row.last))
+                    .delivery(delivery)
+                    .attempts(DeliveryAttemptCount(row.attempts))
+                    .call()
+            })
+            .collect();
+        match (&mut share_value.snapshot, &mut share_value.update) {
+            (Some(snapshot), None) => snapshot.state_batches = batches,
+            (None, Some(update)) => update.state_batches = batches,
+            _ => panic!("exactly one snapshot or update was given"),
         }
     }
 
-    #[test]
-    fn update_values_match_the_kafka_layout() {
-        let rows = [
-            (
-                ShareUpdateValue {
-                    snapshot_epoch: 3,
-                    leader_epoch: 4,
-                    start_offset: Offset(12),
-                    delivery_complete_count: -1,
-                    state_batches: vec![state_batch().bounds(Offset(12)..=Offset(15)).call()],
-                },
-                "0000 00000003 00000004 000000000000000c 02 \
-                 000000000000000c 000000000000000f 00 0001 00 00",
-            ),
-            (
-                ShareUpdateValue {
-                    snapshot_epoch: 3,
-                    leader_epoch: 4,
-                    start_offset: Offset(12),
-                    delivery_complete_count: 7,
-                    state_batches: vec![],
-                },
-                "0000 00000003 00000004 000000000000000c 01 01 00 04 00000007",
-            ),
-        ];
-        for (value, expected) in rows {
-            let bytes = value.encode();
-            check!(bytes.as_ref() == hex(expected).as_slice());
-            check!(ShareUpdateValue::decode(&bytes).unwrap() == value);
-        }
+    #[rstest_bdd_macros::when("the share snapshot is encoded and decoded as a coordinator record")]
+    fn encode_share_snapshot(share_value: &mut ShareValueScenario) {
+        let snapshot = share_value.snapshot.as_ref().expect("a snapshot was given");
+        let encoded = snapshot.encode();
+        share_value.decoded_snapshot = Some(ShareSnapshotValue::decode(&encoded).unwrap());
+        share_value.encoded = Some(encoded);
     }
+
+    #[rstest_bdd_macros::when("the share update is encoded and decoded as a coordinator record")]
+    fn encode_share_update(share_value: &mut ShareValueScenario) {
+        let update = share_value.update.as_ref().expect("an update was given");
+        let encoded = update.encode();
+        share_value.decoded_update = Some(ShareUpdateValue::decode(&encoded).unwrap());
+        share_value.encoded = Some(encoded);
+    }
+
+    #[rstest_bdd_macros::then("the version-zero share record bytes are {expected}")]
+    fn kafka_share_record_bytes(share_value: &ShareValueScenario, expected: String) {
+        let encoded = share_value
+            .encoded
+            .as_ref()
+            .expect("the share value was encoded");
+        check!(encoded.as_ref() == hex(&expected).as_slice());
+    }
+
+    #[rstest_bdd_macros::then("decoding preserves every field of the share snapshot")]
+    fn decoded_share_snapshot(share_value: &ShareValueScenario) {
+        check!(share_value.decoded_snapshot == share_value.snapshot);
+    }
+
+    #[rstest_bdd_macros::then("decoding preserves every field of the share update")]
+    fn decoded_share_update(share_value: &ShareValueScenario) {
+        check!(share_value.decoded_update == share_value.update);
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_coordinator/persistence",
+        fixtures = [share_value: ShareValueScenario]
+    );
 
     /// A reader skips a tag it does not know, and refuses a version other
     /// than 0 and a malformed tag 0.

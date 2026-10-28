@@ -1083,15 +1083,6 @@ mod tests {
         );
     }
 
-    fn check_failover_violation(dir: &Path, krabka: &RunOutput, expected: &str) {
-        check_failover_runs(
-            dir,
-            krabka,
-            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
-            &[expected],
-        );
-    }
-
     fn check_failover_runs(dir: &Path, krabka: &RunOutput, kafka: &RunOutput, expected: &[&str]) {
         write_failover_runs(dir, krabka, kafka);
         let violations = failover_gate_violations(&load_runs(dir, true).unwrap());
@@ -1262,21 +1253,75 @@ mod tests {
         }
     }
 
-    fn check_slow_rate_recovery(mut krabka: RunOutput, expected: &str) {
-        let dir = tempdir().unwrap();
-        krabka.samples.push(rate_recovery_tail());
-        check_failover_violation(dir.path(), &krabka, expected);
+    struct FailoverGateScenario {
+        directory: tempfile::TempDir,
+        krabka: RunOutput,
+        kafka: RunOutput,
+        violations: Vec<String>,
     }
 
-    #[test]
-    fn failover_gate_fails_when_krabka_message_rate_recovers_slower_than_kafka() {
-        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
-        krabka.samples[3].producer_rate = per_sec(8500);
-        check_slow_rate_recovery(
-            krabka,
-            "Krabka producer rate recovery 4s is slower than kafka 2s",
-        );
+    #[rstest::fixture]
+    fn failover_gate() -> FailoverGateScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        FailoverGateScenario {
+            directory: tempdir().expect("failover report directory"),
+            krabka: fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)),
+            kafka: fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+            violations: Vec::new(),
+        }
     }
+
+    #[rstest_bdd_macros::given("comparable Krabka and Kafka failover measurements")]
+    fn comparable_failover_runs(failover_gate: &mut FailoverGateScenario) {
+        failover_gate.krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
+        failover_gate.kafka = fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000));
+    }
+
+    #[rstest_bdd_macros::given(
+        "Krabka's {metric} rate is {rate} per second at 6 seconds and recovers at 8 seconds"
+    )]
+    fn slow_failover_rate(failover_gate: &mut FailoverGateScenario, metric: String, rate: u32) {
+        let sample = &mut failover_gate.krabka.samples[3];
+        match metric.as_str() {
+            "producer" => sample.producer_rate = per_sec(rate),
+            "consumer" => sample.consumer_rate = per_sec(rate),
+            _ => panic!("unknown benchmark rate {metric}"),
+        }
+        failover_gate.krabka.samples.push(rate_recovery_tail());
+    }
+
+    #[rstest_bdd_macros::given(
+        "Krabka drops {dropped} messages and reaches {latency} milliseconds maximum latency"
+    )]
+    fn disturbed_failover(failover_gate: &mut FailoverGateScenario, dropped: u64, latency: u32) {
+        let disturbance = failover_gate
+            .krabka
+            .disturbance
+            .as_mut()
+            .expect("a failover disturbance");
+        disturbance.dropped = MessageCount(dropped);
+        disturbance.latency_spike_max = millis(latency);
+    }
+
+    #[rstest_bdd_macros::when("the recorded failover runs are checked against the Kafka baseline")]
+    fn compare_failover_runs(failover_gate: &mut FailoverGateScenario) {
+        write_failover_runs(
+            failover_gate.directory.path(),
+            &failover_gate.krabka,
+            &failover_gate.kafka,
+        );
+        let loaded =
+            load_runs(failover_gate.directory.path(), true).expect("recorded failover runs load");
+        failover_gate.violations = failover_gate_violations(&loaded);
+    }
+
+    #[rstest_bdd_macros::then("the failover gate reports {expected}")]
+    fn failover_gate_violation(failover_gate: &FailoverGateScenario, expected: String) {
+        assert_violation_contains(&failover_gate.violations, &expected);
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/failover_qualification", fixtures = [failover_gate: FailoverGateScenario]);
 
     #[test]
     fn failover_gate_fails_when_krabka_message_rate_never_recovers() {
@@ -1299,40 +1344,6 @@ mod tests {
         let violations = failover_gate_violations(&load_runs(dir.path(), true).unwrap());
 
         assert_violation_contains(&violations, "Krabka producer rate did not recover");
-    }
-
-    #[test]
-    fn failover_gate_fails_when_krabka_consumer_rate_recovers_slower_than_kafka() {
-        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
-        krabka.samples[3].consumer_rate = per_sec(8000);
-        check_slow_rate_recovery(
-            krabka,
-            "Krabka consumer rate recovery 4s is slower than kafka 2s",
-        );
-    }
-
-    #[test]
-    fn failover_gate_rejects_worse_drops_and_latency_than_kafka() {
-        let rows = [
-            (
-                MessageCount(5),
-                millis(42),
-                "Krabka dropped 5 messages vs kafka 0",
-            ),
-            (
-                MessageCount(0),
-                millis(90),
-                "Krabka latency spike 90ms is higher than kafka 42ms",
-            ),
-        ];
-        for (dropped, latency, expected) in rows {
-            let dir = tempdir().unwrap();
-            let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
-            let disturbance = krabka.disturbance.as_mut().unwrap();
-            disturbance.dropped = dropped;
-            disturbance.latency_spike_max = latency;
-            check_failover_violation(dir.path(), &krabka, expected);
-        }
     }
 
     fn write_comparison_runs(dir: &Path) {

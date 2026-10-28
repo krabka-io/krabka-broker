@@ -114,53 +114,6 @@ fn loaded_group(
 // every loaded member supports the selected protocol with its stored
 // subscription, a stored rebalance timeout of -1 becomes the session timeout,
 // and an empty protocol type becomes no protocol type.
-#[test]
-fn replay_rebuilds_the_group_as_kafka_loads_it() {
-    let secs = Duration::from_secs;
-    let cases = [
-        (
-            "a static member with a stored rebalance timeout",
-            stored_group("consumer", Some("range"), vec![stored_member(
-                Some("inst"),
-                45_000,
-                30_000,
-            )]),
-            loaded_group(Some("inst"), secs(45), secs(30)),
-        ),
-        (
-            "a member whose stored rebalance timeout is -1",
-            stored_group("consumer", Some("range"), vec![stored_member(
-                None, -1, 30_000,
-            )]),
-            loaded_group(None, secs(30), secs(30)),
-        ),
-        (
-            "an empty group with an empty protocol type",
-            stored_group("", None, vec![]),
-            ClassicState {
-                generation_id: 5,
-                ..ClassicState::new("g")
-            },
-        ),
-    ];
-    // Every row is replayed before the one comparison, so a failure shows
-    // each row that differs.
-    let mut replayed_rows = Vec::new();
-    let mut expected_rows = Vec::new();
-    for (name, value, mut expected) in cases {
-        let mut replayed = ClassicState::new("g");
-        apply_group_metadata(&mut replayed, value, 0);
-        // Replay stamps each member's last heartbeat with the load time.
-        for (member_id, member) in &mut expected.members {
-            if let Some(loaded) = replayed.members.get(member_id) {
-                member.last_heartbeat = loaded.last_heartbeat;
-            }
-        }
-        replayed_rows.push((name, replayed));
-        expected_rows.push((name, expected));
-    }
-    assert!(replayed_rows == expected_rows);
-}
 
 // Queues a `JoinGroup` v5 from `member_id` that proposes `range` with
 // `metadata`, and returns the channel its reply arrives on.
@@ -271,3 +224,80 @@ async fn a_replayed_group_admits_a_new_member_that_proposes_its_protocol() {
             }
     );
 }
+
+use rstest_bdd_macros::{given, scenarios, then, when};
+#[derive(Default)]
+struct ClassicLoad {
+    stored: Option<GroupMetadataValue>,
+    loaded: Option<ClassicState>,
+    expected: Option<ClassicState>,
+}
+#[rstest::fixture]
+fn classic_load() -> ClassicLoad {
+    // Start this scenario with fresh inputs and observations.
+
+    ClassicLoad::default()
+}
+#[given(
+    "a persisted classic consumer member has instance {instance} rebalance timeout {rebalance} and session timeout {session} milliseconds"
+)]
+fn persisted_classic_member(
+    classic_load: &mut ClassicLoad,
+    instance: String,
+    rebalance: i32,
+    session: i32,
+) {
+    let instance = if instance == "absent" {
+        None
+    } else {
+        Some(instance.as_str())
+    };
+    classic_load.stored = Some(stored_group("consumer", Some("range"), vec![
+        stored_member(instance, rebalance, session),
+    ]));
+    let rebalance = if rebalance == -1 { session } else { rebalance };
+    classic_load.expected = Some(loaded_group(
+        instance,
+        Duration::from_millis(u64::try_from(rebalance).expect("rebalance milliseconds")),
+        Duration::from_millis(u64::try_from(session).expect("session milliseconds")),
+    ));
+}
+#[given("persisted classic group g is empty with an empty protocol type and generation 5")]
+fn persisted_empty_classic_group(classic_load: &mut ClassicLoad) {
+    classic_load.stored = Some(stored_group("", None, vec![]));
+    classic_load.expected = Some(ClassicState {
+        generation_id: 5,
+        ..ClassicState::new("g")
+    });
+}
+#[when("bootstrap applies the classic group metadata record")]
+fn replay_classic_group(classic_load: &mut ClassicLoad) {
+    let mut loaded = ClassicState::new("g");
+    apply_group_metadata(
+        &mut loaded,
+        classic_load
+            .stored
+            .take()
+            .expect("persisted group prepared"),
+        0,
+    );
+    classic_load.loaded = Some(loaded);
+}
+#[then(
+    "the loaded classic group preserves all stored member and protocol fields with Kafka timeout defaults"
+)]
+fn loaded_classic_group(classic_load: &ClassicLoad) {
+    let loaded = classic_load.loaded.as_ref().expect("group replayed");
+    let mut expected = classic_load
+        .expected
+        .as_ref()
+        .expect("expected group")
+        .clone();
+    for (identifier, member) in &mut expected.members {
+        if let Some(replayed) = loaded.members.get(identifier) {
+            member.last_heartbeat = replayed.last_heartbeat;
+        }
+    }
+    assert!(loaded == &expected);
+}
+scenarios!("tests/features/migrated/src/coordinator/bootstrap/classic_state_tests.feature",fixtures=[classic_load:ClassicLoad]);

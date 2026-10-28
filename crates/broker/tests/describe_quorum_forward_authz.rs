@@ -68,56 +68,91 @@ impl Authorizer for ClusterActionForEveryoneDescribeForAlice {
 
 use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
-/// A caller holding `Describe` succeeds even when the node it asks is not the
-/// active controller and has to forward the request: the forward carries
-/// alice's own principal, which this test's authorizer grants `Describe`,
-/// not the inter-broker identity, which it explicitly does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
-    let cluster = start_n_node_with(2, |_, cfg: &mut BrokerConfig| {
-        // Replace the default plaintext data listener with SASL/PLAIN, bound
-        // to the same address `start_n_node_with` already reserved, so alice
-        // authenticates as herself rather than as `ANONYMOUS`.
-        cfg.listeners = vec![listeners::listener(
+#[derive(Default)]
+struct AuthorizedQuorumForwarding {
+    cluster: Vec<(krabka_broker::BrokerHandle, BrokerConfig, tempfile::TempDir)>,
+    leader: i32,
+    response: Option<DescribeQuorumResponse>,
+}
+#[rstest::fixture]
+fn authorized_quorum_forwarding() -> AuthorizedQuorumForwarding {
+    let cluster = Vec::new();
+    AuthorizedQuorumForwarding {
+        cluster,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a two-voter SASL PLAIN cluster grants ClusterAction to everyone and Describe only to alice"
+)]
+async fn caller_authorized_quorum(authorized_quorum_forwarding: &mut AuthorizedQuorumForwarding) {
+    let cluster = start_n_node_with(2, |_, config: &mut BrokerConfig| {
+        config.listeners = vec![listeners::listener(
             "SASL_PLAINTEXT",
-            cfg.listen_addr,
+            config.listen_addr,
             ListenerProtocol::SaslPlaintext,
         )];
-        cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
-        cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-        cfg.plain_credentials
+        config.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
+        config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+        config
+            .plain_credentials
             .insert(ALICE.to_owned(), ALICE_PASSWORD.to_owned());
-        cfg.authorizer = Arc::new(ClusterActionForEveryoneDescribeForAlice);
+        config.authorizer = Arc::new(ClusterActionForEveryoneDescribeForAlice);
     })
     .await
-    .expect("2-node cluster");
-
-    // Ask node 0 first to learn the elected leader, whichever role it holds.
-    let (_, first_cfg, _dir0) = &cluster[0];
-    let first_client = sasl_client(&first_cfg.listen_addr.to_string(), ALICE, ALICE_PASSWORD).await;
-    let first_resp = first_client
+    .expect("two-voter cluster");
+    let client = sasl_client(&cluster[0].1.listen_addr.to_string(), ALICE, ALICE_PASSWORD).await;
+    let initial = client
         .send(describe_quorum_request())
         .await
-        .expect("describe_quorum from node 0");
-    check!(first_resp.error_code == 0, "top-level error_code");
-    let leader_id = two_node_leader(&first_resp, (1, 2));
-    let follower_cfg = follower_config(&cluster, leader_id);
-    let follower_client =
-        sasl_client(&follower_cfg.listen_addr.to_string(), ALICE, ALICE_PASSWORD).await;
-    let follower_resp = follower_client
-        .send(describe_quorum_request())
-        .await
-        .expect("describe_quorum from the follower");
-
-    check!(follower_resp.error_code == 0, "top-level error_code");
-    let partition = &follower_resp.topics[0].partitions[0];
+        .expect("initial quorum description");
+    check!(initial.error_code == 0, "initial top-level error code");
+    authorized_quorum_forwarding.leader = two_node_leader(&initial, (1, 2));
+    authorized_quorum_forwarding.cluster = cluster;
+}
+#[rstest_bdd_macros::when("alice sends DescribeQuorum to the elected leader's follower")]
+async fn describe_quorum_as_original_caller(
+    authorized_quorum_forwarding: &mut AuthorizedQuorumForwarding,
+) {
+    let follower = follower_config(
+        &authorized_quorum_forwarding.cluster,
+        authorized_quorum_forwarding.leader,
+    );
+    let client = sasl_client(&follower.listen_addr.to_string(), ALICE, ALICE_PASSWORD).await;
+    authorized_quorum_forwarding.response = Some(
+        client
+            .send(describe_quorum_request())
+            .await
+            .expect("forwarded quorum description"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the forwarded quorum response succeeds at both levels and identifies the elected leader"
+)]
+async fn authorized_forwarded_quorum(
+    authorized_quorum_forwarding: &mut AuthorizedQuorumForwarding,
+) {
+    let response = authorized_quorum_forwarding
+        .response
+        .as_ref()
+        .expect("forwarded response");
+    check!(response.error_code == 0, "top-level error code");
+    let partition = &response.topics[0].partitions[0];
     check!(
         partition.error_code == 0,
-        "the follower must forward under alice's own identity, which this \
-         test's authorizer grants Describe, not its inter-broker one, which \
-         it does not: {partition:?}"
+        "forwarding must authorize alice rather than the inter-broker principal: {partition:?}"
     );
-    check!(partition.leader_id == leader_id);
-
-    shutdown_cluster(cluster).await;
+    check!(partition.leader_id == authorized_quorum_forwarding.leader);
+    shutdown_cluster(mem::take(&mut authorized_quorum_forwarding.cluster)).await;
 }
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/caller_quorum_forward.feature",
+    name = "Forwarding preserves the Describe-authorized caller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower(
+    authorized_quorum_forwarding: AuthorizedQuorumForwarding,
+) {
+}
+
+use {krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse, std::mem};

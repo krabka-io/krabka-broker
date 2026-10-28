@@ -355,20 +355,64 @@ mod tests {
         assert2::assert!((got.max_connections, got.listener_max_connections) == (want, want));
     }
 
-    #[yare::parameterized(
-        empty = { "", Some(overrides(&[])) },
-        one = { "127.0.0.1:2", Some(overrides(&[("127.0.0.1", 2)])) },
-        spaced = { " a.example : 3 , b:4 ", Some(overrides(&[("a.example", 3), ("b", 4)])) },
-        ipv6_splits_on_last_colon = { "::1:5", Some(overrides(&[("::1", 5)])) },
-        trailing_comma = { "a:1,", Some(overrides(&[("a", 1)])) },
-        last_duplicate_wins = { "a:1,a:2", Some(overrides(&[("a", 2)])) },
-        negative_refuses_all = { "a:-1", Some(overrides(&[("a", 0)])) },
-        leading_comma = { ",a:1", None },
-        no_colon = { "a", None },
-        not_a_number = { "a:x", None },
-        bad_host = { "a/b:1", None },
-    )]
-    fn overrides_parse_as_kafka_parses_them(value: &str, want: Option<BTreeMap<String, usize>>) {
-        assert2::assert!(parse_overrides(value) == want);
+    use {
+        rstest::fixture,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+
+    struct ConnectionOverrides {
+        value: Option<String>,
+        parsed: Slot<Option<BTreeMap<String, usize>>>,
     }
+
+    #[fixture]
+    fn quota() -> ConnectionOverrides {
+        // Start this scenario with fresh inputs and observations.
+
+        ConnectionOverrides {
+            value: None,
+            parsed: Slot::default(),
+        }
+    }
+
+    #[given("the per-IP connection override text is {quoted}")]
+    fn override_text(quota: &mut ConnectionOverrides, quoted: String) {
+        quota.value = Some(
+            quoted
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .expect("the feature preserves exact whitespace inside double quotes")
+                .to_owned(),
+        );
+    }
+
+    #[when("Kafka per-IP override parsing is applied")]
+    fn parse_override_text(quota: &mut ConnectionOverrides) {
+        quota.parsed.set(parse_overrides(
+            quota.value.as_deref().expect("override text was given"),
+        ));
+    }
+
+    #[derive(DataTableRow)]
+    struct OverrideRow {
+        host: String,
+        maximum_connections: usize,
+    }
+
+    #[then("the parsed per-IP overrides are:")]
+    fn parsed_overrides(quota: &ConnectionOverrides, #[datatable] rows: Rows<OverrideRow>) {
+        let expected: BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| (row.host, row.maximum_connections))
+            .collect();
+        assert2::assert!(quota.parsed.get().as_ref() == Some(&Some(expected)));
+    }
+
+    #[then("the entire per-IP override value is rejected")]
+    fn rejected_overrides(quota: &ConnectionOverrides) {
+        assert2::assert!(quota.parsed.get() == Some(None));
+    }
+
+    scenarios!("tests/features/migrated/src/connection_limiter/settings.feature", fixtures = [quota: ConnectionOverrides]);
 }

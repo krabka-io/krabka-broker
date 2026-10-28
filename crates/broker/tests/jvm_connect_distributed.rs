@@ -49,12 +49,14 @@ use {
     },
     assert2::assert,
     jvm_acceptance::broker0_advertised,
+    krabka_broker::BrokerHandle,
     std::{
         io::{self, Error, ErrorKind, Read as _, Write as _},
         net::TcpStream,
         process::Command,
         time::Duration,
     },
+    tempfile::TempDir,
     tokio::{time, time::Instant},
 };
 
@@ -74,12 +76,6 @@ const DATA_TOPIC: &str = "krabka-connect-file";
 /// Where the connectors' files live inside the worker container.
 const SOURCE_FILE: &str = "/tmp/connect-data/source.txt";
 const SINK_FILE: &str = "/tmp/connect-data/sink.txt";
-
-/// What the source file holds, and therefore what the sink file must end up
-/// holding. `FileStreamSourceConnector` emits one record per line and
-/// `FileStreamSinkConnector` writes one line per record, so the round trip is
-/// line for line.
-const LINES: [&str; 3] = ["connect-line-1", "connect-line-2", "connect-line-3"];
 
 /// How long the worker gets to boot far enough to serve its REST API. It has
 /// to create and then fully replay three topics before the herder completes,
@@ -108,10 +104,10 @@ impl ConnectWorker {
     /// Start the worker against `bootstrap` and return once `docker run` has
     /// accepted it. The process inside is still booting; [`Self::wait_for_rest`]
     /// is what waits for it.
-    fn start(bootstrap: &str) -> Self {
+    fn start(bootstrap: &str, lines: &[String]) -> Self {
         let container = support::unique_container_name("krabka-connect");
         let rest_port = support::free_port();
-        let source_lines = LINES.join("\\n");
+        let source_lines = lines.join("\\n");
         // Written as one script rather than a bind mount: the image runs as a
         // non-root user, and everything the worker needs -- the plugin
         // directory, the source file, the properties -- is container-local.
@@ -211,24 +207,6 @@ impl ConnectWorker {
         }
     }
 
-    /// `PUT /connectors/<name>/config`, which creates or replaces a connector.
-    /// `PUT` rather than `POST /connectors`, so a retry is not a conflict.
-    fn put_connector(&self, name: &str, config: &str) {
-        let RestResponse { status, body } = http(
-            &self.rest,
-            "PUT",
-            &format!("/connectors/{name}/config"),
-            Some(config),
-        )
-        .expect("PUT the connector config");
-        assert!(
-            (200..300).contains(&status),
-            "registering the {name} connector failed with HTTP {status}: {body}\n\
-             worker logs:\n{}",
-            self.logs(),
-        );
-    }
-
     /// Block until `name` and every one of its tasks report `RUNNING`.
     ///
     /// A `FAILED` state ends the wait immediately: the task's own trace is in
@@ -263,7 +241,7 @@ impl ConnectWorker {
     }
 
     /// Block until the sink file holds exactly the source file's lines.
-    async fn wait_for_round_trip(&self) {
+    async fn wait_for_round_trip(&self, expected: &[String]) -> Vec<String> {
         let deadline = Instant::now() + ROUND_TRIP_BUDGET;
         loop {
             let sink: Vec<String> = self
@@ -274,13 +252,13 @@ impl ConnectWorker {
                 .filter(|line| !line.is_empty())
                 .map(str::to_owned)
                 .collect();
-            if sink == LINES {
-                return;
+            if sink == expected {
+                return sink;
             }
             assert!(
                 Instant::now() < deadline,
                 "the FileStream sink file never matched the source file within \
-                 {ROUND_TRIP_BUDGET:?}; sink held {sink:?}, source holds {LINES:?}\n\
+                 {ROUND_TRIP_BUDGET:?}; sink held {sink:?}, source holds {expected:?}\n\
                  worker logs:\n{}",
                 self.logs(),
             );
@@ -353,52 +331,125 @@ fn describe_topic_configs(bootstrap: &str, topic: &str) -> String {
 /// Create a one-partition topic through the JVM `kafka-topics` tool.
 fn create_topic(bootstrap: &str, topic: &str) { create_console_topic_at(bootstrap, topic); }
 
-/// A distributed Connect worker boots against krabka, runs a `FileStream`
-/// source and sink over one topic, and the file survives the round trip.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn connect_distributed_worker_round_trips_a_file_through_krabka() {
-    let (broker, _dir) = jvm_acceptance::start_host_broker().await;
-    let bootstrap = broker0_advertised();
+struct FileConnect {
+    broker: Option<(BrokerHandle, TempDir)>,
+    worker: Option<ConnectWorker>,
+    source: Vec<String>,
+    configured: Vec<(String, RestResponse)>,
+    stores: Vec<(String, String)>,
+}
+#[rstest::fixture]
+fn connect() -> FileConnect {
+    // Start this scenario with fresh inputs and observations.
 
-    // The FileStream connectors do not create their topic, and the sink's
-    // consumer would otherwise join a group over a topic that is not there.
-    create_topic(bootstrap, DATA_TOPIC);
-
-    let worker = ConnectWorker::start(bootstrap);
-    worker.wait_for_rest().await;
-
-    worker.put_connector(
-        "krabka-file-source",
-        &format!(
-            r#"{{"connector.class":"org.apache.kafka.connect.file.FileStreamSourceConnector",
-                 "tasks.max":"1","file":"{SOURCE_FILE}","topic":"{DATA_TOPIC}"}}"#
-        ),
-    );
-    worker.put_connector(
-        "krabka-file-sink",
-        &format!(
-            r#"{{"connector.class":"org.apache.kafka.connect.file.FileStreamSinkConnector",
-                 "tasks.max":"1","file":"{SINK_FILE}","topics":"{DATA_TOPIC}"}}"#
-        ),
-    );
-
-    worker.wait_until_running("krabka-file-source", 1).await;
-    worker.wait_until_running("krabka-file-sink", 1).await;
-    worker.wait_for_round_trip().await;
-
-    // The three `KafkaBasedLog` stores. Connect compacts all of them, because
-    // each is a keyed log it replays in full on every worker start.
-    for topic in [CONFIG_TOPIC, OFFSET_TOPIC, STATUS_TOPIC] {
-        let configs = describe_topic_configs(bootstrap, topic);
+    FileConnect {
+        broker: None,
+        worker: None,
+        source: Vec::new(),
+        configured: Vec::new(),
+        stores: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given("a host broker exposes topic krabka-connect-file and this source file")]
+async fn source_file(connect: &mut FileConnect, docstring: String) {
+    connect.broker = Some(jvm_acceptance::start_host_broker().await);
+    create_topic(broker0_advertised(), DATA_TOPIC);
+    connect.source = docstring
+        .trim_matches('\n')
+        .lines()
+        .map(str::to_owned)
+        .collect();
+}
+#[rstest_bdd_macros::when(
+    "the Kafka 4.3.1 distributed worker starts with compacted config, offset and status stores"
+)]
+fn start_worker(connect: &mut FileConnect) {
+    connect.worker = Some(ConnectWorker::start(broker0_advertised(), &connect.source));
+}
+#[rstest_bdd_macros::then(
+    "the worker serves its REST API after replaying internal stores and joining its group"
+)]
+async fn worker_ready(connect: &FileConnect) {
+    connect
+        .worker
+        .as_ref()
+        .expect("worker")
+        .wait_for_rest()
+        .await;
+}
+#[rstest_bdd_macros::when("connector {name} is configured through REST")]
+fn configure_connector(connect: &mut FileConnect, name: String, docstring: String) {
+    let worker = connect.worker.as_ref().expect("worker");
+    let response = http(
+        &worker.rest,
+        "PUT",
+        &format!("/connectors/{name}/config"),
+        Some(docstring.trim()),
+    )
+    .expect("configure connector");
+    connect.configured.push((name, response));
+}
+#[rstest_bdd_macros::then(
+    "each connector configuration is accepted and each connector and its one task reach RUNNING"
+)]
+async fn running_tasks(connect: &FileConnect) {
+    let worker = connect.worker.as_ref().expect("worker");
+    assert!(connect.configured.len() == 2);
+    for (name, response) in &connect.configured {
+        assert!(
+            (200..300).contains(&response.status),
+            "HTTP{}: {}",
+            response.status,
+            response.body
+        );
+        worker.wait_until_running(name, 1).await;
+    }
+}
+#[rstest_bdd_macros::then("the sink file eventually contains exactly these source lines")]
+async fn round_trip(connect: &FileConnect, datatable: Vec<Vec<String>>) {
+    let expected: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [line]: [String; 1] = row.try_into().expect("line");
+            line
+        })
+        .collect();
+    let observed = connect
+        .worker
+        .as_ref()
+        .expect("worker")
+        .wait_for_round_trip(&expected)
+        .await;
+    assert!(observed == expected);
+}
+#[rstest_bdd_macros::when("the operator describes these Connect store topics")]
+fn store_configs(connect: &mut FileConnect, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [topic]: [String; 1] = row.try_into().expect("topic");
+        let configs = describe_topic_configs(broker0_advertised(), &topic);
+        connect.stores.push((topic, configs));
+    }
+}
+#[rstest_bdd_macros::then("all three internal topics report cleanup.policy=compact")]
+fn compacted_stores(connect: &FileConnect) {
+    assert!(connect.stores.len() == 3);
+    for (topic, configs) in &connect.stores {
         assert!(
             configs.contains("cleanup.policy=compact"),
-            "the Connect store topic {topic} must carry cleanup.policy=compact; \
-             kafka-configs said:\n{configs}\nworker logs:\n{}",
-            worker.logs(),
+            "{topic}: {configs}\n{}",
+            connect.worker.as_ref().expect("worker").logs()
         );
     }
-
-    drop(worker);
-    broker.shutdown().await;
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_connect_distributed.feature",
+    name = "connect distributed worker round trips a file through krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connect_distributed_worker_round_trips_a_file_through_krabka(connect: FileConnect) {
+    drop(connect.worker.take());
+    connect.broker.take().expect("broker").0.shutdown().await;
+    drop(connect);
 }

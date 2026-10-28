@@ -420,40 +420,59 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
     broker_handle.shutdown().await;
 }
 
-/// The partition records of an unregistration are built from the image of the
-/// node that runs it, and only the active controller's image is current. Any
-/// other node answers `NOT_CONTROLLER` with Kafka's wrong-controller message
-/// and appends nothing, so a follower or an observer whose image trails cannot
-/// roll back the leader, epoch and ISR that the controller committed since.
-#[test]
-fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
-    let node = NodeId(1);
-    let not_controller = |message: &str| {
+#[derive(Default)]
+struct UnregisterControllerScenario {
+    leader: Option<NodeId>,
+    responses: Vec<Option<UnregisterBrokerResponse>>,
+}
+#[rstest::fixture]
+fn unregister_controller() -> UnregisterControllerScenario {
+    let responses = Vec::new();
+    UnregisterControllerScenario {
+        responses,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "node 1 receives unregistration while the active controller is {leader}"
+)]
+fn unregister_controller_leader(
+    unregister_controller: &mut UnregisterControllerScenario,
+    leader: String,
+) {
+    unregister_controller.leader = if leader == "unknown" {
+        None
+    } else {
+        Some(NodeId(leader.parse().unwrap()))
+    };
+}
+#[rstest_bdd_macros::when("node 1 decides whether controller unregistration can run locally")]
+fn check_unregister_controller(unregister_controller: &mut UnregisterControllerScenario) {
+    unregister_controller
+        .responses
+        .push(wire::not_controller_refusal(
+            unregister_controller.leader,
+            NodeId(1),
+        ));
+}
+#[rstest_bdd_macros::then("controller routing returns error {code} with message {message}")]
+fn assert_unregister_controller(
+    unregister_controller: &UnregisterControllerScenario,
+    code: i16,
+    message: String,
+) {
+    let expected = if code == codes::NONE {
+        None
+    } else {
         Some(UnregisterBrokerResponse {
-            error_code: codes::NOT_CONTROLLER,
-            error_message: Some(message.to_owned()),
+            error_code: code,
+            error_message: Some(message),
             ..Default::default()
         })
     };
-    for (what, leader, expected) in [
-        ("this node leads", Some(NodeId(1)), None),
-        (
-            "another node leads",
-            Some(NodeId(3)),
-            not_controller("The active controller appears to be node 3."),
-        ),
-        (
-            "no leader is known",
-            None,
-            not_controller("No controller appears to be active."),
-        ),
-    ] {
-        check!(
-            wire::not_controller_refusal(leader, node) == expected,
-            "{what}"
-        );
-    }
+    check!(unregister_controller.responses == vec![expected]);
 }
+rstest_bdd_macros::scenarios!("tests/features/handler_unregister_controller",fixtures=[unregister_controller:UnregisterControllerScenario]);
 
 /// A request that arrives on the controller listener, or inside an `Envelope`,
 /// is already at the active controller and is never forwarded again.

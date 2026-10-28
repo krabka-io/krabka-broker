@@ -7,119 +7,112 @@
 //! on heartbeat responses.
 
 use {
-    crate::streams_harness::{
-        boot, connect, create_topic, describe, finalize_streams_version, join_and_converge,
-        topology,
-    },
+    crate::streams_harness::{StreamsGroupScenario, streams_group},
     assert2::{assert, check},
-    krabka_protocol::owned::list_groups_request::ListGroupsRequest,
+    krabka_protocol::owned::{
+        list_groups_request::ListGroupsRequest, list_groups_response::ListGroupsResponse,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{scenario, then, when},
 };
 
-/// After a member joins, `StreamsGroupDescribe` reports exactly one group row
-/// for the group id with a clean error code, the member present, and a sane
-/// group-state string.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_returns_the_group() {
-    let (_b, bootstrap, _dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, "desc-input", 2).await;
+#[derive(Default)]
+struct StreamsListing {
+    response: Option<ListGroupsResponse>,
+}
 
-    let (member_id, resp) = join_and_converge(
-        &client,
-        "streams-app-3",
-        topology("desc-input", vec![]),
-        2,
-        10,
-    )
-    .await;
-    assert!(resp.error_code == 0, "join error: {resp:?}");
-    assert!(!member_id.is_empty());
+#[fixture]
+fn streams_listing() -> StreamsListing {
+    // Keep the actual filtered list separate from the established streams group.
+    StreamsListing::default()
+}
 
-    let desc = describe(&client, "streams-app-3").await;
-    assert!(
-        desc.groups.len() == 1,
-        "expected exactly one described group, got {}",
-        desc.groups.len()
-    );
-    let g = &desc.groups[0];
-    check!(g.error_code == 0, "describe error: {:?}", g.error_code);
+#[then("the streams description identifies the live group, its member, and a nonempty state")]
+fn visible_streams_group(streams_group: &StreamsGroupScenario) {
+    let described = streams_group
+        .described
+        .as_ref()
+        .expect("streams group described");
+    assert!(described.groups.len() == 1);
+    let group = &described.groups[0];
+    check!(group.error_code == 0);
+    check!(group.group_id == streams_group.group);
+    check!(!group.members.is_empty());
     check!(
-        g.group_id == "streams-app-3",
-        "described group id mismatch: {:?}",
-        g.group_id
+        group
+            .members
+            .iter()
+            .any(|member| member.member_id == streams_group.member)
     );
-    check!(
-        !g.members.is_empty(),
-        "described group must list the joined member"
-    );
-    check!(
-        g.members.iter().any(|m| m.member_id == member_id),
-        "described group must contain member {member_id}, got {:?}",
-        g.members.iter().map(|m| &m.member_id).collect::<Vec<_>>()
-    );
-    check!(
-        !g.group_state.is_empty(),
-        "group_state must be a non-empty phase string, got {:?}",
-        g.group_state
+    check!(!group.group_state.is_empty());
+}
+
+#[when("the streams administrator lists groups filtered by {kind}")]
+async fn list_streams_group(
+    streams_group: &StreamsGroupScenario,
+    streams_listing: &mut StreamsListing,
+    kind: String,
+) {
+    streams_listing.response = Some(
+        streams_group
+            .client()
+            .send(ListGroupsRequest {
+                types_filter: vec![kind],
+                ..Default::default()
+            })
+            .await
+            .expect("ListGroups"),
     );
 }
 
-/// `ListGroups` surfaces a live streams group with `group_type = "streams"`
-/// and honors `types_filter = ["streams"]`. That is the exact path the JVM
-/// `kafka-streams-groups.sh` `AdminClient` uses with
-/// `listGroups(typesFilter=[Streams])` before it issues
-/// `StreamsGroupDescribe`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_surfaces_streams_group() {
-    let (_b, bootstrap, _dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, "list-input", 2).await;
-
-    let (_member_id, resp) = join_and_converge(
-        &client,
-        "streams-app-5",
-        topology("list-input", vec![]),
-        2,
-        10,
-    )
-    .await;
-    assert!(resp.error_code == 0, "join error: {resp:?}");
-
-    // Filtered list, as the JVM streams-groups admin tool issues it.
-    let listed = client
-        .send(ListGroupsRequest {
-            types_filter: vec!["streams".into()],
-            ..Default::default()
-        })
-        .await
-        .expect("ListGroups");
-    assert!(listed.error_code == 0, "ListGroups error: {listed:?}");
-    let g = listed
+#[then("the filtered list contains the group tagged as streams")]
+fn listed_streams_group(streams_group: &StreamsGroupScenario, streams_listing: &StreamsListing) {
+    let response = streams_listing
+        .response
+        .as_ref()
+        .expect("ListGroups answered");
+    assert!(response.error_code == 0, "{response:?}");
+    let group = response
         .groups
         .iter()
-        .find(|g| g.group_id == "streams-app-5")
-        .unwrap_or_else(|| panic!("streams group not listed: {:?}", listed.groups));
-    assert!(
-        g.group_type == "streams",
-        "group_type must be 'streams', got {:?}",
-        g.group_type
-    );
+        .find(|group| group.group_id == streams_group.group)
+        .expect("streams group listed");
+    assert!(group.group_type == "streams");
+}
 
-    // A non-streams type filter must exclude it.
-    let consumer_only = client
-        .send(ListGroupsRequest {
-            types_filter: vec!["consumer".into()],
-            ..Default::default()
-        })
-        .await
-        .expect("ListGroups consumer");
+#[then("the filtered list excludes the streams group")]
+fn excluded_streams_group(streams_group: &StreamsGroupScenario, streams_listing: &StreamsListing) {
     assert!(
-        !consumer_only
+        !streams_listing
+            .response
+            .as_ref()
+            .expect("ListGroups answered")
             .groups
             .iter()
-            .any(|g| g.group_id == "streams-app-5"),
-        "streams group must not appear under a consumer type filter"
+            .any(|group| group.group_id == streams_group.group)
     );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_admin.feature",
+    name = "describe returns the group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_returns_the_group(streams_group: StreamsGroupScenario) {
+    streams_group.shutdown().await;
+    drop(streams_group);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_admin.feature",
+    name = "list groups surfaces streams group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_groups_surfaces_streams_group(
+    streams_group: StreamsGroupScenario,
+    streams_listing: StreamsListing,
+) {
+    let _ = streams_listing;
+    streams_group.shutdown().await;
+    drop(streams_group);
 }

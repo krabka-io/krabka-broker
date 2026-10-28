@@ -379,114 +379,6 @@ mod tests {
         key.sign(&serde_json::json!({"sub": "alice", "exp": exp_s}))
     }
 
-    /// Kafka's `OAuthBearerUnsecuredValidatorCallbackHandler` defaults
-    /// `unsecuredValidatorAllowableClockSkewMs` to 0, while the signed path's
-    /// `sasl.oauthbearer.clock.skew.seconds` defaults to 30. Each case builds
-    /// the validator from `[oauthbearer]` and offers it a token whose `exp`
-    /// lies `expired_by_s` seconds before now.
-    #[yare::parameterized(
-        unsecured_default_refuses_one_second_past_exp = {
-            "allow_unsecured = true", 1, false
-        },
-        unsecured_explicit_skew_admits_one_second_past_exp = {
-            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 1, true
-        },
-        unsecured_explicit_skew_refuses_past_the_skew = {
-            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 6, false
-        },
-        signed_default_admits_one_second_past_exp = {
-            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 1, true
-        },
-        signed_default_admits_just_inside_thirty_seconds = {
-            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 29, true
-        },
-        signed_default_refuses_past_thirty_seconds = {
-            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 31, false
-        },
-        signed_explicit_zero_skew_refuses_one_second_past_exp = {
-            "jwks_endpoint_uri = \"https://idp.example/jwks\"\nallowable_clock_skew_ms = 0",
-            1,
-            false
-        },
-    )]
-    fn file_config_validator_applies_the_kafka_clock_skew_default(
-        table: &str,
-        expired_by_s: i64,
-        admitted: bool,
-    ) {
-        let cfg = configured_unwrap_parse(&format!("[oauthbearer]\n{table}\n")).unwrap();
-        let exp_s = NOW_MS / 1000 - expired_by_s;
-        let outcome = match &cfg.oauthbearer_validator {
-            OAuthBearerValidator::Unsecured(v) => v.validate(&unsecured_token(exp_s), NOW_MS),
-            OAuthBearerValidator::Signed(v) => v.validate(&signed_token(v, exp_s), NOW_MS),
-            OAuthBearerValidator::Introspection(_) => {
-                panic!("expected an unsecured or signed validator; got introspection")
-            }
-        };
-        assert2::assert!(outcome.is_ok() == admitted, "{table:?}: {outcome:?}");
-    }
-
-    /// `unsecured_required_scope` and `unsecured_scope_claim_name` are Kafka's
-    /// `unsecuredValidatorRequiredScope` and `unsecuredValidatorScopeClaimName`.
-    /// Each case builds the unsecured validator from `[oauthbearer]`, offers it
-    /// a token for `alice` with the extra `claims`, and renders a refusal as
-    /// the RFC 7628 challenge the broker sends.
-    #[yare::parameterized(
-        no_required_scope_admits_a_token_without_scope = { "", "", Ok("alice") },
-        every_required_item_admits = {
-            "unsecured_required_scope = \"a b\"", r#", "scope": ["b", "a", "c"]"#, Ok("alice")
-        },
-        a_missing_item_is_insufficient_scope = {
-            "unsecured_required_scope = \"a b\"",
-            r#", "scope": ["a"]"#,
-            Err(r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#)
-        },
-        a_blank_required_scope_requires_none = {
-            "unsecured_required_scope = \"   \"", "", Ok("alice")
-        },
-        the_custom_claim_name_is_read = {
-            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
-            r#", "scp": "a""#,
-            Ok("alice")
-        },
-        the_default_claim_is_ignored_under_a_custom_name = {
-            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
-            r#", "scope": "a""#,
-            Err(r#"{"status":"insufficient_scope", "scope":"[a]"}"#)
-        },
-        a_numeric_custom_claim_is_an_invalid_token = {
-            "unsecured_scope_claim_name = \"scp\"",
-            r#", "scp": 7"#,
-            Err(r#"{"status":"invalid_token"}"#)
-        },
-    )]
-    fn file_config_unsecured_validator_applies_the_kafka_scope_options(
-        table: &str,
-        claims: &str,
-        expected: Result<&str, &str>,
-    ) {
-        let cfg =
-            configured_unwrap_parse(&format!("[oauthbearer]\nallow_unsecured = true\n{table}\n"))
-                .unwrap();
-        let OAuthBearerValidator::Unsecured(validator) = &cfg.oauthbearer_validator else {
-            panic!(
-                "expected the unsecured validator; got {:?}",
-                cfg.oauthbearer_validator
-            )
-        };
-        let header = B64.encode(br#"{"alg":"none"}"#);
-        let exp_s = NOW_MS / 1000 + 60;
-        let payload = B64.encode(format!(r#"{{"sub": "alice", "exp": {exp_s}{claims}}}"#));
-        let outcome = validator
-            .validate(&format!("{header}.{payload}."), NOW_MS)
-            .map(|outcome| outcome.principal.name)
-            .map_err(|error| krabka_security::oauth_error_json(&error));
-        assert2::assert!(
-            outcome == expected.map(str::to_owned).map_err(str::to_owned),
-            "{table:?}"
-        );
-    }
-
     /// Kafka fails the unsecured validator's configuration on a required-scope
     /// item outside the RFC 6749 scope-token grammar.
     #[test]
@@ -850,4 +742,120 @@ introspection_client_secret_path = '{}'
             other => panic!("expected Introspection, got {other:?}"),
         }
     }
+
+    #[derive(Default)]
+    struct ConfiguredOAuthToken {
+        broker: Option<BrokerConfig>,
+        token: Option<String>,
+        validation: Option<Result<String, String>>,
+    }
+
+    #[rstest::fixture]
+    fn configured_oauth_token() -> ConfiguredOAuthToken {
+        // The validator, signing key and token belong to one authentication attempt.
+        ConfiguredOAuthToken::default()
+    }
+
+    #[rstest_bdd_macros::given("the OAuth validator is configured by this file:")]
+    fn supplied_oauth_policy_file(
+        configured_oauth_token: &mut ConfiguredOAuthToken,
+        docstring: String,
+    ) {
+        configured_oauth_token.broker =
+            Some(configured_unwrap_parse(&docstring).expect("apply OAuth policy file"));
+    }
+
+    #[rstest_bdd_macros::given(
+        "alice presents a token that expired {seconds} seconds before timestamp 2000000000000"
+    )]
+    fn expired_oauth_policy_token(configured_oauth_token: &mut ConfiguredOAuthToken, seconds: i64) {
+        let config = configured_oauth_token
+            .broker
+            .as_ref()
+            .expect("OAuth policy was configured");
+        let expiry = NOW_MS / 1000 - seconds;
+        configured_oauth_token.token = Some(match &config.oauthbearer_validator {
+            OAuthBearerValidator::Unsecured(_) => unsecured_token(expiry),
+            OAuthBearerValidator::Signed(validator) => signed_token(validator, expiry),
+            OAuthBearerValidator::Introspection(_) => {
+                panic!("expected unsecured or signed validator")
+            }
+        });
+    }
+
+    #[rstest_bdd_macros::given(
+        "alice presents an unsecured token valid for sixty seconds with extra JSON claims {claims}"
+    )]
+    fn scoped_oauth_policy_token(
+        configured_oauth_token: &mut ConfiguredOAuthToken,
+        claims: String,
+    ) {
+        let mut payload = serde_json::json!({"sub":"alice","exp": NOW_MS / 1000 + 60});
+        let claims: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&claims).expect("explicit extra scope claims");
+        payload
+            .as_object_mut()
+            .expect("JWT claims object")
+            .extend(claims);
+        let header = B64.encode(br#"{"alg":"none"}"#);
+        configured_oauth_token.token =
+            Some(format!("{header}.{}.", B64.encode(payload.to_string())));
+    }
+
+    #[rstest_bdd_macros::when(
+        "the configured OAuth validator validates the token at timestamp 2000000000000"
+    )]
+    fn validate_oauth_policy_token(configured_oauth_token: &mut ConfiguredOAuthToken) {
+        let config = configured_oauth_token
+            .broker
+            .as_ref()
+            .expect("OAuth policy was configured");
+        let token = configured_oauth_token
+            .token
+            .as_ref()
+            .expect("client token was given");
+        let outcome = match &config.oauthbearer_validator {
+            OAuthBearerValidator::Unsecured(validator) => validator.validate(token, NOW_MS),
+            OAuthBearerValidator::Signed(validator) => validator.validate(token, NOW_MS),
+            OAuthBearerValidator::Introspection(_) => {
+                panic!("expected unsecured or signed validator")
+            }
+        };
+        configured_oauth_token.validation = Some(
+            outcome
+                .map(|outcome| outcome.principal.name)
+                .map_err(|error| krabka_security::oauth_error_json(&error)),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the configured OAuth policy admits principal alice")]
+    fn admitted_oauth_policy_token(configured_oauth_token: &ConfiguredOAuthToken) {
+        assert2::assert!(
+            configured_oauth_token.validation.as_ref() == Some(&Ok("alice".to_owned()))
+        );
+    }
+
+    #[rstest_bdd_macros::then("the configured OAuth policy refuses the expired token")]
+    fn refused_expired_oauth_policy_token(configured_oauth_token: &ConfiguredOAuthToken) {
+        assert2::assert!(
+            configured_oauth_token
+                .validation
+                .as_ref()
+                .expect("token was validated")
+                .is_err()
+        );
+    }
+
+    #[rstest_bdd_macros::then("the OAuth policy returns RFC 7628 challenge {challenge}")]
+    fn refused_scoped_oauth_policy_token(
+        configured_oauth_token: &ConfiguredOAuthToken,
+        challenge: String,
+    ) {
+        assert2::assert!(configured_oauth_token.validation.as_ref() == Some(&Err(challenge)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/oauthbearer_apply",
+        fixtures = [configured_oauth_token: ConfiguredOAuthToken]
+    );
 }

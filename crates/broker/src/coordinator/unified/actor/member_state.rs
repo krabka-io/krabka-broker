@@ -902,18 +902,6 @@ mod tests {
     /// A flag RE2J does not have is answered with the message Kafka builds
     /// from RE2J's own `PatternSyntaxException.getDescription`, so a client
     /// that reads `error_message` sees the same text either broker produced.
-    #[test]
-    fn an_re2j_unsupported_flag_carries_kafkas_message() {
-        check!(
-            check_subscribed_topic_regex("(?x)abc")
-                == Err(
-                    "SubscribedTopicRegex `(?x)abc` is not a valid regular expression: \
-                        invalid or unsupported Perl syntax."
-                        .to_owned()
-                )
-        );
-    }
-
     /// The one behavioral difference the Unicode choice leaves — `\d` matching
     /// a non-ASCII digit — cannot be observed through a subscription, because
     /// Kafka topic names are drawn from `[a-zA-Z0-9._-]`.
@@ -1042,4 +1030,29 @@ mod tests {
             "custom assignor must be invoked at least once",
         );
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct SubscriptionRegex {
+        pattern: String,
+        validation: Option<Result<(), String>>,
+    }
+    #[rstest::fixture]
+    fn subscription_regex() -> SubscriptionRegex {
+        // Start this scenario with fresh inputs and observations.
+        SubscriptionRegex::default()
+    }
+    #[given("a member subscribes with regular expression {pattern}")]
+    fn member_regex(subscription_regex: &mut SubscriptionRegex, pattern: String) {
+        subscription_regex.pattern = pattern;
+    }
+    #[when("the coordinator validates the expression using Kafka RE2J syntax rules")]
+    fn validate_member_regex(subscription_regex: &mut SubscriptionRegex) {
+        subscription_regex.validation =
+            Some(check_subscribed_topic_regex(&subscription_regex.pattern));
+    }
+    #[then("the unsupported extended mode flag is rejected with the exact Kafka syntax error")]
+    fn unsupported_regex_flag(subscription_regex: &SubscriptionRegex) {
+        check!(subscription_regex.validation.as_ref()==Some(&Err("SubscribedTopicRegex `(?x)abc` is not a valid regular expression: invalid or unsupported Perl syntax.".to_owned())));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/member_state.feature",fixtures=[subscription_regex:SubscriptionRegex]);
 }

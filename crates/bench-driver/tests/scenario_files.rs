@@ -1,25 +1,5 @@
-//! Every checked-in benchmark scenario loads through the driver's own loader.
-//!
-//! `bench/scenarios/*.yaml` is an operator-written corpus that lives outside
-//! this crate, so nothing linked it to the `Scenario` type. When the dimensioned
-//! fields grew units, all twelve files stopped parsing and no test noticed.
-//! This harness closes that gap. It runs each file through the same `serde_saphyr`
-//! path that `main.rs` uses, with one nextest process per scenario, so a broken
-//! file names itself.
-//!
-//! The harness is `libtest-mimic` directly rather than `datatest-stable`, which
-//! wraps it. `datatest-stable` walks the corpus with `walkdir` and keeps only
-//! entries whose `file_type()` is a file. It does not follow links, and Bazel
-//! stages every runfile as a symbolic link, so under Bazel it saw no scenarios
-//! at all:
-//!
-//! ```text
-//! no test cases found for test 'scenario_file' -- scanned directory:
-//!   `.../scenario_files_test.runfiles/_main/bench/scenarios`
-//! ```
-//!
-//! `scenario_paths` lists the directory itself and asks `Path::is_file`, which
-//! follows the link, so both runners see the same twelve files.
+//! Executable BDD specifications for the operator-written benchmark corpus.
+//! Both Cargo and Bazel load the actual YAML through the driver's parser.
 
 mod corpus;
 
@@ -27,63 +7,86 @@ use {
     assert2::{assert, check},
     krabka_bench_driver::scenario::{LoadMode, Scenario},
     krabka_units::prelude::*,
-    std::{error::Error, fs, path::Path, process::ExitCode},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::{error::Error, fs, path::PathBuf},
 };
 
-/// Loads one scenario file and checks it describes a runnable benchmark.
-fn scenario_file(path: &Path) -> Result<(), Box<dyn Error>> {
-    let yaml = fs::read_to_string(path)?;
-    let scenario: Scenario = serde_saphyr::from_str(&yaml)
-        .map_err(|error| format!("{} does not load: {error}", path.display()))?;
+struct BenchmarkScenario {
+    paths: Vec<PathBuf>,
+    loaded: Vec<Scenario>,
+    reparsed: Vec<Scenario>,
+}
 
-    check!(!scenario.name.is_empty());
-    // A zero-length measurement window or a zero-byte record would run but
-    // measure nothing, so these are load-bearing rather than decorative.
-    check!(scenario.duration > Time::ZERO);
-    check!(scenario.msg_size > ByteSize::ZERO);
-    check!(scenario.batch_size > ByteSize::ZERO);
-    check!(scenario.partitions > 0);
-    check!(scenario.producers > 0);
+#[fixture]
+fn benchmark() -> BenchmarkScenario {
+    // Start this scenario with fresh inputs and observations.
 
-    if let LoadMode::FixedRate { rate } = scenario.mode {
-        check!(rate > Frequency::ZERO);
+    BenchmarkScenario {
+        paths: Vec::new(),
+        loaded: Vec::new(),
+        reparsed: Vec::new(),
     }
+}
 
-    // A kill scheduled at or after the end of the run would never fire.
-    if let Some(failover) = &scenario.failover {
-        check!(failover.kill_after < scenario.duration + scenario.warmup);
-    }
-
-    // The quantities survive a round trip through the operator-facing encoding,
-    // so a scenario echoed into a report reads back as the same benchmark.
-    let reencoded = serde_saphyr::to_string(&scenario)?;
-    let reparsed: Scenario = serde_saphyr::from_str(&reencoded)?;
-    assert!(reparsed == scenario);
-
+#[given("benchmark scenario {filename}")]
+fn scenario_path(benchmark: &mut BenchmarkScenario, filename: String) -> Result<(), String> {
+    benchmark.paths = vec![corpus::bench_dir("scenarios")?.join(filename)];
     Ok(())
 }
 
-fn main() -> ExitCode {
-    let args = libtest_mimic::Arguments::from_args();
-    let paths = match corpus::yaml_files("scenarios") {
-        Ok(paths) => paths,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let trials = paths
-        .into_iter()
-        .map(|path| {
-            // The same `scenario_file::<file>` names `datatest-stable` produced,
-            // so nextest filters and CI history keep matching.
-            let file = path
-                .file_name()
-                .map_or_default(|name| name.to_string_lossy().into_owned());
-            libtest_mimic::Trial::test(format!("scenario_file::{file}"), move || {
-                scenario_file(&path).map_err(libtest_mimic::Failed::from)
-            })
-        })
-        .collect();
-    libtest_mimic::run(&args, trials).exit_code()
+#[given("all checked in benchmark scenarios")]
+fn corpus_paths(benchmark: &mut BenchmarkScenario) -> Result<(), String> {
+    // Directory discovery follows Bazel runfile symlinks and fails on an empty
+    // corpus. New YAML files remain covered before gaining a named scenario.
+    benchmark.paths = corpus::yaml_files("scenarios")?;
+    Ok(())
 }
+
+#[when("the benchmark YAML is loaded")]
+fn load_scenarios(benchmark: &mut BenchmarkScenario) -> Result<(), Box<dyn Error>> {
+    assert!(!benchmark.paths.is_empty());
+    for path in &benchmark.paths {
+        let yaml = fs::read_to_string(path)?;
+        let scenario = serde_saphyr::from_str(&yaml)
+            .map_err(|error| format!("{} does not load: {error}", path.display()))?;
+        benchmark.loaded.push(scenario);
+    }
+    Ok(())
+}
+
+#[then("every benchmark is runnable")]
+fn runnable(benchmark: &BenchmarkScenario) {
+    assert!(!benchmark.loaded.is_empty());
+    for scenario in &benchmark.loaded {
+        check!(!scenario.name.is_empty());
+        check!(scenario.duration > Time::ZERO);
+        check!(scenario.msg_size > ByteSize::ZERO);
+        check!(scenario.batch_size > ByteSize::ZERO);
+        check!(scenario.partitions > 0);
+        check!(scenario.producers > 0);
+        if let LoadMode::FixedRate { rate } = scenario.mode {
+            check!(rate > Frequency::ZERO);
+        }
+        if let Some(failover) = &scenario.failover {
+            check!(failover.kill_after < scenario.duration + scenario.warmup);
+        }
+    }
+}
+
+#[when("every loaded benchmark is serialized and reparsed")]
+fn serialize_benchmarks(benchmark: &mut BenchmarkScenario) -> Result<(), Box<dyn Error>> {
+    for scenario in &benchmark.loaded {
+        let yaml = serde_saphyr::to_string(scenario)?;
+        benchmark.reparsed.push(serde_saphyr::from_str(&yaml)?);
+    }
+    Ok(())
+}
+
+#[then("every benchmark round trips through YAML")]
+fn round_trip(benchmark: &BenchmarkScenario) {
+    assert!(!benchmark.loaded.is_empty());
+    assert!(benchmark.reparsed == benchmark.loaded);
+}
+
+scenarios!("tests/features/scenario_files", fixtures = [benchmark: BenchmarkScenario]);

@@ -25,17 +25,8 @@ use {
     tokio::task,
 };
 
-/// Shared copy→metadata→read body: create a tiered topic, wait for the
-/// config to propagate, produce enough to seal segments, wait for the RLM
-/// copy task to tier one through the topic-backed RLMM, then read offset 0
-/// back. Both the plaintext loopback test and the `SASL_PLAINTEXT` variant use
-/// this body. The only difference is how the caller built `client`.
-pub async fn copy_then_fetch_round_trip(
-    broker: &BrokerHandle,
-    client: &Client,
-    remote_dir: &Path,
-    topic: &str,
-) {
+/// Create the tiny-segment tiered workload and append eighty records.
+pub async fn prepare_round_trip(broker: &BrokerHandle, client: &Client, topic: &str) {
     // Tiny `internal.segment.bytes` so a modest produce seals several segments;
     // `local.retention.bytes=1` evicts every copied segment from local
     // disk so the read-back must consult the remote tier.
@@ -70,7 +61,10 @@ pub async fn copy_then_fetch_round_trip(
         .produce_records_for_test(topic, 0, 80)
         .await
         .expect("produce records");
+}
 
+/// Wait for a completed segment copy in the local archive.
+pub async fn await_archived_round_trip(remote_dir: &Path) {
     // Wait for at least one segment to land in the remote tier. The
     // `LocalTieredStorage` layout writes each copied segment's bytes to a
     // file named `log`; its presence proves the RLM copy task's
@@ -89,7 +83,10 @@ pub async fn copy_then_fetch_round_trip(
         );
         task::yield_now().await;
     }
+}
 
+/// Fetch offset zero through the active topic metadata manager.
+pub async fn read_first_value(client: &Client, topic: &str) -> Option<bytes::Bytes> {
     // Read offset 0 back. Whether it is served from a still-local segment
     // or (after eviction) the remote tier, a successful read exercises the
     // full path with the topic-backed RLMM active. Retry to absorb the
@@ -99,7 +96,7 @@ pub async fn copy_then_fetch_round_trip(
     // keep the bounded retry loop.
     let topic_id = topic_id_for(client, topic).await;
     let fetch_deadline = Instant::now() + Duration::from_secs(30);
-    let value = loop {
+    loop {
         let r = client
             .send(
                 single_partition_fetch()
@@ -118,19 +115,14 @@ pub async fn copy_then_fetch_round_trip(
             .and_then(|recs| recs.as_v2())
             && let Some(first) = batches.first().and_then(|b| b.records.first())
         {
-            break first.value.clone();
+            return first.value.clone();
         }
         assert!(
             Instant::now() <= fetch_deadline,
             "offset 0 never returned records within 30s"
         );
         task::yield_now().await;
-    };
-
-    assert!(
-        value.as_deref() == Some(b"test-record-0".as_slice()),
-        "offset 0 should read back the first produced record"
-    );
+    }
 }
 
 pub use crate::support::storage::remote_log_files;

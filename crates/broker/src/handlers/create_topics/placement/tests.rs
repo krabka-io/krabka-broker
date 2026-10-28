@@ -5,7 +5,7 @@
 use {
     super::{
         InitialLeadership, PlacementRng, automatic_leaderships, automatic_placement_exclusions,
-        codes, inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
+        inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
         resolve_assignments, site_broker_views,
     },
     crate::{
@@ -242,129 +242,67 @@ fn manual_assignments_preserve_partition_order_and_validate_brokers() {
     assert!(assignments == vec![vec![NodeId(1), NodeId(2)], vec![NodeId(2), NodeId(1)]]);
 }
 
-/// Kafka's `createTopic` and `validateManualPartitionAssignment` refuse a
-/// manual assignment with these codes and messages, on brokers 1 and 2.
-#[test]
-fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
-    /// The replica list of one partition of a manual assignment.
-    struct ReplicaList {
-        partition_index: i32,
-        broker_ids: &'static [i32],
-    }
+type ManualReplicaAssignmentResult = Result<Vec<Vec<NodeId>>, (i16, String)>;
 
-    fn topic(
-        num_partitions: i32,
-        replication_factor: i16,
-        lists: &[ReplicaList],
-    ) -> CreatableTopic {
-        CreatableTopic {
-            num_partitions,
-            replication_factor,
-            assignments: lists
-                .iter()
-                .map(|list| CreatableReplicaAssignment {
-                    partition_index: list.partition_index,
-                    broker_ids: list.broker_ids.to_vec(),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }
-    }
-    let cases = [
-        (
-            topic(-1, 2, &[ReplicaList {
-                partition_index: 0,
-                broker_ids: &[1, 2],
-            }]),
-            codes::INVALID_REQUEST,
-            "A manual partition assignment was specified, but replication factor was not set to \
-             -1.",
-        ),
-        (
-            topic(1, -1, &[ReplicaList {
-                partition_index: 0,
-                broker_ids: &[1, 2],
-            }]),
-            codes::INVALID_REQUEST,
-            "A manual partition assignment was specified, but numPartitions was not set to -1.",
-        ),
-        (
-            topic(-1, -1, &[
-                ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[1, 2],
-                },
-                ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[2, 1],
-                },
-            ]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "Found multiple manual partition assignments for partition 0",
-        ),
-        (
-            topic(-1, -1, &[ReplicaList {
-                partition_index: 0,
-                broker_ids: &[],
-            }]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "The manual partition assignment includes an empty replica list.",
-        ),
-        (
-            topic(-1, -1, &[ReplicaList {
-                partition_index: 0,
-                broker_ids: &[9, 1, 7],
-            }]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "The manual partition assignment includes broker 7, but no such broker is registered.",
-        ),
-        (
-            topic(-1, -1, &[ReplicaList {
-                partition_index: 0,
-                broker_ids: &[2, 1, 2],
-            }]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "The manual partition assignment includes the broker 2 more than once.",
-        ),
-        (
-            topic(-1, -1, &[
-                ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[1, 2],
-                },
-                ReplicaList {
-                    partition_index: 1,
-                    broker_ids: &[1],
-                },
-            ]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "The manual partition assignment includes a partition with 1 replica(s), but this is \
-             not consistent with previous partitions, which have 2 replica(s).",
-        ),
-        (
-            topic(-1, -1, &[
-                ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[1],
-                },
-                ReplicaList {
-                    partition_index: 2,
-                    broker_ids: &[2],
-                },
-            ]),
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            "partitions should be a consecutive 0-based integer sequence",
-        ),
-    ];
-
-    for (topic, code, message) in cases {
-        assert!(
-            manual_replicas(&topic, &[NodeId(1), NodeId(2)]) == Err((code, message.to_owned())),
-            "{message}"
-        );
+#[derive(Default)]
+struct ManualPlacementScenario {
+    topic: CreatableTopic,
+    result: Option<ManualReplicaAssignmentResult>,
+}
+#[rstest::fixture]
+fn manual_placement() -> ManualPlacementScenario {
+    let result = None;
+    ManualPlacementScenario {
+        result,
+        ..Default::default()
     }
 }
+#[rstest_bdd_macros::given(
+    "a topic with numPartitions {partitions}, replication factor {factor} and explicit partition replicas {replicas}"
+)]
+fn manual_topic_assignment(
+    manual_placement: &mut ManualPlacementScenario,
+    partitions: i32,
+    factor: i16,
+    replicas: String,
+) {
+    manual_placement.topic = CreatableTopic {
+        num_partitions: partitions,
+        replication_factor: factor,
+        assignments: replicas
+            .split(';')
+            .map(|partition| {
+                let (index, brokers) = partition.split_once(':').expect("partition:broker list");
+                CreatableReplicaAssignment {
+                    partition_index: index.parse().expect("partition index"),
+                    broker_ids: brokers
+                        .split(',')
+                        .filter(|broker| !broker.is_empty())
+                        .map(|broker| broker.parse().expect("broker ID"))
+                        .collect(),
+                    ..Default::default()
+                }
+            })
+            .collect(),
+        ..Default::default()
+    };
+}
+#[rstest_bdd_macros::when("manual placement validates against registered brokers 1 and 2")]
+fn validate_manual_placement(manual_placement: &mut ManualPlacementScenario) {
+    manual_placement.result = Some(manual_replicas(&manual_placement.topic, &[
+        NodeId(1),
+        NodeId(2),
+    ]));
+}
+#[rstest_bdd_macros::then("manual placement refuses with error {code} and message \"{message}\"")]
+fn refused_manual_placement(
+    manual_placement: &ManualPlacementScenario,
+    code: i16,
+    message: String,
+) {
+    assert!(manual_placement.result.as_ref().expect("placement result") == &Err((code, message)));
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_manual_topic_placement.feature", fixtures = [manual_placement: ManualPlacementScenario]);
 
 #[test]
 fn site_broker_views_read_the_rack_and_the_witness_role() {

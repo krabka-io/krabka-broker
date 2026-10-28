@@ -47,6 +47,7 @@ use {
             offset_commit_request::OffsetCommitRequest,
             offset_delete_response::OffsetDeleteResponse,
             txn_offset_commit_request::TxnOffsetCommitRequest,
+            txn_offset_commit_response::TxnOffsetCommitResponse,
         },
         primitives::uuid::Uuid as WireUuid,
     },
@@ -54,6 +55,7 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::{task::JoinHandle, time},
 };
 
@@ -295,179 +297,238 @@ async fn relayed_transaction_cluster(configure: impl Fn(&mut BrokerConfig)) -> R
     }
 }
 
-/// An `EndTxn` whose `PrepareCommit` cannot reach a follower gets no answer,
-/// and the transaction commits through the next coordinator when the
-/// producer retries.
-///
-/// The coordinator's relay is cut while it leads `__transaction_state-0`, so
-/// its followers stop fetching and stay in the ISR. The coordinator then dies
-/// with the `PrepareCommit` in its log only. A coordinator that answered at
-/// the local append told the producer the transaction committed, and the
-/// follower that leads the partition next still holds the transaction as
-/// `Ongoing` at the epoch before the commit's bump, which fences the producer's
-/// next transaction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
-    let RelayedTransaction {
-        mut cluster,
-        admin,
-        coordinator,
-    } = relayed_transaction_cluster(|config| {
-        config.transaction_state_num_partitions = 1;
-        // The coordinator keeps its followers in the ISR while they cannot
-        // reach it, so the high watermark stops below what it appends then.
-        config.isr_scan_interval = krabka_units::hours(1);
-    })
-    .await;
-    cluster
-        .handle(coordinator)
-        .wait_until_isr_len(STATE_TOPIC, 0, 3)
-        .await;
-    // The data partition lives on another broker, so its markers do not go
-    // through the coordinator's relay, and it survives the coordinator.
-    let data_node = other_node(coordinator);
-    let topic_id = create_topic(
-        &admin,
-        AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(data_node)]),
-    )
-    .await;
-    admin.close();
-    cluster
-        .handle(data_node)
-        .wait_until_local_partition_leader(TOPIC, 0, NodeId(data_node))
-        .await;
-
-    let ConnectedTransaction {
-        connection: to_coordinator,
-        producer,
-    } = connected_transaction(cluster.address(coordinator)).await;
-    let to_data = connect(cluster.address(data_node)).await;
-    produce(&to_data, topic_id, Some(producer), &["a", "b", "c"]).await;
-
-    // Cut the coordinator off from its followers, and commit.
-    let state_end = cluster
-        .handle(coordinator)
-        .local_log_end_offset(STATE_TOPIC, 0)
-        .expect("the coordinator hosts the state partition");
-    let mut commit = cut_and_append_commit(
-        &cluster,
-        coordinator,
-        to_coordinator,
-        producer,
-        STATE_TOPIC,
-        state_end + 1,
-    )
-    .await;
-    let answered = time::timeout(Duration::from_secs(2), &mut commit).await;
-    assert!(
-        answered.is_err(),
-        "EndTxn answered for a PrepareCommit that only its coordinator holds: {answered:?}"
-    );
-    let high_watermark = cluster
-        .handle(coordinator)
-        .high_watermark_for_test(STATE_TOPIC, 0)
-        .await
-        .expect("the coordinator hosts the state partition");
-    assert!(high_watermark == state_end);
-
-    // The coordinator dies with the decision, and the request with it.
-    cluster.take(coordinator).crash_for_test().await;
-    let lost = commit.await.expect("the EndTxn task");
-    assert!(lost.is_err(), "EndTxn has no answer: {lost:?}");
-
-    // A follower leads the state partition next. It never got the
-    // PrepareCommit, so the producer's retry is what commits the transaction.
-    // Transaction version 2 bumps the epoch on completion.
-    let survivor = cluster.handle(data_node);
-    survivor
-        .wait_until_partition_leader_changed(STATE_TOPIC, 0, NodeId(coordinator))
-        .await;
-    let next = leader_of(survivor, STATE_TOPIC).await;
-    let to_next = connect(cluster.address(next)).await;
-    let committed = end_txn(&to_next, producer).await;
-    assert!(
-        committed
-            == EndTxnResponse {
-                producer_id: producer.id.0,
-                producer_epoch: producer.epoch.0 + 1,
-                ..Default::default()
-            }
-    );
-
-    produce(&to_data, topic_id, None, &["z"]).await;
-    let seen = read_committed(cluster.address(data_node), "z").await;
-    assert!(seen == ["a", "b", "c", "z"]);
-
-    cluster.shutdown().await;
+#[derive(Default)]
+struct ReplicatedCommit {
+    session: Option<RelayedTransaction>,
+    connection: Option<Connection>,
+    producer: Option<ProducerIdentity>,
+    topic_id: Option<WireUuid>,
+    data_node: u64,
+    state_end: Option<i64>,
+    commit: Option<JoinHandle<Result<EndTxnResponse, krabka_client_core::ClientError>>>,
+    completed: Option<EndTxnResponse>,
+    records: Option<Vec<String>>,
 }
 
-/// A transaction completes only once its `COMMIT` marker is committed on the
-/// data partition, so a marker lost with its leader is written again.
-///
-/// The coordinator leads `__transaction_state-0`, which has no other replica,
-/// and the data partition, which has one follower. The coordinator's relay is
-/// cut after the follower fetched the transaction's records. The follower
-/// stays in the ISR but fetches nothing more, so the marker reaches the
-/// coordinator's log only, and the `EndTxn` gets no answer. The coordinator
-/// then dies, and the follower leads the data partition without the marker.
-///
-/// A coordinator that counted the marker at the local append recorded
-/// `CompleteCommit` before it died. The transaction then stayed open on the
-/// follower permanently. Its last stable offset stopped at the first record of
-/// the transaction, and a `read_committed` consumer read nothing after it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_transaction_completes_only_once_its_markers_are_committed() {
-    let RelayedTransaction {
-        mut cluster,
-        admin,
-        coordinator,
-    } = relayed_transaction_cluster(|config| {
-        config.transaction_state_num_partitions = 1;
-        // The coordinator is the only replica of the state partition, so a
-        // state record commits at its append, and the cut below stops only
-        // the data partition.
-        config.transaction_state_replication_factor = 1;
-        config.transaction_state_min_isr = 1;
-        // The coordinator keeps its follower in the ISR while the follower
-        // cannot reach it, so the high watermark stops below the marker.
-        config.isr_scan_interval = krabka_units::hours(1);
-    })
-    .await;
-    let follower = other_node(coordinator);
-    let topic_id = create_topic(
-        &admin,
-        AssignedTopicSetup::on_replicas(TOPIC, vec![
-            krabka_metadata::NodeId(coordinator),
-            krabka_metadata::NodeId(follower),
-        ]),
+#[rstest::fixture]
+fn replicated_commit() -> ReplicatedCommit {
+    // The held request remains live across relay cuts and coordinator crashes.
+    ReplicatedCommit::default()
+}
+
+impl ReplicatedCommit {
+    fn session(&self) -> &RelayedTransaction { self.session.as_ref().expect("relayed transaction") }
+
+    fn producer(&self) -> ProducerIdentity { self.producer.expect("transaction identity") }
+
+    fn topic_id(&self) -> WireUuid { self.topic_id.expect("transaction data topic") }
+
+    async fn setup(&mut self, state_replicas: i16) {
+        self.session = Some(
+            relayed_transaction_cluster(|config| {
+                config.transaction_state_num_partitions = 1;
+                config.transaction_state_replication_factor = state_replicas;
+                config.transaction_state_min_isr = i32::from(state_replicas - 1).max(1);
+                config.isr_scan_interval = krabka_units::hours(1);
+            })
+            .await,
+        );
+        self.data_node = other_node(self.session().coordinator);
+    }
+
+    async fn initialize(&mut self) {
+        let ConnectedTransaction {
+            connection,
+            producer,
+        } = connected_transaction(self.session().cluster.address(self.session().coordinator)).await;
+        self.connection = Some(connection);
+        self.producer = Some(producer);
+    }
+
+    async fn shutdown(self) {
+        let RelayedTransaction { cluster, admin, .. } = self.session.expect("relayed transaction");
+        admin.close();
+        if let Some(connection) = self.connection {
+            connection.close();
+        }
+        cluster.shutdown().await;
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "a three-replica transaction-state partition holds the decision while a different broker leads an RF1 data partition containing transactional a,b,c"
+)]
+async fn replicated_decision_workload(replicated_commit: &mut ReplicatedCommit) {
+    replicated_commit.setup(3).await;
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.session().coordinator)
+        .wait_until_isr_len(STATE_TOPIC, 0, 3)
+        .await;
+    replicated_commit.topic_id = Some(
+        create_topic(
+            &replicated_commit.session().admin,
+            AssignedTopicSetup::on_replicas(TOPIC, vec![krabka_metadata::NodeId(
+                replicated_commit.data_node,
+            )]),
+        )
+        .await,
+    );
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.data_node)
+        .wait_until_local_partition_leader(TOPIC, 0, NodeId(replicated_commit.data_node))
+        .await;
+    replicated_commit.initialize().await;
+    let to_data = connect(
+        replicated_commit
+            .session()
+            .cluster
+            .address(replicated_commit.data_node),
     )
     .await;
-    admin.close();
-    cluster
-        .handle(coordinator)
-        .wait_until_local_partition_leader(TOPIC, 0, NodeId(coordinator))
+    produce(
+        &to_data,
+        replicated_commit.topic_id(),
+        Some(replicated_commit.producer()),
+        &["a", "b", "c"],
+    )
+    .await;
+    to_data.close();
+}
+
+#[rstest_bdd_macros::given(
+    "the coordinator alone replicates transaction state and leads an RF2 data partition whose follower has transactional a,b,c"
+)]
+async fn replicated_marker_workload(replicated_commit: &mut ReplicatedCommit) {
+    replicated_commit.setup(1).await;
+    replicated_commit.topic_id = Some(
+        create_topic(
+            &replicated_commit.session().admin,
+            AssignedTopicSetup::on_replicas(TOPIC, vec![
+                krabka_metadata::NodeId(replicated_commit.session().coordinator),
+                krabka_metadata::NodeId(replicated_commit.data_node),
+            ]),
+        )
+        .await,
+    );
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.session().coordinator)
+        .wait_until_local_partition_leader(
+            TOPIC,
+            0,
+            NodeId(replicated_commit.session().coordinator),
+        )
         .await;
-    cluster
-        .handle(coordinator)
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.session().coordinator)
         .wait_until_isr_len(TOPIC, 0, 2)
         .await;
+    replicated_commit.initialize().await;
+    produce(
+        replicated_commit
+            .connection
+            .as_ref()
+            .expect("transaction connection"),
+        replicated_commit.topic_id(),
+        Some(replicated_commit.producer()),
+        &["a", "b", "c"],
+    )
+    .await;
+}
 
-    let ConnectedTransaction {
-        connection: to_coordinator,
-        producer,
-    } = connected_transaction(cluster.address(coordinator)).await;
-    produce(&to_coordinator, topic_id, Some(producer), &["a", "b", "c"]).await;
+#[rstest_bdd_macros::when(
+    "the coordinator relay is cut and EndTxn appends one local PrepareCommit state record"
+)]
+async fn unreplicated_commit_decision(replicated_commit: &mut ReplicatedCommit) {
+    replicated_commit.state_end = Some(
+        replicated_commit
+            .session()
+            .cluster
+            .handle(replicated_commit.session().coordinator)
+            .local_log_end_offset(STATE_TOPIC, 0)
+            .expect("state partition"),
+    );
+    let connection = replicated_commit
+        .connection
+        .take()
+        .expect("transaction connection");
+    replicated_commit.commit = Some(
+        cut_and_append_commit(
+            &replicated_commit.session().cluster,
+            replicated_commit.session().coordinator,
+            connection,
+            replicated_commit.producer(),
+            STATE_TOPIC,
+            replicated_commit.state_end.expect("old log end") + 1,
+        )
+        .await,
+    );
+}
 
-    // Cut the follower off from the coordinator, and commit. The marker comes
-    // after the three records.
-    let mut commit =
-        cut_and_append_commit(&cluster, coordinator, to_coordinator, producer, TOPIC, 4).await;
-    let answered = time::timeout(Duration::from_secs(2), &mut commit).await;
+#[rstest_bdd_macros::when(
+    "the coordinator relay is cut and EndTxn appends a local data COMMIT marker at offset 3"
+)]
+async fn unreplicated_commit_marker(replicated_commit: &mut ReplicatedCommit) {
+    let connection = replicated_commit
+        .connection
+        .take()
+        .expect("transaction connection");
+    replicated_commit.commit = Some(
+        cut_and_append_commit(
+            &replicated_commit.session().cluster,
+            replicated_commit.session().coordinator,
+            connection,
+            replicated_commit.producer(),
+            TOPIC,
+            4,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("EndTxn remains unanswered for two seconds")]
+async fn pending_unreplicated_commit(replicated_commit: &mut ReplicatedCommit) {
+    let answered = time::timeout(
+        Duration::from_secs(2),
+        replicated_commit.commit.as_mut().expect("pending EndTxn"),
+    )
+    .await;
     assert!(
         answered.is_err(),
-        "EndTxn answered for a marker that only its leader holds: {answered:?}"
+        "EndTxn answered for an unreplicated commit: {answered:?}"
     );
-    let to_coordinator = connect(cluster.address(coordinator)).await;
+}
+
+#[rstest_bdd_macros::then("the transaction-state high watermark remains at its previous log end")]
+async fn unreplicated_decision_watermark(replicated_commit: &ReplicatedCommit) {
+    let high_watermark = replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.session().coordinator)
+        .high_watermark_for_test(STATE_TOPIC, 0)
+        .await
+        .expect("state partition");
+    assert!(Some(high_watermark) == replicated_commit.state_end);
+}
+
+#[rstest_bdd_macros::then(
+    "DescribeTransactions remains PrepareCommit with its data partition 0 awaiting its marker"
+)]
+async fn pending_replicated_marker(replicated_commit: &ReplicatedCommit) {
+    let connection = connect(
+        replicated_commit
+            .session()
+            .cluster
+            .address(replicated_commit.session().coordinator),
+    )
+    .await;
     let preparing = Described {
         state: "PrepareCommit".to_owned(),
         topics: vec![DescribedTopic {
@@ -475,45 +536,239 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
             partitions: vec![0],
         }],
     };
-    assert!(describe_until(&to_coordinator, &preparing).await == Some(preparing));
-    to_coordinator.close();
+    assert!(describe_until(&connection, &preparing).await == Some(preparing));
+    connection.close();
+}
 
-    // The coordinator dies with the marker, and the follower leads the data
-    // partition without it.
-    cluster.take(coordinator).crash_for_test().await;
-    let lost = commit.await.expect("the EndTxn task");
-    assert!(lost.is_err(), "EndTxn has no answer: {lost:?}");
-    cluster
-        .handle(follower)
-        .wait_until_partition_leader_changed(TOPIC, 0, NodeId(coordinator))
+#[rstest_bdd_macros::when("the coordinator crashes with the unreplicated commit")]
+async fn crash_unreplicated_coordinator(replicated_commit: &mut ReplicatedCommit) {
+    let coordinator = replicated_commit.session().coordinator;
+    replicated_commit
+        .session
+        .as_mut()
+        .expect("relayed transaction")
+        .cluster
+        .take(coordinator)
+        .crash_for_test()
         .await;
+}
 
-    // The coordinator comes back with the `PrepareCommit`, and writes the
-    // marker again on the follower that now leads the partition.
-    cluster.relay(coordinator).heal();
-    cluster.restart(coordinator).await;
-    let to_follower = connect(cluster.address(follower)).await;
-    produce(&to_follower, topic_id, None, &["z"]).await;
-    let seen = read_committed(cluster.address(follower), "z").await;
-    assert!(seen == ["a", "b", "c", "z"]);
-    let to_coordinator = connect(cluster.address(coordinator)).await;
+#[rstest_bdd_macros::then("the pending EndTxn request is lost without a response")]
+async fn lost_unreplicated_commit(replicated_commit: &mut ReplicatedCommit) {
+    let lost = replicated_commit
+        .commit
+        .take()
+        .expect("pending EndTxn")
+        .await
+        .expect("the EndTxn task");
+    assert!(lost.is_err(), "EndTxn has no answer: {lost:?}");
+}
+
+#[rstest_bdd_macros::when(
+    "a follower becomes transaction coordinator and the producer retries EndTxn"
+)]
+async fn retry_replicated_decision(replicated_commit: &mut ReplicatedCommit) {
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.data_node)
+        .wait_until_partition_leader_changed(
+            STATE_TOPIC,
+            0,
+            NodeId(replicated_commit.session().coordinator),
+        )
+        .await;
+    let next = leader_of(
+        replicated_commit
+            .session()
+            .cluster
+            .handle(replicated_commit.data_node),
+        STATE_TOPIC,
+    )
+    .await;
+    let connection = connect(replicated_commit.session().cluster.address(next)).await;
+    replicated_commit.completed = Some(end_txn(&connection, replicated_commit.producer()).await);
+    connection.close();
+}
+
+#[rstest_bdd_macros::then(
+    "EndTxn succeeds with the same producer id and an epoch increment of one"
+)]
+fn replicated_decision_completed(replicated_commit: &ReplicatedCommit) {
+    let producer = replicated_commit.producer();
+    assert!(
+        replicated_commit.completed.as_ref()
+            == Some(&EndTxnResponse {
+                producer_id: producer.id.0,
+                producer_epoch: producer.epoch.0 + 1,
+                ..Default::default()
+            })
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "the data follower takes leadership and the healed coordinator restarts to retry its marker"
+)]
+async fn replay_replicated_marker(replicated_commit: &mut ReplicatedCommit) {
+    replicated_commit
+        .session()
+        .cluster
+        .handle(replicated_commit.data_node)
+        .wait_until_partition_leader_changed(
+            TOPIC,
+            0,
+            NodeId(replicated_commit.session().coordinator),
+        )
+        .await;
+    let coordinator = replicated_commit.session().coordinator;
+    replicated_commit
+        .session()
+        .cluster
+        .relay(coordinator)
+        .heal();
+    replicated_commit
+        .session
+        .as_mut()
+        .expect("relayed transaction")
+        .cluster
+        .restart(coordinator)
+        .await;
+}
+
+#[rstest_bdd_macros::when(
+    "the data leader appends plain z and a committed consumer reads through it"
+)]
+async fn read_replicated_commit(replicated_commit: &mut ReplicatedCommit) {
+    let connection = connect(
+        replicated_commit
+            .session()
+            .cluster
+            .address(replicated_commit.data_node),
+    )
+    .await;
+    produce(&connection, replicated_commit.topic_id(), None, &["z"]).await;
+    connection.close();
+    replicated_commit.records = Some(
+        read_committed(
+            replicated_commit
+                .session()
+                .cluster
+                .address(replicated_commit.data_node),
+            "z",
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the committed consumer sees exactly a,b,c,z")]
+fn visible_replicated_commit(replicated_commit: &ReplicatedCommit) {
+    assert!(replicated_commit.records.as_ref().expect("committed read") == &["a", "b", "c", "z"]);
+}
+
+#[rstest_bdd_macros::then(
+    "DescribeTransactions reports CompleteCommit with no outstanding partitions"
+)]
+async fn completed_replicated_marker(replicated_commit: &ReplicatedCommit) {
+    let connection = connect(
+        replicated_commit
+            .session()
+            .cluster
+            .address(replicated_commit.session().coordinator),
+    )
+    .await;
     let completed = Described {
         state: "CompleteCommit".to_owned(),
         topics: vec![],
     };
-    assert!(describe_until(&to_coordinator, &completed).await == Some(completed));
-
-    cluster.shutdown().await;
+    assert!(describe_until(&connection, &completed).await == Some(completed));
+    connection.close();
 }
 
-/// While a follower of `__consumer_offsets-0` is down but still in its ISR, no
-/// offsets record commits. The group coordinator then answers neither a
-/// `TxnOffsetCommit` nor an `OffsetDelete` with success: each write times out
-/// after Kafka's `offsets.commit.timeout.ms`, which
-/// `CoordinatorOperationExceptionHelper` answers `COORDINATOR_NOT_AVAILABLE`.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "an end txn is answered only once its commit decision is replicated"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn group_coordinator_writes_are_answered_only_once_committed() {
-    let mut cluster = registered_transaction_cluster(|_, config| {
+async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated(
+    replicated_commit: ReplicatedCommit,
+) {
+    replicated_commit.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "a transaction completes only once its markers are committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transaction_completes_only_once_its_markers_are_committed(
+    replicated_commit: ReplicatedCommit,
+) {
+    replicated_commit.shutdown().await;
+}
+
+#[derive(Default)]
+struct UncommittedOffsets {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    to_group: Option<Connection>,
+    to_txn: Option<Connection>,
+    group_node: u64,
+    txn_node: u64,
+    topic_id: Option<WireUuid>,
+    producer: Option<ProducerIdentity>,
+    stopped_dir: Option<TempDir>,
+    offsets: Option<TxnOffsetCommitResponse>,
+    deleted: Option<OffsetDeleteResponse>,
+}
+
+#[rstest::fixture]
+fn uncommitted_offsets() -> UncommittedOffsets {
+    // The failed replica stays in ISR for both coordinator writes.
+    UncommittedOffsets::default()
+}
+
+impl UncommittedOffsets {
+    fn address(&self, node: u64) -> SocketAddr {
+        self.cluster
+            .iter()
+            .find(|(broker, _, _)| broker.node_id() == node)
+            .map(|(_, config, _)| config.listen_addr)
+            .expect("a cluster member")
+    }
+
+    fn group(&self) -> &Connection {
+        self.to_group
+            .as_ref()
+            .expect("group coordinator connection")
+    }
+
+    fn transaction(&self) -> &Connection {
+        self.to_txn
+            .as_ref()
+            .expect("transaction coordinator connection")
+    }
+
+    fn producer(&self) -> ProducerIdentity { self.producer.expect("transaction identity") }
+
+    async fn shutdown(self) {
+        let Self {
+            cluster,
+            to_group,
+            to_txn,
+            stopped_dir,
+            ..
+        } = self;
+        to_group.expect("group coordinator connection").close();
+        to_txn.expect("transaction coordinator connection").close();
+        shutdown_cluster(cluster).await;
+        drop(stopped_dir);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three-replica offsets and transaction state hold stable group offset 5 and an open transaction registered for that group, with ISR scan one hour and heartbeat timeout ten minutes"
+)]
+async fn replicated_group_offsets(uncommitted_offsets: &mut UncommittedOffsets) {
+    uncommitted_offsets.cluster = registered_transaction_cluster(|_, config| {
         config.offsets_topic_num_partitions = 1;
         config.transaction_state_num_partitions = 1;
         // A stopped follower stays in the ISR: the leader does not shrink it
@@ -522,15 +777,7 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         config.heartbeat_timeout = krabka_units::minutes(10);
     })
     .await;
-    let address = |node: u64| {
-        cluster
-            .iter()
-            .find(|(handle, _, _)| handle.node_id() == node)
-            .map(|(_, config, _)| config.listen_addr)
-            .expect("a cluster member")
-    };
-
-    let admin = client(cluster[0].1.listen_addr).await;
+    let admin = client(uncommitted_offsets.cluster[0].1.listen_addr).await;
     let group_node = u64::try_from(
         support::find_coordinator(&admin, support::KEY_TYPE_GROUP, GROUP)
             .await
@@ -551,17 +798,24 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
     admin.close();
     // The group coordinator resolves the offsets below by topic id, so its
     // broker has to hold the topic first.
-    for (handle, _, _) in &cluster {
+    for (handle, _, _) in &uncommitted_offsets.cluster {
         handle.wait_until_partition_present(TOPIC, 0).await;
     }
-    cluster[0].0.wait_until_isr_len(OFFSETS_TOPIC, 0, 3).await;
-    cluster[0].0.wait_until_isr_len(STATE_TOPIC, 0, 3).await;
-    assert!(leader_of(&cluster[0].0, OFFSETS_TOPIC).await == group_node);
+    uncommitted_offsets.cluster[0]
+        .0
+        .wait_until_isr_len(OFFSETS_TOPIC, 0, 3)
+        .await;
+    uncommitted_offsets.cluster[0]
+        .0
+        .wait_until_isr_len(STATE_TOPIC, 0, 3)
+        .await;
+    assert!(leader_of(&uncommitted_offsets.cluster[0].0, OFFSETS_TOPIC).await == group_node);
 
     // A committed offset, for the delete below, and an open transaction that
     // holds the group's offsets partition.
-    let to_group = connect(address(group_node)).await;
-    let committed = to_group
+    uncommitted_offsets.to_group = Some(connect(uncommitted_offsets.address(group_node)).await);
+    let committed = uncommitted_offsets
+        .group()
         .send(OffsetCommitRequest {
             group_id: GROUP.into(),
             generation_id_or_member_epoch: -1,
@@ -576,9 +830,10 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         committed.topics[0].partitions[0].error_code == 0,
         "{committed:?}"
     );
-    let to_txn = connect(address(txn_node)).await;
-    let producer = init_producer(&to_txn).await;
-    let added = to_txn
+    uncommitted_offsets.to_txn = Some(connect(uncommitted_offsets.address(txn_node)).await);
+    let producer = init_producer(uncommitted_offsets.transaction()).await;
+    let added = uncommitted_offsets
+        .transaction()
         .send(AddOffsetsToTxnRequest {
             transactional_id: TID.into(),
             producer_id: producer.id.0,
@@ -590,29 +845,67 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         .expect("AddOffsetsToTxn");
     assert!(added.error_code == 0, "{added:?}");
 
-    // Stop a follower of the offsets partition that is neither coordinator.
-    let follower = cluster
-        .iter()
-        .position(|(handle, _, _)| ![group_node, txn_node].contains(&handle.node_id()))
-        .expect("a follower");
-    let (stopped, _, stopped_dir) = cluster.remove(follower);
-    stopped.crash_for_test().await;
+    uncommitted_offsets.group_node = group_node;
+    uncommitted_offsets.txn_node = txn_node;
+    uncommitted_offsets.topic_id = Some(topic_id);
+    uncommitted_offsets.producer = Some(producer);
+}
 
-    let offsets = to_group
-        .send(TxnOffsetCommitRequest {
-            transactional_id: TID.into(),
-            group_id: GROUP.into(),
-            producer_id: producer.id.0,
-            producer_epoch: producer.epoch.0,
-            generation_id_or_member_epoch: -1,
-            member_id: String::new(),
-            topics: vec![txn_offset_topic(TOPIC, topic_id, vec![
-                txn_offset_partition(krabka_ids::PartitionIndex(0), krabka_ids::Offset(7)),
-            ])],
-            ..Default::default()
+#[rstest_bdd_macros::when(
+    "an offsets follower that is neither coordinator crashes while remaining in ISR"
+)]
+async fn stop_offsets_replica(uncommitted_offsets: &mut UncommittedOffsets) {
+    // Stop a follower of the offsets partition that is neither coordinator.
+    let follower = uncommitted_offsets
+        .cluster
+        .iter()
+        .position(|(handle, _, _)| {
+            ![uncommitted_offsets.group_node, uncommitted_offsets.txn_node]
+                .contains(&handle.node_id())
         })
-        .await
-        .expect("TxnOffsetCommit");
+        .expect("a follower");
+    let (stopped, _, stopped_dir) = uncommitted_offsets.cluster.remove(follower);
+    uncommitted_offsets.stopped_dir = Some(stopped_dir);
+    stopped.crash_for_test().await;
+}
+
+#[rstest_bdd_macros::when(
+    "TxnOffsetCommit proposes partition 0 offset 7 with generation -1 and an empty member id"
+)]
+async fn unreplicated_txn_offsets(uncommitted_offsets: &mut UncommittedOffsets) {
+    uncommitted_offsets.offsets = Some(
+        uncommitted_offsets
+            .group()
+            .send(TxnOffsetCommitRequest {
+                transactional_id: TID.into(),
+                group_id: GROUP.into(),
+                producer_id: uncommitted_offsets.producer().id.0,
+                producer_epoch: uncommitted_offsets.producer().epoch.0,
+                generation_id_or_member_epoch: -1,
+                member_id: String::new(),
+                topics: vec![txn_offset_topic(
+                    TOPIC,
+                    uncommitted_offsets.topic_id.expect("source topic"),
+                    vec![txn_offset_partition(
+                        krabka_ids::PartitionIndex(0),
+                        krabka_ids::Offset(7),
+                    )],
+                )],
+                ..Default::default()
+            })
+            .await
+            .expect("TxnOffsetCommit"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the transactional offset response contains only partition 0 with COORDINATOR_NOT_AVAILABLE 15"
+)]
+fn rejected_unreplicated_offsets(uncommitted_offsets: &UncommittedOffsets) {
+    let offsets = uncommitted_offsets
+        .offsets
+        .as_ref()
+        .expect("transactional offsets requested");
     let codes: Vec<PartitionCode> = offsets
         .topics
         .iter()
@@ -630,22 +923,42 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             }],
         "{offsets:?}"
     );
+}
 
-    let deleted = to_group
-        .send(offset_delete_request(GROUP, vec![offset_delete_topic(
-            TOPIC,
-            vec![offset_delete_partition(0)],
-        )]))
-        .await
-        .expect("OffsetDelete");
+#[rstest_bdd_macros::when("OffsetDelete requests the group's partition 0 offset")]
+async fn unreplicated_offset_delete(uncommitted_offsets: &mut UncommittedOffsets) {
+    uncommitted_offsets.deleted = Some(
+        uncommitted_offsets
+            .group()
+            .send(offset_delete_request(GROUP, vec![offset_delete_topic(
+                TOPIC,
+                vec![offset_delete_partition(0)],
+            )]))
+            .await
+            .expect("OffsetDelete"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the full OffsetDelete response is COORDINATOR_NOT_AVAILABLE 15 with default remaining fields"
+)]
+fn rejected_unreplicated_delete(uncommitted_offsets: &UncommittedOffsets) {
     assert!(
-        deleted
-            == OffsetDeleteResponse {
+        uncommitted_offsets.deleted.as_ref()
+            == Some(&OffsetDeleteResponse {
                 error_code: COORDINATOR_NOT_AVAILABLE,
                 ..Default::default()
-            }
+            })
     );
+}
 
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "group coordinator writes are answered only once committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn group_coordinator_writes_are_answered_only_once_committed(
+    uncommitted_offsets: UncommittedOffsets,
+) {
+    uncommitted_offsets.shutdown().await;
 }

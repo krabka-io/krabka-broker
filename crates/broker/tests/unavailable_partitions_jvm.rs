@@ -247,12 +247,12 @@ struct KrabkaCluster {
     bootstrap: String,
     doomed: BTreeSet<i32>,
     _primary: tempfile::TempDir,
-    _extra: tempfile::TempDir,
+    extra: tempfile::TempDir,
 }
 
 impl KrabkaCluster {
     /// Boot the broker, create the topic with the real tool, wait for every
-    /// replica to be attributed to a directory, then kill the second one.
+    /// replica to be attributed to a directory.
     async fn start() -> Self {
         support::init_tracing();
         let primary = tempfile::tempdir().expect("primary log dir");
@@ -305,20 +305,22 @@ impl KrabkaCluster {
             .map(|p| p.partition)
             .collect();
 
-        // Only the second directory: with the first still online the broker
-        // does not take the all-dirs-offline self-shutdown path.
-        assert!(
-            handle.test_mark_log_dir_offline(extra.path()),
-            "the extra dir must have been registered and online",
-        );
-
         Self {
             handle,
             bootstrap,
             doomed,
             _primary: primary,
-            _extra: extra,
+            extra,
         }
+    }
+
+    fn fail_extra_log_dir(&self) {
+        // Only the second directory: with the first still online the broker
+        // does not take the all-dirs-offline self-shutdown path.
+        assert!(
+            self.handle.test_mark_log_dir_offline(self.extra.path()),
+            "the extra dir must have been registered and online",
+        );
     }
 
     /// `kafka-topics --describe --topic <TOPIC> <args>` against this broker.
@@ -361,9 +363,7 @@ struct OracleCluster {
 }
 
 impl OracleCluster {
-    /// Boot the broker, create the topic, then fill the tmpfs until the write
-    /// path fails with `No space left on device`, which is what Kafka's
-    /// `LogDirFailureChannel` reacts to.
+    /// Boot the broker and create the topic across both online directories.
     fn start() -> Self {
         let name = support::unique_container_name("krabka-unavailable-oracle");
         let tmpfs = format!("{ORACLE_TMPFS}:size=4m");
@@ -378,14 +378,12 @@ impl OracleCluster {
             KAFKA_IMAGE,
         ]);
         run_docker("run kafka oracle", &args);
-        let mut oracle = Self {
+        let oracle = Self {
             name,
             doomed: BTreeSet::new(),
         };
         oracle.wait_ready();
         oracle.create_topic();
-        oracle.fill_the_tmpfs();
-        oracle.doomed = oracle.partitions_on_tmpfs();
         oracle
     }
 
@@ -542,20 +540,115 @@ impl Drop for OracleCluster {
 
 // ---------------------------------------------------------------------- suite
 
-/// One cluster of each kind, the same two commands against both, the same rule
-/// applied to both answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[derive(Default)]
+struct FailedDiskFilters {
+    oracle: Option<OracleCluster>,
+    krabka: Option<KrabkaCluster>,
+    oracle_report: Option<HealthReport>,
+    krabka_report: Option<HealthReport>,
+}
+
+#[rstest::fixture]
+fn failed_disk_filters() -> FailedDiskFilters {
+    // The oracle runs first, so the same rule is established before checking krabka.
+    FailedDiskFilters::default()
+}
+
+#[rstest_bdd_macros::given(
+    "Kafka 4.3.1 hosts four RF1 partitions across two directories with its second directory on a 4-MiB tmpfs"
+)]
+async fn oracle_disk_topology(failed_disk_filters: &mut FailedDiskFilters) {
+    failed_disk_filters.oracle = Some(
+        task::spawn_blocking(OracleCluster::start)
+            .await
+            .expect("oracle boot"),
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "20000 one-KiB records fill Kafka's second directory and kafka-topics reads both health filters"
+)]
+async fn fail_oracle_disk(failed_disk_filters: &mut FailedDiskFilters) {
+    let mut oracle = failed_disk_filters.oracle.take().expect("oracle cluster");
+    let (oracle, report) = task::spawn_blocking(move || {
+        oracle.fill_the_tmpfs();
+        oracle.doomed = oracle.partitions_on_tmpfs();
+        let report = oracle.health_report();
+        (oracle, report)
+    })
+    .await
+    .expect("oracle failed-disk observations");
+    failed_disk_filters.oracle = Some(oracle);
+    failed_disk_filters.oracle_report = Some(report);
+}
+
+#[rstest_bdd_macros::then(
+    "Kafka's unavailable and under-replicated filters name exactly the failed-disk partitions, which alone lose leader and ISR"
+)]
+fn oracle_disk_filter_rows(failed_disk_filters: &FailedDiskFilters) {
+    assert_health_filters_agree(
+        "apache/kafka:4.3.1",
+        failed_disk_filters
+            .oracle_report
+            .as_ref()
+            .expect("oracle health filters read"),
+    );
+}
+
+#[rstest_bdd_macros::given(
+    "krabka hosts four RF1 partitions assigned across two online directories"
+)]
+async fn krabka_disk_topology(failed_disk_filters: &mut FailedDiskFilters) {
+    failed_disk_filters.krabka = Some(KrabkaCluster::start().await);
+}
+
+#[rstest_bdd_macros::when(
+    "krabka's second directory fails and kafka-topics reads both health filters"
+)]
+fn fail_krabka_disk(failed_disk_filters: &mut FailedDiskFilters) {
+    failed_disk_filters
+        .krabka
+        .as_ref()
+        .expect("krabka cluster")
+        .fail_extra_log_dir();
+    failed_disk_filters.krabka_report = Some(
+        failed_disk_filters
+            .krabka
+            .as_ref()
+            .expect("krabka cluster")
+            .health_report(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "krabka's unavailable and under-replicated filters name exactly the failed-disk partitions, which alone lose leader and ISR"
+)]
+fn krabka_disk_filter_rows(failed_disk_filters: &FailedDiskFilters) {
+    assert_health_filters_agree(
+        "krabka",
+        failed_disk_filters
+            .krabka_report
+            .as_ref()
+            .expect("krabka health filters read"),
+    );
+}
+
 #[ignore = "requires Docker"]
-async fn both_health_filters_print_a_partition_on_a_failed_log_dir() {
-    // Kafka first: if the rule below is wrong about Kafka, this is where the
-    // suite says so, before krabka is blamed for missing it.
-    let oracle = task::spawn_blocking(OracleCluster::start)
-        .await
-        .expect("oracle boot");
-    assert_health_filters_agree("apache/kafka:4.3.1", &oracle.health_report());
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unavailable_partitions_jvm.feature",
+    name = "both health filters print a partition on a failed log dir"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn both_health_filters_print_a_partition_on_a_failed_log_dir(
+    failed_disk_filters: FailedDiskFilters,
+) {
+    failed_disk_filters.shutdown().await;
+}
 
-    let krabka = KrabkaCluster::start().await;
-    assert_health_filters_agree("krabka", &krabka.health_report());
-
-    krabka.shutdown().await;
+impl FailedDiskFilters {
+    async fn shutdown(self) {
+        let Self { krabka, oracle, .. } = self;
+        krabka.expect("krabka cluster").shutdown().await;
+        drop(oracle);
+    }
 }

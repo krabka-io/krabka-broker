@@ -5,17 +5,16 @@
 
 use {
     crate::{
-        admin_harness::build_client,
-        support::{
-            quorum::{
-                describe_quorum_request as support_describe_quorum_request, follower_config,
-                metadata_quorum_request as describe_quorum_request, two_node_leader,
-            },
-            shutdown_cluster, start_n_node_client, start_n_node_with_retry,
+        admin_harness::{AdminCluster, admin, build_client},
+        support::quorum::{
+            describe_quorum_request as support_describe_quorum_request, follower_config,
+            metadata_quorum_request as describe_quorum_request, two_node_leader,
         },
     },
     assert2::{assert, check},
     krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
 /// Zero out the parts of a response that legitimately keep advancing between
@@ -45,18 +44,73 @@ fn without_replica_progress(mut resp: DescribeQuorumResponse) -> DescribeQuorumR
     resp
 }
 
-/// `DescribeQuorum` against the cluster-metadata topic on a 1-broker
-/// cluster returns one partition row carrying the broker's voter id with
-/// `leader_id` == 1. This test verifies the dispatch glue, the ACL allow
-/// path, and the response encoding. The pure `build_topic_responses` helper
-/// has its own unit tests in
-/// `crates/broker/src/handlers/describe_quorum.rs`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_quorum_reports_cluster_metadata_voter_set() {
-    let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
+struct QuorumDiscovery {
+    response: Option<DescribeQuorumResponse>,
+    baseline: Option<DescribeQuorumResponse>,
+    leader: Option<i32>,
+}
 
-    let req = describe_quorum_request();
-    let resp = client.send(req).await.expect("describe_quorum");
+#[fixture]
+fn quorum() -> QuorumDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    QuorumDiscovery {
+        response: None,
+        baseline: None,
+        leader: None,
+    }
+}
+
+#[given("the active controller of the two-broker quorum is known")]
+async fn known_controller(admin: &AdminCluster, quorum: &mut QuorumDiscovery) {
+    let response = admin
+        .client()
+        .send(describe_quorum_request())
+        .await
+        .expect("describe_quorum from node 0");
+    assert!(response.error_code == 0, "top-level error_code");
+    quorum.leader = Some(two_node_leader(&response, (1, 2)));
+    quorum.baseline = Some(response);
+}
+
+#[when("the admin describes the cluster metadata quorum")]
+async fn describe_metadata_quorum(admin: &AdminCluster, quorum: &mut QuorumDiscovery) {
+    quorum.response = Some(
+        admin
+            .client()
+            .send(describe_quorum_request())
+            .await
+            .expect("describe_quorum"),
+    );
+}
+
+#[when("the non-controller broker receives DescribeQuorum")]
+async fn describe_through_follower(admin: &AdminCluster, quorum: &mut QuorumDiscovery) {
+    let cfg = follower_config(
+        admin.cluster(),
+        quorum.leader.expect("a known active controller"),
+    );
+    let client = build_client(cfg.listen_addr).await;
+    quorum.response = Some(
+        client
+            .send(describe_quorum_request())
+            .await
+            .expect("describe_quorum from the follower"),
+    );
+}
+
+#[when("the admin asks DescribeQuorum for a non-metadata topic")]
+async fn describe_unknown_quorum(admin: &AdminCluster, quorum: &mut QuorumDiscovery) {
+    let request = support_describe_quorum_request("not-the-metadata-topic", vec![0]);
+    quorum.response = Some(admin.client().send(request).await.expect("describe_quorum"));
+}
+
+#[then("the metadata quorum names broker 1 as its only voter and elected leader")]
+fn single_metadata_voter(quorum: &QuorumDiscovery) {
+    let resp = quorum
+        .response
+        .as_ref()
+        .expect("the metadata quorum was described");
     check!(resp.error_code == 0, "top-level error_code");
     assert!(resp.topics.len() == 1, "exactly one topic row");
     check!(resp.topics[0].topic_name == "__cluster_metadata");
@@ -93,37 +147,14 @@ async fn describe_quorum_reports_cluster_metadata_voter_set() {
     );
 }
 
-/// A combined node that is not the active controller forwards `DescribeQuorum`
-/// to the active controller instead of answering from its own (follower) raft
-/// view (#1034). Before the fix, the follower answered locally and reported
-/// every voter's `log_end_offset` as `-1` (openraft only fills the
-/// replication map on the leader); after the fix it gets the leader's exact
-/// answer, so the two decoded responses name the same leader, epoch, and
-/// voter set (apart from each replica's log position, high watermark, and
-/// wall-clock timestamps, which the live leader may have advanced between
-/// the two requests).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
-    let cluster = start_n_node_with_retry(2).await;
-
-    // Ask node 0 first: whichever role it holds, the fix means it now answers
-    // correctly (forwarded if it is the follower, local if it is the leader),
-    // so its response names the true leader.
-    let (_, first_cfg, _dir0) = &cluster[0];
-    let first_client = build_client(first_cfg.listen_addr).await;
-    let first_resp = first_client
-        .send(describe_quorum_request())
-        .await
-        .expect("describe_quorum from node 0");
-    assert!(first_resp.error_code == 0, "top-level error_code");
-    let leader_id = two_node_leader(&first_resp, (1, 2));
-    let follower_cfg = follower_config(&cluster, leader_id);
-    let follower_client = build_client(follower_cfg.listen_addr).await;
-    let follower_resp = follower_client
-        .send(describe_quorum_request())
-        .await
-        .expect("describe_quorum from the follower");
-
+#[then("the forwarded quorum response matches the active controller with real voter progress")]
+fn forwarded_response(quorum: &QuorumDiscovery) {
+    let follower_resp = quorum.response.as_ref().expect("the follower was queried");
+    let first_resp = quorum
+        .baseline
+        .as_ref()
+        .expect("the active controller is known");
+    let leader_id = quorum.leader.expect("the active controller is known");
     check!(follower_resp.error_code == 0, "top-level error_code");
     let follower_partition = &follower_resp.topics[0].partitions[0];
     check!(
@@ -144,27 +175,18 @@ async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
         follower_partition.current_voters,
     );
 
-    assert!(without_replica_progress(follower_resp) == without_replica_progress(first_resp));
-
-    shutdown_cluster(cluster).await;
+    assert!(
+        without_replica_progress(follower_resp.clone())
+            == without_replica_progress(first_resp.clone())
+    );
 }
 
-/// A request for a topic other than `__cluster_metadata`, or a partition
-/// other than 0, gets Kafka's `UNKNOWN_TOPIC_OR_PARTITION` (3) with its
-/// message -- not the `INVALID_TOPIC_EXCEPTION` (17) the broker listener used
-/// to answer with locally before it forwarded (#1034). The check runs
-/// against a node forwarding to the active controller (node 0 of a 2-node
-/// cluster is a follower about half the time; either way `forward_raw`
-/// routes the request to whichever node answers it).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
-    let cluster = start_n_node_with_retry(2).await;
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
-
-    let req = support_describe_quorum_request("not-the-metadata-topic", vec![0]);
-    let resp = client.send(req).await.expect("describe_quorum");
-
+#[then("the unknown quorum partition returns Kafka UNKNOWN_TOPIC_OR_PARTITION and its message")]
+fn unknown_partition(quorum: &QuorumDiscovery) {
+    let resp = quorum
+        .response
+        .as_ref()
+        .expect("the unknown quorum topic was requested");
     check!(resp.error_code == 0, "top-level error_code");
     assert!(resp.topics.len() == 1);
     let pd = &resp.topics[0].partitions[0];
@@ -174,6 +196,40 @@ async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
         "Kafka's Errors.UNKNOWN_TOPIC_OR_PARTITION.message(); got {:?}",
         pd.error_message,
     );
+}
 
-    shutdown_cluster(cluster).await;
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "describe quorum reports cluster metadata voter set"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_quorum_reports_cluster_metadata_voter_set(
+    admin: AdminCluster,
+    quorum: QuorumDiscovery,
+) {
+    admin.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "combined follower forwards describe quorum to the active controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn combined_follower_forwards_describe_quorum_to_the_active_controller(
+    admin: AdminCluster,
+    quorum: QuorumDiscovery,
+) {
+    admin.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "describe quorum for another topic is unknown topic or partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition(
+    admin: AdminCluster,
+    quorum: QuorumDiscovery,
+) {
+    admin.shutdown().await;
 }

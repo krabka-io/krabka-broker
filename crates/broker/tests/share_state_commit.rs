@@ -313,49 +313,149 @@ async fn initialize_when_loaded(client: &Client, topic_id: uuid::Uuid) -> Answer
     panic!("the share coordinator did not load __share_group_state-0");
 }
 
-/// While a follower of `__share_group_state-0` is down but still in its ISR,
-/// no share-state record commits. The coordinator then answers no request
-/// with success: each one times out as Kafka's coordinator write does, and
-/// the share-partition leader gets `COORDINATOR_NOT_AVAILABLE`, which it
-/// retries.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_share_state_request_is_answered_only_when_committed() {
-    let mut cluster = start_three().await;
-    let lookup = client(&cluster[0].0).await;
-    let topic_id = create_orders(&lookup).await;
-    let key = format!("{GROUP}:{}:0", URL_SAFE_NO_PAD.encode(topic_id.as_bytes()));
-    let coordinator = support::find_coordinator(&lookup, support::KEY_TYPE_SHARE, &key)
-        .await
-        .node_id;
-    lookup.close();
-    let coordinator = u64::try_from(coordinator).expect("a node id");
+/// State and observations belong to one coordinator workload.
+#[derive(Default)]
+struct ShareStateCommit {
+    cluster: Cluster,
+    member: Option<Client>,
+    topic_id: Option<uuid::Uuid>,
+    coordinator: u64,
+    stopped_dir: Option<TempDir>,
+    answers: Vec<(Rpc, Answer)>,
+}
 
-    // Every replica is up: the records commit, and the coordinator answers.
-    let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
-    let initialized = initialize_when_loaded(&member, topic_id).await;
-    assert!(initialized == Rpc::Initialize { state_epoch: 0 }.answer(topic_id, 0, ""));
-    let written = Rpc::Write { start_offset: 0 }.send(&member, topic_id).await;
-    assert!(written == Rpc::Write { start_offset: 0 }.answer(topic_id, 0, ""));
+#[rstest::fixture]
+fn share_state_commit() -> ShareStateCommit {
+    // Each scenario starts its own replicated state partition.
+    ShareStateCommit::default()
+}
 
-    // Stop a follower of the state partition. It stays in the ISR, so the
-    // high watermark stops below every later record.
-    let stopped_dir = crash_follower(&mut cluster, coordinator).await;
+impl ShareStateCommit {
+    fn member(&self) -> &Client { self.member.as_ref().expect("coordinator connection") }
 
-    let rows = [
+    fn topic_id(&self) -> uuid::Uuid { self.topic_id.expect("orders topic") }
+}
+
+#[rstest_bdd_macros::given(
+    "orders has a three-replica share-state partition whose ISR never shrinks during the scenario"
+)]
+async fn replicated_share_state(share_state_commit: &mut ShareStateCommit) {
+    share_state_commit.cluster = start_three().await;
+    share_state_commit.member = Some(client(&share_state_commit.cluster[0].0).await);
+    share_state_commit.topic_id = Some(create_orders(share_state_commit.member()).await);
+    let key = format!(
+        "{GROUP}:{}:0",
+        URL_SAFE_NO_PAD.encode(share_state_commit.topic_id().as_bytes())
+    );
+    share_state_commit.coordinator = u64::try_from(
+        support::find_coordinator(share_state_commit.member(), support::KEY_TYPE_SHARE, &key)
+            .await
+            .node_id,
+    )
+    .expect("a node id");
+    share_state_commit
+        .member
+        .take()
+        .expect("lookup connection")
+        .close();
+    share_state_commit.member = Some(
+        client(
+            &share_state_commit.cluster
+                [position_of(&share_state_commit.cluster, share_state_commit.coordinator)]
+            .0,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "the coordinator initializes state epoch 0 and writes start offset 0 with all replicas available"
+)]
+async fn commit_available_share_state(share_state_commit: &mut ShareStateCommit) {
+    let initialized =
+        initialize_when_loaded(share_state_commit.member(), share_state_commit.topic_id()).await;
+    share_state_commit
+        .answers
+        .push((Rpc::Initialize { state_epoch: 0 }, initialized));
+    let written = Rpc::Write { start_offset: 0 }
+        .send(share_state_commit.member(), share_state_commit.topic_id())
+        .await;
+    share_state_commit
+        .answers
+        .push((Rpc::Write { start_offset: 0 }, written));
+}
+
+#[rstest_bdd_macros::then(
+    "both complete share-state responses report success with no error message"
+)]
+fn committed_share_state(share_state_commit: &ShareStateCommit) {
+    assert!(share_state_commit.answers.len() == 2);
+    for (rpc, answer) in &share_state_commit.answers {
+        assert!(
+            *answer == rpc.answer(share_state_commit.topic_id(), 0, ""),
+            "{rpc:?}"
+        );
+    }
+}
+
+#[rstest_bdd_macros::when(
+    "a follower crashes while staying in the ISR and the coordinator writes offset 10, reads, initializes epoch 1 and deletes state"
+)]
+async fn uncommittable_share_state(share_state_commit: &mut ShareStateCommit) {
+    share_state_commit.stopped_dir = Some(
+        crash_follower(
+            &mut share_state_commit.cluster,
+            share_state_commit.coordinator,
+        )
+        .await,
+    );
+    share_state_commit.answers.clear();
+    for rpc in [
         Rpc::Write { start_offset: 10 },
         Rpc::Read,
         Rpc::Initialize { state_epoch: 1 },
         Rpc::Delete,
-    ];
-    for rpc in rows {
-        let answer = rpc.send(&member, topic_id).await;
+    ] {
+        let answer = rpc
+            .send(share_state_commit.member(), share_state_commit.topic_id())
+            .await;
+        share_state_commit.answers.push((rpc, answer));
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "all four complete responses report coordinator unavailable code 15 and The request timed out."
+)]
+fn timed_out_share_state(share_state_commit: &ShareStateCommit) {
+    assert!(share_state_commit.answers.len() == 4);
+    for (rpc, answer) in &share_state_commit.answers {
         assert!(
-            answer == rpc.answer(topic_id, COORDINATOR_NOT_AVAILABLE, TIMED_OUT),
+            *answer
+                == rpc.answer(
+                    share_state_commit.topic_id(),
+                    COORDINATOR_NOT_AVAILABLE,
+                    TIMED_OUT
+                ),
             "{rpc:?}"
         );
     }
-    member.close();
+}
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state_commit.feature",
+    name = "a share state request is answered only when committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_share_state_request_is_answered_only_when_committed(
+    share_state_commit: ShareStateCommit,
+) {
+    let ShareStateCommit {
+        cluster,
+        member,
+        stopped_dir,
+        ..
+    } = share_state_commit;
+    member.expect("coordinator connection").close();
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

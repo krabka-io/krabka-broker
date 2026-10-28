@@ -4,10 +4,9 @@
 
 use {
     crate::{
-        cluster_lock,
+        OperatorElectionScenario, operator_election,
         support::{
             admin::{ElectionKind, ElectionSetup},
-            registered_cluster, shutdown_cluster,
             topics::AssignedTopicSetup,
         },
         wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
@@ -18,24 +17,11 @@ use {
     assert2::assert,
     krabka_broker::codes,
 };
-
-/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
-///
-/// Scenario:
-/// 1. Kill broker 1, the preferred replica. Broker 3 keeps the raft quorum
-///    (2/3).
-/// 2. Broker 2 becomes partition leader through the automatic on-broker-dead
-///    path.
-/// 3. Revive broker 1 with Rejoin. It catches up on replication and expands
-///    back into the ISR.
-/// 4. Send `ElectLeaders Preferred` with `election_type=0` over the wire.
-/// 5. Assert per-partition `error_code` = 0. Poll until leader == 1 again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preferred_election_via_wire_returns_success() {
-    let _g = cluster_lock().lock().await;
-
-    let mut cluster = registered_cluster(3).await;
-
+#[rstest_bdd_macros::given(
+    "foo-preferred partition 0 has replicas 1 and 2, and preferred broker 1 has stopped, rejoined and become electable in the ISR"
+)]
+async fn rejoined_preferred_replica(operator_election: &mut OperatorElectionScenario) {
+    let mut cluster = mem::take(&mut operator_election.cluster);
     // All three brokers' addresses captured before any shutdowns.
     let broker1_addr = cluster[0].1.listen_addr;
 
@@ -116,81 +102,108 @@ async fn preferred_election_via_wire_returns_success() {
     };
     eprintln!("sending ElectLeaders Preferred to raft leader at {elect_addr}");
 
-    // Now send ElectLeaders Preferred (election_type=0). Broker 1 is the
-    // preferred replica (replicas[0]) and is now back in ISR and alive.
+    operator_election.cluster = cluster;
+    operator_election.revived = Some(revived_h);
+    operator_election.retired_directory = Some(dead_dir);
+    operator_election.address = Some(elect_addr);
+}
+#[rstest_bdd_macros::when(
+    "the operator requests a preferred election of foo-preferred partition 0"
+)]
+async fn elect_rejoined_preferred_replica(operator_election: &mut OperatorElectionScenario) {
     let result = drive_elect_leaders()
-        .addr(elect_addr)
+        .addr(operator_election.address())
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: ("foo-preferred").to_owned(),
+            topic: "foo-preferred".into(),
             ..Default::default()
         })
         .call()
         .await;
-    assert!(
-        result == vec![(0, 0)],
-        "expected error_code=0 for PREFERRED election; got {result:?}"
-    );
-
-    // Poll until the image reflects broker 1 as leader again.
-    wait_partition_leader(&cluster[0].0, "foo-preferred", 0, 1).await;
-    wait_partition_leader(&revived_h, "foo-preferred", 0, 1).await;
-
-    // Clean up.
-    revived_h.shutdown().await;
-    shutdown_cluster(cluster).await;
-    drop(dead_dir);
+    operator_election.result = Some(result);
 }
-
-/// KIP-460: a request that names no topics asks about every partition, and
-/// Kafka answers it only with the partitions it acted on --
-/// `ReplicationControlManager.electLeaders` drops every `ELECTION_NOT_NEEDED`
-/// row in that shape because "we do not return partitions which already have
-/// the desired leader". Returning them makes
-/// `kafka-leader-election --all-topic-partitions` on a healthy cluster print a
-/// "valid replica already elected" line for every partition, internal topics
-/// included, where Apache Kafka prints nothing at all.
-///
-/// The named shape is unaffected: a client that asked about one partition is
-/// told what happened to it, code 84 included. Both halves are checked here,
-/// against the same untouched cluster, so a change that filtered too much
-/// would fail on the second.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {
-    let _g = cluster_lock().lock().await;
-
-    let cluster = registered_cluster(3).await;
-    let broker1_addr = cluster[0].1.listen_addr;
-
-    // Nothing has failed over, so every partition is already led by its
-    // preferred replica and no election is needed anywhere.
-    create_topic_plaintext(broker1_addr, AssignedTopicSetup {
-        name: ("foo-all-partitions").into(),
+#[rstest_bdd_macros::then(
+    "the surviving broker and rejoined broker both observe broker 1 as foo-preferred partition 0 leader"
+)]
+async fn restored_preferred_partition_leader(operator_election: &mut OperatorElectionScenario) {
+    wait_partition_leader(&operator_election.cluster[0].0, "foo-preferred", 0, 1).await;
+    wait_partition_leader(
+        operator_election
+            .revived
+            .as_ref()
+            .expect("rejoined preferred broker"),
+        "foo-preferred",
+        0,
+        1,
+    )
+    .await;
+    operator_election.shutdown().await;
+}
+#[rstest_bdd_macros::given(
+    "foo-all-partitions partition 0 already has preferred broker 1 as leader with replicas 1 and 2"
+)]
+async fn already_preferred_partition(operator_election: &mut OperatorElectionScenario) {
+    let address = operator_election.cluster[0].1.listen_addr;
+    create_topic_plaintext(address, AssignedTopicSetup {
+        name: "foo-all-partitions".into(),
         replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
     })
     .await;
-    wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
-
-    let rows = drive_elect_all_partitions(broker1_addr, ElectionKind::Preferred).await;
-
-    assert!(
-        rows.is_empty(),
-        "a cluster with nothing to elect must answer --all-topic-partitions with no rows, \
-         got {rows:?}"
+    wait_partition_exists(&operator_election.cluster[0].0, "foo-all-partitions", 0).await;
+    operator_election.address = Some(address);
+}
+#[rstest_bdd_macros::when(
+    "the operator requests preferred elections for all partitions and then explicitly names foo-all-partitions partition 0"
+)]
+async fn compare_all_and_named_preferred_elections(
+    operator_election: &mut OperatorElectionScenario,
+) {
+    operator_election.all_result = Some(
+        drive_elect_all_partitions(operator_election.address(), ElectionKind::Preferred).await,
     );
-
-    // The same partition, named explicitly, still reports why it was skipped.
-    let named = drive_elect_leaders()
-        .addr(broker1_addr)
-        .client_id(CLIENT_ID)
-        .election(ElectionSetup {
-            topic: ("foo-all-partitions").to_owned(),
-            ..Default::default()
-        })
-        .call()
-        .await;
-    assert!(
-        named == vec![(0, codes::ELECTION_NOT_NEEDED)],
-        "a named partition must still report ELECTION_NOT_NEEDED, got {named:?}"
+    operator_election.result = Some(
+        drive_elect_leaders()
+            .addr(operator_election.address())
+            .client_id(CLIENT_ID)
+            .election(ElectionSetup {
+                topic: "foo-all-partitions".into(),
+                ..Default::default()
+            })
+            .call()
+            .await,
     );
 }
+#[rstest_bdd_macros::then(
+    "the all-partitions response omits skipped rows and the named partition returns ELECTION_NOT_NEEDED code 84"
+)]
+async fn omitted_preferred_election_rows(operator_election: &mut OperatorElectionScenario) {
+    assert!(
+        operator_election
+            .all_result
+            .as_ref()
+            .expect("all-partitions election")
+            .is_empty()
+    );
+    assert!(
+        operator_election.result.as_ref().expect("named election")
+            == &[(0, codes::ELECTION_NOT_NEEDED)]
+    );
+    operator_election.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/preferred_elections.feature",
+    name = "A rejoined preferred replica can regain leadership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preferred_election_via_wire_returns_success(operator_election: OperatorElectionScenario) {}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/preferred_elections.feature",
+    name = "All-partitions elections omit partitions already on the preferred leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader(
+    operator_election: OperatorElectionScenario,
+) {
+}
+
+use std::mem;

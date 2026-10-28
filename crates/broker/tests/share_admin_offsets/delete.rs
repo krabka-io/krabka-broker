@@ -8,10 +8,7 @@
 use {
     crate::{
         describe::{describe_all_offsets, describe_until, initialized_partitions},
-        harness::{
-            InitializedRestartFixture, NONE, acquired_topic, fetch_until_acquired,
-            initialized_restart_fixture, leave,
-        },
+        harness::{NONE, fetch_until_acquired, leave},
         support::share::{ShareSessionSetup, rejoin_group},
     },
     assert2::{assert, check},
@@ -33,149 +30,220 @@ fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
     }
 }
 
-/// Delete removes the durable share-state for a topic of an empty group.
-///
-/// A later Describe reads the partition as missing and reports
-/// `start_offset` -1.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_removes_topic() {
-    let (_permit, _broker, client, _dir, _tid, member, _) = acquired_topic().await;
-    leave(&client, "g1", &member).await;
+use {
+    crate::harness::AdminOffsetSession,
+    krabka_protocol::owned::{
+        delete_share_group_offsets_response::DeleteShareGroupOffsetsResponse,
+        describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    let resp = client
-        .send(delete_topic_request())
-        .await
-        .expect("DeleteShareGroupOffsets");
-    check!(
-        resp.error_code == NONE,
-        "delete top-level error: {}",
-        resp.error_code
-    );
-    check!(
-        resp.responses[0].topic_name == "t",
-        "delete response topic name mismatch: {}",
-        resp.responses[0].topic_name
-    );
-    check!(
-        resp.responses[0].error_code == NONE,
-        "delete per-topic error: {}",
-        resp.responses[0].error_code
-    );
+#[derive(Default)]
+struct ShareOffsetDeletion {
+    session: Option<AdminOffsetSession>,
+    response: Option<DeleteShareGroupOffsetsResponse>,
+    described: Option<DescribeShareGroupOffsetsResponseGroup>,
+    enumerated: Option<Vec<i32>>,
+}
 
-    // Describe now reads the removed partition as missing → start_offset -1.
-    let group = describe_until(&client, "g1", "t", vec![0], -1).await;
-    let part = &group.topics[0].partitions[0];
-    assert!(
-        part.start_offset == -1,
-        "deleted state must read as missing (start_offset -1), got {}",
-        part.start_offset
-    );
-    assert!(
-        part.error_code == NONE,
-        "describe of missing partition is not an error, got {}",
-        part.error_code
+#[fixture]
+fn share_offset_deletion() -> ShareOffsetDeletion {
+    // Capture deletion and metadata enumeration independently across the restart.
+    ShareOffsetDeletion::default()
+}
+
+#[given("share group g1 has acquired its three initialized records on t")]
+async fn initialized_deletion_group(share_offset_deletion: &mut ShareOffsetDeletion) {
+    share_offset_deletion.session = Some(AdminOffsetSession::initialized(3).await);
+    fetch_until_acquired(
+        &share_offset_deletion.session().client,
+        ShareSessionSetup::opening(
+            share_offset_deletion
+                .session()
+                .member
+                .as_ref()
+                .expect("joined member"),
+            share_offset_deletion.session().topic,
+        ),
+    )
+    .await;
+}
+
+#[when("the deletion-test member leaves g1")]
+async fn empty_deletion_group(share_offset_deletion: &ShareOffsetDeletion) {
+    leave(
+        &share_offset_deletion.session().client,
+        "g1",
+        share_offset_deletion
+            .session()
+            .member
+            .as_ref()
+            .expect("joined member"),
+    )
+    .await;
+}
+
+#[when("an administrator deletes t's offsets from g1")]
+async fn delete_share_offsets(share_offset_deletion: &mut ShareOffsetDeletion) {
+    share_offset_deletion.response = Some(
+        share_offset_deletion
+            .session()
+            .client
+            .send(delete_topic_request())
+            .await
+            .expect("DeleteShareGroupOffsets"),
     );
 }
 
-/// F6, delete-metadata rewrite: `DeleteShareGroupOffsets` rewrites the v14
-/// state-partition-metadata record.
-///
-/// The deleted topic is then gone from the initialized set of the group, and it
-/// STAYS gone after a restart, because the seed no longer lists it again.
-///
-/// A describe with no topic list enumerates the *initialized* partitions of
-/// the group, read from the v14 metadata cache. Before the delete, that
-/// returns partition [0] of "t". After the delete rewrite, "t" has no
-/// initialized partitions, so it has no row. This holds before AND after a
-/// restart.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_rewrites_metadata_topic_absent_after_restart() {
-    let InitializedRestartFixture {
-        _permit,
-        _dir,
-        log_dir,
-        topic: initial,
-    } = initialized_restart_fixture().call().await;
+#[then("offset deletion succeeds for the group and topic t")]
+fn share_offsets_deleted(share_offset_deletion: &ShareOffsetDeletion) {
+    let response = share_offset_deletion
+        .response
+        .as_ref()
+        .expect("DeleteShareGroupOffsets answered");
+    check!(response.error_code == NONE);
+    check!(response.responses[0].topic_name == "t");
+    check!(response.responses[0].error_code == NONE);
+}
 
-    let tid;
-    {
-        let (broker, client, topic, member) = initial;
-        tid = topic;
-        let _ = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
+#[when("the deleted t partition is described until it reports a missing start")]
+async fn describe_deleted_share_offsets(share_offset_deletion: &mut ShareOffsetDeletion) {
+    share_offset_deletion.described = Some(
+        describe_until(
+            &share_offset_deletion.session().client,
+            "g1",
+            "t",
+            vec![0],
+            -1,
+        )
+        .await,
+    );
+}
 
-        // Sanity: a describe with no topic list enumerates the initialized
-        // partitions for "t" — partition [0] is present before the delete.
-        let before = describe_all_offsets(&client, "g1").await;
-        let before_parts: Vec<i32> = initialized_partitions(&before, "t");
-        assert!(
-            before_parts == vec![0],
-            "describe must enumerate initialized partition [0] before delete, got {before_parts:?}"
-        );
+#[then("the deleted partition's start is minus one without a partition error")]
+fn missing_deleted_share_offsets(share_offset_deletion: &ShareOffsetDeletion) {
+    let partition = &share_offset_deletion
+        .described
+        .as_ref()
+        .expect("partition described")
+        .topics[0]
+        .partitions[0];
+    assert!(partition.start_offset == -1);
+    assert!(partition.error_code == NONE);
+}
 
-        leave(&client, "g1", &member).await;
+#[when("all initialized share offsets of g1 are enumerated")]
+async fn enumerate_deleted_share_offsets(share_offset_deletion: &mut ShareOffsetDeletion) {
+    let described = describe_all_offsets(&share_offset_deletion.session().client, "g1").await;
+    share_offset_deletion.enumerated = Some(initialized_partitions(&described, "t"));
+}
 
-        let resp = client
-            .send(delete_topic_request())
-            .await
-            .expect("DeleteShareGroupOffsets");
-        assert!(
-            resp.error_code == NONE && resp.responses[0].error_code == NONE,
-            "delete failed: top={} per-topic={}",
-            resp.error_code,
-            resp.responses[0].error_code
-        );
+#[then("the initialized offset metadata enumerates exactly t partition zero")]
+fn initialized_deletion_metadata(share_offset_deletion: &ShareOffsetDeletion) {
+    assert!(
+        share_offset_deletion
+            .enumerated
+            .as_ref()
+            .expect("initialized offsets enumerated")
+            == &vec![0]
+    );
+}
 
-        // The describe with no topic list no longer enumerates any
-        // initialized partition for "t" (the v14 metadata record was rewritten).
-        // This is a NEGATIVE condition (absence); no broker awaiter exists for
-        // "metadata rewrite complete", so we poll until the absence is observed.
-        // Bounded to 4s — the delete RPC already succeeded so the rewrite is
-        // in-flight, not guessing arbitrary settle time.
-        let mut absent = false;
-        for _ in 0..40 {
-            let g = describe_all_offsets(&client, "g1").await;
-            let parts: Vec<i32> = initialized_partitions(&g, "t");
-            if parts.is_empty() {
-                absent = true;
-                break;
-            }
-            // real-time wait (not a progress poll): settle between re-checks asserting the deleted topic stays absent (absence, not a positive poll)
-            time::sleep(Duration::from_millis(100)).await;
+#[when("offset metadata is polled for up to four seconds until deleted t disappears")]
+async fn await_deleted_share_metadata(share_offset_deletion: &mut ShareOffsetDeletion) {
+    for _ in 0..40 {
+        enumerate_deleted_share_offsets(share_offset_deletion).await;
+        if share_offset_deletion
+            .enumerated
+            .as_ref()
+            .expect("enumeration")
+            .is_empty()
+        {
+            break;
         }
-        assert!(
-            absent,
-            "describe must not enumerate any initialized partition for the deleted topic"
-        );
-
-        // `absent` is confirmed above (positive absence observed via describe).
-        // A brief flush sleep lets the v14 metadata-rewrite persist to disk
-        // before shutdown, so the restart below sees the rewritten seed.
-        // This is a persist-flush, not a state-guessing settle: we already know
-        // the in-memory state is correct.
-        time::sleep(Duration::from_millis(300)).await;
-        broker.shutdown().await;
+        time::sleep(Duration::from_millis(100)).await;
     }
+}
 
-    {
-        let (_broker, client) = rejoin_group(log_dir, "g1").await;
+#[then("the initialized offset metadata contains no t partitions")]
+fn absent_deletion_metadata(share_offset_deletion: &ShareOffsetDeletion) {
+    assert!(
+        share_offset_deletion
+            .enumerated
+            .as_ref()
+            .expect("initialized offsets enumerated")
+            .is_empty()
+    );
+}
 
-        // After restart, the v14 seed no longer lists "t" (the rewrite removed
-        // it), so the describe with no topic list must STILL
-        // enumerate zero initialized partitions. Poll a window to let the
-        // coordinator finish replaying state, asserting absence throughout.
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            let g = describe_all_offsets(&client, "g1").await;
-            let parts: Vec<i32> = initialized_partitions(&g, "t");
-            assert!(
-                parts.is_empty(),
-                "deleted topic must remain un-initialized after restart (v14 rewrite), got {parts:?}"
-            );
-            if Instant::now() >= deadline {
-                break;
-            }
-            // real-time wait (not a progress poll): settle between re-checks asserting the deleted topic stays absent throughout the window (liveness, not a positive poll)
-            time::sleep(Duration::from_millis(200)).await;
+#[when("the metadata rewrite is flushed for 300 milliseconds and the share broker restarts")]
+async fn restart_deleted_share_metadata(share_offset_deletion: &mut ShareOffsetDeletion) {
+    let session = share_offset_deletion.session.as_mut().expect("share group");
+    time::sleep(Duration::from_millis(300)).await;
+    session
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let (broker, client) = rejoin_group(session.directory.path().to_path_buf(), "g1").await;
+    session.broker = Some(broker);
+    session.client = client;
+}
+
+#[then("deleted t remains absent from initialized offsets throughout eight seconds of recovery")]
+async fn durable_deleted_share_metadata(share_offset_deletion: &ShareOffsetDeletion) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let described = describe_all_offsets(&share_offset_deletion.session().client, "g1").await;
+        let partitions = initialized_partitions(&described, "t");
+        assert!(
+            partitions.is_empty(),
+            "deleted topic reinitialized after restart: {partitions:?}"
+        );
+        if Instant::now() >= deadline {
+            break;
         }
+        time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/delete.feature",
+    name = "delete removes topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_removes_topic(share_offset_deletion: ShareOffsetDeletion) {
+    share_offset_deletion
+        .session
+        .take()
+        .expect("share fixture")
+        .shutdown()
+        .await;
+    drop(share_offset_deletion);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/delete.feature",
+    name = "delete rewrites metadata topic absent after restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_rewrites_metadata_topic_absent_after_restart(
+    share_offset_deletion: ShareOffsetDeletion,
+) {
+    share_offset_deletion
+        .session
+        .take()
+        .expect("share fixture")
+        .shutdown()
+        .await;
+    drop(share_offset_deletion);
+}
+
+impl ShareOffsetDeletion {
+    fn session(&self) -> &AdminOffsetSession {
+        self.session.as_ref().expect("live scenario session")
     }
 }

@@ -12,42 +12,90 @@ use {
         cluster::wait_alice_quota,
         kafka_wire::{
             PlainAuthenticationSetup,
-            quotas::{QuotaAlterSetup, QuotaDescribeSetup, alter_user_quota},
+            quotas::{QuotaAlterSetup, QuotaDescribeSetup, QuotaEntity, alter_user_quota},
         },
         support::retry::{all_cluster_authorization_failed, retry_until},
     },
     assert2::assert,
 };
+type QuotaValues = Vec<(String, f64)>;
+struct ClientQuotaAdmin {
+    broker: Option<krabka_broker::BrokerHandle>,
+    directory: Option<tempfile::TempDir>,
+    altered: Option<Vec<(QuotaEntity, i16)>>,
+    described: Option<Vec<(QuotaEntity, QuotaValues)>>,
+}
+#[rstest::fixture]
+fn quota_admin() -> ClientQuotaAdmin {
+    // Start this scenario with fresh inputs and observations.
 
-/// Test 1: `AlterClientQuotas` sets `(user=alice) producer_byte_rate=1024`.
-///
-/// The value then appears in the metadata image and in
-/// `DescribeClientQuotas`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_then_describe_round_trip() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+    ClientQuotaAdmin {
+        broker: None,
+        directory: None,
+        altered: None,
+        described: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "admin is a super user and alice is an ordinary authenticated principal"
+)]
+async fn quota_admin_principals(quota_admin: &mut ClientQuotaAdmin) {
+    let (handle, directory, _) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
     ])
     .await;
 
-    // Alter: set producer_byte_rate=1024 for (user=alice).
+    quota_admin.broker = Some(handle);
+    quota_admin.directory = Some(directory);
+}
+#[rstest_bdd_macros::given("the empty ACL compatibility shortcut is disabled")]
+async fn quota_admin_acl_enforced(quota_admin: &mut ClientQuotaAdmin) {
+    seed_compat_shim_disable_acl(quota_admin.broker.as_ref().expect("broker started")).await;
+}
+#[rstest_bdd_macros::when("admin sets alice producer byte rate to 1024")]
+async fn quota_admin_set(quota_admin: &mut ClientQuotaAdmin) {
+    let addr = quota_admin
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
     let alter_resp = alter_user_quota()
         .addr(addr)
         .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
         .call()
         .await;
+    quota_admin.altered = Some(alter_resp);
+}
+#[rstest_bdd_macros::then("the admin quota alteration returns one successful entry")]
+fn quota_admin_set_accepted(quota_admin: &ClientQuotaAdmin) {
+    let alter_resp = quota_admin
+        .altered
+        .as_ref()
+        .expect("quota alteration attempted");
     assert!(alter_resp.len() == 1, "one entry in response");
     assert!(
         alter_resp[0].1 == 0,
         "alter should succeed; error_code={}",
         alter_resp[0].1
     );
-
-    // Await until the quota is visible in the committed metadata image.
-    wait_alice_quota(&handle, "producer_byte_rate", 1024.0).await;
-
-    // Describe: fetch back the quota.
+}
+#[rstest_bdd_macros::then("alice committed producer byte rate is 1024")]
+async fn quota_admin_image(quota_admin: &ClientQuotaAdmin) {
+    wait_alice_quota(
+        quota_admin.broker.as_ref().expect("broker started"),
+        "producer_byte_rate",
+        1024.0,
+    )
+    .await;
+}
+#[rstest_bdd_macros::when("admin describes quotas for any named user")]
+async fn quota_admin_describe(quota_admin: &mut ClientQuotaAdmin) {
+    let addr = quota_admin
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
     let desc = drive_describe_client_quotas_sasl(
         addr,
         vec![("user".into(), 2 /* ANY */, None)],
@@ -58,6 +106,11 @@ async fn alter_then_describe_round_trip() {
     )
     .await;
 
+    quota_admin.described = Some(desc);
+}
+#[rstest_bdd_macros::then("DescribeClientQuotas includes alice producer byte rate 1024")]
+fn quota_admin_described(quota_admin: &ClientQuotaAdmin) {
+    let desc = quota_admin.described.as_ref().expect("quotas described");
     let pbr = desc
         .iter()
         .find(|(entity, _)| {
@@ -75,29 +128,14 @@ async fn alter_then_describe_round_trip() {
         pbr == Some(1024.0),
         "expected producer_byte_rate=1024 from describe; got {desc:?}"
     );
-
-    handle.shutdown().await;
 }
-
-/// Test 5: a non-super-user cannot alter client quotas.
-///
-/// alice is authenticated, is not a super-user, and has no ACLs. alice sends
-/// `AlterClientQuotas`. Every entry must carry
-/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
-///
-/// The test seeds a dummy ACL first. The dummy ACL disables the compat shim,
-/// which allows every operation while the image holds no ACLs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_super_user_denied() {
-    let credentials = [("admin", "admin-secret"), ("alice", "alice-secret")];
-    let (handle, _dir, addr) =
-        start_single_broker_sasl_plaintext_with_users("admin", &credentials).await;
-
-    // Seed dummy ACL to disable compat shim.
-    seed_compat_shim_disable_acl(&handle).await;
-
-    // Retry until the shim is provably off: alice should receive 31 on every
-    // AlterClientQuotas entry, not 0 (which would mean the shim allowed it).
+#[rstest_bdd_macros::when("alice attempts to set her producer byte rate to 999")]
+async fn quota_alice_unauthorized_alter(quota_admin: &mut ClientQuotaAdmin) {
+    let addr = quota_admin
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
     let resp = retry_until()
         .attempt(|| async {
             drive_alter_client_quotas_sasl(
@@ -121,10 +159,37 @@ async fn non_super_user_denied() {
         .call()
         .await;
 
-    handle.shutdown().await;
-
+    quota_admin.altered = Some(resp);
+}
+#[rstest_bdd_macros::then(
+    "the requested quota entry is refused with cluster authorization error 31"
+)]
+fn quota_alice_denied(quota_admin: &ClientQuotaAdmin) {
+    let resp = quota_admin
+        .altered
+        .as_ref()
+        .expect("quota alteration attempted");
+    assert!(resp.len() == 1, "one result for the requested quota entry");
     assert!(
         resp.iter().all(|(_, ec)| *ec == 31),
         "all entries must carry CLUSTER_AUTHORIZATION_FAILED (31); got {resp:?}"
     );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/admin_api.feature",
+    name = "alter then describe round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_then_describe_round_trip(quota_admin: ClientQuotaAdmin) {
+    quota_admin.broker.expect("broker started").shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/admin_api.feature",
+    name = "non super user denied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_super_user_denied(quota_admin: ClientQuotaAdmin) {
+    quota_admin.broker.expect("broker started").shutdown().await;
 }

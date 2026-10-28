@@ -578,65 +578,6 @@ mod tests {
     /// #797: Kafka's `hasSatisfiedHeartbeat`. A member that waits in
     /// `JoinGroup` cannot heartbeat: an existing one does not expire while it
     /// waits, and a new one has the new-member join timeout.
-    #[test]
-    fn members_waiting_in_join_group_expire_as_kafka_does() {
-        let session = Duration::from_secs(10);
-        for (name, is_new, awaiting, elapsed, dropped) in [
-            (
-                "existing, waiting, past session",
-                false,
-                true,
-                Duration::from_secs(60),
-                false,
-            ),
-            (
-                "existing, not waiting, past session",
-                false,
-                false,
-                Duration::from_secs(60),
-                true,
-            ),
-            (
-                "existing, not waiting, in session",
-                false,
-                false,
-                Duration::from_secs(5),
-                false,
-            ),
-            (
-                "new, waiting, past session",
-                true,
-                true,
-                Duration::from_secs(60),
-                false,
-            ),
-            (
-                "new, waiting, past new-member timeout",
-                true,
-                true,
-                NEW_MEMBER_JOIN_TIMEOUT + Duration::from_secs(1),
-                true,
-            ),
-        ] {
-            let mut g = ClassicGroup::new("g");
-            g.add_member(sample_member("keeper"));
-            let mut m = sample_member("m1");
-            m.is_new = is_new;
-            m.session_timeout = session;
-            let now = Instant::now();
-            m.last_heartbeat = now.checked_sub(elapsed).unwrap();
-            g.add_member(m);
-            if !awaiting {
-                g.joined_this_round.remove("m1");
-            }
-            let want: Vec<String> = if dropped { vec!["m1".into()] } else { vec![] };
-            check!(
-                g.expire_dead_members(now, Duration::from_secs(3)) == want,
-                "{name}"
-            );
-        }
-    }
-
     /// A `MEMBER_ID_REQUIRED` id that never joins goes away after its
     /// session timeout, and the expiry is reported so that the caller can
     /// complete a join phase the id was blocking.
@@ -650,4 +591,69 @@ mod tests {
         check!(expired == vec!["late".to_owned()]);
         check!(g.pending_members.keys().collect::<Vec<_>>() == vec!["waiting"]);
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct JoinExpiry {
+        group: Option<ClassicGroup>,
+        now: Option<Instant>,
+        expired: Option<Vec<String>>,
+    }
+    #[rstest::fixture]
+    fn join_expiry() -> JoinExpiry {
+        // Start this scenario with fresh inputs and observations.
+        JoinExpiry::default()
+    }
+    #[given(
+        "m1 is new {is_new} waiting in JoinGroup {waiting} with ten second session and last heartbeat age {age}"
+    )]
+    fn waiting_classic_member(
+        join_expiry: &mut JoinExpiry,
+        is_new: bool,
+        waiting: bool,
+        age: String,
+    ) {
+        let elapsed = if age == "new-member-timeout-plus-one" {
+            NEW_MEMBER_JOIN_TIMEOUT + Duration::from_secs(1)
+        } else {
+            Duration::from_secs(age.parse().expect("heartbeat age seconds"))
+        };
+        let mut group = ClassicGroup::new("g");
+        group.add_member(sample_member("keeper"));
+        let mut member = sample_member("m1");
+        member.is_new = is_new;
+        member.session_timeout = Duration::from_secs(10);
+        let now = Instant::now();
+        member.last_heartbeat = now.checked_sub(elapsed).expect("heartbeat instant");
+        group.add_member(member);
+        if !waiting {
+            group.joined_this_round.remove("m1");
+        }
+        join_expiry.group = Some(group);
+        join_expiry.now = Some(now);
+    }
+    #[when(
+        "the coordinator expires inactive classic members with three second initial rebalance delay"
+    )]
+    fn expire_join_members(join_expiry: &mut JoinExpiry) {
+        join_expiry.expired = Some(
+            join_expiry
+                .group
+                .as_mut()
+                .expect("classic group prepared")
+                .expire_dead_members(
+                    join_expiry.now.expect("expiry time"),
+                    Duration::from_secs(3),
+                ),
+        );
+    }
+    #[then("the expired member list is {members}")]
+    fn expired_classic_members(join_expiry: &JoinExpiry, members: String) {
+        let expected = if members == "none" {
+            vec![]
+        } else {
+            vec![members]
+        };
+        check!(join_expiry.expired.as_ref() == Some(&expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_state/membership.feature",fixtures=[join_expiry:JoinExpiry]);
 }

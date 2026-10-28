@@ -76,34 +76,67 @@ mod tests {
         assert!(parse_share_key(99, &[]).is_err());
     }
 
-    #[test]
-    fn key_versions_match_kafka_api_keys() {
-        // apiKey of each schema at Apache Kafka tag 4.3.1.
-        assert!(KEY_SHARE_MEMBER_METADATA == 10);
-        assert!(KEY_SHARE_GROUP_METADATA == 11);
-        assert!(KEY_SHARE_TARGET_ASSIGNMENT_METADATA == 12);
-        assert!(KEY_SHARE_TARGET_ASSIGNMENT_MEMBER == 13);
-        assert!(KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT == 14);
-        assert!(KEY_SHARE_GROUP_STATE_PARTITION_METADATA == 15);
+    use {
+        crate::coordinator::unified::{
+            codec_observations::KafkaMetadataKey, test_support::wire_bytes,
+        },
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    type ShareMetadataKeyScenario = KafkaMetadataKey;
+    #[rstest::fixture]
+    fn input() -> ShareMetadataKeyScenario {
+        // Start this scenario with fresh inputs and observations.
+        ShareMetadataKeyScenario::default()
     }
-
-    #[test]
-    fn group_metadata_key_bytes_match_kafka_schema() {
-        // i16 apiKey 11, then a non-flexible i16-length group id.
-        let bytes = encode_share_key(&ShareGroupKey::GroupMetadata {
-            group_id: "g1".into(),
-        })
-        .unwrap();
-        assert!(&bytes[..] == b"\x00\x0b\x00\x02g1");
+    #[given("the Share compacted log record kind is {kind}")]
+    fn metadata_record_kind(input: &mut ShareMetadataKeyScenario, kind: String) {
+        input.kind = kind;
     }
-
-    #[test]
-    fn member_metadata_key_bytes_match_kafka_schema() {
-        let bytes = encode_share_key(&ShareGroupKey::MemberMetadata {
-            group_id: "g1".into(),
-            member_id: "m1".into(),
-        })
-        .unwrap();
-        assert!(&bytes[..] == b"\x00\x0a\x00\x02g1\x00\x02m1");
+    #[when("the Share coordinator selects the record API key")]
+    fn metadata_api_key(input: &mut ShareMetadataKeyScenario) {
+        input.version = Some(match input.kind.as_str() {
+            "member-metadata" => KEY_SHARE_MEMBER_METADATA,
+            "group-metadata" => KEY_SHARE_GROUP_METADATA,
+            "target-assignment-metadata" => KEY_SHARE_TARGET_ASSIGNMENT_METADATA,
+            "target-assignment-member" => KEY_SHARE_TARGET_ASSIGNMENT_MEMBER,
+            "current-member-assignment" => KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT,
+            "group-state-partition-metadata" => KEY_SHARE_GROUP_STATE_PARTITION_METADATA,
+            _ => panic!("unknown metadata record kind"),
+        });
     }
+    #[then("the Share record API key is {version}")]
+    fn metadata_version(input: &ShareMetadataKeyScenario, version: i16) {
+        assert!(input.version == Some(version));
+    }
+    #[given("a Share {kind} metadata key for group {group} and member {member}")]
+    fn metadata_key_input(
+        input: &mut ShareMetadataKeyScenario,
+        kind: String,
+        group: String,
+        member: String,
+    ) {
+        input.set_key_fields(kind, group, member);
+    }
+    #[when("the Share coordinator encodes the metadata key")]
+    fn encode_metadata_key(input: &mut ShareMetadataKeyScenario) {
+        input.encoded = Some(
+            encode_share_key(&match input.kind.as_str() {
+                "group" => ShareGroupKey::GroupMetadata {
+                    group_id: input.group.clone(),
+                },
+                "member" => ShareGroupKey::MemberMetadata {
+                    group_id: input.group.clone(),
+                    member_id: input.member.clone().expect("member identifier"),
+                },
+                _ => panic!("unknown Share key kind"),
+            })
+            .expect("encode Share metadata key"),
+        );
+    }
+    #[then("the Share metadata key has exact Kafka bytes {hex}")]
+    fn metadata_key_bytes(input: &ShareMetadataKeyScenario, hex: String) {
+        let want = wire_bytes(&[&hex]);
+        input.assert_kafka_bytes(&want);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/keys.feature",fixtures=[input:ShareMetadataKeyScenario]);
 }

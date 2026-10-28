@@ -11,6 +11,9 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 
 krabka_macros::refused_fetch_partition_fixture!(refused_partition);
@@ -27,37 +30,55 @@ use krabka_protocol::{
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
-#[tokio::test]
-async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
-    let p = support::start().await;
-    p.client
+struct FetchIdentity {
+    broker: Option<InProcess>,
+    ids: Vec<WireUuid>,
+    actual: Vec<(WireUuid, Vec<FetchableTopicResponse>)>,
+}
+
+#[fixture]
+fn fetching() -> FetchIdentity {
+    // Start this scenario with fresh inputs and observations.
+
+    FetchIdentity {
+        broker: None,
+        ids: Vec::new(),
+        actual: Vec::new(),
+    }
+}
+
+#[given("a known fetch topic beside zero and unassigned topic ids")]
+async fn unmatched_fetch_ids(fetching: &mut FetchIdentity) {
+    let broker = support::start().await;
+    broker
+        .client
         .send(create_topic_request(
-            creatable_topic().name(("f_known").into()).call(),
+            creatable_topic().name("f_known".into()).call(),
         ))
         .await
         .expect("create topic");
+    fetching.broker = Some(broker);
+    fetching.ids = support::topics::unresolved_topic_ids(0xdead_beef)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
+}
 
-    let cases = [
-        (
-            "non-zero id",
-            WireUuid(uuid::Uuid::from_u128(0xdead_beef).into_bytes()),
-        ),
-        ("zero id", WireUuid::ZERO),
-    ];
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (label, topic_id) in cases {
+#[when("partitions zero and one are fetched by each unresolved id")]
+async fn request_unresolved_partitions(fetching: &mut FetchIdentity) {
+    let broker = fetching.broker.as_ref().expect("a broker was started");
+    for &topic_id in &fetching.ids {
         let partition = |partition| FetchPartition {
             partition,
             fetch_offset: 0,
             partition_max_bytes: 1_048_576,
             ..Default::default()
         };
-        let resp = p
+        let response = broker
             .client
             .send(fetch_request_for(
                 vec![FetchTopic {
-                    topic: String::new(), // v13+: name absent, id-only on the wire
+                    topic: String::new(),
                     topic_id,
                     partitions: vec![partition(0), partition(1)],
                     ..Default::default()
@@ -66,15 +87,35 @@ async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
             ))
             .await
             .expect("fetch");
-        // Kafka's `FetchResponse.partitionResponse`.
-        let refused = |partition_index| refused_partition(partition_index, UNKNOWN_TOPIC_ID);
-        actual.push((label, resp.responses));
-        expected.push((label, vec![FetchableTopicResponse {
+        fetching.actual.push((topic_id, response.responses));
+    }
+}
+
+#[then("both fetched partitions report UNKNOWN_TOPIC_ID under the unchanged id")]
+fn unknown_fetch_partitions(fetching: &FetchIdentity) {
+    assert!(fetching.actual.len() == fetching.ids.len());
+    for (topic_id, actual) in &fetching.actual {
+        let refused = |partition| refused_partition(partition, UNKNOWN_TOPIC_ID);
+        let expected = vec![FetchableTopicResponse {
             topic: String::new(),
-            topic_id,
+            topic_id: *topic_id,
             partitions: vec![refused(0), refused(1)],
             ..Default::default()
-        }]));
+        }];
+        assert!(*actual == expected);
     }
-    assert!(actual == expected);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "Fetching an unresolved identity refuses every requested partition"
+)]
+#[tokio::test]
+async fn fetch_unresolved_topic_id_returns_unknown_topic_id(fetching: FetchIdentity) {
+    fetching
+        .broker
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
 }

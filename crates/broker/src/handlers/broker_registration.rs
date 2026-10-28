@@ -390,85 +390,22 @@ mod tests {
         );
     }
 
-    /// krabka-io/krabka-broker#822: the feature checks of
-    /// `ClusterControlManager.registerBroker`, in Kafka's order. The cluster
-    /// has finalized `metadata.version` 25 and `group.version` 1.
-    #[test]
-    fn features_are_checked_as_kafka_checks_them() {
-        /// A supported version range the registering broker reports for a feature.
-        struct FeatureRange {
-            name: &'static str,
-            min: i16,
-            max: i16,
+    #[derive(Default)]
+    struct BrokerRegistrationChecks {
+        image: Option<krabka_metadata::MetadataImage>,
+        request: BrokerRegistrationRequest,
+        outcome: Option<Result<(), i16>>,
+    }
+    #[rstest::fixture]
+    fn registration_checks() -> BrokerRegistrationChecks {
+        let image = None;
+        BrokerRegistrationChecks {
+            image,
+            ..Default::default()
         }
-
-        /// A case label, the features the broker reports, and the registration outcome.
-        struct FeatureCase {
-            what: &'static str,
-            features: Vec<FeatureRange>,
-            expected: Result<(), i16>,
-        }
-
-        fn range(name: &'static str, min: i16, max: i16) -> FeatureRange {
-            FeatureRange { name, min, max }
-        }
-
-        let cases: &[FeatureCase] = &[
-            FeatureCase {
-                what: "both finalized features in range",
-                features: vec![
-                    range("metadata.version", 7, 25),
-                    range("group.version", 0, 1),
-                ],
-                expected: Ok(()),
-            },
-            FeatureCase {
-                what: "metadata.version below the finalized level",
-                features: vec![
-                    range("metadata.version", 7, 24),
-                    range("group.version", 0, 1),
-                ],
-                expected: Err(codes::UNSUPPORTED_VERSION),
-            },
-            FeatureCase {
-                what: "a feature the cluster left at level 0 that the broker cannot run at 0",
-                features: vec![
-                    range("metadata.version", 7, 25),
-                    range("group.version", 0, 1),
-                    range("share.version", 1, 1),
-                ],
-                expected: Err(codes::UNSUPPORTED_VERSION),
-            },
-            FeatureCase {
-                what: "an unfinalized feature that includes level 0",
-                features: vec![
-                    range("metadata.version", 7, 25),
-                    range("group.version", 0, 1),
-                    range("share.version", 0, 1),
-                ],
-                expected: Ok(()),
-            },
-            FeatureCase {
-                what: "no metadata.version",
-                features: vec![range("group.version", 0, 1)],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            FeatureCase {
-                what: "no features at all",
-                features: vec![],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            FeatureCase {
-                what: "a finalized feature the broker does not name",
-                features: vec![range("metadata.version", 7, 25)],
-                expected: Err(codes::UNSUPPORTED_VERSION),
-            },
-            FeatureCase {
-                what: "an unsupported feature wins over a missing metadata.version",
-                features: vec![range("group.version", 2, 3)],
-                expected: Err(codes::UNSUPPORTED_VERSION),
-            },
-        ];
+    }
+    #[rstest_bdd_macros::given("the cluster has finalized metadata.version 25 and group.version 1")]
+    fn finalized_registration_features(registration_checks: &mut BrokerRegistrationChecks) {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         for (name, level) in [("metadata.version", 25), ("group.version", 1)] {
             image.apply(&MetadataRecord::V1FeatureLevel(
@@ -478,27 +415,90 @@ mod tests {
                 },
             ));
         }
-        for FeatureCase {
-            what,
-            features,
-            expected,
-        } in cases
-        {
-            let req = BrokerRegistrationRequest {
-                features: features
-                    .iter()
-                    .map(|&FeatureRange { name, min, max }| Feature {
-                        name: name.into(),
-                        min_supported_version: min,
-                        max_supported_version: max,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            };
-            assert2::check!(validate_features(&req, &image) == *expected, "{what}");
-        }
+        registration_checks.image = Some(image);
     }
+    #[rstest_bdd_macros::given("the registering broker advertises feature ranges {ranges}")]
+    fn advertised_registration_features(
+        registration_checks: &mut BrokerRegistrationChecks,
+        ranges: String,
+    ) {
+        registration_checks.request.features = ranges
+            .split(';')
+            .filter(|range| *range != "none")
+            .map(|range| {
+                let fields = range.split(':').collect::<Vec<_>>();
+                Feature {
+                    name: fields[0].to_owned(),
+                    min_supported_version: fields[1].parse().expect("minimum supported level"),
+                    max_supported_version: fields[2].parse().expect("maximum supported level"),
+                    ..Default::default()
+                }
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when("registration checks feature compatibility with finalized levels")]
+    fn validate_registration_features(registration_checks: &mut BrokerRegistrationChecks) {
+        registration_checks.outcome = Some(validate_features(
+            &registration_checks.request,
+            registration_checks
+                .image
+                .as_ref()
+                .expect("finalized features"),
+        ));
+    }
+    #[rstest_bdd_macros::given(
+        "broker 1 owns directory 500 and broker 2 owns directory 600 at epoch 10"
+    )]
+    fn registered_log_directories(registration_checks: &mut BrokerRegistrationChecks) {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (node, directory) in [(1, 500), (2, 600)] {
+            image.apply(&MetadataRecord::V1BrokerRegistration(
+                BrokerRegistrationRecord {
+                    broker_epoch: 10,
+                    incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
+                    host: "broker".into(),
+                    log_dirs: vec![uuid::Uuid::from_u128(directory)],
+                    ..broker_registration(NodeId(node))
+                },
+            ));
+        }
+        registration_checks.image = Some(image);
+    }
+    #[rstest_bdd_macros::given("broker 2 requests directory IDs {directories}")]
+    fn requested_registration_directories(
+        registration_checks: &mut BrokerRegistrationChecks,
+        directories: String,
+    ) {
+        registration_checks.request.broker_id = 2;
+        registration_checks.request.log_dirs = directories
+            .split(',')
+            .filter(|id| *id != "none")
+            .map(|id| Uuid(*uuid::Uuid::from_u128(id.parse().expect("directory ID")).as_bytes()))
+            .collect();
+    }
+    #[rstest_bdd_macros::when("registration checks directory ownership and reserved IDs")]
+    fn validate_registration_directories(registration_checks: &mut BrokerRegistrationChecks) {
+        registration_checks.outcome = Some(validate_log_dirs(
+            &registration_checks.request,
+            registration_checks
+                .image
+                .as_ref()
+                .expect("registered directories"),
+            NodeId(2),
+        ));
+    }
+    #[rstest_bdd_macros::then("registration validation returns error code {code}")]
+    fn registration_validation_result(registration_checks: &BrokerRegistrationChecks, code: i16) {
+        let expected = if code == 0 { Ok(()) } else { Err(code) };
+        assert2::check!(
+            registration_checks
+                .outcome
+                .as_ref()
+                .expect("registration checked")
+                == &expected
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_broker_registration.feature", fixtures = [registration_checks: BrokerRegistrationChecks]);
 
     /// A broker from the pre-reservation release advertises `krabka.version`
     /// only through level 1. After level 2 is finalized, registration rejects
@@ -535,98 +535,6 @@ mod tests {
             ..Default::default()
         };
         assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
-    }
-
-    /// krabka-io/krabka-broker#822: the KIP-858 directory checks of
-    /// `ClusterControlManager.registerBroker`. Broker 1 already registered
-    /// directory 500, and broker 2 is registering.
-    #[test]
-    fn log_dirs_are_checked_as_kafka_checks_them() {
-        /// A case label, the directories the broker reports, and the registration outcome.
-        struct DirCase {
-            what: &'static str,
-            directories: &'static [u128],
-            expected: Result<(), i16>,
-        }
-
-        let cases: &[DirCase] = &[
-            DirCase {
-                what: "one fresh directory",
-                directories: &[1000],
-                expected: Ok(()),
-            },
-            DirCase {
-                what: "two fresh directories",
-                directories: &[1000, 1001],
-                expected: Ok(()),
-            },
-            DirCase {
-                what: "no directory",
-                directories: &[],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            DirCase {
-                what: "MIGRATING",
-                directories: &[0],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            DirCase {
-                what: "the last reserved id",
-                directories: &[99],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            DirCase {
-                what: "the first id past the reserved range",
-                directories: &[100],
-                expected: Ok(()),
-            },
-            DirCase {
-                what: "one id twice",
-                directories: &[1000, 1000],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            DirCase {
-                what: "a directory another broker registered",
-                directories: &[1000, 500],
-                expected: Err(codes::INVALID_REGISTRATION),
-            },
-            DirCase {
-                what: "a directory it registered itself",
-                directories: &[600],
-                expected: Ok(()),
-            },
-        ];
-        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        for (node, directory) in [(1, 500), (2, 600)] {
-            image.apply(&MetadataRecord::V1BrokerRegistration(
-                BrokerRegistrationRecord {
-                    broker_epoch: 10,
-                    incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
-                    host: "broker".into(),
-                    log_dirs: vec![uuid::Uuid::from_u128(directory)],
-                    ..broker_registration(krabka_raft::NodeId(node))
-                },
-            ));
-        }
-        for DirCase {
-            what,
-            directories,
-            expected,
-        } in cases
-        {
-            let req = BrokerRegistrationRequest {
-                broker_id: 2,
-                log_dirs: directories
-                    .iter()
-                    .map(|&id| Uuid(*uuid::Uuid::from_u128(id).as_bytes()))
-                    .collect(),
-                ..Default::default()
-            };
-            assert2::check!(
-                validate_log_dirs(&req, &image, NodeId(2)) == *expected,
-                "{what}"
-            );
-        }
     }
 }
 

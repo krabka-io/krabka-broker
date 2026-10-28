@@ -50,7 +50,7 @@ pub(super) fn hash_map_order<'a>(keys: impl IntoIterator<Item = &'a str>) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, rstest_bdd::datatable::Rows};
 
     #[yare::parameterized(
         empty = { "", 0 },
@@ -61,53 +61,54 @@ mod tests {
         assert2::assert!(java_string_hash(key) == want, "{key}");
     }
 
-    /// The feature names in insertion order, and the order that Kafka iterates
-    /// them in.
-    struct OrderCase {
-        keys: &'static [&'static str],
-        want: &'static [&'static str],
+    struct FeatureValidationOrder {
+        requested: Vec<String>,
+        validated: Option<Vec<String>>,
     }
 
-    /// The order observed on a Kafka 4.3.1 broker: an eight-feature
-    /// `kafka-features upgrade` in which every row fails names the error of
-    /// `group.version`, and a two-row request that lists `share.version` first
-    /// still names `group.version`.
-    #[test]
-    fn feature_names_iterate_in_kafka_order() {
-        let cases: [OrderCase; 3] = [
-            OrderCase {
-                keys: &[
-                    "group.version",
-                    "share.version",
-                    "transaction.version",
-                    "streams.version",
-                    "eligible.leader.replicas.version",
-                    "kraft.version",
-                    "metadata.version",
-                    "no.such.feature",
-                ],
-                want: &[
-                    "group.version",
-                    "no.such.feature",
-                    "kraft.version",
-                    "share.version",
-                    "metadata.version",
-                    "streams.version",
-                    "transaction.version",
-                    "eligible.leader.replicas.version",
-                ],
-            },
-            OrderCase {
-                keys: &["share.version", "group.version"],
-                want: &["group.version", "share.version"],
-            },
-            OrderCase { keys: // Both land in bucket 7, which keeps first-insertion order.
-                &["metadata.version", "share.version", "metadata.version"], want: &["metadata.version", "share.version"] },
-        ];
-        for OrderCase { keys, want } in cases {
-            assert!(hash_map_order(keys.iter().copied()) == want, "{keys:?}");
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct FeatureName {
+        name: String,
+    }
+
+    #[rstest::fixture]
+    fn feature_order() -> FeatureValidationOrder {
+        // Start this scenario with fresh inputs and observations.
+
+        FeatureValidationOrder {
+            requested: Vec::new(),
+            validated: None,
         }
     }
+
+    #[rstest_bdd_macros::given("an UpdateFeatures request lists these features in order:")]
+    fn requested_feature_order(
+        feature_order: &mut FeatureValidationOrder,
+        #[datatable] rows: Rows<FeatureName>,
+    ) {
+        feature_order.requested = rows.into_iter().map(|row| row.name).collect();
+    }
+
+    #[rstest_bdd_macros::when("the controller orders feature validation as Kafka's HashMap does")]
+    fn kafka_feature_validation_order(feature_order: &mut FeatureValidationOrder) {
+        feature_order.validated = Some(
+            hash_map_order(feature_order.requested.iter().map(String::as_str))
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the features are validated exactly in this order:")]
+    fn expected_feature_order(
+        feature_order: &FeatureValidationOrder,
+        #[datatable] rows: Rows<FeatureName>,
+    ) {
+        let expected: Vec<_> = rows.into_iter().map(|row| row.name).collect();
+        assert!(feature_order.validated.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/update_features/java_order.feature", fixtures = [feature_order: FeatureValidationOrder]);
 
     #[test]
     fn the_table_grows_past_three_quarters_full() {

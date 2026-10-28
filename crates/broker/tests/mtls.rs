@@ -95,167 +95,14 @@ fn client_config_with_pinned_server_and_client_cert(
     Arc::new(cfg)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
-    // Provider registration is shared with auth_handlers.rs; tolerate
-    // an earlier installer.
-    let _ = aws_lc_rs::default_provider().install_default();
-
-    // The cert's Subject DN is the principal name. Set it as a
-    // super-user so the authorizer permits CreateTopics; with no
-    // super-users + no ACLs the compat shim would allow everything
-    // regardless of principal, which would mask the principal-derivation
-    // path under test.
-    let MtlsBroker {
-        log_dir: _log_dir,
-        pem_dir: _pem_dir,
-        handle,
-        addr,
-    } = mtls_super_user(ClientAuthMode::Required).await;
-
-    // Build the test TLS client: pin the broker's self-issued cert,
-    // present the fixture client cert + key.
-    let server_cert_der = server_certificate();
-    let client_cfg = client_config_with_pinned_server_and_client_cert(server_cert_der);
-    let connector = TlsConnector::from(client_cfg);
-
-    let mut tls = mtls_connect(addr, connector, "mTLS handshake must succeed").await;
-
-    // Send CreateTopics. Authorize gate: Cluster Create on the
-    // super-user path. Any non-super-user principal (including
-    // ANONYMOUS, which is what a non-mTLS connection would see) would
-    // get CLUSTER_AUTHORIZATION_FAILED.
-    let body = create_topics_body("mtls-smoke");
-    let resp_bytes = kafka_wire::round_trip()
-        .stream(&mut tls)
-        .api_key(19)
-        .version(7)
-        .client_id(CLIENT_ID)
-        .header(RequestHeaderEncoding::Flexible)
-        .body(&body)
-        .call()
-        .await
-        .unwrap();
-    check_create_topics_success(
-        &resp_bytes,
-        "CreateTopics must succeed for the cert-DN super-user",
-    );
-
-    handle.shutdown().await;
-}
-
-/// A presented certificate whose Subject DN matches no
-/// `ssl.principal.mapping.rules` rule must close the connection.
-///
-/// Kafka's `SslPrincipalMapper.getName` throws `NoMatchingRule` there and the
-/// channel never builds. The two ways this could regress are both privilege
-/// promotions: admitting the peer under its raw DN, or falling through to
-/// `ANONYMOUS`. Either would turn an operator's exhaustive rule list into a
-/// door that anyone holding a CA-signed cert walks through.
-///
-/// The client is set up exactly as the passing test above -- same fixture
-/// cert, same DN in `super_users` -- so the only difference is the rule list.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unmappable_certificate_dn_closes_the_connection() {
-    let _ = aws_lc_rs::default_provider().install_default();
-
-    let MtlsFixture {
-        log_dir: _log_dir,
-        pem_dir: _pem_dir,
-        config: mut cfg,
-    } = mtls_fixture(ClientAuthMode::Required);
-    // Matches only OU=ServiceUsers; the fixture DN has no matching rule.
-    cfg.listeners[0].principal_mapper =
-        krabka_broker::SslPrincipalMapper::parse(&["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"])
-            .expect("the rule list parses");
-    // Both regressions would produce a *response* rather than a closed
-    // connection: a DN pass-through authorizes as this super-user and
-    // succeeds, an ANONYMOUS fall-through comes back
-    // CLUSTER_AUTHORIZATION_FAILED. Only the refusal ends the connection with
-    // no reply at all, which is what this test reads.
-    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_owned()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let server_cert_der = server_certificate();
-    let connector = TlsConnector::from(client_config_with_pinned_server_and_client_cert(
-        server_cert_der,
-    ));
-
-    let mut tls = mtls_connect(addr, connector, "mTLS handshake must succeed").await;
-
-    let body = create_topics_body("unmappable-dn");
-
-    let outcome =
-        timed_create_topics(&mut tls, &body, "the broker must close rather than hang").await;
-
-    assert!(
-        outcome.is_err(),
-        "an unmappable cert DN must not be served -- got a response: {outcome:?}"
-    );
-
-    handle.shutdown().await;
-}
-
-/// A TLS listener that does not require a client certificate still has to
-/// serve the peer that presents none.
-///
-/// This is the other half of the refusal above: `peer_cert_principal` returns
-/// `Ok(None)` here -- the `ANONYMOUS` session -- and `Err(())` there, and the
-/// two must not collapse into one another. If "no certificate" started
-/// closing the connection, every `ClientAuthMode::Optional` listener would
-/// stop serving plain TLS clients; the refusal test above holds the opposite
-/// direction, so between them the branch cannot be flattened either way.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
-    let _ = aws_lc_rs::default_provider().install_default();
-
-    let MtlsBroker {
-        log_dir: _log_dir,
-        pem_dir: _pem_dir,
-        handle,
-        addr,
-    } = mtls_super_user(ClientAuthMode::Optional).await;
-
-    let server_cert_der = server_certificate();
-    let client_cfg = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
-            pinned: server_cert_der,
-            schemes: fixture_signature_schemes(),
-            mismatch: "presented server cert does not match pinned dev cert",
-        }))
-        .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(client_cfg));
-
-    let mut tls = mtls_connect(
-        addr,
-        connector,
-        "a certificate-less TLS handshake must succeed on an Optional listener",
-    )
-    .await;
-
-    let body = create_topics_body("anonymous-tls");
-
-    // The broker answers, which is the whole claim: the session was built.
-    // The refusal test above sends the same request over the same listener
-    // shape and gets no answer at all.
-    let resp_bytes = timed_create_topics(&mut tls, &body, "the broker must not hang")
-        .await
-        .expect("the broker must answer a certificate-less TLS connection");
-    check_create_topics_success(&resp_bytes, "the ANONYMOUS session must be served");
-
-    handle.shutdown().await;
-}
-
 async fn timed_create_topics<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     body: &[u8],
+    timeout: Duration,
     timeout_context: &str,
 ) -> io::Result<Vec<u8>> {
     time::timeout(
-        Duration::from_secs(10),
+        timeout,
         kafka_wire::round_trip()
             .stream(stream)
             .api_key(19)
@@ -341,19 +188,200 @@ async fn mtls_connect(
     connector.connect(server_name, tcp).await.expect(context)
 }
 
-async fn mtls_super_user(client_auth: ClientAuthMode) -> MtlsBroker {
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct CertificateSession {
+    configured: Option<MtlsFixture>,
+    broker: Option<MtlsBroker>,
+    connector: Option<TlsConnector>,
+    tls: Option<TlsStream<TcpStream>>,
+    response: Option<io::Result<Vec<u8>>>,
+    request_timeout: Option<Duration>,
+}
+#[fixture]
+fn session() -> CertificateSession {
+    // Start this scenario with fresh inputs and observations.
+
+    CertificateSession {
+        configured: None,
+        broker: None,
+        connector: None,
+        tls: None,
+        response: None,
+        request_timeout: None,
+    }
+}
+#[given("a TLS listener uses client authentication mode {mode} and trusts the fixture client CA")]
+fn listener(session: &mut CertificateSession, mode: String) {
+    let _ = aws_lc_rs::default_provider().install_default();
+    let mode = match mode.as_str() {
+        "required" => ClientAuthMode::Required,
+        "optional" => ClientAuthMode::Optional,
+        _ => panic!("unknown client authentication mode {mode}"),
+    };
+    session.configured = Some(mtls_fixture(mode));
+}
+#[given("the fixture certificate Subject DN is the only configured superuser")]
+fn privileged_dn(session: &mut CertificateSession) {
+    session
+        .configured
+        .as_mut()
+        .expect("TLS listener configured")
+        .config
+        .super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_owned()};
+}
+#[given("the listener accepts only these certificate principal mapping rules")]
+fn mapping(session: &mut CertificateSession, datatable: Vec<Vec<String>>) {
+    let rules: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.into_iter().next().expect("principal mapping rule"))
+        .collect();
+    let rules: Vec<&str> = rules.iter().map(String::as_str).collect();
+    session
+        .configured
+        .as_mut()
+        .expect("TLS listener configured")
+        .config
+        .listeners[0]
+        .principal_mapper =
+        krabka_broker::SslPrincipalMapper::parse(&rules).expect("mapping rules parse");
+}
+#[given("the configured TLS broker is running")]
+async fn running(session: &mut CertificateSession) {
     let MtlsFixture {
         log_dir,
         pem_dir,
-        mut config,
-    } = mtls_fixture(client_auth);
-    config.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_owned()};
-    let handle = Broker::start(config).await.expect("broker must start");
+        config,
+    } = session.configured.take().expect("TLS listener configured");
+    let handle = Broker::start(config).await.expect("TLS broker starts");
     let addr = handle.listen_addr();
-    MtlsBroker {
+    session.broker = Some(MtlsBroker {
         log_dir,
         pem_dir,
         handle,
         addr,
-    }
+    });
+}
+#[given("the TLS client pins the server and presents the trusted fixture certificate")]
+fn with_certificate(session: &mut CertificateSession) {
+    session.connector = Some(TlsConnector::from(
+        client_config_with_pinned_server_and_client_cert(server_certificate()),
+    ));
+}
+#[given("the TLS client pins the server and presents no client certificate")]
+fn without_certificate(session: &mut CertificateSession) {
+    let config = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
+            pinned: server_certificate(),
+            schemes: fixture_signature_schemes(),
+            mismatch: "presented server cert does not match pinned dev cert",
+        }))
+        .with_no_client_auth();
+    session.connector = Some(TlsConnector::from(Arc::new(config)));
+}
+#[given("the client bounds its request wait to ten seconds")]
+fn deadline(session: &mut CertificateSession) {
+    session.request_timeout = Some(Duration::from_secs(10));
+}
+#[when("the client completes TLS and requests creation of topic {topic}")]
+async fn request(session: &mut CertificateSession, topic: String) {
+    let broker = session.broker.as_ref().expect("TLS broker running");
+    let mut tls = mtls_connect(
+        broker.addr,
+        session.connector.take().expect("TLS client configured"),
+        "configured TLS handshake must succeed",
+    )
+    .await;
+    let body = create_topics_body(&topic);
+    session.response = Some(if let Some(timeout) = session.request_timeout {
+        timed_create_topics(
+            &mut tls,
+            &body,
+            timeout,
+            "the broker must close or respond rather than hang",
+        )
+        .await
+    } else {
+        kafka_wire::round_trip()
+            .stream(&mut tls)
+            .api_key(19)
+            .version(7)
+            .client_id(CLIENT_ID)
+            .header(RequestHeaderEncoding::Flexible)
+            .body(&body)
+            .call()
+            .await
+    });
+    session.tls = Some(tls);
+}
+#[then("the broker responds successfully through the certificate DN superuser session")]
+fn authorized(session: &CertificateSession) {
+    let bytes = session
+        .response
+        .as_ref()
+        .expect("TLS request completed")
+        .as_ref()
+        .expect("broker responds to authenticated session");
+    check_create_topics_success(bytes, "certificate DN superuser CreateTopics");
+}
+#[then("the unmappable certificate connection closes without any Kafka response")]
+fn closed(session: &CertificateSession) {
+    let response = session.response.as_ref().expect("TLS request completed");
+    assert!(
+        response.is_err(),
+        "unmappable cert DN must not be served: {response:?}"
+    );
+}
+#[then("the broker serves the certificate less ANONYMOUS session successfully")]
+fn anonymous(session: &CertificateSession) {
+    let bytes = session
+        .response
+        .as_ref()
+        .expect("TLS request completed")
+        .as_ref()
+        .expect("broker answers certificate less connection");
+    check_create_topics_success(bytes, "ANONYMOUS session must be served");
+}
+async fn shutdown(session: CertificateSession) {
+    let MtlsBroker {
+        handle,
+        log_dir,
+        pem_dir,
+        ..
+    } = session.broker.expect("TLS broker started");
+    handle.shutdown().await;
+    drop((log_dir, pem_dir));
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "A trusted client certificate authorizes its Subject DN superuser"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mtls_principal_is_cert_dn_and_super_user_bypass_works(session: CertificateSession) {
+    shutdown(session).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "A trusted certificate matching no mapping rule is disconnected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unmappable_certificate_dn_closes_the_connection(session: CertificateSession) {
+    shutdown(session).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "An optional certificate listener serves clients that present no certificate"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_with_no_certificate_is_served_rather_than_closed(
+    session: CertificateSession,
+) {
+    shutdown(session).await;
 }

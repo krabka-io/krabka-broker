@@ -241,84 +241,6 @@ mod tests {
     /// subscription, or a changed assignment. Each row is one heartbeat and
     /// the whole response it gets.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heartbeat_assignments_match_kafka() {
-        use krabka_protocol::owned::{
-            common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
-            share_group_heartbeat_response::Assignment,
-        };
-
-        let (metadata, id) = metadata_with_topic()
-            .name(TopicMetadataSetup::four_partitions().name)
-            .partitions(TopicMetadataSetup::four_partitions().partitions)
-            .call();
-        let response =
-            |member: &str, epoch: i32, partitions: Option<Vec<i32>>| ShareGroupHeartbeatResponse {
-                member_id: Some(member.into()),
-                member_epoch: epoch,
-                heartbeat_interval_ms: 5_000,
-                assignment: partitions.map(|partitions| Assignment {
-                    topic_partitions: if partitions.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![TopicPartitions {
-                            topic_id: id,
-                            partitions,
-                            ..Default::default()
-                        }]
-                    },
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-        let request = |member: &str, epoch: i32, subscribe: bool| ShareGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member.into(),
-            member_epoch: epoch,
-            subscribed_topic_names: subscribe.then(|| vec!["t".into()]),
-            ..Default::default()
-        };
-        // (initialized partitions, [(request, expected response)])
-        let scenarios = [
-            (None, vec![
-                (request("m1", 0, true), response("m1", 2, Some(vec![]))),
-                (request("m1", 2, false), response("m1", 2, None)),
-            ]),
-            (Some(vec![0, 1, 2, 3]), vec![
-                (
-                    request("m1", 0, true),
-                    response("m1", 2, Some(vec![0, 1, 2, 3])),
-                ),
-                (request("m1", 2, false), response("m1", 2, None)),
-                (request("m2", 0, true), response("m2", 3, Some(vec![0, 1]))),
-                (request("m1", 2, false), response("m1", 3, Some(vec![2, 3]))),
-                (request("m1", 3, false), response("m1", 3, None)),
-                (request("m1", 3, true), response("m1", 3, Some(vec![2, 3]))),
-            ]),
-        ];
-        for (index, (initialized, steps)) in scenarios.into_iter().enumerate() {
-            let (coord, _log) = make_coordinator(Arc::clone(&metadata));
-            let handle = coord.get_or_create_share("g");
-            if let Some(partitions) = initialized {
-                seed_initialized()
-                    .handle(&handle)
-                    .topic_id(id)
-                    .partitions(
-                        partitions
-                            .into_iter()
-                            .map(krabka_ids::PartitionIndex)
-                            .collect(),
-                    )
-                    .call()
-                    .await;
-            }
-            for (step, (req, expected)) in steps.into_iter().enumerate() {
-                let resp = heartbeat(&handle, req).await;
-                check!(resp == expected, "scenario {index} step {step}");
-            }
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn member_limit_rejects_only_new_members() {
         let (metadata, _id) = metadata_with_topic().call();
         let log = Arc::new(InMemoryOffsetsLog::default());
@@ -354,68 +276,6 @@ mod tests {
     /// and epoch `-1`. An unknown member answers `UNKNOWN_MEMBER_ID` and
     /// leaves the group and the log untouched.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn leave_matches_kafka() {
-        // (leaving member id, expected response, expected new batches,
-        // expected group epoch afterwards)
-        let rows = [
-            (
-                "m1",
-                ShareGroupHeartbeatResponse {
-                    member_id: Some("m1".into()),
-                    member_epoch: -1,
-                    ..Default::default()
-                },
-                1,
-                3,
-            ),
-            (
-                "m9",
-                ShareGroupHeartbeatResponse {
-                    error_code: codes::UNKNOWN_MEMBER_ID,
-                    error_message: Some("Member m9 is not a member of group g.".into()),
-                    ..Default::default()
-                },
-                0,
-                2,
-            ),
-        ];
-        for (member_id, expected, new_batches, group_epoch) in rows {
-            let (metadata, _id) = metadata_with_topic()
-                .name(TopicMetadataSetup::four_partitions().name)
-                .partitions(TopicMetadataSetup::four_partitions().partitions)
-                .call();
-            let (coord, log) = make_coordinator(metadata);
-            let handle = coord.get_or_create_share("g");
-            let joined = heartbeat(&handle, subscribed_request().call()).await;
-            check!(joined.error_code == codes::NONE);
-            let pre_leave = log.batches().await.len();
-
-            let resp = heartbeat(&handle, ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: member_id.into(),
-                member_epoch: -1,
-                ..Default::default()
-            })
-            .await;
-
-            check!(resp == expected, "{member_id}");
-            let batches = log.batches().await;
-            check!(batches.len() == pre_leave + new_batches, "{member_id}");
-            if new_batches > 0 {
-                check!(
-                    batches[batches.len() - 1]
-                        .records
-                        .iter()
-                        .any(|r| r.value.is_none()),
-                    "leave batch must contain at least one tombstone"
-                );
-            }
-            let seed = coord.cached_share_seed("g").expect("seed cached");
-            check!(seed.group_epoch == group_epoch, "{member_id}");
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stale_epoch_is_fenced() {
         let (_coord, _log, handle) = subscribed_group()
             .name(TopicMetadataSetup::four_partitions().name)
@@ -433,72 +293,6 @@ mod tests {
     /// `m2` and `m3` join (group epochs 3 and 4), and `m1` heartbeats once at
     /// epoch 2. Each row sends one heartbeat on a fresh group and compares the
     /// whole response.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn member_epoch_rule_matches_kafka() {
-        // (member id, request epoch, accepted)
-        let rows = [
-            ("m1", 0, true),
-            ("m1", 2, true),
-            ("m1", 3, false),
-            ("m1", 4, true),
-            ("m1", 5, false),
-            ("m9", 4, false),
-        ];
-
-        for (index, (member_id, member_epoch, accepted)) in rows.into_iter().enumerate() {
-            let (_coord, _log, handle) = subscribed_group()
-                .name(TopicMetadataSetup::four_partitions().name)
-                .partitions(TopicMetadataSetup::four_partitions().partitions)
-                .call();
-            check!(
-                heartbeat(&handle, subscribed_request().call())
-                    .await
-                    .member_epoch
-                    == 2
-            );
-            check!(
-                heartbeat(&handle, subscribed_request().member_id("m2").call())
-                    .await
-                    .member_epoch
-                    == 3
-            );
-            check!(
-                heartbeat(&handle, subscribed_request().member_id("m3").call())
-                    .await
-                    .member_epoch
-                    == 4
-            );
-            let advanced = heartbeat(&handle, subscribed_request().epoch(2).call()).await;
-            check!(advanced.member_epoch == 4);
-
-            let resp = heartbeat(
-                &handle,
-                subscribed_request()
-                    .member_id(member_id)
-                    .epoch(member_epoch)
-                    .call(),
-            )
-            .await;
-
-            let config = ShareGroupConfig::assigning_at_once();
-            let expected = if accepted {
-                // A rejoin and the previous epoch get the current epoch and
-                // the full assignment, as a current heartbeat does.
-                ShareGroupHeartbeatResponse {
-                    member_id: Some("m1".into()),
-                    member_epoch: 4,
-                    assignment: advanced.assignment.clone(),
-                    ..super::super::response::base_resp(codes::NONE, 4, &config)
-                }
-            } else if member_id == "m1" {
-                super::super::response::error_resp(codes::FENCED_MEMBER_EPOCH, &config)
-            } else {
-                super::super::response::error_resp(codes::UNKNOWN_MEMBER_ID, &config)
-            };
-            check!(resp == expected, "row {index}");
-        }
-    }
-
     /// A heartbeat that carries a rack id replaces the stored one, a rejoin at
     /// epoch 0 included, and the member metadata record carries the new rack.
     /// A heartbeat without a rack id keeps it (`maybeUpdateRackId`).
@@ -602,5 +396,311 @@ mod tests {
             cases.record(case, joined.member_epoch, (before, after), written, wanted);
         }
         cases.check();
+    }
+    use {
+        crate::coordinator::unified::share::actor::ShareGroupActorHandle,
+        krabka_protocol::{
+            owned::{
+                common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
+                share_group_heartbeat_response::Assignment,
+            },
+            primitives::uuid::Uuid,
+            records::RecordBatch,
+        },
+        rstest_bdd_macros::{given, then, when},
+    };
+    #[derive(Default)]
+    struct ShareHeartbeatBehavior {
+        coordinator: Option<Arc<GroupCoordinator>>,
+        log: Option<Arc<InMemoryOffsetsLog>>,
+        handle: Option<Arc<ShareGroupActorHandle>>,
+        topic: Option<Uuid>,
+        response: Option<ShareGroupHeartbeatResponse>,
+        setup_epochs: Vec<i32>,
+        setup_errors: Vec<i16>,
+        advanced: Option<ShareGroupHeartbeatResponse>,
+        before_batches: usize,
+        batches: Vec<RecordBatch>,
+        group_epoch: Option<i32>,
+    }
+    #[rstest::fixture]
+    fn share_heartbeat() -> ShareHeartbeatBehavior {
+        // Start this scenario with fresh inputs and observations.
+        ShareHeartbeatBehavior::default()
+    }
+    #[given(
+        "Share group g subscribes to four-partition topic t with initialized partitions {initialized}"
+    )]
+    async fn share_group_initialization(
+        share_heartbeat: &mut ShareHeartbeatBehavior,
+        initialized: String,
+    ) {
+        let (metadata, id) = metadata_with_topic()
+            .name(TopicMetadataSetup::four_partitions().name)
+            .partitions(TopicMetadataSetup::four_partitions().partitions)
+            .call();
+        let (coordinator, log) = make_coordinator(metadata);
+        let handle = coordinator.get_or_create_share("g");
+        if initialized == "all" {
+            seed_initialized()
+                .handle(&handle)
+                .topic_id(id)
+                .partitions((0..4).map(krabka_ids::PartitionIndex).collect())
+                .call()
+                .await;
+        } else if initialized != "none" {
+            panic!("unknown initialized partition set");
+        }
+        share_heartbeat.topic = Some(id);
+        share_heartbeat.coordinator = Some(coordinator);
+        share_heartbeat.log = Some(log);
+        share_heartbeat.handle = Some(handle);
+    }
+    #[given("m1 has joined Share group g at epoch 2")]
+    async fn joined_share_member(share_heartbeat: &mut ShareHeartbeatBehavior) {
+        let response = heartbeat(
+            share_heartbeat
+                .handle
+                .as_ref()
+                .expect("Share group prepared"),
+            subscribed_request().call(),
+        )
+        .await;
+        share_heartbeat.setup_epochs.push(response.member_epoch);
+        share_heartbeat.setup_errors.push(response.error_code);
+        share_heartbeat.before_batches = share_heartbeat
+            .log
+            .as_ref()
+            .expect("group log")
+            .batches()
+            .await
+            .len();
+    }
+    #[given(
+        "m1 joined at epoch 2 then m2 and m3 joined and m1 advanced from previous epoch 2 to current epoch 4"
+    )]
+    async fn advanced_share_member(share_heartbeat: &mut ShareHeartbeatBehavior) {
+        let handle = share_heartbeat
+            .handle
+            .as_ref()
+            .expect("Share group prepared");
+        for request in [
+            subscribed_request().call(),
+            subscribed_request().member_id("m2").call(),
+            subscribed_request().member_id("m3").call(),
+            subscribed_request().epoch(2).call(),
+        ] {
+            let response = heartbeat(handle, request).await;
+            share_heartbeat.setup_epochs.push(response.member_epoch);
+            share_heartbeat.setup_errors.push(response.error_code);
+            share_heartbeat.advanced = Some(response);
+        }
+    }
+    #[when(
+        "Share member {member_id} heartbeats at epoch {epoch} including topic subscription {subscribe}"
+    )]
+    async fn share_member_heartbeat(
+        share_heartbeat: &mut ShareHeartbeatBehavior,
+        member_id: String,
+        epoch: i32,
+        subscribe: bool,
+    ) {
+        let request = ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id,
+            member_epoch: epoch,
+            subscribed_topic_names: subscribe.then(|| vec!["t".into()]),
+            ..Default::default()
+        };
+        share_heartbeat.response = Some(
+            heartbeat(
+                share_heartbeat
+                    .handle
+                    .as_ref()
+                    .expect("Share group prepared"),
+                request,
+            )
+            .await,
+        );
+    }
+    #[then(
+        "the complete Share response names member {member_id} at epoch {epoch} with assignment {partitions}"
+    )]
+    fn share_assignment_response(
+        share_heartbeat: &ShareHeartbeatBehavior,
+        member_id: String,
+        epoch: i32,
+        partitions: String,
+    ) {
+        let assignment = if partitions == "omitted" {
+            None
+        } else {
+            let partitions = serde_json::from_str::<Vec<i32>>(&partitions)
+                .expect("expected assigned partitions");
+            Some(Assignment {
+                topic_partitions: if partitions.is_empty() {
+                    vec![]
+                } else {
+                    vec![TopicPartitions {
+                        topic_id: share_heartbeat.topic.expect("topic identifier"),
+                        partitions,
+                        ..Default::default()
+                    }]
+                },
+                ..Default::default()
+            })
+        };
+        let expected = ShareGroupHeartbeatResponse {
+            member_id: Some(member_id),
+            member_epoch: epoch,
+            heartbeat_interval_ms: 5000,
+            assignment,
+            ..Default::default()
+        };
+        check!(share_heartbeat.response.as_ref() == Some(&expected));
+    }
+    #[when("Share member {member_id} leaves with epoch minus one")]
+    async fn leave_share_member(share_heartbeat: &mut ShareHeartbeatBehavior, member_id: String) {
+        let request = ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id,
+            member_epoch: -1,
+            ..Default::default()
+        };
+        share_heartbeat.response = Some(
+            heartbeat(
+                share_heartbeat
+                    .handle
+                    .as_ref()
+                    .expect("Share group prepared"),
+                request,
+            )
+            .await,
+        );
+        share_heartbeat.batches = share_heartbeat
+            .log
+            .as_ref()
+            .expect("group log")
+            .batches()
+            .await;
+        share_heartbeat.group_epoch = Some(
+            share_heartbeat
+                .coordinator
+                .as_ref()
+                .expect("coordinator")
+                .cached_share_seed("g")
+                .expect("cached Share group")
+                .group_epoch,
+        );
+    }
+    #[then(
+        "the Share leave result for {member_id} appends {batches} batches and leaves group epoch {epoch}"
+    )]
+    fn share_leave_result(
+        share_heartbeat: &ShareHeartbeatBehavior,
+        member_id: String,
+        batches: usize,
+        epoch: i32,
+    ) {
+        check!(share_heartbeat.setup_epochs == vec![2]);
+        check!(share_heartbeat.setup_errors == vec![codes::NONE]);
+        let expected = if member_id == "m1" {
+            ShareGroupHeartbeatResponse {
+                member_id: Some("m1".into()),
+                member_epoch: -1,
+                ..Default::default()
+            }
+        } else {
+            ShareGroupHeartbeatResponse {
+                error_code: codes::UNKNOWN_MEMBER_ID,
+                error_message: Some("Member m9 is not a member of group g.".into()),
+                ..Default::default()
+            }
+        };
+        check!(share_heartbeat.response.as_ref() == Some(&expected));
+        check!(share_heartbeat.batches.len() == share_heartbeat.before_batches + batches);
+        check!(share_heartbeat.group_epoch == Some(epoch));
+        if batches > 0 {
+            check!(
+                share_heartbeat
+                    .batches
+                    .last()
+                    .expect("leave batch")
+                    .records
+                    .iter()
+                    .any(|record| record.value.is_none())
+            );
+        }
+    }
+    #[then("the epoch validation returns the complete Share {outcome} response")]
+    fn share_epoch_result(share_heartbeat: &ShareHeartbeatBehavior, outcome: String) {
+        check!(share_heartbeat.setup_epochs == vec![2, 3, 4, 4]);
+        check!(share_heartbeat.setup_errors == vec![0, 0, 0, 0]);
+        let config = ShareGroupConfig::assigning_at_once();
+        let expected = match outcome.as_str() {
+            "accepted" => ShareGroupHeartbeatResponse {
+                member_id: Some("m1".into()),
+                member_epoch: 4,
+                assignment: share_heartbeat
+                    .advanced
+                    .as_ref()
+                    .expect("member advanced")
+                    .assignment
+                    .clone(),
+                ..super::super::response::base_resp(codes::NONE, 4, &config)
+            },
+            "fenced" => super::super::response::error_resp(codes::FENCED_MEMBER_EPOCH, &config),
+            "unknown-member" => {
+                super::super::response::error_resp(codes::UNKNOWN_MEMBER_ID, &config)
+            }
+            _ => panic!("unknown epoch outcome"),
+        };
+        check!(share_heartbeat.response.as_ref() == Some(&expected));
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "Initialized Share partitions rebalance on joins and omit unchanged assignments"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_assignments_match_kafka(share_heartbeat: ShareHeartbeatBehavior) {
+        let _ = share_heartbeat;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "Uninitialized Share partitions remain unassigned"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_assignments_wait_for_initialization(
+        share_heartbeat: ShareHeartbeatBehavior,
+    ) {
+        let _ = share_heartbeat;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "Known and unknown Share members leave with Kafka durability rules"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leave_matches_kafka(
+        share_heartbeat: ShareHeartbeatBehavior,
+        member: String,
+        batches: usize,
+        epoch: i32,
+    ) {
+        let _ = share_heartbeat;
+        let _ = (member, batches, epoch);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "Share member epoch fencing accepts only rejoin previous or current member epochs"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn member_epoch_rule_matches_kafka(
+        share_heartbeat: ShareHeartbeatBehavior,
+        member: String,
+        epoch: i32,
+        outcome: String,
+    ) {
+        let _ = share_heartbeat;
+        let _ = (member, epoch, outcome);
     }
 }

@@ -16,7 +16,6 @@ use {
         quota_admin::drive_alter_client_quotas_sasl,
     },
     crate::{
-        cluster::wait_alice_quota,
         kafka_wire::{
             self, PlainAuthenticationSetup, ProduceRecordCount, ProduceValueBytes,
             ResponseHeaderSelection as WireResponseHeaderSelection, ZeroFilledRecordsSetup,
@@ -69,393 +68,6 @@ async fn throttled_response<R>(
     }
 }
 
-/// Test 2: a low `(user=alice) producer_byte_rate` throttles a produce.
-///
-/// Set `(user=alice) producer_byte_rate=128`. alice produces about 8 KB. Assert
-/// `throttle_time_ms > 0`.
-///
-/// Rate = 128 bytes/sec, burst = 1 second at rate = 128 bytes free. A produce
-/// of 8 KB = 8192 bytes is about 7168 bytes over budget. At 128 bytes/sec that
-/// is about 56 seconds of debt, which Kafka reports whole: a byte-rate
-/// throttle has no cap. This test asserts only `throttle_time_ms` > 0. The
-/// exact value is not load-bearing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_byte_rate_throttles_produce() {
-    let ThrottledProducer {
-        handle,
-        dir: _dir,
-        response: resp,
-    } = throttled_producer_fixture("throttle-produce").await;
-
-    check_successful_produce(&resp);
-    assert!(
-        resp.throttle_time_ms > 0,
-        "expected throttle_time_ms > 0, got {}",
-        resp.throttle_time_ms
-    );
-
-    handle.shutdown().await;
-}
-
-/// Test 6: a tiny `(user=alice) request_percentage` throttles a produce.
-///
-/// Set a tiny `(user=alice) request_percentage` and NO byte-rate quota. alice
-/// produces a small payload. Assert `throttle_time_ms > 0`.
-///
-/// This quota is the KIP-124 request quota, a server-side CPU-time throttle.
-/// KIP-219 requires the broker to report it in `throttle_time_ms` and to mute
-/// the channel. The broker must *not* silently delay the request.
-/// `request_percentage=0.001` gives the bucket a budget of about 10µs/sec, far
-/// below the processing time of any real produce handler. Even one small
-/// produce thus trips the quota, and the response must carry a non-zero
-/// throttle time. No `producer_byte_rate` is set, so only the request quota can
-/// cause the throttle.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttles_produce() {
-    let QuotaFixture {
-        handle,
-        dir: _dir,
-        addr,
-    } = quota_fixture().await;
-
-    prepare_quota_topic(
-        &handle,
-        addr,
-        "throttle-request",
-        krabka_metadata::AclOperation::Write,
-    )
-    .await;
-
-    // Set a tiny request_percentage for alice (no byte-rate quota).
-    set_request_time_quota(&handle, addr).await;
-
-    // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
-    // (29) while the alice Write ACL propagates to the handler's image snapshot.
-    let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: ("throttle-request").to_owned(),
-        value_bytes: ProduceValueBytes(16),
-        ..Default::default()
-    })
-    .await;
-
-    check_successful_produce(&resp);
-    assert!(
-        resp.throttle_time_ms > 0,
-        "expected request-quota throttle_time_ms > 0, got {}",
-        resp.throttle_time_ms
-    );
-
-    handle.shutdown().await;
-}
-
-use crate::support::client::metric_value;
-
-/// A throttled produce must move the throttle series, attributed to the quota
-/// that caused it.
-///
-/// The setup is Test 2's: `(user=alice) producer_byte_rate=128`, and alice
-/// produces 8 KB. That test asserts the client is *told* about the throttle;
-/// this one asserts the broker records what it applied, so an operator seeing
-/// produce latency rise can tell "the client is over its quota" from "the
-/// broker is broken". `quota_type="Produce"` is the byte-rate quota, and it
-/// must be the one credited: no `request_percentage` is set, so the KIP-124
-/// quota asks for nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
-    let ThrottledProducer {
-        handle,
-        dir: _dir,
-        response: resp,
-    } = throttled_producer_fixture("throttle-metrics").await;
-    assert!(
-        resp.throttle_time_ms > 0,
-        "expected throttle_time_ms > 0, got {}",
-        resp.throttle_time_ms
-    );
-
-    let applied_seconds = f64::from(resp.throttle_time_ms) / 1000.0;
-    let phase = metric_value(
-        &handle,
-        "krabka_broker_request_throttle_duration_seconds_sum{api_key=\"Produce\"}",
-    )
-    .await;
-    assert!(
-        phase >= applied_seconds,
-        "the throttle phase must cover the delay the response reported \
-         ({applied_seconds}s); got {phase}"
-    );
-
-    // The byte-rate quota is what fired, so it is what the applied-throttle
-    // family credits. The request quota is unset and must stay at zero.
-    let by_quota = metric_value(
-        &handle,
-        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Produce\"}",
-    )
-    .await;
-    assert!(
-        by_quota >= applied_seconds,
-        "producer_byte_rate must be credited with the applied throttle \
-         ({applied_seconds}s); got {by_quota}"
-    );
-    let request_quota = metric_value(
-        &handle,
-        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Request\"}",
-    )
-    .await;
-    assert!(
-        request_quota < 1.0e-9,
-        "no request_percentage quota is set, so it must be credited with \
-         nothing; got {request_quota}"
-    );
-
-    handle.shutdown().await;
-}
-
-/// Test 3: a low `(user=alice) consumer_byte_rate` throttles a fetch.
-///
-/// Set `(user=alice) consumer_byte_rate=128`. Produce 8 KB as admin. alice
-/// fetches. Assert `throttle_time_ms > 0`.
-///
-/// The rate and burst reasoning is the same as Test 2.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_byte_rate_throttles_fetch() {
-    let QuotaFixture {
-        handle,
-        dir: _dir,
-        addr,
-    } = quota_fixture().await;
-
-    prepare_quota_topic(
-        &handle,
-        addr,
-        "throttle-fetch",
-        krabka_metadata::AclOperation::Read,
-    )
-    .await;
-
-    // Set low consumer quota for alice.
-    let alter_resp = alter_user_quota()
-        .addr(addr)
-        .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
-        .key("consumer_byte_rate")
-        .value(128.0)
-        .call()
-        .await;
-    assert!(
-        alter_resp[0].1 == 0,
-        "alter consumer_byte_rate must succeed"
-    );
-
-    // Wait for the quota to appear in the image.
-    wait_alice_quota(&handle, "consumer_byte_rate", 128.0).await;
-
-    // Produce 8 KB as admin (not subject to quota yet).
-    seed_alice_write_acl(&handle, "throttle-fetch").await; // give admin path a topic
-    let produce_resp = drive_produce_sasl(
-        addr,
-        ZeroFilledRecordsSetup {
-            topic: ("throttle-fetch").to_owned(),
-            count: ProduceRecordCount(8),
-            ..Default::default()
-        },
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user: "admin",
-            password: (b"admin-secret").to_vec(),
-        },
-    )
-    .await;
-    let part = &produce_resp.responses[0].partition_responses[0];
-    assert!(
-        part.error_code == 0,
-        "admin produce must succeed, error_code={}",
-        part.error_code
-    );
-
-    // Alice fetches. Rate = 128 bytes/sec, data = 8 KB → throttle fires.
-    // Retry loop: auth can lag.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let fetch_resp = loop {
-        let r = drive_fetch_sasl(addr, "alice", b"alice-secret", "throttle-fetch").await;
-        // If throttle_time_ms > 0 or error_code == 0, we have a real response.
-        if r.error_code == 0 {
-            break r;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "fetch error after 15s; error_code={}",
-            r.error_code
-        );
-        // real-time wait (not a progress poll): retry cadence between network fetch attempts, deadline-guarded
-        time::sleep(Duration::from_millis(100)).await;
-    };
-
-    assert!(
-        fetch_resp.throttle_time_ms > 0,
-        "expected consumer throttle_time_ms > 0, got {}",
-        fetch_resp.throttle_time_ms
-    );
-    // Kafka answers a throttled consumer fetch with an empty response: no
-    // rows, no error, and no session (`FetchContext.getThrottledResponse`).
-    // The client did not get the records, so its position does not move.
-    assert!(
-        fetch_resp
-            == FetchResponse {
-                throttle_time_ms: fetch_resp.throttle_time_ms,
-                ..Default::default()
-            }
-    );
-
-    handle.shutdown().await;
-}
-
-/// Test 4: a `(user, client-id)` quota overrides a user-only quota.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_client_tuple_overrides_user_specific() {
-    let QuotaFixture {
-        handle,
-        dir: _dir,
-        addr,
-    } = quota_fixture().await;
-
-    prepare_quota_topic(
-        &handle,
-        addr,
-        "precedence-topic",
-        krabka_metadata::AclOperation::Write,
-    )
-    .await;
-
-    // Set a lenient user-only quota.
-    let alter_user = alter_user_quota()
-        .addr(addr)
-        .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
-        .value(8192.0)
-        .call()
-        .await;
-    assert!(alter_user[0].1 == 0, "alter user quota must succeed");
-
-    // Set a tight tuple quota for `CLIENT_ID`.
-    let alter_tuple = drive_alter_client_quotas_sasl(
-        addr,
-        vec![(
-            vec![
-                ("user".into(), Some("alice".into())),
-                ("client-id".into(), Some("krabka-quota-test".into())),
-            ],
-            vec![("producer_byte_rate".into(), 128.0, false)],
-        )],
-        &QuotaAlterSetup {
-            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
-            ..Default::default()
-        },
-    )
-    .await;
-    assert!(alter_tuple[0].1 == 0, "alter tuple quota must succeed");
-
-    // Wait for both quotas to appear in the image.
-    handle
-        .wait_for_image(|img| {
-            let user_key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            let tuple_key: krabka_metadata::EntityKey = vec![
-                ("client-id".into(), Some("krabka-quota-test".into())),
-                ("user".into(), Some("alice".into())),
-            ];
-            let user_rate = img
-                .client_quotas()
-                .get(&user_key)
-                .and_then(|c| c.get("producer_byte_rate"))
-                .copied();
-            let tuple_rate = img
-                .client_quotas()
-                .get(&tuple_key)
-                .and_then(|c| c.get("producer_byte_rate"))
-                .copied();
-            user_rate == Some(8192.0) && tuple_rate == Some(128.0)
-        })
-        .await;
-
-    // Alice produces 8 KB with `krabka-quota-test`. The 128-byte tuple quota
-    // throttles it; the 8192-byte user-only quota would fit in the burst window.
-    let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: ("precedence-topic").to_owned(),
-        count: ProduceRecordCount(8),
-        ..Default::default()
-    })
-    .await;
-
-    check_successful_produce(&resp);
-    assert!(
-        resp.throttle_time_ms > 0,
-        "expected throttle_time_ms > 0 because the user/client tuple rate applies; got {}",
-        resp.throttle_time_ms
-    );
-
-    handle.shutdown().await;
-}
-
-/// Test 7: the request quota is echoed on an API the dispatch loop patches.
-///
-/// `Produce` and `Fetch` fill `ThrottleTimeMs` in themselves, before encoding.
-/// Everywhere else `apply_request_quota` runs, the delay is written into
-/// the already-encoded body by patching its leading int32, which is only safe
-/// on the responses whose schema really does put `ThrottleTimeMs` first.
-/// `network::dispatch::throttle_audit` pins which those are against the
-/// generated encoders; this test proves the patch reaches the wire on one of
-/// them and corrupts nothing else.
-///
-/// `AddOffsetsToTxn` is the API driven here because its dispatch entry carries
-/// `RequestQuotaPolicy::ApplyFallbackAccounting`, so the quota path runs, and
-/// its response leads with `ThrottleTimeMs`, so the patch applies. alice drives
-/// it with no quota set, then again with a tiny `(user=alice)`
-/// `request_percentage`. The throttled response must report
-/// `throttle_time_ms > 0` and be equal to the unthrottled one in every other
-/// field, which is what a leading-int32 patch and nothing more looks like.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
-    let QuotaFixture {
-        handle,
-        dir: _dir,
-        addr,
-    } = quota_fixture().await;
-
-    // One connection for every alice request: re-authenticating would charge
-    // each handshake to the same quota bucket.
-    let mut stream = alice_quota_connection(addr, "SASL authenticate for AddOffsetsToTxn").await;
-
-    // Baseline: no quota is configured yet, so there is no delay to report.
-    let baseline = drive_add_offsets_to_txn(&mut stream, 10).await;
-    assert!(
-        baseline.throttle_time_ms == 0,
-        "unthrottled response must report throttle_time_ms=0, got {}",
-        baseline.throttle_time_ms
-    );
-
-    set_request_time_quota(&handle, addr).await;
-
-    // Drive the same request until the request bucket runs dry. Each request
-    // charges its own handler time, so the first one over budget is throttled.
-    let throttled = throttled_response(
-        &mut stream,
-        drive_add_offsets_to_txn,
-        |response| response.throttle_time_ms,
-        "no request-quota throttle on AddOffsetsToTxn after 15s",
-    )
-    .await;
-
-    // The patch touched the leading int32 and nothing else: every other field
-    // still decodes to what the unthrottled response carried.
-    assert!(
-        throttled
-            == AddOffsetsToTxnResponse {
-                throttle_time_ms: throttled.throttle_time_ms,
-                ..baseline
-            }
-    );
-
-    handle.shutdown().await;
-}
-
 /// `ApiVersions` v3 is the version driven below: v1 is the first with a
 /// `ThrottleTimeMs` at all, and v3 is the first flexible one, which is what a
 /// modern client negotiates with.
@@ -500,75 +112,6 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
         .expect("ApiVersions round-trip");
     let mut cur: &[u8] = &resp_bytes;
     ApiVersionsResponse::decode(&mut cur, API_VERSIONS_VERSION).expect("decode ApiVersionsResponse")
-}
-
-/// Test 9: `ApiVersions` reports the request-quota delay it was held for.
-///
-/// `ApiVersionsResponse` carries `ThrottleTimeMs` behind the `ApiKeys` array,
-/// so the dispatch loop's leading-int32 patch cannot reach it. Its dispatch
-/// entry is `RequestQuotaPolicy::SelfAccounted` for that reason: the handler
-/// charges the KIP-124 request quota and fills the field in on the typed
-/// response, the way Kafka's `handleApiVersionsRequest` answers through
-/// `requestHelper.sendResponseMaybeThrottle`. Without that, a client held by
-/// the quota reads `throttle_time_ms = 0` and never backs off.
-///
-/// One authenticated connection drives the handshake until the
-/// `(user=alice) request_percentage` bucket runs dry, which is what the
-/// `AddOffsetsToTxn` test above does on the patched path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttle_is_reported_on_api_versions() {
-    let QuotaFixture {
-        handle,
-        dir: _dir,
-        addr,
-    } = quota_fixture().await;
-
-    let mut stream = alice_quota_connection(addr, "SASL authenticate for ApiVersions").await;
-
-    // Baseline: no quota is configured yet, so there is no delay to report.
-    let baseline = drive_api_versions(&mut stream, 10).await;
-    assert!(
-        baseline.error_code == 0,
-        "ApiVersions must succeed, error_code={}",
-        baseline.error_code
-    );
-    assert!(
-        baseline.throttle_time_ms == 0,
-        "unthrottled response must report throttle_time_ms=0, got {}",
-        baseline.throttle_time_ms
-    );
-
-    set_request_time_quota(&handle, addr).await;
-
-    let throttled = throttled_response(
-        &mut stream,
-        drive_api_versions,
-        |response| response.throttle_time_ms,
-        "no request-quota throttle on ApiVersions after 15s",
-    )
-    .await;
-
-    // The handler set the field on the typed response, so nothing else moved:
-    // the advertised table and the feature rows are the baseline's. The
-    // finalized features epoch is the metadata offset, as Kafka's
-    // `KRaftMetadataCache.features` reports it, so the quota record written in
-    // between moves it on.
-    assert!(throttled.finalized_features_epoch > baseline.finalized_features_epoch);
-    assert!(
-        throttled
-            == ApiVersionsResponse {
-                throttle_time_ms: throttled.throttle_time_ms,
-                finalized_features_epoch: throttled.finalized_features_epoch,
-                ..baseline
-            }
-    );
-    assert!(
-        throttled.throttle_time_ms <= QUOTA_THROTTLE_MAX_MS,
-        "reported back-off must stay inside quota_throttle_max, got {}",
-        throttled.throttle_time_ms
-    );
-
-    handle.shutdown().await;
 }
 
 async fn produce_when_acl_applied(
@@ -650,63 +193,11 @@ fn check_successful_produce(response: &ProduceResponse) {
     );
 }
 
-/// A throttled broker, the directory that backs it, and the response to its
-/// first successful produce.
-struct ThrottledProducer {
-    handle: krabka_broker::BrokerHandle,
-    dir: tempfile::TempDir,
-    response: ProduceResponse,
-}
-
-/// A successful Produce request after Alice's topic ACL and 128-byte quota become visible.
-async fn throttled_producer_fixture(topic: &str) -> ThrottledProducer {
-    let QuotaFixture {
-        handle,
-        dir: directory,
-        addr,
-    } = quota_fixture().await;
-    prepare_quota_topic(&handle, addr, topic, krabka_metadata::AclOperation::Write).await;
-    set_alice_quota()
-        .broker(&handle)
-        .addr(addr)
-        .key(QuotaSettingSetup::low_producer().key)
-        .value(QuotaSettingSetup::low_producer().value)
-        .call()
-        .await;
-    let response = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: topic.to_owned(),
-        count: ProduceRecordCount(8),
-        ..Default::default()
-    })
-    .await;
-    ThrottledProducer {
-        handle,
-        dir: directory,
-        response,
-    }
-}
-
 #[derive(krabka_macros::FieldDefaults)]
 struct QuotaSettingSetup<'a> {
     #[default("producer_byte_rate")]
     key: &'a str,
     value: QuotaValue,
-}
-
-impl QuotaSettingSetup<'_> {
-    fn low_producer() -> Self {
-        Self {
-            value: QuotaValue(128.0),
-            ..Default::default()
-        }
-    }
-
-    fn request_time() -> Self {
-        Self {
-            key: "request_percentage",
-            value: QuotaValue(0.001),
-        }
-    }
 }
 
 #[bon::builder]
@@ -727,13 +218,440 @@ async fn set_alice_quota(
         .await;
 }
 
-async fn set_request_time_quota(broker: &krabka_broker::BrokerHandle, addr: SocketAddr) {
-    let setup = QuotaSettingSetup::request_time();
+use {crate::support::client::metric_value, krabka_metadata::AclOperation};
+struct QuotaEnforcement {
+    broker: Option<QuotaFixture>,
+    topic: String,
+    produced: Option<ProduceResponse>,
+    fetched: Option<FetchResponse>,
+    stream: Option<TcpStream>,
+    offsets_baseline: Option<AddOffsetsToTxnResponse>,
+    offsets_throttled: Option<AddOffsetsToTxnResponse>,
+    versions_baseline: Option<ApiVersionsResponse>,
+    versions_throttled: Option<ApiVersionsResponse>,
+}
+impl QuotaEnforcement {
+    async fn shutdown(self) {
+        let QuotaFixture {
+            handle,
+            dir: _directory,
+            ..
+        } = self.broker.expect("quota broker started");
+        drop(self.stream);
+        handle.shutdown().await;
+    }
+}
+#[rstest::fixture]
+fn quota() -> QuotaEnforcement {
+    // Start this scenario with fresh inputs and observations.
+
+    QuotaEnforcement {
+        broker: None,
+        topic: String::new(),
+        produced: None,
+        fetched: None,
+        stream: None,
+        offsets_baseline: None,
+        offsets_throttled: None,
+        versions_baseline: None,
+        versions_throttled: None,
+    }
+}
+#[rstest_bdd_macros::given("a SASL quota broker has super user admin and ordinary user alice")]
+async fn quota_enforcement_broker(quota: &mut QuotaEnforcement) {
+    quota.broker = Some(quota_fixture().await);
+}
+#[rstest_bdd_macros::given("topic {topic} permits alice to {operation}")]
+async fn quota_enforcement_topic(quota: &mut QuotaEnforcement, topic: String, operation: String) {
+    let QuotaFixture { handle, addr, .. } = quota.broker.as_ref().expect("quota broker started");
+    let addr = *addr;
+    let grant = match operation.as_str() {
+        "Write" => AclOperation::Write,
+        "Read" => AclOperation::Read,
+        other => panic!("unsupported topic grant {other}"),
+    };
+    prepare_quota_topic(handle, addr, &topic, grant).await;
+    quota.topic = topic;
+}
+#[rstest_bdd_macros::given("alice has {key} quota {rate}")]
+async fn quota_enforcement_rate(quota: &mut QuotaEnforcement, key: String, rate: f64) {
+    let QuotaFixture { handle, addr, .. } = quota.broker.as_ref().expect("quota broker started");
+    let addr = *addr;
     set_alice_quota()
-        .broker(broker)
+        .broker(handle)
         .addr(addr)
-        .key(setup.key)
-        .value(setup.value)
+        .key(&key)
+        .value(rate)
         .call()
         .await;
+}
+#[rstest_bdd_macros::when("alice produces {count} records of {value_bytes} bytes to the topic")]
+async fn quota_produce_records(quota: &mut QuotaEnforcement, count: usize, value_bytes: usize) {
+    let addr = quota.broker.as_ref().expect("quota broker started").addr;
+    quota.produced = Some(
+        produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
+            topic: quota.topic.clone(),
+            count: ProduceRecordCount(count),
+            value_bytes: ProduceValueBytes(value_bytes),
+        })
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the produce partition succeeds and reports a positive throttle delay")]
+fn quota_produce_throttled(quota: &QuotaEnforcement) {
+    let response = quota.produced.as_ref().expect("records produced");
+    check_successful_produce(response);
+    assert!(
+        response.throttle_time_ms > 0,
+        "expected positive throttle, got {}",
+        response.throttle_time_ms
+    );
+}
+#[rstest_bdd_macros::then(
+    "Produce latency and producer quota metrics cover the delay while request quota credit stays zero"
+)]
+async fn quota_produce_metrics(quota: &QuotaEnforcement) {
+    let handle = &quota.broker.as_ref().expect("quota broker started").handle;
+    let resp = quota.produced.as_ref().expect("records produced");
+    let applied_seconds = f64::from(resp.throttle_time_ms) / 1000.0;
+    let phase = metric_value(
+        handle,
+        "krabka_broker_request_throttle_duration_seconds_sum{api_key=\"Produce\"}",
+    )
+    .await;
+    assert!(
+        phase >= applied_seconds,
+        "the throttle phase must cover the delay the response reported \
+         ({applied_seconds}s); got {phase}"
+    );
+
+    // The byte-rate quota is what fired, so it is what the applied-throttle
+    // family credits. The request quota is unset and must stay at zero.
+    let by_quota = metric_value(
+        handle,
+        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Produce\"}",
+    )
+    .await;
+    assert!(
+        by_quota >= applied_seconds,
+        "producer_byte_rate must be credited with the applied throttle \
+         ({applied_seconds}s); got {by_quota}"
+    );
+    let request_quota = metric_value(
+        handle,
+        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Request\"}",
+    )
+    .await;
+    assert!(
+        request_quota < 1.0e-9,
+        "no request_percentage quota is set, so it must be credited with \
+         nothing; got {request_quota}"
+    );
+}
+#[rstest_bdd_macros::given("admin has stored eight 1024 byte records in throttle-fetch")]
+async fn quota_fetch_records(quota: &mut QuotaEnforcement) {
+    let QuotaFixture { handle, addr, .. } = quota.broker.as_ref().expect("quota broker started");
+    let addr = *addr;
+    // Produce 8 KB as admin (not subject to quota yet).
+    seed_alice_write_acl(handle, "throttle-fetch").await; // give admin path a topic
+    let produce_resp = drive_produce_sasl(
+        addr,
+        ZeroFilledRecordsSetup {
+            topic: ("throttle-fetch").to_owned(),
+            count: ProduceRecordCount(8),
+            ..Default::default()
+        },
+        &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            user: "admin",
+            password: (b"admin-secret").to_vec(),
+        },
+    )
+    .await;
+    let part = &produce_resp.responses[0].partition_responses[0];
+    assert!(
+        part.error_code == 0,
+        "admin produce must succeed, error_code={}",
+        part.error_code
+    );
+}
+#[rstest_bdd_macros::when("alice fetches throttle-fetch after the Read grant applies")]
+async fn quota_fetch_attempt(quota: &mut QuotaEnforcement) {
+    let addr = quota.broker.as_ref().expect("quota broker started").addr;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let fetch_resp = loop {
+        let r = drive_fetch_sasl(addr, "alice", b"alice-secret", "throttle-fetch").await;
+        // If throttle_time_ms > 0 or error_code == 0, we have a real response.
+        if r.error_code == 0 {
+            break r;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "fetch error after 15s; error_code={}",
+            r.error_code
+        );
+        // real-time wait (not a progress poll): retry cadence between network fetch attempts, deadline-guarded
+        time::sleep(Duration::from_millis(100)).await;
+    };
+
+    quota.fetched = Some(fetch_resp);
+}
+#[rstest_bdd_macros::then(
+    "the throttled fetch reports a positive delay with no records rows errors or session"
+)]
+fn quota_fetch_throttled(quota: &QuotaEnforcement) {
+    let fetch_resp = quota.fetched.as_ref().expect("fetch attempted");
+    assert!(
+        fetch_resp.throttle_time_ms > 0,
+        "expected consumer throttle_time_ms > 0, got {}",
+        fetch_resp.throttle_time_ms
+    );
+    // Kafka answers a throttled consumer fetch with an empty response: no
+    // rows, no error, and no session (`FetchContext.getThrottledResponse`).
+    // The client did not get the records, so its position does not move.
+    assert!(
+        *fetch_resp
+            == FetchResponse {
+                throttle_time_ms: fetch_resp.throttle_time_ms,
+                ..Default::default()
+            }
+    );
+}
+#[rstest_bdd_macros::given(
+    "alice producer rate is 8192 but the krabka-quota-test user-client tuple rate is 128"
+)]
+async fn quota_tuple_precedence(quota: &mut QuotaEnforcement) {
+    let QuotaFixture { handle, addr, .. } = quota.broker.as_ref().expect("quota broker started");
+    let addr = *addr;
+    // Set a lenient user-only quota.
+    let alter_user = alter_user_quota()
+        .addr(addr)
+        .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
+        .value(8192.0)
+        .call()
+        .await;
+    assert!(alter_user[0].1 == 0, "alter user quota must succeed");
+
+    // Set a tight tuple quota for `CLIENT_ID`.
+    let alter_tuple = drive_alter_client_quotas_sasl(
+        addr,
+        vec![(
+            vec![
+                ("user".into(), Some("alice".into())),
+                ("client-id".into(), Some("krabka-quota-test".into())),
+            ],
+            vec![("producer_byte_rate".into(), 128.0, false)],
+        )],
+        &QuotaAlterSetup {
+            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(alter_tuple[0].1 == 0, "alter tuple quota must succeed");
+
+    // Wait for both quotas to appear in the image.
+    handle
+        .wait_for_image(|img| {
+            let user_key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let tuple_key: krabka_metadata::EntityKey = vec![
+                ("client-id".into(), Some("krabka-quota-test".into())),
+                ("user".into(), Some("alice".into())),
+            ];
+            let user_rate = img
+                .client_quotas()
+                .get(&user_key)
+                .and_then(|c| c.get("producer_byte_rate"))
+                .copied();
+            let tuple_rate = img
+                .client_quotas()
+                .get(&tuple_key)
+                .and_then(|c| c.get("producer_byte_rate"))
+                .copied();
+            user_rate == Some(8192.0) && tuple_rate == Some(128.0)
+        })
+        .await;
+}
+#[rstest_bdd_macros::given("alice uses one authenticated connection for the requests")]
+async fn quota_persistent_connection(quota: &mut QuotaEnforcement) {
+    let addr = quota.broker.as_ref().expect("quota broker started").addr;
+    quota.stream = Some(alice_quota_connection(addr, "authenticate quota session").await);
+}
+#[rstest_bdd_macros::when("the connection sends an unthrottled AddOffsetsToTxn request")]
+async fn quota_offsets_baseline(quota: &mut QuotaEnforcement) {
+    quota.offsets_baseline = Some(
+        drive_add_offsets_to_txn(quota.stream.as_mut().expect("alice authenticated"), 10).await,
+    );
+}
+#[rstest_bdd_macros::then("AddOffsetsToTxn initially reports zero throttle")]
+fn quota_offsets_initially_unthrottled(quota: &QuotaEnforcement) {
+    let baseline = quota
+        .offsets_baseline
+        .as_ref()
+        .expect("baseline offsets request sent");
+    assert!(
+        baseline.throttle_time_ms == 0,
+        "unthrottled response must report throttle_time_ms=0"
+    );
+}
+#[rstest_bdd_macros::when(
+    "the same connection drives AddOffsetsToTxn until the request quota throttles"
+)]
+async fn quota_offsets_exhausted(quota: &mut QuotaEnforcement) {
+    quota.offsets_throttled = Some(
+        throttled_response(
+            quota.stream.as_mut().expect("alice authenticated"),
+            drive_add_offsets_to_txn,
+            |response| response.throttle_time_ms,
+            "no request-quota throttle on AddOffsetsToTxn after 15s",
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the positive AddOffsetsToTxn throttle leaves every other response field unchanged"
+)]
+fn quota_offsets_patch(quota: &QuotaEnforcement) {
+    let baseline = quota
+        .offsets_baseline
+        .as_ref()
+        .expect("baseline offsets request sent");
+    let throttled = quota
+        .offsets_throttled
+        .as_ref()
+        .expect("throttled offsets request sent");
+    assert!(throttled.throttle_time_ms > 0);
+    assert!(
+        *throttled
+            == AddOffsetsToTxnResponse {
+                throttle_time_ms: throttled.throttle_time_ms,
+                ..baseline.clone()
+            }
+    );
+}
+#[rstest_bdd_macros::when("the connection sends an unthrottled API versions v3 request")]
+async fn quota_versions_baseline(quota: &mut QuotaEnforcement) {
+    quota.versions_baseline =
+        Some(drive_api_versions(quota.stream.as_mut().expect("alice authenticated"), 10).await);
+}
+#[rstest_bdd_macros::then("API versions initially succeeds with zero throttle")]
+fn quota_versions_initially_unthrottled(quota: &QuotaEnforcement) {
+    let baseline = quota
+        .versions_baseline
+        .as_ref()
+        .expect("baseline API versions sent");
+    assert!(
+        baseline.error_code == 0,
+        "ApiVersions must succeed, error_code={}",
+        baseline.error_code
+    );
+    assert!(
+        baseline.throttle_time_ms == 0,
+        "unthrottled response must report throttle_time_ms=0, got {}",
+        baseline.throttle_time_ms
+    );
+}
+#[rstest_bdd_macros::when(
+    "the same connection drives API versions v3 until the request quota throttles"
+)]
+async fn quota_versions_exhausted(quota: &mut QuotaEnforcement) {
+    quota.versions_throttled = Some(
+        throttled_response(
+            quota.stream.as_mut().expect("alice authenticated"),
+            drive_api_versions,
+            |response| response.throttle_time_ms,
+            "no request-quota throttle on ApiVersions after 15s",
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "API versions reports a positive capped delay and advancing epoch with all advertised APIs and features unchanged"
+)]
+fn quota_versions_accounted(quota: &QuotaEnforcement) {
+    let baseline = quota
+        .versions_baseline
+        .as_ref()
+        .expect("baseline API versions sent");
+    let throttled = quota
+        .versions_throttled
+        .as_ref()
+        .expect("throttled API versions sent");
+    assert!(throttled.throttle_time_ms > 0);
+    // The handler set the field on the typed response, so nothing else moved:
+    // the advertised table and the feature rows are the baseline's. The
+    // finalized features epoch is the metadata offset, as Kafka's
+    // `KRaftMetadataCache.features` reports it, so the quota record written in
+    // between moves it on.
+    assert!(throttled.finalized_features_epoch > baseline.finalized_features_epoch);
+    assert!(
+        *throttled
+            == ApiVersionsResponse {
+                throttle_time_ms: throttled.throttle_time_ms,
+                finalized_features_epoch: throttled.finalized_features_epoch,
+                ..baseline.clone()
+            }
+    );
+    assert!(
+        throttled.throttle_time_ms <= QUOTA_THROTTLE_MAX_MS,
+        "reported back-off must stay inside quota_throttle_max, got {}",
+        throttled.throttle_time_ms
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "producer byte rate throttles produce"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_byte_rate_throttles_produce(quota: QuotaEnforcement) { quota.shutdown().await; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttles produce"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttles_produce(quota: QuotaEnforcement) { quota.shutdown().await; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "producer byte rate throttle moves the throttle metrics"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_byte_rate_throttle_moves_the_throttle_metrics(quota: QuotaEnforcement) {
+    quota.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "consumer byte rate throttles fetch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_byte_rate_throttles_fetch(quota: QuotaEnforcement) { quota.shutdown().await; }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "user client tuple overrides user specific"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_client_tuple_overrides_user_specific(quota: QuotaEnforcement) {
+    quota.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttle is echoed on a patched api"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_echoed_on_a_patched_api(quota: QuotaEnforcement) {
+    quota.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttle is reported on api versions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_reported_on_api_versions(quota: QuotaEnforcement) {
+    quota.shutdown().await;
 }

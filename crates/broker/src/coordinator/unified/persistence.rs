@@ -549,55 +549,6 @@ mod tests {
     /// per-commit expiry writes version 1, which has no leader epoch and no
     /// topic id, and every other commit writes version 4, flexible, with the
     /// topic id in tagged field 0 unless it is the zero id.
-    #[test]
-    fn offset_commit_value_writes_kafkas_version_and_bytes() {
-        let v4_with_id = wire_bytes(&[
-            "0004",                             // version
-            "000000000000002a",                 // offset
-            "00000004",                         // leader epoch
-            "056d657461",                       // compact metadata
-            "00000000000f4240",                 // commit timestamp
-            "010010",                           // one tagged field: tag 0, 16 bytes
-            "0102030405060708090a0b0c0d0e0f10", // topic id
-        ]);
-        let v4_without_id = wire_bytes(&[
-            "0004",             // version
-            "000000000000002a", // offset
-            "00000004",         // leader epoch
-            "056d657461",       // compact metadata
-            "00000000000f4240", // commit timestamp
-            "00",               // no tagged fields
-        ]);
-        let v1 = wire_bytes(&[
-            "0001",             // version
-            "000000000000002a", // offset
-            "00046d657461",     // metadata
-            "00000000000f4240", // commit timestamp
-            "000000000098967f", // expire timestamp
-        ]);
-        let cases = [
-            (
-                value(None, Some(TOPIC_ID)),
-                v4_with_id,
-                value(None, Some(TOPIC_ID)),
-            ),
-            (value(None, None), v4_without_id, value(None, None)),
-            (
-                value(Some(9_999_999), Some(TOPIC_ID)),
-                v1,
-                OffsetCommitValue {
-                    leader_epoch: -1,
-                    ..value(Some(9_999_999), None)
-                },
-            ),
-        ];
-        for (written, bytes, read) in cases {
-            let encoded = written.encode_value().unwrap();
-            assert!(encoded[..] == bytes[..], "{written:?}");
-            assert!(OffsetCommitValue::decode_value(&encoded).unwrap() == read);
-        }
-    }
-
     /// Every version Kafka defines decodes, the way `OffsetAndMetadata.
     /// fromRecord` reads it: a leader epoch only from version 3, an expiry only
     /// at version 1 and only when it is not -1, a topic id only from version 4.
@@ -858,4 +809,64 @@ mod tests {
             }
         }
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct StoredOffset {
+        value: Option<OffsetCommitValue>,
+        encoded: Option<Bytes>,
+        decoded: Option<OffsetCommitValue>,
+    }
+    #[rstest::fixture]
+    fn stored_offset() -> StoredOffset {
+        // Start this scenario with fresh inputs and observations.
+        StoredOffset::default()
+    }
+    #[given(
+        "offset 42 at leader epoch 4 has metadata meta commit time 1000000 expiry {expiry} and topic identifier {topic_id}"
+    )]
+    fn offset_commit_fields(stored_offset: &mut StoredOffset, expiry: String, topic_id: bool) {
+        let expiry = if expiry == "absent" {
+            None
+        } else {
+            Some(expiry.parse().expect("expiry timestamp"))
+        };
+        stored_offset.value = Some(value(expiry, topic_id.then_some(TOPIC_ID)));
+    }
+    #[when("the coordinator serializes the offset commit and reads it from the compacted log")]
+    fn offset_commit_codec(stored_offset: &mut StoredOffset) {
+        let encoded = stored_offset
+            .value
+            .as_ref()
+            .expect("offset commit prepared")
+            .encode_value()
+            .expect("write offset commit");
+        stored_offset.decoded =
+            Some(OffsetCommitValue::decode_value(&encoded).expect("read offset commit"));
+        stored_offset.encoded = Some(encoded);
+    }
+    #[then(
+        "offset bytes are {hex} and recovery reports leader epoch {leader_epoch} with topic identifier {topic_id}"
+    )]
+    fn offset_commit_layout(
+        stored_offset: &StoredOffset,
+        hex: String,
+        leader_epoch: i32,
+        topic_id: bool,
+    ) {
+        let expected = wire_bytes(&[&hex]);
+        assert!(&stored_offset.encoded.as_ref().expect("offset encoded")[..] == &expected[..]);
+        let expected = OffsetCommitValue {
+            leader_epoch,
+            ..value(
+                stored_offset
+                    .value
+                    .as_ref()
+                    .expect("original commit")
+                    .expire_timestamp_ms,
+                topic_id.then_some(TOPIC_ID),
+            )
+        };
+        assert!(stored_offset.decoded.as_ref() == Some(&expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/persistence.feature",fixtures=[stored_offset:StoredOffset]);
 }

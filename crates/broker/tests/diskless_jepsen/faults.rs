@@ -15,9 +15,9 @@
 //!    as well, so the survivors have to elect a new one before the partition
 //!    can be reassigned. The witness is that the two leaders differ.
 //!
-//! [`assert_complete_witness`] is the guard on all of it: every field has to
-//! be filled in, and the two leader pairs have to name different nodes. A
-//! schedule that silently skipped a fault fails there rather than passing.
+//! The scenario checks each native witness at its corresponding behavior
+//! step: PUT counters advance, canonical log files are erased, authority
+//! changes, and both readers return the acknowledged ledger.
 
 use {
     crate::{TOPIC, cluster::TestNode},
@@ -53,21 +53,6 @@ fn checkpoint_offsets(raw: &str) -> Option<[i64; 2]> {
         .map(str::parse::<i64>);
     let range = [offsets.next()?.ok()?, offsets.next()?.ok()?];
     offsets.next().is_none().then_some(range)
-}
-
-/// What each fault left behind. The suite fills this in as it goes and checks
-/// it at the end, so a fault that turned into a no-op cannot pass unnoticed.
-#[derive(Debug, Default)]
-pub struct FaultWitness {
-    pub(crate) put_failures: u64,
-    pub(crate) lost_wal_node: Option<NodeId>,
-    pub(crate) old_controller: Option<NodeId>,
-    pub(crate) new_controller: Option<NodeId>,
-    pub(crate) old_partition_leader: Option<NodeId>,
-    pub(crate) new_partition_leader: Option<NodeId>,
-    pub(crate) object_retry_succeeded: bool,
-    pub(crate) rust_ledger_checked: bool,
-    pub(crate) jvm_differential_checked: bool,
 }
 
 /// Make every diskless object PUT fail, and return the path of the blocker.
@@ -252,22 +237,6 @@ pub async fn await_wal_object(object_dir: &Path, broker_id: i32) {
     })
     .await
     .expect("the diskless WAL object PUT did not recover after the blocker was removed");
-}
-
-/// Every fault landed, and the two handoffs moved authority to another node.
-pub fn assert_complete_witness(witness: &FaultWitness, put_failures_before: u64) {
-    assert!(witness.put_failures > put_failures_before);
-    assert!(witness.lost_wal_node.is_some());
-    assert!(witness.old_controller.is_some());
-    assert!(witness.new_controller.is_some());
-    assert!(witness.old_controller != witness.new_controller);
-    assert!(witness.old_partition_leader.is_some());
-    assert!(witness.new_partition_leader.is_some());
-    assert!(witness.old_partition_leader != witness.new_partition_leader);
-    assert!(witness.lost_wal_node == witness.old_partition_leader);
-    assert!(witness.object_retry_succeeded);
-    assert!(witness.rust_ledger_checked);
-    assert!(witness.jvm_differential_checked);
 }
 
 fn recursive_file_count(path: &Path) -> usize {

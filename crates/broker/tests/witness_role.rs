@@ -30,8 +30,19 @@
 #![cfg(test)]
 
 use {
-    std::{future::Future, time::Duration},
+    krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::{
+            fetch_response::FetchResponse, metadata_response::MetadataResponse,
+            produce_response::ProduceResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
+    },
+    std::{future::Future, mem, time::Duration},
     support::{SITE_A, SITE_B, SITE_C, SITES, cluster_lock},
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
 
 mod support;
@@ -74,4 +85,60 @@ const N_RECORDS: i32 = 5;
 
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
     support::poll::within(what, Duration::from_secs(45), future).await
+}
+
+#[derive(Default)]
+struct WitnessTopic {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    leader: Option<Client>,
+    witness: Option<Client>,
+    topic_id: Option<WireUuid>,
+    metadata: Option<MetadataResponse>,
+    partition: Option<witness_wire::PartitionView>,
+    fetched: Option<FetchResponse>,
+    produced: Option<ProduceResponse>,
+    committed: Option<i16>,
+}
+
+#[rstest::fixture]
+fn witness_topic() -> WitnessTopic {
+    // The witness's replica and client-facing roles share one fresh partition.
+    WitnessTopic::default()
+}
+
+impl WitnessTopic {
+    fn leader(&self) -> &Client { self.leader.as_ref().expect("leader connection") }
+
+    fn witness(&self) -> &Client { self.witness.as_ref().expect("witness connection") }
+
+    fn topic_id(&self) -> WireUuid { self.topic_id.expect("witness topic") }
+
+    async fn shutdown(&mut self) {
+        let Self {
+            guard,
+            cluster,
+            leader,
+            witness,
+            ..
+        } = mem::take(self);
+        leader.expect("leader connection").close();
+        if let Some(witness) = witness {
+            witness.close();
+        }
+        witness_cluster::shutdown(cluster).await;
+        drop(guard);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "sites A and B host data brokers 1 and 2, site C hosts witness 3 and all three replicas join witness-topic partition 0 ISR"
+)]
+async fn witness_topic_cluster(witness_topic: &mut WitnessTopic) {
+    witness_topic.guard = Some(cluster_lock().lock().await);
+    witness_topic.cluster = witness_cluster::start_stretch_cluster().await;
+    witness_topic.leader =
+        Some(witness_cluster::client_at(&witness_topic.cluster[0].1.listen_addr.to_string()).await);
+    witness_topic.topic_id = Some(witness_wire::create_topic(witness_topic.leader()).await);
+    witness_cluster::wait_for_witness_isr(&witness_topic.cluster, TOPIC).await;
 }

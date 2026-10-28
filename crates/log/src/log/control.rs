@@ -249,8 +249,8 @@ mod tests {
                     BarrierEpoch, BarrierMarkerSetup, KeyedRecord, PartitionState,
                     ProducerTransaction, TempLog, TransactionFields, abort_marker, barrier_marker,
                     barrier_marker_from_producer, commit_marker, compact_test_log, compaction_ctx,
-                    control_key, control_value, install_stamps, keyed_batch, partition_state,
-                    sample_batch, stamped_test_log, test_log, transactional_batch,
+                    install_stamps, keyed_batch, partition_state, sample_batch, stamped_test_log,
+                    test_log, transactional_batch,
                 },
             },
             producer_snapshot::ProducerSnapshotEntry,
@@ -263,6 +263,7 @@ mod tests {
         krabka_ids::{Offset, ProducerId},
         krabka_protocol::records::Record,
         krabka_units::prelude::mebibytes,
+        std::str,
         tempfile::tempdir,
     };
 
@@ -298,22 +299,6 @@ mod tests {
         value: Bytes,
     }
 
-    /// One parse case: its name, the bytes, and what the parse comes to.
-    struct ParseCase<T> {
-        name: &'static str,
-        bytes: Option<&'static [u8]>,
-        expected: Parsed<T>,
-    }
-
-    /// One append case: its name, the marker's key and value, and what the
-    /// append comes to.
-    struct AppendCase {
-        name: &'static str,
-        key: Option<Bytes>,
-        value: Option<Bytes>,
-        expected: Parsed<()>,
-    }
-
     const KEY: &str = "end control record key";
     const VALUE: &str = "end transaction marker value";
 
@@ -333,263 +318,166 @@ mod tests {
         );
     }
 
-    /// Kafka's `ControlRecordType.parseTypeId`: the type is bytes 2..4 of the
-    /// key; a short or missing key and a negative version are corrupt, and a
-    /// later version parses as version 0.
-    #[test]
-    fn a_control_key_parses_as_kafka_parses_it() {
-        let cases: [ParseCase<i16>; 12] = [
-            ParseCase {
-                name: "ABORT",
-                bytes: Some(&[0, 0, 0, 0]),
-                expected: Parsed::Value(0),
-            },
-            ParseCase {
-                name: "COMMIT",
-                bytes: Some(&[0, 0, 0, 1]),
-                expected: Parsed::Value(1),
-            },
-            ParseCase {
-                name: "barrier",
-                bytes: Some(&[0, 0, 0x03, 0xe8]),
-                expected: Parsed::Value(1000),
-            },
-            ParseCase {
-                name: "a longer key",
-                bytes: Some(&[0, 0, 0, 1, 9, 9]),
-                expected: Parsed::Value(1),
-            },
-            ParseCase {
-                name: "a later version",
-                bytes: Some(&[0, 1, 0, 1]),
-                expected: Parsed::Value(1),
-            },
-            ParseCase {
-                name: "the largest version",
-                bytes: Some(&[0x7f, 0xff, 0, 1]),
-                expected: Parsed::Value(1),
-            },
-            ParseCase {
-                name: "minus one",
-                bytes: Some(&[0xff, 0xff, 0, 1]),
-                expected: Parsed::BadVersion {
-                    record: "control record",
-                    version: -1,
-                },
-            },
-            ParseCase {
-                name: "the smallest version",
-                bytes: Some(&[0x80, 0x00, 0, 1]),
-                expected: Parsed::BadVersion {
-                    record: "control record",
-                    version: i16::MIN,
-                },
-            },
-            ParseCase {
-                name: "no key",
-                bytes: None,
-                expected: Parsed::TooShort {
-                    record: KEY,
-                    found: 0,
-                },
-            },
-            ParseCase {
-                name: "one byte",
-                bytes: Some(&[0]),
-                expected: Parsed::TooShort {
-                    record: KEY,
-                    found: 1,
-                },
-            },
-            ParseCase {
-                name: "two bytes",
-                bytes: Some(&[0, 0]),
-                expected: Parsed::TooShort {
-                    record: KEY,
-                    found: 2,
-                },
-            },
-            ParseCase {
-                name: "three bytes",
-                bytes: Some(&[0, 0, 0]),
-                expected: Parsed::TooShort {
-                    record: KEY,
-                    found: 3,
-                },
-            },
-        ];
-        for ParseCase {
-            name,
-            bytes,
-            expected,
-        } in cases
-        {
-            check!(
-                Parsed::from(parse_control_marker_type(bytes)) == expected,
-                "case {name}"
-            );
+    #[derive(Default)]
+    struct ControlMarkerScenario {
+        key: Option<Bytes>,
+        value: Option<Bytes>,
+        parsed_key: Option<Parsed<i16>>,
+        parsed_value: Option<Parsed<i32>>,
+        log: Option<TempLog>,
+        append: Option<Parsed<()>>,
+        before: Option<PartitionState>,
+        after: Option<PartitionState>,
+        end: Option<Offset>,
+    }
+    #[rstest::fixture]
+    fn control_marker() -> ControlMarkerScenario {
+        let key = None;
+        ControlMarkerScenario {
+            key,
+            ..ControlMarkerScenario::default()
         }
     }
-
-    /// Kafka's `EndTransactionMarker.deserializeValue`: the coordinator epoch
-    /// is bytes 2..6 of the value; a short or missing value and a negative
-    /// version are corrupt, and a later version parses as version 0.
-    #[test]
-    fn an_end_marker_value_parses_as_kafka_parses_it() {
-        let cases: [ParseCase<i32>; 10] = [
-            ParseCase {
-                name: "current",
-                bytes: Some(&[0, 0, 0, 0, 0, 7]),
-                expected: Parsed::Value(7),
-            },
-            ParseCase {
-                name: "a longer value",
-                bytes: Some(&[0, 0, 0, 0, 0, 7, 9]),
-                expected: Parsed::Value(7),
-            },
-            ParseCase {
-                name: "a later version",
-                bytes: Some(&[0, 1, 0, 0, 0, 7, 9]),
-                expected: Parsed::Value(7),
-            },
-            ParseCase {
-                name: "the largest version",
-                bytes: Some(&[0x7f, 0xff, 0, 0, 0, 7]),
-                expected: Parsed::Value(7),
-            },
-            ParseCase {
-                name: "minus one",
-                bytes: Some(&[0xff, 0xff, 0, 0, 0, 7]),
-                expected: Parsed::BadVersion {
-                    record: "end transaction marker",
-                    version: -1,
-                },
-            },
-            ParseCase {
-                name: "the smallest version",
-                bytes: Some(&[0x80, 0x00, 0, 0, 0, 7]),
-                expected: Parsed::BadVersion {
-                    record: "end transaction marker",
-                    version: i16::MIN,
-                },
-            },
-            ParseCase {
-                name: "no value",
-                bytes: None,
-                expected: Parsed::TooShort {
-                    record: VALUE,
-                    found: 0,
-                },
-            },
-            ParseCase {
-                name: "version only",
-                bytes: Some(&[0, 0]),
-                expected: Parsed::TooShort {
-                    record: VALUE,
-                    found: 2,
-                },
-            },
-            ParseCase {
-                name: "four bytes",
-                bytes: Some(&[0, 0, 0, 0]),
-                expected: Parsed::TooShort {
-                    record: VALUE,
-                    found: 4,
-                },
-            },
-            ParseCase {
-                name: "five bytes",
-                bytes: Some(&[0, 0, 0, 0, 0]),
-                expected: Parsed::TooShort {
-                    record: VALUE,
-                    found: 5,
-                },
-            },
-        ];
-        for ParseCase {
-            name,
-            bytes,
-            expected,
-        } in cases
-        {
-            check!(
-                Parsed::from(parse_control_marker_coordinator_epoch(bytes)) == expected,
-                "case {name}"
-            );
+    fn marker_fixture_bytes(text: &str) -> Option<Bytes> {
+        if text == "missing" {
+            return None;
         }
+        let digits: String = text.split_whitespace().collect();
+        let (pairs, remainder) = digits.as_bytes().as_chunks::<2>();
+        assert2::assert!(remainder.is_empty(), "complete hexadecimal control bytes");
+        Some(
+            pairs
+                .iter()
+                .map(|pair| {
+                    u8::from_str_radix(str::from_utf8(pair).expect("ASCII hex"), 16)
+                        .expect("hexadecimal control marker fixture")
+                })
+                .collect(),
+        )
     }
+    #[rstest_bdd_macros::given("control key bytes {key}")]
+    fn control_marker_key(control_marker: &mut ControlMarkerScenario, key: String) {
+        control_marker.key = marker_fixture_bytes(&key);
+    }
+    #[rstest_bdd_macros::given("end-marker value bytes {value}")]
+    fn control_marker_value(control_marker: &mut ControlMarkerScenario, value: String) {
+        control_marker.value = marker_fixture_bytes(&value);
+    }
+    #[rstest_bdd_macros::when("the control key type is parsed")]
+    fn parse_marker_key(control_marker: &mut ControlMarkerScenario) {
+        control_marker.parsed_key = Some(Parsed::from(parse_control_marker_type(
+            control_marker.key.as_deref(),
+        )));
+    }
+    #[rstest_bdd_macros::when("the end-marker coordinator epoch is parsed")]
+    fn parse_marker_value(control_marker: &mut ControlMarkerScenario) {
+        control_marker.parsed_value = Some(Parsed::from(parse_control_marker_coordinator_epoch(
+            control_marker.value.as_deref(),
+        )));
+    }
+    #[rstest_bdd_macros::then("the control key type is {kind}")]
+    fn parsed_marker_key_type(control_marker: &ControlMarkerScenario, kind: i16) {
+        check!(control_marker.parsed_key == Some(Parsed::Value(kind)));
+    }
+    #[rstest_bdd_macros::then("the end-marker coordinator epoch is {epoch}")]
+    fn parsed_marker_coordinator(control_marker: &ControlMarkerScenario, epoch: i32) {
+        check!(control_marker.parsed_value == Some(Parsed::Value(epoch)));
+    }
+    #[rstest_bdd_macros::then("the control key rejects version {version}")]
+    fn rejected_marker_key_version(control_marker: &ControlMarkerScenario, version: i16) {
+        check!(
+            control_marker.parsed_key
+                == Some(Parsed::BadVersion {
+                    record: "control record",
+                    version
+                })
+        );
+    }
+    #[rstest_bdd_macros::then("the end-marker value rejects version {version}")]
+    fn rejected_marker_value_version(control_marker: &ControlMarkerScenario, version: i16) {
+        check!(
+            control_marker.parsed_value
+                == Some(Parsed::BadVersion {
+                    record: "end transaction marker",
+                    version
+                })
+        );
+    }
+    #[rstest_bdd_macros::then("the control key reports only {found} bytes")]
+    fn short_marker_key(control_marker: &ControlMarkerScenario, found: usize) {
+        check!(control_marker.parsed_key == Some(Parsed::TooShort { record: KEY, found }));
+    }
+    #[rstest_bdd_macros::then("the end-marker value reports only {found} bytes")]
+    fn short_marker_value(control_marker: &ControlMarkerScenario, found: usize) {
+        check!(
+            control_marker.parsed_value
+                == Some(Parsed::TooShort {
+                    record: VALUE,
+                    found
+                })
+        );
+    }
+    #[rstest_bdd_macros::given("producer 1000 epoch 2 has an open one-record transaction")]
+    fn open_marker_transaction(control_marker: &mut ControlMarkerScenario) {
+        let mut fixture = test_log();
+        let mut data = transactional_batch(1000, 2, &["a"]);
+        data.base_sequence = 0;
+        fixture.log.append(&mut data).expect("transaction data");
+        control_marker.before = Some(partition_state(&fixture.log, &[1000]));
+        control_marker.log = Some(fixture);
+    }
+    #[rstest_bdd_macros::when("the malformed commit marker is appended")]
+    fn append_bad_marker(control_marker: &mut ControlMarkerScenario) {
+        let log = &mut control_marker
+            .log
+            .as_mut()
+            .expect("producer transaction given")
+            .log;
+        let mut marker = commit_marker(1000, 2);
+        marker.records[0].key = control_marker.key.clone();
+        marker.records[0].value = control_marker.value.clone();
+        control_marker.append = Some(Parsed::from(log.append(&mut marker).map(|_| ())));
+        control_marker.after = Some(partition_state(log, &[1000]));
+        control_marker.end = Some(log.log_end_offset());
+    }
+    #[rstest_bdd_macros::then("the marker append refuses {record} version {version}")]
+    fn refused_marker_append_version(
+        control_marker: &ControlMarkerScenario,
+        record: String,
+        version: i16,
+    ) {
+        let record = match record.as_str() {
+            "key" => "control record",
+            "value" => "end transaction marker",
+            _ => panic!("unknown marker field {record}"),
+        };
+        check!(control_marker.append == Some(Parsed::BadVersion { record, version }));
+    }
+    #[rstest_bdd_macros::then("the marker append reports a {record} of only {found} bytes")]
+    fn refused_marker_append_size(
+        control_marker: &ControlMarkerScenario,
+        record: String,
+        found: usize,
+    ) {
+        let record = match record.as_str() {
+            "key" => KEY,
+            "value" => VALUE,
+            _ => panic!("unknown marker field {record}"),
+        };
+        check!(control_marker.append == Some(Parsed::TooShort { record, found }));
+    }
+    #[rstest_bdd_macros::then("the log and complete transaction state stay unchanged at offset 1")]
+    fn unchanged_marker_log(control_marker: &ControlMarkerScenario) {
+        check!(control_marker.before.is_some());
+        check!(control_marker.after == control_marker.before);
+        check!(control_marker.end == Some(Offset(1)));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/control_marker_contract", fixtures = [control_marker: ControlMarkerScenario]);
 
     fn append_open_barrier_transaction(log: &mut Log) {
         let mut data = transactional_batch(1000, 2, &["a", "b"]);
         data.base_sequence = 0;
         log.append(&mut data).unwrap(); // offsets 0 and 1
-    }
-
-    /// An end marker Kafka would refuse stops the append, as Kafka's
-    /// `ProducerAppendInfo` does when `EndTransactionMarker.deserialize`
-    /// throws, and the log is unchanged.
-    #[test]
-    fn an_end_marker_kafka_refuses_is_not_appended() {
-        let cases: [AppendCase; 4] = [
-            AppendCase {
-                name: "a negative key version",
-                key: Some(Bytes::from_static(&[0xff, 0xff, 0x00, 0x01])),
-                value: Some(control_value(17)),
-                expected: Parsed::BadVersion {
-                    record: "control record",
-                    version: -1,
-                },
-            },
-            AppendCase {
-                name: "a short key",
-                key: Some(Bytes::from_static(&[0x00, 0x00, 0x00])),
-                value: Some(control_value(17)),
-                expected: Parsed::TooShort {
-                    record: KEY,
-                    found: 3,
-                },
-            },
-            AppendCase {
-                name: "a negative value version",
-                key: Some(control_key(COMMIT_CONTROL_TYPE)),
-                value: Some(Bytes::from_static(&[0xff, 0xfe, 0, 0, 0, 17])),
-                expected: Parsed::BadVersion {
-                    record: "end transaction marker",
-                    version: -2,
-                },
-            },
-            AppendCase {
-                name: "no value",
-                key: Some(control_key(COMMIT_CONTROL_TYPE)),
-                value: None,
-                expected: Parsed::TooShort {
-                    record: VALUE,
-                    found: 0,
-                },
-            },
-        ];
-        for AppendCase {
-            name,
-            key,
-            value,
-            expected,
-        } in cases
-        {
-            let TempLog { dir: _dir, mut log } = test_log();
-            let mut data = transactional_batch(1000, 2, &["a"]);
-            data.base_sequence = 0;
-            log.append(&mut data).unwrap();
-            let before = partition_state(&log, &[1000]);
-
-            let mut marker = commit_marker(1000, 2);
-            marker.records[0].key = key;
-            marker.records[0].value = value;
-            let got = Parsed::from(log.append(&mut marker).map(|_| ()));
-
-            check!(got == expected, "case {name}");
-            check!(partition_state(&log, &[1000]) == before, "case {name}");
-            check!(log.log_end_offset() == Offset(1), "case {name}");
-        }
     }
 
     // ---- barrier-marker tests ----

@@ -19,8 +19,7 @@ use {
         codes,
         handlers::test_support::{
             AcknowledgementMode, AcknowledgementPartitionSetup, OffsetRun, ShareSessionEpoch,
-            StartedBroker, WireAckBatch, WirePartitionAcknowledgements,
-            acknowledge_batches_request, acquired_share_records,
+            StartedBroker, acknowledge_batches_request, acquired_share_records,
             create_topic as create_topic_from_test_support, initialize_earliest_share,
             produce_records, share_acknowledge_wire, share_fetch_wire, share_record_states,
         },
@@ -50,15 +49,6 @@ const VERSION: i16 = 2;
 const DENIED: &str = "denied";
 /// The principal that may read everything.
 const READER: &str = "reader";
-
-/// A partition that the one-partition topic does not have.
-const MISSING_PARTITION: i32 = 3;
-
-const ACCEPT: i8 = 1;
-const RENEW: i8 = 4;
-
-/// One acknowledgement batch: its offsets and types.
-type Batch = WireAckBatch<'static>;
 
 /// The row's `(error_code, acknowledge_error_code)` of a `ShareFetch`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -228,220 +218,198 @@ async fn record_states(broker: &BrokerHandle, group: &str, topic_id: WireUuid) -
     share_record_states(broker, group, topic_id).await
 }
 
-/// One scenario for both APIs.
-struct Case {
-    name: &'static str,
-    user: &'static str,
-    partition: i32,
-    batches: &'static [Batch],
-    /// `ShareFetch`: the row's error codes.
-    fetch: RowCodes,
-    /// `ShareAcknowledge`: the row's error code.
-    acknowledge: i16,
-    /// The state of each offset left in the window of partition 0 after the
-    /// request.
-    states: &'static [RecordState],
+#[derive(Default)]
+struct AcknowledgementOrderScenario {
+    started: Option<StartedBroker>,
+    topic_id: WireUuid,
+    rows: Vec<(i32, i16, i16, Vec<RecordState>)>,
 }
-
-const HELD: &[RecordState] = &[Acquired, Acquired, Acquired];
-
-fn cases() -> Vec<Case> {
-    let invalid = |name, batches| Case {
-        name,
-        user: READER,
-        partition: 0,
-        batches,
-        fetch: RowCodes {
-            error_code: codes::NONE,
-            acknowledge_error_code: codes::INVALID_REQUEST,
-        },
-        acknowledge: codes::INVALID_REQUEST,
-        states: HELD,
-    };
-    vec![
-        Case {
-            name: "allowed and valid",
-            user: READER,
-            partition: 0,
-            batches: &[WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[ACCEPT],
-            }],
-            fetch: RowCodes {
-                error_code: codes::NONE,
-                acknowledge_error_code: codes::NONE,
-            },
-            acknowledge: codes::NONE,
-            // The accepted prefix leaves the window with the SPSO.
-            states: &[],
-        },
-        Case {
-            name: "denied and valid",
-            user: DENIED,
-            partition: 0,
-            batches: &[WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[ACCEPT],
-            }],
-            fetch: RowCodes {
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                acknowledge_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            },
-            acknowledge: codes::TOPIC_AUTHORIZATION_FAILED,
-            states: HELD,
-        },
-        Case {
-            name: "denied and invalid",
-            user: DENIED,
-            partition: 0,
-            batches: &[WireAckBatch {
-                first: 2,
-                last: 0,
-                types: &[ACCEPT],
-            }],
-            fetch: RowCodes {
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                acknowledge_error_code: codes::INVALID_REQUEST,
-            },
-            acknowledge: codes::INVALID_REQUEST,
-            states: HELD,
-        },
-        invalid("first offset past last", &[WireAckBatch {
-            first: 2,
-            last: 0,
-            types: &[ACCEPT],
-        }]),
-        invalid("overlapping batches", &[
-            WireAckBatch {
-                first: 0,
-                last: 1,
-                types: &[ACCEPT],
-            },
-            WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[ACCEPT],
-            },
-        ]),
-        invalid("no acknowledge type", &[WireAckBatch {
-            first: 0,
-            last: 2,
-            types: &[],
-        }]),
-        invalid("type count not the range", &[WireAckBatch {
-            first: 0,
-            last: 2,
-            types: &[ACCEPT, ACCEPT],
-        }]),
-        invalid("type out of range", &[WireAckBatch {
-            first: 0,
-            last: 2,
-            types: &[5],
-        }]),
-        invalid("renew without IsRenewAck", &[WireAckBatch {
-            first: 0,
-            last: 2,
-            types: &[RENEW],
-        }]),
-        Case {
-            name: "partition the metadata does not hold",
-            user: READER,
-            partition: MISSING_PARTITION,
-            batches: &[WireAckBatch {
-                first: 0,
-                last: 0,
-                types: &[ACCEPT],
-            }],
-            fetch: RowCodes {
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                acknowledge_error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            },
-            acknowledge: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            states: HELD,
-        },
-    ]
-}
-
-#[tokio::test]
-async fn acknowledge_checks_run_in_kafka_order() {
-    let StartedBroker { broker, dir: _dir } = start().await;
-    let topic_id = create_topic(&broker).await;
-    produce(&broker).await;
-
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (index, case) in cases().into_iter().enumerate() {
-        let group = format!("fetch-{index}");
-        acquire_all(&broker, &group, topic_id).await;
-        let response = share_fetch()
-            .broker(&broker)
-            .user(case.user)
-            .group(&group)
-            .topic_id(topic_id)
-            .rows(vec![AcknowledgementPartitionSetup::from_wire(
-                WirePartitionAcknowledgements {
-                    index: case.partition,
-                    batches: case.batches,
-                },
-            )])
-            .call()
-            .await;
-        let row = &response.responses[0].partitions[0];
-        actual.push((
-            "ShareFetch",
-            case.name,
-            (
-                row.partition_index,
-                row.error_code,
-                row.acknowledge_error_code,
-            ),
-            record_states(&broker, &group, topic_id).await,
-        ));
-        expected.push((
-            "ShareFetch",
-            case.name,
-            (
-                case.partition,
-                case.fetch.error_code,
-                case.fetch.acknowledge_error_code,
-            ),
-            case.states.to_vec(),
-        ));
-
-        let group = format!("acknowledge-{index}");
-        acquire_all(&broker, &group, topic_id).await;
-        let response = share_acknowledge()
-            .broker(&broker)
-            .user(case.user)
-            .group(&group)
-            .topic_id(topic_id)
-            .partition(AcknowledgementPartitionSetup::from_wire(
-                WirePartitionAcknowledgements {
-                    index: case.partition,
-                    batches: case.batches,
-                },
-            ))
-            .call()
-            .await;
-        let row = &response.responses[0].partitions[0];
-        actual.push((
-            "ShareAcknowledge",
-            case.name,
-            (row.partition_index, row.error_code, codes::NONE),
-            record_states(&broker, &group, topic_id).await,
-        ));
-        expected.push((
-            "ShareAcknowledge",
-            case.name,
-            (case.partition, case.acknowledge, codes::NONE),
-            case.states.to_vec(),
-        ));
+#[rstest::fixture]
+fn acknowledgement_order() -> AcknowledgementOrderScenario {
+    let started = None;
+    AcknowledgementOrderScenario {
+        started,
+        ..Default::default()
     }
-    assert!(actual == expected);
-    broker.shutdown().await;
 }
+#[rstest_bdd_macros::given(
+    "reader acquired offsets 0 through 2 of ack-order partition 0 in separate fetch and acknowledge groups"
+)]
+async fn acquired_ack_order_records(acknowledgement_order: &mut AcknowledgementOrderScenario) {
+    let started = start().await;
+    let topic_id = create_topic(&started.broker).await;
+    produce(&started.broker).await;
+    acquire_all(&started.broker, "fetch-order", topic_id).await;
+    acquire_all(&started.broker, "acknowledge-order", topic_id).await;
+    acknowledgement_order.topic_id = topic_id;
+    acknowledgement_order.started = Some(started);
+}
+#[rstest_bdd_macros::when(
+    "principal {user} sends these acknowledgement batches for partition {partition} through both share APIs"
+)]
+async fn ordered_ack_requests(
+    acknowledgement_order: &mut AcknowledgementOrderScenario,
+    user: String,
+    partition: i32,
+    datatable: Vec<Vec<String>>,
+) {
+    use crate::handlers::test_support::{AcknowledgementBatchSetup, AcknowledgementCode};
+    let batches = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| AcknowledgementBatchSetup {
+            first_offset: krabka_log::Offset(cells[0].parse().expect("first offset")),
+            last_offset: krabka_log::Offset(cells[1].parse().expect("last offset")),
+            types: cells[2]
+                .split(',')
+                .filter(|kind| *kind != "none")
+                .map(|kind| AcknowledgementCode(kind.parse().expect("ack type")))
+                .collect(),
+        })
+        .collect();
+    let input = AcknowledgementPartitionSetup {
+        index: krabka_ids::PartitionIndex(partition),
+        batches,
+    };
+    let broker = &acknowledgement_order
+        .started
+        .as_ref()
+        .expect("acquired groups")
+        .broker;
+    let fetch = share_fetch()
+        .broker(broker)
+        .user(&user)
+        .group("fetch-order")
+        .topic_id(acknowledgement_order.topic_id)
+        .rows(vec![input.clone()])
+        .call()
+        .await;
+    let row = &fetch.responses[0].partitions[0];
+    acknowledgement_order.rows.push((
+        row.partition_index,
+        row.error_code,
+        row.acknowledge_error_code,
+        record_states(broker, "fetch-order", acknowledgement_order.topic_id).await,
+    ));
+    let acknowledge = share_acknowledge()
+        .broker(broker)
+        .user(&user)
+        .group("acknowledge-order")
+        .topic_id(acknowledgement_order.topic_id)
+        .partition(input)
+        .call()
+        .await;
+    let row = &acknowledge.responses[0].partitions[0];
+    acknowledgement_order.rows.push((
+        row.partition_index,
+        row.error_code,
+        codes::NONE,
+        record_states(broker, "acknowledge-order", acknowledgement_order.topic_id).await,
+    ));
+}
+#[rstest_bdd_macros::then("the share API rows and remaining acquired records are exactly")]
+async fn acknowledgement_order_results(
+    acknowledgement_order: &mut AcknowledgementOrderScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let expected = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            (
+                cells[1].parse().expect("partition"),
+                cells[2].parse().expect("fetch or acknowledge error"),
+                cells[3].parse().expect("piggyback acknowledge error"),
+                cells[4]
+                    .split(',')
+                    .filter(|state| *state != "none")
+                    .map(|state| match state {
+                        "acquired" => Acquired,
+                        other => panic!("unknown record state {other}"),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(acknowledgement_order.rows == expected);
+    acknowledgement_order
+        .started
+        .take()
+        .expect("started broker")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Authorized valid acknowledgements settle acquired records"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_0(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Topic denial precedes state mutation"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_1(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Batch validation precedes acknowledge ACL checks"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_2(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Reversed offsets are invalid"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_3(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Overlapping batches are invalid"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_4(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "A missing acknowledge type is invalid"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_5(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Per-offset type counts must match the range"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_6(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Unknown acknowledge types are invalid"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_7(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Renew requires the renewal request flag"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_8(acknowledgement_order: AcknowledgementOrderScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_ack_validation_order.feature",
+    name = "Metadata validation rejects a missing partition"
+)]
+#[tokio::test]
+async fn acknowledgement_order_case_9(acknowledgement_order: AcknowledgementOrderScenario) {}
 
 /// A denied topic row without acknowledgements in a request without any
 /// acknowledgement answers only the fetch error.

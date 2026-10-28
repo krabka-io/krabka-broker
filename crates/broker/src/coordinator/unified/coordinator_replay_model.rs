@@ -17,7 +17,6 @@ use {
         ModernGroupType, group_tombstone, member_tombstone, persisted_group,
         target_metadata_tombstone,
     },
-    crate::model_check::run_bfs,
     stateright::{Checker, Model, Property},
 };
 
@@ -31,7 +30,6 @@ const MAX_STATES: usize = 2_000_000;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 6_376;
 const WITNESS_CREATED_BY_CHILD: u8 = 1 << 0;
 const WITNESS_IGNORED_TOMBSTONE: u8 = 1 << 1;
 const WITNESS_FAILED_LOAD: u8 = 1 << 2;
@@ -299,13 +297,49 @@ impl Model for ReplayModel {
     }
 }
 
-#[test]
-fn coordinator_replay_log_orders_follow_kafka() {
-    let checker = run_bfs(ReplayModel, "coordinator_replay", MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
+use rstest_bdd_macros::{given, scenarios, then, when};
+#[derive(Default)]
+struct ReplayExploration {
+    model: Option<ReplayModel>,
+    checker: Option<Box<dyn Checker<ReplayModel>>>,
+}
+#[rstest::fixture]
+fn replay_exploration() -> ReplayExploration {
+    // Start this scenario with fresh inputs and observations.
+    ReplayExploration::default()
+}
+#[given("a consumer group replay model includes child records tombstones and Kafka deletion order")]
+fn coordinator_replay_model(replay_exploration: &mut ReplayExploration) {
+    replay_exploration.model = Some(ReplayModel);
+}
+#[when("breadth first search exhausts all bounded coordinator record orderings")]
+fn explore_coordinator_replay(replay_exploration: &mut ReplayExploration) {
+    replay_exploration.checker = Some(Box::new(
+        replay_exploration
+            .model
+            .take()
+            .expect("model prepared")
+            .checker()
+            .target_max_depth(MAX_DEPTH)
+            .target_state_count(MAX_STATES)
+            .spawn_bfs()
+            .join(),
+    ));
+}
+#[then(
+    "the search reaches exactly {states} unique states without exhausting its bounds and all replay properties hold"
+)]
+fn coordinator_replay_properties(replay_exploration: &ReplayExploration, states: usize) {
+    let checker = replay_exploration
+        .checker
+        .as_ref()
+        .expect("search completed");
+    assert2::assert!(checker.max_depth() < MAX_DEPTH);
+    assert2::assert!(checker.state_count() < MAX_STATES);
     assert2::assert!(
-        checker.unique_state_count() == PINNED_UNIQUE_STATES,
-        "unique-state count moved: the reachable set of this model changed"
+        checker.unique_state_count() == states,
+        "reachable state set changed"
     );
     checker.assert_properties();
 }
+scenarios!("tests/features/migrated/src/coordinator/unified/coordinator_replay_model.feature",fixtures=[replay_exploration:ReplayExploration]);

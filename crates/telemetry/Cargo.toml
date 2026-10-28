@@ -62,6 +62,10 @@ flate2 = { workspace = true }
 jemalloc_pprof = { version = "0.9", optional = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 mutants = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true, features = ["io-util", "net", "rt", "time", "macros", "rt-multi-thread", "sync"] }

@@ -155,46 +155,6 @@ async fn refused_start(dir: &TempDir, cluster_id: Uuid) -> RaftError {
     refused
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
-    let dir = TempDir::new().unwrap();
-    let cluster_id = Uuid::new_v4();
-
-    // The first boot has the flag on and finalizes the unstable level.
-    finalize_unstable_level(
-        &dir,
-        cluster_id,
-        finalize_unstable_metadata_version(),
-        vec![],
-    )
-    .await;
-
-    let metadata_dir = metadata_partition_dir(dir.path());
-    let before = protected_metadata_files(&metadata_dir);
-    assert!(!before.is_empty());
-
-    // With the flag off the node refuses the log, with Kafka's message.
-    let refused = refused_start(&dir, cluster_id).await;
-    check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
-    check!(refused.to_string() == format!("Encountered fatal fault: {REFUSAL}"));
-    check!(protected_metadata_files(&metadata_dir) == before);
-
-    // The refusal changed nothing on disk: the same log starts with the flag on.
-    let controller = Controller::start(
-        config()
-            .dir(&dir)
-            .cluster_id(cluster_id)
-            .mode(BootstrapMode::Rejoin)
-            .unstable(UnstableFeatureVersions::Enabled)
-            .call(),
-    )
-    .await
-    .expect("restart with the flag on");
-    wait_for_leader(&controller).await;
-    check!(controller.current_image().finalized_metadata_version() == Some(33));
-    controller.shutdown().await;
-}
-
 /// What the high-watermark file says when the node restarts.
 #[derive(Clone, Copy, Debug)]
 enum HighWatermarkFile {
@@ -227,18 +187,54 @@ const SHARE_VERSION_REFUSAL: &str = "Tried to apply FeatureLevelRecord \
 /// watermark below the finalized level. The refusal must still come before
 /// the engine writes anything: an engine that started would elect itself,
 /// append to the log, commit the level, and only then stop.
-#[yare::parameterized(
-    at_log_start = { HighWatermarkFile::AtLogStart },
-    missing = { HighWatermarkFile::Missing },
-    below_a_superseding_level = { HighWatermarkFile::BelowASupersedingLevel },
-)]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
-    high_watermark: HighWatermarkFile,
-) {
-    let dir = TempDir::new().unwrap();
-    let cluster_id = Uuid::new_v4();
-    let (level, then, refusal) = match high_watermark {
+use rstest_bdd_macros::{given, then, when};
+struct FeatureRecovery {
+    dir: TempDir,
+    cluster: Uuid,
+    before: BTreeMap<PathBuf, Vec<u8>>,
+    refusal: Option<RaftError>,
+    expected_refusal: &'static str,
+    controller: Option<ControllerHandle>,
+    fault: Option<String>,
+    channel_closed: Option<bool>,
+    rejected_change: Option<RaftError>,
+}
+#[rstest::fixture]
+fn recovery() -> FeatureRecovery {
+    // Start this scenario with fresh inputs and observations.
+
+    FeatureRecovery {
+        dir: TempDir::new().expect("metadata directory"),
+        cluster: Uuid::new_v4(),
+        before: BTreeMap::new(),
+        refusal: None,
+        expected_refusal: REFUSAL,
+        controller: None,
+        fault: None,
+        channel_closed: None,
+        rejected_change: None,
+    }
+}
+#[given("a stopped controller log finalized at unstable metadata version 33")]
+async fn unstable_log(recovery: &mut FeatureRecovery) {
+    finalize_unstable_level(
+        &recovery.dir,
+        recovery.cluster,
+        finalize_unstable_metadata_version(),
+        vec![],
+    )
+    .await;
+    recovery.before = protected_metadata_files(&metadata_partition_dir(recovery.dir.path()));
+}
+#[given("the finalized unstable log has recovered high watermark {watermark}")]
+async fn watermark_log(recovery: &mut FeatureRecovery, watermark: String) {
+    let watermark = match watermark.as_str() {
+        "at-log-start" => HighWatermarkFile::AtLogStart,
+        "missing" => HighWatermarkFile::Missing,
+        "below-superseding-level" => HighWatermarkFile::BelowASupersedingLevel,
+        _ => panic!("unknown high watermark condition"),
+    };
+    let (level, after, refusal) = match watermark {
         HighWatermarkFile::AtLogStart | HighWatermarkFile::Missing => {
             (finalize_unstable_metadata_version(), vec![], REFUSAL)
         }
@@ -248,44 +244,104 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
             SHARE_VERSION_REFUSAL,
         ),
     };
-    let at_level = finalize_unstable_level(&dir, cluster_id, level, then).await;
-
-    let metadata_dir = metadata_partition_dir(dir.path());
-    let high_watermark_path = metadata_dir.join("high-watermark");
-    match high_watermark {
-        // Version 0 of the file: the version, then the offset.
-        HighWatermarkFile::AtLogStart => fs::write(&high_watermark_path, "0\n0\n").unwrap(),
-        HighWatermarkFile::Missing => fs::remove_file(&high_watermark_path).unwrap(),
+    let at_level = finalize_unstable_level(&recovery.dir, recovery.cluster, level, after).await;
+    let path = metadata_partition_dir(recovery.dir.path()).join("high-watermark");
+    match watermark {
+        HighWatermarkFile::AtLogStart => fs::write(path, "0\n0\n").expect("cache log start"),
+        HighWatermarkFile::Missing => fs::remove_file(path).expect("remove watermark cache"),
         HighWatermarkFile::BelowASupersedingLevel => {
-            fs::write(&high_watermark_path, at_level).unwrap();
+            fs::write(path, at_level).expect("cache committed level");
         }
     }
-    let before = protected_metadata_files(&metadata_dir);
-
-    let refused = refused_start(&dir, cluster_id).await;
-    check!(matches!(&refused, RaftError::FatalFault(message) if message == refusal));
-    check!(protected_metadata_files(&metadata_dir) == before);
+    recovery.expected_refusal = refusal;
+    recovery.before = protected_metadata_files(&metadata_partition_dir(recovery.dir.path()));
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
-    let dir = TempDir::new().unwrap();
-    let controller = Controller::start(config().dir(&dir).cluster_id(Uuid::new_v4()).call())
-        .await
-        .expect("boot");
-    wait_for_leader(&controller).await;
-    let fatal = controller.watch_fatal();
+#[when("the controller rejoins with unstable features disabled")]
+async fn refuse_unstable_restart(recovery: &mut FeatureRecovery) {
+    recovery.refusal = Some(refused_start(&recovery.dir, recovery.cluster).await);
+}
+#[then(
+    "startup reports the exact unsupported feature fault before changing any protected metadata file"
+)]
+fn unchanged_refused_restart(recovery: &FeatureRecovery) {
+    let refused = recovery.refusal.as_ref().expect("restart attempted");
     check!(
-        fatal.borrow().is_none(),
-        "no fault before the level commits"
+        matches!(refused, RaftError::FatalFault(message) if message == recovery.expected_refusal)
     );
-
-    // The level commits and applies, since the check reads the image the engine
-    // publishes. Then the controller stops, and no later change is accepted.
+    check!(
+        refused.to_string() == format!("Encountered fatal fault: {}", recovery.expected_refusal)
+    );
+    check!(!recovery.before.is_empty());
+    check!(
+        protected_metadata_files(&metadata_partition_dir(recovery.dir.path())) == recovery.before
+    );
+}
+#[when("the same controller log rejoins with unstable features enabled")]
+async fn restart_unstable_enabled(recovery: &mut FeatureRecovery) {
+    let controller = Controller::start(
+        config()
+            .dir(&recovery.dir)
+            .cluster_id(recovery.cluster)
+            .mode(BootstrapMode::Rejoin)
+            .unstable(UnstableFeatureVersions::Enabled)
+            .call(),
+    )
+    .await
+    .expect("restart with unstable features");
+    wait_for_leader(&controller).await;
+    recovery.controller = Some(controller);
+}
+#[then("the recovered controller publishes finalized metadata version 33")]
+fn recovered_unstable_version(recovery: &FeatureRecovery) {
+    check!(
+        recovery
+            .controller
+            .as_ref()
+            .expect("controller restarted")
+            .current_image()
+            .finalized_metadata_version()
+            == Some(33)
+    );
+}
+#[given("a running controller with unstable features enabled {enabled}")]
+async fn live_feature_controller(recovery: &mut FeatureRecovery, enabled: bool) {
+    let policy = if enabled {
+        UnstableFeatureVersions::Enabled
+    } else {
+        UnstableFeatureVersions::Disabled
+    };
+    let controller = Controller::start(
+        config()
+            .dir(&recovery.dir)
+            .cluster_id(recovery.cluster)
+            .unstable(policy)
+            .call(),
+    )
+    .await
+    .expect("boot controller");
+    wait_for_leader(&controller).await;
+    recovery.controller = Some(controller);
+}
+#[then("the controller has not reported a fatal fault")]
+fn no_initial_fault(recovery: &FeatureRecovery) {
+    check!(
+        recovery
+            .controller
+            .as_ref()
+            .expect("controller running")
+            .watch_fatal()
+            .borrow()
+            .is_none()
+    );
+}
+#[when("metadata version 33 commits and subsequent submissions observe the controller stopping")]
+async fn commit_unsupported_live(recovery: &mut FeatureRecovery) {
+    let controller = recovery.controller.as_ref().expect("controller running");
+    let fatal = controller.watch_fatal();
     controller
         .submit_change(finalize_unstable_metadata_version())
         .await
-        .expect("commit the unsupported level");
+        .expect("commit unsupported level");
     let deadline = Instant::now() + Duration::from_secs(30);
     for probe in 0.. {
         let topic = MetadataRecord::V1Topic(single_partition_topic(
@@ -293,45 +349,87 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
             Uuid::new_v4(),
         ));
         if let Err(error) = controller.submit_change(vec![topic]).await {
-            check!(matches!(error, RaftError::Shutdown), "{error}");
+            recovery.rejected_change = Some(error);
             break;
         }
         assert!(
             Instant::now() <= deadline,
-            "the controller kept accepting changes at an unsupported level"
+            "controller continued accepting unsupported metadata"
         );
-        // intentional: the stop follows the image publication on another task,
-        // and nothing but a refused submit says that it has happened.
         time::sleep(Duration::from_millis(20)).await;
     }
-    // The refusal is on the fatal channel by the time a submit fails: the host
-    // that halts over it never sees the shutdown without the reason.
-    check!(fatal.borrow().as_deref() == Some(REFUSAL));
-    controller.shutdown().await;
+    recovery.fault = fatal.borrow().as_deref().map(str::to_owned);
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_that_stops_for_any_other_reason_reports_no_fault() {
-    let dir = TempDir::new().unwrap();
-    let controller = Controller::start(
-        config()
-            .dir(&dir)
-            .cluster_id(Uuid::new_v4())
-            .unstable(UnstableFeatureVersions::Enabled)
-            .call(),
-    )
-    .await
-    .expect("boot");
-    wait_for_leader(&controller).await;
-    // A level within the range is not a fault.
+#[then(
+    "the stopped controller rejects changes with Shutdown and publishes the unsupported feature reason"
+)]
+fn stopped_feature_fault(recovery: &FeatureRecovery) {
+    check!(matches!(
+        recovery.rejected_change,
+        Some(RaftError::Shutdown)
+    ));
+    check!(recovery.fault.as_deref() == Some(REFUSAL));
+}
+#[when("metadata version 33 commits and the supported controller shuts down normally")]
+async fn normal_feature_shutdown(recovery: &mut FeatureRecovery) {
+    let controller = recovery.controller.take().expect("controller running");
     controller
         .submit_change(finalize_unstable_metadata_version())
         .await
-        .expect("commit a supported level");
+        .expect("commit supported level");
     let mut fatal = controller.watch_fatal();
     controller.shutdown().await;
-
-    // The channel closes without ever carrying a value.
-    check!(fatal.changed().await.is_err());
-    check!(fatal.borrow().is_none());
+    recovery.channel_closed = Some(fatal.changed().await.is_err());
+    recovery.fault = fatal.borrow().as_deref().map(str::to_owned);
+}
+#[then("the fatal channel closes without ever reporting a fault")]
+fn normal_feature_fault(recovery: &FeatureRecovery) {
+    check!(recovery.channel_closed == Some(true));
+    check!(recovery.fault.is_none());
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a log finalized at an unstable level starts only with the flag on"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on(
+    recovery: FeatureRecovery,
+) {
+    if let Some(controller) = recovery.controller.take() {
+        controller.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a level above the recovered high watermark is refused before any write"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
+    recovery: FeatureRecovery,
+    watermark: String,
+) {
+    let _ = watermark;
+    if let Some(controller) = recovery.controller.take() {
+        controller.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a controller stops when it replays a level it does not support"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controller_stops_when_it_replays_a_level_it_does_not_support(recovery: FeatureRecovery) {
+    if let Some(controller) = recovery.controller.take() {
+        controller.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a controller that stops for any other reason reports no fault"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controller_that_stops_for_any_other_reason_reports_no_fault(recovery: FeatureRecovery) {
+    if let Some(controller) = recovery.controller.take() {
+        controller.shutdown().await;
+    }
 }

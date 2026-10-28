@@ -112,6 +112,7 @@ mod tests {
         assert2::{assert, check},
         bytes::{BufMut, Bytes, BytesMut},
         futures_util::{SinkExt, StreamExt},
+        std::io::Error,
         tokio::{
             io::AsyncWriteExt,
             net::{TcpListener, TcpStream},
@@ -143,29 +144,103 @@ mod tests {
         assert!(received.as_ref() == b"hello broker");
     }
 
-    #[test]
-    fn kafka_max_frame_size_is_one_hundred_mib() {
+    #[derive(Default)]
+    struct KafkaFrameScenario {
+        maximum: usize,
+        payload_length: usize,
+        input: BytesMut,
+        configured_maximum: Option<usize>,
+        decoded: Option<Result<Option<BytesMut>, Error>>,
+    }
+
+    #[rstest::fixture]
+    fn kafka_frame() -> KafkaFrameScenario {
+        // Keep kafka frame inputs and observations fresh for each scenario.
+        KafkaFrameScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("the network codec uses Kafka's default maximum frame size")]
+    fn kafka_frame_limit(kafka_frame: &mut KafkaFrameScenario) {
+        kafka_frame.maximum = DEFAULT_MAX_FRAME_BYTES;
+    }
+
+    #[rstest_bdd_macros::given(
+        "a complete Kafka frame carries {length} payload bytes filled with 165"
+    )]
+    fn complete_kafka_frame(kafka_frame: &mut KafkaFrameScenario, length: usize) {
+        kafka_frame.payload_length = length;
+        kafka_frame.input = BytesMut::with_capacity(4 + length);
+        kafka_frame
+            .input
+            .put_u32(u32::try_from(length).expect("payload length fits u32"));
+        kafka_frame.input.resize(4 + length, 0xA5);
+    }
+
+    #[rstest_bdd_macros::given(
+        "only a Kafka frame header declaring {length} payload bytes has arrived"
+    )]
+    fn oversized_kafka_header(kafka_frame: &mut KafkaFrameScenario, length: usize) {
+        kafka_frame.payload_length = length;
+        kafka_frame.input = BytesMut::with_capacity(4);
+        kafka_frame
+            .input
+            .put_u32(u32::try_from(length).expect("max frame length fits u32"));
+    }
+
+    #[rstest_bdd_macros::when("the network codec's configured frame limit is read")]
+    fn configured_kafka_frame_limit(kafka_frame: &mut KafkaFrameScenario) {
+        kafka_frame.configured_maximum =
+            Some(codec(kafka_frame.maximum).requests.max_frame_length());
+    }
+
+    #[rstest_bdd_macros::when("the network codec decodes the received Kafka frame bytes")]
+    fn decode_kafka_frame(kafka_frame: &mut KafkaFrameScenario) {
+        kafka_frame.decoded = Some(codec(kafka_frame.maximum).decode(&mut kafka_frame.input));
+    }
+
+    #[rstest_bdd_macros::then("the configured frame limit is 100 MiB or 104857600 bytes")]
+    fn kafka_maximum_frame_limit(kafka_frame: &KafkaFrameScenario) {
         assert!(DEFAULT_MAX_FRAME_BYTES == 100 * 1024 * 1024);
         assert!(DEFAULT_MAX_FRAME_BYTES == 104_857_600);
+        assert!(kafka_frame.configured_maximum == Some(104_857_600));
     }
 
-    #[test]
-    fn codec_decodes_frames_larger_than_tokio_default_but_within_kafka_max() {
-        let payload_len = 9 * 1024 * 1024;
-        assert!(payload_len < DEFAULT_MAX_FRAME_BYTES);
-
-        let mut bytes = BytesMut::with_capacity(4 + payload_len);
-        bytes.put_u32(u32::try_from(payload_len).expect("payload length fits u32"));
-        bytes.resize(4 + payload_len, 0xA5);
-
-        let decoded = codec(DEFAULT_MAX_FRAME_BYTES)
-            .decode(&mut bytes)
+    #[rstest_bdd_macros::then(
+        "the complete payload is delivered unchanged below Kafka's frame limit"
+    )]
+    fn decoded_kafka_frame(kafka_frame: &KafkaFrameScenario) {
+        assert!(kafka_frame.payload_length < kafka_frame.maximum);
+        let decoded = kafka_frame
+            .decoded
+            .as_ref()
+            .expect("decode was attempted")
+            .as_ref()
             .expect("decode")
+            .as_ref()
             .expect("frame");
-        check!(decoded.len() == payload_len);
+        check!(decoded.len() == kafka_frame.payload_length);
         check!(decoded[0] == 0xA5);
-        check!(decoded[payload_len - 1] == 0xA5);
+        check!(decoded[kafka_frame.payload_length - 1] == 0xA5);
     }
+
+    #[rstest_bdd_macros::then("the frame is rejected as too big before its payload arrives")]
+    fn refused_kafka_frame(kafka_frame: &KafkaFrameScenario) {
+        let error = kafka_frame
+            .decoded
+            .as_ref()
+            .expect("decode was attempted")
+            .as_ref()
+            .expect_err("oversized frame");
+        assert!(
+            error.to_string().contains("frame size too big"),
+            "unexpected error: {error}"
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/network/codec.feature",
+        fixtures = [kafka_frame: KafkaFrameScenario]
+    );
 
     #[test]
     fn codec_limits_requests_only_and_does_not_limit_responses() {
@@ -242,22 +317,6 @@ mod tests {
         check!(
             response_frame_length(len).ok() == accepted,
             "a {len}-byte response frame"
-        );
-    }
-
-    #[test]
-    fn codec_rejects_frames_over_kafka_max() {
-        let mut bytes = BytesMut::with_capacity(4);
-        bytes.put_u32(
-            u32::try_from(DEFAULT_MAX_FRAME_BYTES + 1).expect("max frame length fits u32"),
-        );
-
-        let err = codec(DEFAULT_MAX_FRAME_BYTES)
-            .decode(&mut bytes)
-            .expect_err("oversized frame");
-        assert!(
-            err.to_string().contains("frame size too big"),
-            "unexpected error: {err}"
         );
     }
 }

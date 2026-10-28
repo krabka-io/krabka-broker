@@ -382,29 +382,64 @@ fn parse_metadata_raft_command_queue_capacity(value: &str) -> Result<usize, Stri
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::test_support::env_guard, assert2::assert,
-        krabka_telemetry::profiling::ProfilingConfig, krabka_units::secs, std::path::Path,
+        super::*,
+        crate::test_support::env_guard,
+        assert2::assert,
+        krabka_telemetry::profiling::ProfilingConfig,
+        krabka_units::secs,
+        std::{path::Path, sync::MutexGuard},
     };
 
-    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
-    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
-    /// `java.util.UUID` form.
-    #[test]
-    fn cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
-        let _guard = env_guard();
-        let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    struct ClusterIdCommand {
+        _environment: MutexGuard<'static, ()>,
+        value: String,
+        parsed: Option<Result<Args, clap::Error>>,
+    }
 
-        let base64 =
-            Args::try_parse_from(["krabka-broker", "--cluster-id", "AQIDBAUGBwgJCgsMDQ4PEA"])
-                .expect("parse base64 cluster id");
-        assert!(base64.cluster_id == Some(id));
+    #[rstest::fixture]
+    fn cluster_id_command() -> ClusterIdCommand {
+        // Start this scenario with fresh inputs and observations.
 
-        let hyphenated = Args::try_parse_from(["krabka-broker", "--cluster-id", &id.to_string()])
-            .expect("parse hyphenated cluster id");
-        assert!(hyphenated.cluster_id == Some(id));
+        ClusterIdCommand {
+            _environment: env_guard(),
+            value: String::new(),
+            parsed: None,
+        }
+    }
 
+    #[rstest_bdd_macros::given("the operator supplies cluster ID {value}")]
+    fn cluster_id_argument(cluster_id_command: &mut ClusterIdCommand, value: String) {
+        cluster_id_command.value = value;
+    }
+
+    #[rstest_bdd_macros::when("the broker parses the cluster ID command line")]
+    fn parse_cluster_id_command(cluster_id_command: &mut ClusterIdCommand) {
+        cluster_id_command.parsed = Some(Args::try_parse_from([
+            "krabka-broker",
+            "--cluster-id",
+            &cluster_id_command.value,
+        ]));
+    }
+
+    #[rstest_bdd_macros::then("the configured cluster UUID is {expected}")]
+    fn configured_cluster_id(cluster_id_command: &ClusterIdCommand, expected: Uuid) {
+        let parsed = cluster_id_command
+            .parsed
+            .as_ref()
+            .expect("the command line was parsed")
+            .as_ref()
+            .expect("the cluster ID must be accepted");
+        assert!(parsed.cluster_id == Some(expected));
+    }
+
+    #[rstest_bdd_macros::then("the malformed cluster ID is rejected")]
+    fn rejected_cluster_id(cluster_id_command: &ClusterIdCommand) {
         assert!(
-            Args::try_parse_from(["krabka-broker", "--cluster-id", "not-a-cluster-id"]).is_err()
+            cluster_id_command
+                .parsed
+                .as_ref()
+                .expect("the command line was parsed")
+                .is_err()
         );
     }
 
@@ -662,4 +697,5 @@ mod tests {
         otel-exporter-otlp-timeout-secs OTEL_EXPORTER_OTLP_TIMEOUT_SECS [] +++++++++++++++++\n\
         krabka-otlp-heartbeat-interval KRABKA_OTLP_HEARTBEAT_INTERVAL [] +------++--------\n\
 ";
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/bin/broker/cli.feature", fixtures = [cluster_id_command: ClusterIdCommand]);
 }

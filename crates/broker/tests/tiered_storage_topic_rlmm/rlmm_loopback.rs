@@ -7,55 +7,94 @@
 
 use {
     crate::{
+        TopicRlmmScenario,
         rlmm_cluster::{await_activation, build_client, start_broker_with_topic_rlmm},
-        rlmm_round_trip::copy_then_fetch_round_trip,
-        run_broker_test,
+        rlmm_round_trip::{await_archived_round_trip, prepare_round_trip, read_first_value},
+        topic_rlmm,
     },
     assert2::assert,
 };
 
 const METADATA_TOPIC: &str = "__remote_log_metadata";
 
-/// The bootstrap completes against the loopback listener. The activation
-/// gauge flips and the broker provisions the `__remote_log_metadata` topic.
-#[test]
-fn topic_rlmm_activates_against_loopback() {
-    run_broker_test(topic_rlmm_activates_against_loopback_case());
+#[rstest_bdd_macros::given(
+    "a topic-backed metadata manager bootstraps against its broker's plaintext loopback listener"
+)]
+fn plaintext_loopback_manager(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.cluster = Some(topic_rlmm.runtime.block_on(start_broker_with_topic_rlmm()));
 }
 
-async fn topic_rlmm_activates_against_loopback_case() {
-    let (broker, _log_dir, _remote_dir) = start_broker_with_topic_rlmm().await;
+#[rstest_bdd_macros::when("the topic-backed manager finishes activation")]
+fn activate_loopback_manager(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm
+        .runtime
+        .block_on(await_activation(topic_rlmm.broker()));
+}
 
-    await_activation(&broker).await;
+#[rstest_bdd_macros::then("the broker hosts __remote_log_metadata partition 0")]
+fn loopback_metadata_partition(topic_rlmm: &TopicRlmmScenario) {
     assert!(
-        broker.has_partition(METADATA_TOPIC, 0),
+        topic_rlmm.broker().has_partition(METADATA_TOPIC, 0),
         "__remote_log_metadata-0 should be hosted after bootstrap"
     );
-
-    broker.shutdown().await;
 }
 
-/// Produce enough to seal several segments, wait for the RLM copy task to
-/// tier one through the topic-backed RLMM, then read the records back at
-/// offset 0. That RLMM publishes `CopySegment*` events to
-/// `__remote_log_metadata` over the loopback and consumes them back to update
-/// its cache.
-#[test]
-fn topic_rlmm_copy_then_fetch_round_trip() {
-    run_broker_test(topic_rlmm_copy_then_fetch_round_trip_case());
+#[rstest_bdd_macros::when(
+    "80 records are appended to {topic} with 1-KiB segments and one byte local retention"
+)]
+fn append_loopback_records(topic_rlmm: &mut TopicRlmmScenario, topic: String) {
+    topic_rlmm.topic = topic;
+    if topic_rlmm.client.is_none() {
+        topic_rlmm.client = Some(
+            topic_rlmm
+                .runtime
+                .block_on(build_client(topic_rlmm.broker())),
+        );
+    }
+    topic_rlmm.runtime.block_on(prepare_round_trip(
+        topic_rlmm.broker(),
+        topic_rlmm.client(),
+        &topic_rlmm.topic,
+    ));
 }
 
-async fn topic_rlmm_copy_then_fetch_round_trip_case() {
-    const TOPIC: &str = "tiered-topic-rlmm-itest";
-
-    let (broker, _log_dir, remote_dir) = start_broker_with_topic_rlmm().await;
-    await_activation(&broker).await;
-
-    let client = build_client(&broker).await;
-    copy_then_fetch_round_trip(&broker, &client, remote_dir.path(), TOPIC).await;
-    // Close the test client before broker shutdown; shutdown drains active
-    // listener connections, so leaving the client alive can make nextest
-    // report this test as slow while waiting for connection tasks to exit.
-    drop(client);
-    broker.shutdown().await;
+#[rstest_bdd_macros::then("at least one completed segment is present in the remote archive")]
+fn loopback_archived_records(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm
+        .runtime
+        .block_on(await_archived_round_trip(topic_rlmm.remote_dir()));
 }
+
+#[rstest_bdd_macros::when("Fetch reads offset 0 through the topic-backed metadata manager")]
+fn fetch_loopback_records(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm.first_value.set(
+        topic_rlmm
+            .runtime
+            .block_on(read_first_value(topic_rlmm.client(), &topic_rlmm.topic)),
+    );
+}
+
+#[rstest_bdd_macros::then("the first fetched record value is test-record-0")]
+fn loopback_first_record(topic_rlmm: &TopicRlmmScenario) {
+    assert!(
+        topic_rlmm
+            .first_value
+            .get()
+            .expect("offset zero fetched")
+            .as_deref()
+            == Some(b"test-record-0".as_slice()),
+        "offset 0 should read back the first produced record"
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_loopback.feature",
+    name = "topic rlmm activates against loopback"
+)]
+fn topic_rlmm_activates_against_loopback(topic_rlmm: TopicRlmmScenario) { topic_rlmm.shutdown(); }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_loopback.feature",
+    name = "topic rlmm copy then fetch round trip"
+)]
+fn topic_rlmm_copy_then_fetch_round_trip(topic_rlmm: TopicRlmmScenario) { topic_rlmm.shutdown(); }

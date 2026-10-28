@@ -12,6 +12,7 @@ crate_library(name = "log")
 crate_bench(lib = "log")
 
 crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
     docker = {"integration": ["cp_kafka_6_1_1"]},
     lib = "log",
     # ~830 mutants, each a rebuild plus a test run against a ~4s baseline. At the

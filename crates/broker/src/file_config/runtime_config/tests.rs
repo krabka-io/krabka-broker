@@ -298,96 +298,6 @@ fn runtime_file_config_accepts_a_zero_classic_group_initial_rebalance_delay() {
     assert!(cfg.validate().is_ok());
 }
 
-/// Kafka's defaults are `sasl.server.max.receive.size` = 524288 and
-/// `connection.failed.authentication.delay.ms` = 100. The delay is
-/// `atLeast(0)`, so zero is a value and turns the delay off, and a negative
-/// one is an error.
-#[test]
-fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
-    let defaults = BrokerConfig::default();
-    assert!(defaults.sasl_server_max_receive.bytes_i64() == 524_288);
-    assert!(defaults.connection_failed_authentication_delay == millis(100));
-
-    let cases = [
-        (
-            "[runtime]\nsasl_server_max_receive = \"64KiB\"\nconnection_failed_authentication_delay = \"0ms\"\n",
-            bytes(65_536),
-            Duration::ZERO,
-        ),
-        (
-            "[runtime]\nconnection_failed_authentication_delay = \"250ms\"\n",
-            bytes(524_288),
-            Duration::from_millis(250),
-        ),
-    ];
-    for (source, want_limit, want_delay) in cases {
-        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).expect("apply runtime config");
-        assert!(cfg.sasl_server_max_receive == want_limit, "{source}");
-        assert!(cfg.failed_authentication_delay() == want_delay, "{source}");
-    }
-
-    let file: FileConfig =
-        toml::from_str("[runtime]\nconnection_failed_authentication_delay = \"-1ms\"\n")
-            .expect("parse runtime config");
-    let error = file
-        .apply_to(&mut BrokerConfig::default())
-        .expect_err("a negative delay must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("connection_failed_authentication_delay")
-    );
-}
-
-/// The loader records which Kafka keys the `[runtime]` table named, whatever
-/// their values, so `DescribeConfigs` reports a supplied setting at
-/// `STATIC_BROKER_CONFIG` even at Kafka's default. A table that names none
-/// records none, a field that is not a Kafka key records nothing, and a second
-/// table applied afterwards, as the command-line overlay is, adds to the first.
-#[test]
-fn the_runtime_table_records_the_kafka_keys_it_named() {
-    let recorded = |sources: &[&str]| -> Vec<&'static str> {
-        let mut cfg = BrokerConfig::default();
-        for source in sources {
-            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
-            file.apply_to(&mut cfg).expect("apply runtime config");
-        }
-        cfg.static_config_origins
-            .supplied_kafka_keys
-            .into_iter()
-            .collect()
-    };
-
-    assert!(
-        (
-            recorded(&["[runtime]\n"]),
-            recorded(&["[runtime]\ncleaner_interval = \"7s\"\n"]),
-            recorded(&[
-                "[runtime]\nconsumer_group_session_timeout = \"45s\"\nshare_group_max_size = 200\n\
-                 streams_group_rack_aware_assignment_tags = [\"rack\"]\n"
-            ]),
-            recorded(&[
-                "[runtime]\nconsumer_group_session_timeout = \"45s\"\n",
-                "[runtime]\nsocket_send_buffer = \"1MiB\"\n",
-            ]),
-        ) == (
-            Vec::new(),
-            Vec::new(),
-            vec![
-                "group.consumer.session.timeout.ms",
-                "group.share.max.size",
-                "group.streams.rack.aware.assignment.tags",
-            ],
-            vec![
-                "group.consumer.session.timeout.ms",
-                "socket.send.buffer.bytes"
-            ],
-        )
-    );
-}
-
 /// The five keys of Kafka's `MetadataLogConfig` set the whole of
 /// `BrokerConfig::metadata_log` together, and the loader records each Kafka
 /// key the table named, so `DescribeConfigs` reports it at
@@ -432,3 +342,88 @@ metadata_max_idle_interval = "0ms"
         )
     );
 }
+
+#[derive(Default)]
+struct RuntimeFileApplication {
+    sources: Vec<String>,
+    applied: Option<Result<BrokerConfig, String>>,
+}
+
+#[rstest::fixture]
+fn runtime_file_application() -> RuntimeFileApplication {
+    // Overlays and provenance are isolated to one broker configuration.
+    RuntimeFileApplication::default()
+}
+
+#[rstest_bdd_macros::given("a runtime configuration file contains:")]
+fn supplied_runtime_configuration(
+    runtime_file_application: &mut RuntimeFileApplication,
+    docstring: String,
+) {
+    runtime_file_application.sources.push(docstring);
+}
+
+#[rstest_bdd_macros::when("the runtime files are applied in order to a default broker")]
+fn apply_runtime_configuration(runtime_file_application: &mut RuntimeFileApplication) {
+    assert!(!runtime_file_application.sources.is_empty());
+    let mut config = BrokerConfig::default();
+    for source in &runtime_file_application.sources {
+        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+        if let Err(error) = file.apply_to(&mut config) {
+            runtime_file_application.applied = Some(Err(error.to_string()));
+            return;
+        }
+    }
+    runtime_file_application.applied = Some(Ok(config));
+}
+
+#[rstest_bdd_macros::then(
+    "SASL accepts at most {limit} bytes and failed authentication waits {delay} milliseconds"
+)]
+fn runtime_sasl_limits(runtime_file_application: &RuntimeFileApplication, limit: u64, delay: u32) {
+    let config = runtime_file_application
+        .applied
+        .as_ref()
+        .expect("runtime files were applied")
+        .as_ref()
+        .expect("valid SASL configuration");
+    assert!(config.sasl_server_max_receive.bytes_u64() == limit);
+    assert!(config.connection_failed_authentication_delay == millis(delay));
+    assert!(config.failed_authentication_delay() == Duration::from_millis(u64::from(delay)));
+}
+
+#[rstest_bdd_macros::then("runtime application refuses a field named {field}")]
+fn runtime_application_refusal(runtime_file_application: &RuntimeFileApplication, field: String) {
+    let Err(error) = runtime_file_application
+        .applied
+        .as_ref()
+        .expect("runtime files were applied")
+    else {
+        panic!("runtime configuration must be refused");
+    };
+    assert!(error.contains(&field));
+}
+
+#[rstest_bdd_macros::then("the supplied Kafka configuration key origins are JSON {keys}")]
+fn runtime_configuration_origins(runtime_file_application: &RuntimeFileApplication, keys: String) {
+    let config = runtime_file_application
+        .applied
+        .as_ref()
+        .expect("runtime files were applied")
+        .as_ref()
+        .expect("valid runtime configuration");
+    let actual: Vec<_> = config
+        .static_config_origins
+        .supplied_kafka_keys
+        .iter()
+        .copied()
+        .collect();
+    let expected: Vec<String> =
+        serde_json::from_str(&keys).expect("explicit ordered Kafka key list");
+    assert!(actual == expected);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/file_config/runtime_config/tests",
+    fixtures = [runtime_file_application: RuntimeFileApplication]
+);

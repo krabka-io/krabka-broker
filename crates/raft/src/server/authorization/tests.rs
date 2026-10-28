@@ -48,38 +48,6 @@ use {
 
 const MESSAGE: &str = "Cluster authorization failed.";
 
-/// Kafka's `ControllerApis` operation for each api that the controller
-/// listener answers itself, and no operation for the apis that a broker
-/// handler authorizes.
-#[yare::parameterized(
-    fetch = { api_key::FETCH, Some(ClusterOperation::ClusterAction) },
-    vote = { api_key::VOTE, Some(ClusterOperation::ClusterAction) },
-    begin_quorum_epoch = { api_key::BEGIN_QUORUM_EPOCH, Some(ClusterOperation::ClusterAction) },
-    end_quorum_epoch = { api_key::END_QUORUM_EPOCH, Some(ClusterOperation::ClusterAction) },
-    fetch_snapshot = { api_key::FETCH_SNAPSHOT, Some(ClusterOperation::ClusterAction) },
-    controller_registration = { 70, Some(ClusterOperation::ClusterAction) },
-    update_raft_voter = { 82, Some(ClusterOperation::ClusterAction) },
-    assign_replicas_to_dirs = { 73, Some(ClusterOperation::ClusterAction) },
-    submit_change = { API_KEY_SUBMIT_CHANGE, Some(ClusterOperation::ClusterAction) },
-    metadata_fetch = { API_KEY_METADATA_FETCH, Some(ClusterOperation::ClusterAction) },
-    delegation_token_mutation = {
-        API_KEY_DELEGATION_TOKEN_MUTATION,
-        Some(ClusterOperation::ClusterAction),
-    },
-    add_raft_voter = { 80, Some(ClusterOperation::Alter) },
-    remove_raft_voter = { 81, Some(ClusterOperation::Alter) },
-    describe_cluster = { 60, Some(ClusterOperation::Alter) },
-    describe_quorum = { 55, Some(ClusterOperation::Describe) },
-    api_versions = { 18, None },
-    create_topics = { 19, None },
-    envelope = { 58, None },
-    broker_registration = { 62, None },
-    broker_heartbeat = { 63, None },
-)]
-fn each_controller_api_needs_the_kafka_operation(key: i16, operation: Option<ClusterOperation>) {
-    check!(required_operation(key) == operation);
-}
-
 /// The refusal of a `SubmitChange` without `ClusterAction`.
 fn submit_change_refusal() -> Refusal {
     Refusal::SubmitChange(KrabkaSubmitChangeResponse {
@@ -115,20 +83,6 @@ struct RefusalCase {
     version: i16,
     body: Bytes,
     expected: Refusal,
-}
-
-fn check_refusal_cases(cases: impl IntoIterator<Item = RefusalCase>) {
-    for RefusalCase {
-        name,
-        api,
-        version,
-        body,
-        expected,
-    } in cases
-    {
-        let bytes = refusal(api, version, &body).expect("encode the refusal");
-        check!(decode(api, version, &bytes) == expected, "{name}");
-    }
 }
 
 fn decode(api: i16, version: i16, bytes: &[u8]) -> Refusal {
@@ -199,222 +153,6 @@ fn fetch_request(version: i16) -> Bytes {
     let mut body = BytesMut::new();
     request.encode(&mut body, version).unwrap();
     body.freeze()
-}
-
-/// Each refusal is the `getErrorResponse` of its Kafka api with
-/// `CLUSTER_AUTHORIZATION_FAILED`, and the krabka-private apis refuse in
-/// their own response.
-#[test]
-fn fetch_and_quorum_refusals_are_kafka_error_responses() {
-    // `FetchResponse.partitionResponse`: its empty, non-null records decode
-    // as an empty pre-v2 payload.
-    let fetch_row = |partition_index| fetch_response::PartitionData {
-        partition_index,
-        error_code: 31,
-        high_watermark: -1,
-        records: Some(RecordsPayload::Legacy(Bytes::new())),
-        ..Default::default()
-    };
-    let cases = [
-        RefusalCase {
-            name: "Fetch before v13 names every partition",
-            api: api_key::FETCH,
-            version: 12,
-            body: fetch_request(12),
-            expected: Refusal::Fetch(FetchResponse {
-                error_code: 31,
-                session_id: 7,
-                responses: vec![FetchableTopicResponse {
-                    topic: "__cluster_metadata".to_owned(),
-                    // Fetch carries topic ids from v13 on.
-                    topic_id: WireUuid([0; 16]),
-                    partitions: vec![fetch_row(0), fetch_row(1)],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "Fetch at exactly v13 has only the top-level error",
-            api: api_key::FETCH,
-            version: 13,
-            body: fetch_request(13),
-            expected: Refusal::Fetch(FetchResponse {
-                error_code: 31,
-                session_id: 7,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "Fetch from v13 has only the top-level error",
-            api: api_key::FETCH,
-            version: 17,
-            body: fetch_request(17),
-            expected: Refusal::Fetch(FetchResponse {
-                error_code: 31,
-                session_id: 7,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "Vote",
-            api: api_key::VOTE,
-            version: 2,
-            body: Bytes::new(),
-            expected: Refusal::Vote(VoteResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "BeginQuorumEpoch",
-            api: api_key::BEGIN_QUORUM_EPOCH,
-            version: 1,
-            body: Bytes::new(),
-            expected: Refusal::BeginQuorumEpoch(BeginQuorumEpochResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "EndQuorumEpoch",
-            api: api_key::END_QUORUM_EPOCH,
-            version: 1,
-            body: Bytes::new(),
-            expected: Refusal::EndQuorumEpoch(EndQuorumEpochResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "FetchSnapshot",
-            api: api_key::FETCH_SNAPSHOT,
-            version: 1,
-            body: Bytes::new(),
-            expected: Refusal::FetchSnapshot(FetchSnapshotResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-    ];
-    check_refusal_cases(cases);
-}
-
-#[test]
-fn admin_and_private_refusals_are_kafka_error_responses() {
-    let private_submit = KrabkaSubmitChangeResponse {
-        error_code: 31,
-        leader_hint: -1,
-        result: Bytes::new(),
-    };
-    let cases = [
-        RefusalCase {
-            name: "AssignReplicasToDirs",
-            api: 73,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::AssignReplicasToDirs(AssignReplicasToDirsResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "ControllerRegistration",
-            api: 70,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::ControllerRegistration(ControllerRegistrationResponse {
-                error_code: 31,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "UpdateRaftVoter",
-            api: 82,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::UpdateRaftVoter(UpdateRaftVoterResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "AddRaftVoter",
-            api: 80,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::AddRaftVoter(AddRaftVoterResponse {
-                error_code: 31,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "RemoveRaftVoter",
-            api: 81,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::RemoveRaftVoter(RemoveRaftVoterResponse {
-                error_code: 31,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "DescribeCluster",
-            api: 60,
-            version: 1,
-            body: Bytes::new(),
-            expected: Refusal::DescribeCluster(DescribeClusterResponse {
-                error_code: 31,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "DescribeQuorum",
-            api: 55,
-            version: 2,
-            body: Bytes::new(),
-            expected: Refusal::DescribeQuorum(DescribeQuorumResponse {
-                error_code: 31,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }),
-        },
-        RefusalCase {
-            name: "SubmitChange",
-            api: API_KEY_SUBMIT_CHANGE,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::SubmitChange(private_submit.clone()),
-        },
-        RefusalCase {
-            name: "DelegationTokenMutation",
-            api: API_KEY_DELEGATION_TOKEN_MUTATION,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::SubmitChange(private_submit),
-        },
-        RefusalCase {
-            name: "MetadataFetch",
-            api: API_KEY_METADATA_FETCH,
-            version: 0,
-            body: Bytes::new(),
-            expected: Refusal::MetadataFetch(KrabkaMetadataFetchResponse {
-                error_code: 31,
-                leader_hint: -1,
-                leader_epoch: -1,
-                log_start_offset: -1,
-                high_watermark: -1,
-                quorum_high_watermark: -1,
-                snapshot_id: None,
-                records: Bytes::new(),
-            }),
-        },
-    ];
-    check_refusal_cases(cases);
 }
 
 /// Grants that allow exactly the listed operations.
@@ -656,3 +394,344 @@ async fn a_denied_request_never_reaches_the_engine() {
             .expect("the connection ends cleanly at EOF");
     }
 }
+
+fn fetch_and_quorum_refusal_fixtures() -> Vec<RefusalCase> {
+    // `FetchResponse.partitionResponse`: its empty, non-null records decode
+    // as an empty pre-v2 payload.
+    let fetch_row = |partition_index| fetch_response::PartitionData {
+        partition_index,
+        error_code: 31,
+        high_watermark: -1,
+        records: Some(RecordsPayload::Legacy(Bytes::new())),
+        ..Default::default()
+    };
+    let cases = [
+        RefusalCase {
+            name: "Fetch before v13 names every partition",
+            api: api_key::FETCH,
+            version: 12,
+            body: fetch_request(12),
+            expected: Refusal::Fetch(FetchResponse {
+                error_code: 31,
+                session_id: 7,
+                responses: vec![FetchableTopicResponse {
+                    topic: "__cluster_metadata".to_owned(),
+                    // Fetch carries topic ids from v13 on.
+                    topic_id: WireUuid([0; 16]),
+                    partitions: vec![fetch_row(0), fetch_row(1)],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "Fetch at exactly v13 has only the top-level error",
+            api: api_key::FETCH,
+            version: 13,
+            body: fetch_request(13),
+            expected: Refusal::Fetch(FetchResponse {
+                error_code: 31,
+                session_id: 7,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "Fetch from v13 has only the top-level error",
+            api: api_key::FETCH,
+            version: 17,
+            body: fetch_request(17),
+            expected: Refusal::Fetch(FetchResponse {
+                error_code: 31,
+                session_id: 7,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "Vote",
+            api: api_key::VOTE,
+            version: 2,
+            body: Bytes::new(),
+            expected: Refusal::Vote(VoteResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "BeginQuorumEpoch",
+            api: api_key::BEGIN_QUORUM_EPOCH,
+            version: 1,
+            body: Bytes::new(),
+            expected: Refusal::BeginQuorumEpoch(BeginQuorumEpochResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "EndQuorumEpoch",
+            api: api_key::END_QUORUM_EPOCH,
+            version: 1,
+            body: Bytes::new(),
+            expected: Refusal::EndQuorumEpoch(EndQuorumEpochResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "FetchSnapshot",
+            api: api_key::FETCH_SNAPSHOT,
+            version: 1,
+            body: Bytes::new(),
+            expected: Refusal::FetchSnapshot(FetchSnapshotResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+    ];
+    Vec::from(cases)
+}
+
+fn admin_and_private_refusal_fixtures() -> Vec<RefusalCase> {
+    let private_submit = KrabkaSubmitChangeResponse {
+        error_code: 31,
+        leader_hint: -1,
+        result: Bytes::new(),
+    };
+    let cases = [
+        RefusalCase {
+            name: "AssignReplicasToDirs",
+            api: 73,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::AssignReplicasToDirs(AssignReplicasToDirsResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "ControllerRegistration",
+            api: 70,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::ControllerRegistration(ControllerRegistrationResponse {
+                error_code: 31,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "UpdateRaftVoter",
+            api: 82,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::UpdateRaftVoter(UpdateRaftVoterResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "AddRaftVoter",
+            api: 80,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::AddRaftVoter(AddRaftVoterResponse {
+                error_code: 31,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "RemoveRaftVoter",
+            api: 81,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::RemoveRaftVoter(RemoveRaftVoterResponse {
+                error_code: 31,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "DescribeCluster",
+            api: 60,
+            version: 1,
+            body: Bytes::new(),
+            expected: Refusal::DescribeCluster(DescribeClusterResponse {
+                error_code: 31,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "DescribeQuorum",
+            api: 55,
+            version: 2,
+            body: Bytes::new(),
+            expected: Refusal::DescribeQuorum(DescribeQuorumResponse {
+                error_code: 31,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }),
+        },
+        RefusalCase {
+            name: "SubmitChange",
+            api: API_KEY_SUBMIT_CHANGE,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::SubmitChange(private_submit.clone()),
+        },
+        RefusalCase {
+            name: "DelegationTokenMutation",
+            api: API_KEY_DELEGATION_TOKEN_MUTATION,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::SubmitChange(private_submit),
+        },
+        RefusalCase {
+            name: "MetadataFetch",
+            api: API_KEY_METADATA_FETCH,
+            version: 0,
+            body: Bytes::new(),
+            expected: Refusal::MetadataFetch(KrabkaMetadataFetchResponse {
+                error_code: 31,
+                leader_hint: -1,
+                leader_epoch: -1,
+                log_start_offset: -1,
+                high_watermark: -1,
+                quorum_high_watermark: -1,
+                snapshot_id: None,
+                records: Bytes::new(),
+            }),
+        },
+    ];
+    Vec::from(cases)
+}
+
+use {
+    rstest::fixture,
+    rstest_bdd::{Slot, datatable::Rows},
+    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+};
+
+struct ControllerAuthorization {
+    api: Option<i16>,
+    required: Slot<Option<ClusterOperation>>,
+    requests: Vec<RefusalCase>,
+    responses: Option<Vec<Bytes>>,
+}
+
+#[fixture]
+fn authorization() -> ControllerAuthorization {
+    // Start this scenario with fresh inputs and observations.
+
+    ControllerAuthorization {
+        api: None,
+        required: Slot::default(),
+        requests: Vec::new(),
+        responses: None,
+    }
+}
+
+fn controller_api(name: &str) -> i16 {
+    match name {
+        "Fetch" => api_key::FETCH,
+        "Vote" => api_key::VOTE,
+        "BeginQuorumEpoch" => api_key::BEGIN_QUORUM_EPOCH,
+        "EndQuorumEpoch" => api_key::END_QUORUM_EPOCH,
+        "FetchSnapshot" => api_key::FETCH_SNAPSHOT,
+        "ControllerRegistration" => 70,
+        "UpdateRaftVoter" => 82,
+        "AssignReplicasToDirs" => 73,
+        "SubmitChange" => API_KEY_SUBMIT_CHANGE,
+        "MetadataFetch" => API_KEY_METADATA_FETCH,
+        "DelegationTokenMutation" => API_KEY_DELEGATION_TOKEN_MUTATION,
+        "AddRaftVoter" => 80,
+        "RemoveRaftVoter" => 81,
+        "DescribeCluster" => 60,
+        "DescribeQuorum" => 55,
+        "ApiVersions" => 18,
+        "CreateTopics" => 19,
+        "Envelope" => 58,
+        "BrokerRegistration" => 62,
+        "BrokerHeartbeat" => 63,
+        _ => panic!("unknown controller API fixture: {name}"),
+    }
+}
+
+#[given("controller listener API {api}")]
+fn requested_controller_api(authorization: &mut ControllerAuthorization, api: String) {
+    authorization.api = Some(controller_api(&api));
+}
+
+#[when("the controller listener resolves the API's required cluster operation")]
+fn required_cluster_operation(authorization: &mut ControllerAuthorization) {
+    authorization.required.set(required_operation(
+        authorization.api.expect("a controller API was given"),
+    ));
+}
+
+#[then("the controller API requires {operation}")]
+fn required_api_operation(authorization: &ControllerAuthorization, operation: String) {
+    let expected = match operation.as_str() {
+        "ClusterAction" => Some(ClusterOperation::ClusterAction),
+        "Alter" => Some(ClusterOperation::Alter),
+        "Describe" => Some(ClusterOperation::Describe),
+        "broker-handler-authorization" => None,
+        _ => panic!("unknown required cluster operation: {operation}"),
+    };
+    check!(authorization.required.get() == Some(expected));
+}
+
+#[derive(DataTableRow)]
+struct ControllerRequestRow {
+    api: String,
+    version: i16,
+}
+
+#[given("the controller receives these authorization-refusal request shapes:")]
+fn controller_refusal_requests(
+    authorization: &mut ControllerAuthorization,
+    #[datatable] rows: Rows<ControllerRequestRow>,
+) {
+    let mut fixtures = fetch_and_quorum_refusal_fixtures();
+    fixtures.extend(admin_and_private_refusal_fixtures());
+    for row in rows {
+        let api = controller_api(&row.api);
+        let index = fixtures
+            .iter()
+            .position(|fixture| fixture.api == api && fixture.version == row.version)
+            .expect("the feature names a concrete request fixture");
+        authorization.requests.push(fixtures.remove(index));
+    }
+}
+
+#[when("the controller encodes ClusterAuthorizationFailed for every requested API")]
+fn refuse_controller_requests(authorization: &mut ControllerAuthorization) {
+    authorization.responses = Some(
+        authorization
+            .requests
+            .iter()
+            .map(|request| {
+                refusal(request.api, request.version, &request.body).expect("encode the refusal")
+            })
+            .collect(),
+    );
+}
+
+#[then("every refusal matches the complete Kafka response layout and consumes every encoded byte")]
+fn exact_controller_refusals(authorization: &ControllerAuthorization) {
+    let responses = authorization
+        .responses
+        .as_ref()
+        .expect("authorization refusals were encoded");
+    check!(!authorization.requests.is_empty());
+    check!(responses.len() == authorization.requests.len());
+    for (request, response) in authorization.requests.iter().zip(responses) {
+        check!(
+            decode(request.api, request.version, response) == request.expected,
+            "{}",
+            request.name
+        );
+    }
+}
+
+scenarios!("tests/features/migrated/src/server/authorization/tests.feature", fixtures = [authorization: ControllerAuthorization]);

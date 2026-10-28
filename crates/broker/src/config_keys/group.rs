@@ -829,159 +829,6 @@ mod tests {
         }
     }
 
-    /// Kafka 4.3.1's `GroupConfig.validateValues` names the broker key a value
-    /// broke, and accepts every key of its `CONFIG_DEF`, whatever krabka's
-    /// coordinators apply. Each row is a key, a value and the outcome.
-    #[test]
-    fn group_overrides_are_validated_with_kafka_4_3_1s_rules_and_messages() {
-        let cases: [Row; 22] = [
-            Row {
-                key: "consumer.session.timeout.ms",
-                value: "50000",
-                want: Ok(()),
-            },
-            Row {
-                key: "consumer.heartbeat.interval.ms",
-                value: "6000",
-                want: Ok(()),
-            },
-            Row {
-                key: "consumer.assignment.interval.ms",
-                value: "500",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.session.timeout.ms",
-                value: "50000",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.heartbeat.interval.ms",
-                value: "6000",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.record.lock.duration.ms",
-                value: "45000",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.delivery.count.limit",
-                value: "7",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.partition.max.record.locks",
-                value: "1000",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.isolation.level",
-                value: "read_committed",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.renew.acknowledge.enable",
-                value: "false",
-                want: Ok(()),
-            },
-            Row {
-                key: "share.assignment.interval.ms",
-                value: "0",
-                want: Ok(()),
-            },
-            Row {
-                key: "streams.initial.rebalance.delay.ms",
-                value: "0",
-                want: Ok(()),
-            },
-            Row {
-                key: "consumer.session.timeout.ms",
-                value: "1000",
-                want: Err(
-                    "consumer.session.timeout.ms must be greater than or equal to \
-                     group.consumer.min.session.timeout.ms",
-                ),
-            },
-            Row {
-                key: "consumer.heartbeat.interval.ms",
-                value: "20000",
-                want: Err(
-                    "consumer.heartbeat.interval.ms must be less than or equal to \
-                     group.consumer.max.heartbeat.interval.ms",
-                ),
-            },
-            Row {
-                key: "share.record.lock.duration.ms",
-                value: "500",
-                want: Err(
-                    "Invalid value 500 for configuration share.record.lock.duration.ms: Value \
-                     must be at least 1000",
-                ),
-            },
-            Row {
-                key: "share.record.lock.duration.ms",
-                value: "3600000",
-                want: Err(
-                    "share.record.lock.duration.ms must be less than or equal to \
-                     group.share.max.record.lock.duration.ms",
-                ),
-            },
-            Row {
-                key: "share.delivery.count.limit",
-                value: "1",
-                want: Err(
-                    "Invalid value 1 for configuration share.delivery.count.limit: Value must \
-                     be at least 2",
-                ),
-            },
-            Row {
-                key: "share.isolation.level",
-                value: "read_everything",
-                want: Err(
-                    "Invalid value read_everything for configuration share.isolation.level: \
-                     String must be one of: read_committed, read_uncommitted",
-                ),
-            },
-            Row {
-                key: "share.renew.acknowledge.enable",
-                value: "maybe",
-                want: Err(
-                    "Invalid value maybe for configuration share.renew.acknowledge.enable: \
-                     Expected value to be either true or false",
-                ),
-            },
-            Row {
-                key: "streams.session.timeout.ms",
-                value: "90000",
-                want: Err("streams.session.timeout.ms must be less than or equal to \
-                     group.streams.max.session.timeout.ms"),
-            },
-            Row {
-                key: "streams.num.standby.replicas",
-                value: "3",
-                want: Err(
-                    "streams.num.standby.replicas must be less than or equal to \
-                     group.streams.max.standby.replicas",
-                ),
-            },
-            Row {
-                key: "streams.assignment.interval.ms",
-                value: "20000",
-                want: Err(
-                    "streams.assignment.interval.ms must be less than or equal to \
-                     group.streams.max.assignment.interval.ms",
-                ),
-            },
-        ];
-        for Row { key, value, want } in cases {
-            check!(
-                validate(&[(key, value)], Disabled) == want.map_err(str::to_owned),
-                "{key}={value}"
-            );
-        }
-    }
-
     /// The parse runs in `CONFIG_DEF`'s order, so the first bad value in it
     /// is the one named, whatever the names sort to.
     #[test]
@@ -1103,19 +950,6 @@ mod tests {
         overrides(&[(key, value)])
     }
 
-    #[test]
-    fn kafkas_group_key_roster_has_every_trunk_key() {
-        check!(KAFKA_GROUP_KEYS.len() == 27);
-        let names: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
-        check!(names == sorted);
-        // The parse order names each key once, and only keys of the roster.
-        let mut ordered = DEFINITION_ORDER.to_vec();
-        ordered.sort_unstable();
-        check!(ordered == names);
-    }
-
     /// Kafka's `GroupCoordinatorConfig` `require`s, for each protocol's
     /// broker assignment interval, in the constructor's order: below the
     /// minimum, above the maximum, the bounds themselves, and a value the type
@@ -1154,4 +988,99 @@ mod tests {
             "{props:?}"
         );
     }
+
+    #[derive(Default)]
+    struct GroupConfiguration {
+        bounds: Option<GroupBounds>,
+        properties: BTreeMap<String, String>,
+        result: Option<Result<(), String>>,
+        definitions: Option<&'static [GroupKey]>,
+        names: Option<Vec<&'static str>>,
+        parse_order: Option<Vec<&'static str>>,
+    }
+
+    #[rstest::fixture]
+    fn group_configuration() -> GroupConfiguration {
+        // Every alteration and roster query receives fresh domain state.
+        GroupConfiguration::default()
+    }
+
+    #[rstest_bdd_macros::given("the broker uses default group configuration bounds")]
+    fn default_group_bounds(group_configuration: &mut GroupConfiguration) {
+        group_configuration.bounds = Some(GroupBounds::default());
+    }
+
+    #[rstest_bdd_macros::given("group override {key} is {value}")]
+    fn group_configuration_override(
+        group_configuration: &mut GroupConfiguration,
+        key: String,
+        value: String,
+    ) {
+        group_configuration.properties.insert(key, value);
+    }
+
+    #[rstest_bdd_macros::when("the group alteration is validated with released API rules")]
+    fn validate_group_alteration(group_configuration: &mut GroupConfiguration) {
+        group_configuration.result = Some(validate_group_configs(
+            &group_configuration.properties,
+            group_configuration
+                .bounds
+                .as_ref()
+                .expect("broker bounds were given"),
+            Disabled,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the group alteration is accepted")]
+    fn accepted_group_alteration(group_configuration: &GroupConfiguration) {
+        check!(group_configuration.result == Some(Ok(())));
+    }
+
+    #[rstest_bdd_macros::then("the group alteration is refused with {message}")]
+    fn refused_group_alteration(group_configuration: &GroupConfiguration, message: String) {
+        check!(group_configuration.result == Some(Err(message)));
+    }
+
+    #[rstest_bdd_macros::given("Kafka trunk group configuration definitions")]
+    fn trunk_group_definitions(group_configuration: &mut GroupConfiguration) {
+        group_configuration.definitions = Some(KAFKA_GROUP_KEYS);
+    }
+
+    #[rstest_bdd_macros::when("the group key names and definition parse order are listed")]
+    fn enumerate_group_definitions(group_configuration: &mut GroupConfiguration) {
+        group_configuration.names = Some(
+            group_configuration
+                .definitions
+                .expect("trunk definitions were given")
+                .iter()
+                .map(|key| key.name)
+                .collect(),
+        );
+        group_configuration.parse_order = Some(DEFINITION_ORDER.to_vec());
+    }
+
+    #[rstest_bdd_macros::then(
+        "the roster has 27 alphabetically ordered names and parse order contains every name once"
+    )]
+    fn complete_group_definitions(group_configuration: &GroupConfiguration) {
+        let names = group_configuration
+            .names
+            .as_ref()
+            .expect("key roster was listed");
+        check!(names.len() == 27);
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        check!(*names == sorted);
+        let mut ordered = group_configuration
+            .parse_order
+            .clone()
+            .expect("parse order was listed");
+        ordered.sort_unstable();
+        check!(ordered == *names);
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config_keys/group",
+        fixtures = [group_configuration: GroupConfiguration]
+    );
 }

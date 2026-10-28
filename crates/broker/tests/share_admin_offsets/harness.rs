@@ -12,8 +12,9 @@ pub use crate::support::share::{
 };
 use {
     crate::support::share::{
-        ConsumptionFixture, ConsumptionSetup, MemberSession, ShareRecordCount, ShareSessionSetup,
-        consumption_fixture, join as join_share_group, permitted_topic_fixture, start_topic,
+        ConsumptionFixture, ConsumptionSetup, MemberSession, ShareAck, ShareRecordCount,
+        ShareSessionSetup, consumption_fixture, join as join_share_group, permitted_topic_fixture,
+        start_topic,
     },
     assert2::assert,
     krabka_client_core::Client,
@@ -181,7 +182,6 @@ pub async fn acquired_topic() -> (
 pub struct InitializedRestartFixture {
     pub _permit: OwnedSemaphorePermit,
     pub _dir: tempfile::TempDir,
-    pub log_dir: PathBuf,
     pub topic: (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid, String),
 }
 
@@ -195,14 +195,80 @@ pub async fn initialized_restart_fixture(
         path: log_dir,
     } = restart_directory().await;
     let topic = initialized_topic()
-        .log_dir(log_dir.clone())
+        .log_dir(log_dir)
         .count(count.0)
         .call()
         .await;
     InitializedRestartFixture {
         _permit: permit,
         _dir: dir,
-        log_dir,
         topic,
+    }
+}
+
+/// Live share-offset administration fixture, retaining the permit and disk across restarts.
+pub struct AdminOffsetSession {
+    pub broker: Option<krabka_broker::BrokerHandle>,
+    pub client: Arc<Client>,
+    pub directory: tempfile::TempDir,
+    pub permit: OwnedSemaphorePermit,
+    pub topic: uuid::Uuid,
+    pub member: Option<String>,
+}
+
+impl AdminOffsetSession {
+    pub async fn seeded(count: i64) -> Self {
+        let (permit, broker, client, directory, topic) =
+            seeded_empty_group().count(count).call().await;
+        Self {
+            broker: Some(broker),
+            client,
+            directory,
+            permit,
+            topic,
+            member: None,
+        }
+    }
+
+    pub async fn initialized(count: i64) -> Self {
+        let InitializedRestartFixture {
+            _permit: permit,
+            _dir: directory,
+            topic: (broker, client, topic, member),
+        } = initialized_restart_fixture().count(count).call().await;
+        Self {
+            broker: Some(broker),
+            client,
+            directory,
+            permit,
+            topic,
+            member: Some(member),
+        }
+    }
+
+    pub fn broker(&self) -> &krabka_broker::BrokerHandle {
+        self.broker.as_ref().expect("share offset broker")
+    }
+
+    pub async fn shutdown(mut self) {
+        self.broker
+            .take()
+            .expect("share offset broker")
+            .shutdown()
+            .await;
+        drop(self.client);
+        drop(self.directory);
+        drop(self.permit);
+    }
+}
+
+impl AdminOffsetSession {
+    /// Acknowledge the real joined member's offsets through the requested boundary.
+    pub fn acknowledgement_through(&self, last: krabka_ids::Offset) -> ShareAck<'_> {
+        ShareAck::prefix_for(
+            self.member.as_ref().expect("joined member"),
+            self.topic,
+            last,
+        )
     }
 }

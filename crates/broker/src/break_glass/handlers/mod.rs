@@ -283,13 +283,48 @@ pub mod tests {
 
     pub fn audit_channel() -> (Arc<AuditLog>, krabka_audit::AuditReceiver) { AuditLog::new(8) }
 
-    #[test]
-    fn a_connection_principal_takes_its_kafka_string_form() {
-        let p = principal("alice");
-        let peer = peer();
-
-        check!(principal_name(&context(&p, &peer)) == "User:alice");
+    #[derive(Default)]
+    struct BreakGlassPrincipalScenario {
+        principal: Option<Principal>,
+        name: Option<String>,
     }
+
+    #[rstest::fixture]
+    fn operator_principal() -> BreakGlassPrincipalScenario {
+        // An operator request carries its own authenticated principal.
+        BreakGlassPrincipalScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("a break-glass request is authenticated as principal {name}")]
+    fn break_glass_authenticated_principal(
+        operator_principal: &mut BreakGlassPrincipalScenario,
+        name: String,
+    ) {
+        operator_principal.principal = Some(principal(&name));
+    }
+
+    #[rstest_bdd_macros::when("the handler derives the request's Kafka principal string")]
+    fn break_glass_kafka_principal(operator_principal: &mut BreakGlassPrincipalScenario) {
+        let principal = operator_principal
+            .principal
+            .as_ref()
+            .expect("a principal was given");
+        let peer = peer();
+        operator_principal.name = Some(principal_name(&context(principal, &peer)));
+    }
+
+    #[rstest_bdd_macros::then("the break-glass principal string is {expected}")]
+    fn break_glass_principal_name(
+        operator_principal: &BreakGlassPrincipalScenario,
+        expected: String,
+    ) {
+        check!(operator_principal.name.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/break_glass/handlers/mod.feature",
+        fixtures = [operator_principal: BreakGlassPrincipalScenario]
+    );
 
     #[test]
     fn a_proposal_id_round_trips_through_its_wire_form() {

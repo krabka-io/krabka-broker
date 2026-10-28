@@ -32,9 +32,6 @@ use {
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
 
-/// The Kafka base64 form of a cluster id that is not the engines' nil id.
-fn foreign_cluster_id() -> String { URL_SAFE_NO_PAD.encode(Uuid::from_u128(7).as_bytes()) }
-
 /// Delivers one inbound request to `engine` and returns its answer, or `None`
 /// when the engine dropped the reply, which closes the connection.
 fn deliver(
@@ -114,57 +111,6 @@ fn vote_partition(request: &mut VoteRequest) -> &mut vote_req::PartitionData {
     &mut request.topics[0].partitions[0]
 }
 
-/// A response that names the metadata partition and node 2 at epoch 5.
-fn vote_answer(error_code: i16) -> VoteResponse {
-    vote_answer_with_leader(error_code, 2, 5, vec![vote_answer_node()])
-}
-
-fn vote_answer_node() -> vote_resp::NodeEndpoint {
-    vote_resp::NodeEndpoint {
-        node_id: 2,
-        host: "127.0.0.1".into(),
-        port: 9_093,
-        ..Default::default()
-    }
-}
-
-fn vote_answer_with_leader(
-    error_code: i16,
-    leader_id: i32,
-    leader_epoch: i32,
-    node_endpoints: Vec<vote_resp::NodeEndpoint>,
-) -> VoteResponse {
-    VoteResponse {
-        topics: vec![vote_resp::TopicData {
-            topic_name: METADATA_TOPIC.into(),
-            partitions: vec![vote_resp::PartitionData {
-                partition_index: 0,
-                error_code,
-                leader_id,
-                leader_epoch,
-                vote_granted: false,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        node_endpoints,
-        ..Default::default()
-    }
-}
-
-/// `vote_answer`, but for a vote the follower of node 2 granted.
-fn vote_answer_granted() -> VoteResponse {
-    let mut answer = vote_answer(0);
-    answer.topics[0].partitions[0].vote_granted = true;
-    answer
-}
-
-/// The refusal of a request from epoch 6: the follower has stepped down to that
-/// epoch before it looked at the request's voter key, so it names no leader.
-fn vote_answer_after_stepping_down_to_epoch_6(error_code: i16) -> VoteResponse {
-    vote_answer_with_leader(error_code, -1, 6, Vec::new())
-}
-
 fn engine_with_local_directory() -> EngineInDir {
     let (mut engine, dir) = build_engine_only().call();
     let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
@@ -184,158 +130,6 @@ fn engine_with_local_directory() -> EngineInDir {
         engine.timeouts,
     );
     EngineInDir { engine, dir }
-}
-
-#[tokio::test]
-async fn vote_runs_kafka_request_checks() {
-    struct Row {
-        label: &'static str,
-        request: VoteRequest,
-        expected: VoteResponse,
-    }
-
-    let top_level = |error_code| VoteResponse {
-        error_code,
-        ..Default::default()
-    };
-    let rows = vec![
-        Row {
-            label: "foreign cluster id",
-            request: vote_request(|r| r.cluster_id = Some(foreign_cluster_id())),
-            expected: top_level(104),
-        },
-        Row {
-            label: "cluster id that does not parse",
-            request: vote_request(|r| r.cluster_id = Some("not-a-cluster".into())),
-            expected: top_level(104),
-        },
-        Row {
-            label: "another topic",
-            request: vote_request(|r| r.topics[0].topic_name = "other".into()),
-            expected: top_level(42),
-        },
-        Row {
-            label: "partition 1",
-            request: vote_request(|r| vote_partition(r).partition_index = 1),
-            expected: top_level(42),
-        },
-        Row {
-            label: "two partitions",
-            request: vote_request(|r| {
-                let second = r.topics[0].partitions[0].clone();
-                r.topics[0].partitions.push(second);
-            }),
-            expected: top_level(42),
-        },
-        Row {
-            label: "two topics",
-            request: vote_request(|r| {
-                let second = r.topics[0].clone();
-                r.topics.push(second);
-            }),
-            expected: top_level(42),
-        },
-        Row {
-            label: "negative last offset",
-            request: vote_request(|r| vote_partition(r).last_offset = -1),
-            expected: vote_answer(42),
-        },
-        Row {
-            label: "negative last epoch",
-            request: vote_request(|r| vote_partition(r).last_offset_epoch = -1),
-            expected: vote_answer(42),
-        },
-        Row {
-            label: "standard vote whose last epoch is the replica epoch",
-            request: vote_request(|r| vote_partition(r).last_offset_epoch = 6),
-            expected: vote_answer(42),
-        },
-        Row {
-            label: "pre-vote whose last epoch is above the replica epoch",
-            request: vote_request(|r| {
-                vote_partition(r).pre_vote = true;
-                vote_partition(r).last_offset_epoch = 7;
-            }),
-            expected: vote_answer(42),
-        },
-        Row {
-            label: "replica epoch below the local epoch",
-            request: vote_request(|r| {
-                vote_partition(r).replica_epoch = 4;
-                vote_partition(r).pre_vote = true;
-            }),
-            expected: vote_answer(74),
-        },
-        Row {
-            label: "negative replica id",
-            request: vote_request(|r| vote_partition(r).replica_id = -1),
-            expected: vote_answer(42),
-        },
-        Row {
-            label: "voter key names another replica, from a higher epoch",
-            request: vote_request(|r| r.voter_id = 2),
-            expected: vote_answer_after_stepping_down_to_epoch_6(125),
-        },
-        Row {
-            label: "voter key names replica 0 which is not local, from a higher epoch",
-            request: vote_request(|r| r.voter_id = 0),
-            expected: vote_answer_after_stepping_down_to_epoch_6(125),
-        },
-        Row {
-            label: "voter key names another replica, at the local epoch",
-            request: vote_request(|r| {
-                r.voter_id = 2;
-                vote_partition(r).pre_vote = true;
-                vote_partition(r).replica_epoch = 5;
-            }),
-            expected: vote_answer(125),
-        },
-        Row {
-            label: "pre-vote from node 0 is valid",
-            request: vote_request(|r| {
-                vote_partition(r).replica_id = 0;
-                vote_partition(r).pre_vote = true;
-                vote_partition(r).replica_epoch = 5;
-            }),
-            expected: vote_answer(0),
-        },
-        Row {
-            label: "pre-vote to a follower that has not fetched from its leader",
-            request: vote_request(|r| {
-                vote_partition(r).pre_vote = true;
-                vote_partition(r).replica_epoch = 5;
-            }),
-            expected: vote_answer_granted(),
-        },
-        Row {
-            label: "pre-vote with no voter key",
-            request: vote_request(|r| {
-                r.voter_id = -1;
-                vote_partition(r).pre_vote = true;
-                vote_partition(r).replica_epoch = 5;
-            }),
-            expected: vote_answer_granted(),
-        },
-        Row {
-            label: "standard vote at the local epoch while a leader is known",
-            request: vote_request(|r| vote_partition(r).replica_epoch = 5),
-            expected: vote_answer(0),
-        },
-    ];
-    for Row {
-        label,
-        request,
-        expected,
-    } in rows
-    {
-        let EngineInDir {
-            mut engine,
-            dir: _dir,
-        } = follower_of_2_in_epoch_5();
-        let body = deliver(&mut engine, vote, encode(&request, VOTE_VERSION)).expect("an answer");
-        let response = VoteResponse::decode(&mut &body[..], VOTE_VERSION).expect("decode");
-        check!(response == expected, "{label}");
-    }
 }
 
 /// A granted standard vote moves the voter to the candidate's epoch and names
@@ -443,76 +237,6 @@ fn begin_answer(error_code: i16, leader_id: i32, leader_epoch: i32) -> BeginQuor
 }
 
 #[tokio::test]
-async fn begin_quorum_epoch_runs_kafka_request_checks() {
-    struct Row {
-        label: &'static str,
-        request: BeginQuorumEpochRequest,
-        expected: BeginQuorumEpochResponse,
-    }
-
-    let top_level = |error_code| BeginQuorumEpochResponse {
-        error_code,
-        ..Default::default()
-    };
-    let rows = vec![
-        Row {
-            label: "foreign cluster id",
-            request: begin_request(|r| r.cluster_id = Some(foreign_cluster_id())),
-            expected: top_level(104),
-        },
-        Row {
-            label: "another topic",
-            request: begin_request(|r| r.topics[0].topic_name = "other".into()),
-            expected: top_level(42),
-        },
-        Row {
-            label: "two partitions",
-            request: begin_request(|r| {
-                let dup_part = r.topics[0].partitions[0].clone();
-                r.topics[0].partitions.push(dup_part);
-            }),
-            expected: top_level(42),
-        },
-        Row {
-            label: "leader epoch below the local epoch",
-            request: begin_request(|r| r.topics[0].partitions[0].leader_epoch = 4),
-            expected: begin_answer(74, 2, 5),
-        },
-        Row {
-            label: "negative leader id",
-            request: begin_request(|r| r.topics[0].partitions[0].leader_id = -1),
-            expected: begin_answer(42, 2, 5),
-        },
-        Row {
-            label: "voter key names another replica, after the transition",
-            request: begin_request(|r| r.voter_id = 2),
-            expected: begin_answer(125, 3, 6),
-        },
-        Row {
-            label: "a new leader",
-            request: begin_request(|_| {}),
-            expected: begin_answer(0, 3, 6),
-        },
-    ];
-    for Row {
-        label,
-        request,
-        expected,
-    } in rows
-    {
-        let EngineInDir {
-            mut engine,
-            dir: _dir,
-        } = follower_of_2_in_epoch_5();
-        let body =
-            deliver(&mut engine, begin, encode(&request, QUORUM_EPOCH_VERSION)).expect("an answer");
-        let response =
-            BeginQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION).expect("decode");
-        check!(response == expected, "{label}");
-    }
-}
-
-#[tokio::test]
 async fn a_begin_quorum_epoch_body_that_does_not_decode_gets_no_answer() {
     let EngineInDir {
         mut engine,
@@ -546,119 +270,6 @@ fn candidates(ids: &[i32]) -> Vec<eqe_req::ReplicaInfo> {
             ..Default::default()
         })
         .collect()
-}
-
-#[tokio::test]
-async fn end_quorum_epoch_runs_kafka_request_checks() {
-    struct Row {
-        label: &'static str,
-        request: EndQuorumEpochRequest,
-        expected: EndQuorumEpochResponse,
-        role: &'static str,
-    }
-
-    let top_level = |error_code| EndQuorumEpochResponse {
-        error_code,
-        ..Default::default()
-    };
-    let answer = |error_code, leader_id: i32| EndQuorumEpochResponse {
-        topics: vec![eqe_resp::TopicData {
-            topic_name: METADATA_TOPIC.into(),
-            partitions: vec![eqe_resp::PartitionData {
-                partition_index: 0,
-                error_code,
-                leader_id,
-                leader_epoch: 5,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        node_endpoints: (leader_id >= 0)
-            .then(|| eqe_resp::NodeEndpoint {
-                node_id: leader_id,
-                host: "127.0.0.1".into(),
-                port: 9_093,
-                ..Default::default()
-            })
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    // (label, request, response, the role name after the request)
-    let rows = vec![
-        Row {
-            label: "foreign cluster id",
-            request: end_request(|r| r.cluster_id = Some(foreign_cluster_id())),
-            expected: top_level(104),
-            role: "Follower",
-        },
-        Row {
-            label: "partition 1",
-            request: end_request(|r| r.topics[0].partitions[0].partition_index = 1),
-            expected: top_level(42),
-            role: "Follower",
-        },
-        Row {
-            label: "leader epoch below the local epoch",
-            request: end_request(|r| r.topics[0].partitions[0].leader_epoch = 4),
-            expected: answer(74, 2),
-            role: "Follower",
-        },
-        Row {
-            label: "negative leader id",
-            request: end_request(|r| r.topics[0].partitions[0].leader_id = -1),
-            expected: answer(42, 2),
-            role: "Follower",
-        },
-        Row {
-            label: "first preferred candidate elects at once",
-            request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[1, 3]);
-            }),
-            expected: answer(0, -1),
-            role: "Prospective",
-        },
-        Row {
-            label: "no preferred candidates elects at once",
-            request: end_request(|_| {}),
-            expected: answer(0, -1),
-            role: "Prospective",
-        },
-        Row {
-            label: "second preferred candidate waits",
-            request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[3, 1]);
-            }),
-            expected: answer(0, -1),
-            role: "Unattached",
-        },
-        Row {
-            label: "a replica the list does not name waits",
-            request: end_request(|r| {
-                r.topics[0].partitions[0].preferred_candidates = candidates(&[3]);
-            }),
-            expected: answer(0, -1),
-            role: "Unattached",
-        },
-    ];
-    for Row {
-        label,
-        request,
-        expected,
-        role,
-    } in rows
-    {
-        let EngineInDir {
-            mut engine,
-            dir: _dir,
-        } = follower_of_2_in_epoch_5();
-        let body =
-            deliver(&mut engine, end, encode(&request, QUORUM_EPOCH_VERSION)).expect("an answer");
-        let response =
-            EndQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION).expect("decode");
-        check!(response == expected, "{label}");
-        check!(engine.core.role().name() == role, "{label}");
-    }
 }
 
 fn fetch_snapshot_request(
@@ -786,199 +397,6 @@ fn single_voter_leader_with_checkpoints() -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
-#[tokio::test]
-async fn fetch_snapshot_runs_kafka_request_checks() {
-    struct Row {
-        label: &'static str,
-        request: FetchSnapshotRequest,
-        expected: FetchSnapshotResponse,
-    }
-
-    let top_level = |error_code| FetchSnapshotResponse {
-        error_code,
-        ..Default::default()
-    };
-    let metadata = AnsweredPartition {
-        topic: METADATA_TOPIC,
-        index: 0,
-    };
-    let leader = Some(AnsweredLeader { id: 1, epoch: 1 });
-    let rows = vec![
-        Row {
-            label: "foreign cluster id",
-            request: fetch_snapshot_request(|r, _| r.cluster_id = Some(foreign_cluster_id())),
-            expected: top_level(104),
-        },
-        Row {
-            label: "two partitions",
-            request: fetch_snapshot_request(|r, p| {
-                r.topics = vec![fs_req::TopicSnapshot {
-                    name: METADATA_TOPIC.into(),
-                    partitions: vec![p.clone(), p.clone()],
-                    ..Default::default()
-                }];
-            }),
-            expected: top_level(42),
-        },
-        Row {
-            label: "another topic",
-            request: fetch_snapshot_request(|r, p| {
-                r.topics = vec![fs_req::TopicSnapshot {
-                    name: "other".into(),
-                    partitions: vec![p.clone()],
-                    ..Default::default()
-                }];
-            }),
-            expected: fetch_snapshot_answer(
-                AnsweredPartition {
-                    topic: "other",
-                    index: 0,
-                },
-                3,
-                None,
-                None,
-            ),
-        },
-        Row {
-            label: "partition 1",
-            request: fetch_snapshot_request(|_, p| p.partition = 1),
-            expected: fetch_snapshot_answer(
-                AnsweredPartition {
-                    topic: METADATA_TOPIC,
-                    index: 1,
-                },
-                3,
-                None,
-                None,
-            ),
-        },
-        Row {
-            label: "leader epoch below the local epoch",
-            request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 0),
-            expected: fetch_snapshot_answer(metadata, 74, leader, None),
-        },
-        Row {
-            label: "leader epoch above the local epoch",
-            request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 2),
-            expected: fetch_snapshot_answer(metadata, 75, leader, None),
-        },
-        Row {
-            label: "unknown snapshot id",
-            request: fetch_snapshot_request(|_, p| p.snapshot_id.end_offset = 11),
-            expected: fetch_snapshot_answer(metadata, 98, leader, None),
-        },
-        Row {
-            label: "bootstrap snapshot id",
-            request: fetch_snapshot_request(|_, p| {
-                p.snapshot_id.end_offset = 0;
-                p.snapshot_id.epoch = 0;
-            }),
-            expected: fetch_snapshot_answer(metadata, 98, leader, None),
-        },
-        Row {
-            label: "negative position",
-            request: fetch_snapshot_request(|_, p| p.position = -1),
-            expected: fetch_snapshot_answer(metadata, 99, leader, None),
-        },
-        Row {
-            label: "position at the size",
-            request: fetch_snapshot_request(|_, p| p.position = 10),
-            expected: fetch_snapshot_answer(metadata, 99, leader, None),
-        },
-        Row {
-            label: "last byte",
-            request: fetch_snapshot_request(|_, p| p.position = 9),
-            expected: fetch_snapshot_answer(
-                metadata,
-                0,
-                leader,
-                Some(AnsweredChunk {
-                    size: 10,
-                    position: 9,
-                    bytes: b"9",
-                }),
-            ),
-        },
-        Row {
-            label: "middle chunk",
-            request: fetch_snapshot_request(|_, p| p.position = 4),
-            expected: fetch_snapshot_answer(
-                metadata,
-                0,
-                leader,
-                Some(AnsweredChunk {
-                    size: 10,
-                    position: 4,
-                    bytes: b"4567",
-                }),
-            ),
-        },
-        Row {
-            label: "chunk clamped to the end",
-            request: fetch_snapshot_request(|r, p| {
-                r.max_bytes = i32::MAX;
-                p.position = 7;
-            }),
-            expected: fetch_snapshot_answer(
-                metadata,
-                0,
-                leader,
-                Some(AnsweredChunk {
-                    size: 10,
-                    position: 7,
-                    bytes: b"789",
-                }),
-            ),
-        },
-        Row {
-            label: "negative max bytes",
-            request: fetch_snapshot_request(|r, _| r.max_bytes = -1),
-            expected: fetch_snapshot_answer(
-                metadata,
-                0,
-                leader,
-                Some(AnsweredChunk {
-                    size: 10,
-                    position: 0,
-                    bytes: b"",
-                }),
-            ),
-        },
-        Row {
-            label: "first chunk",
-            request: fetch_snapshot_request(|_, _| {}),
-            expected: fetch_snapshot_answer(
-                metadata,
-                0,
-                leader,
-                Some(AnsweredChunk {
-                    size: 10,
-                    position: 0,
-                    bytes: b"0123",
-                }),
-            ),
-        },
-    ];
-    for Row {
-        label,
-        request,
-        expected,
-    } in rows
-    {
-        let EngineInDir {
-            mut engine,
-            dir: _dir,
-        } = single_voter_leader_with_checkpoints();
-        let body = deliver(
-            &mut engine,
-            fetch_snapshot,
-            encode(&request, FETCH_SNAPSHOT_VERSION),
-        )
-        .expect("an answer");
-        check!(body == encode(&expected, FETCH_SNAPSHOT_VERSION), "{label}");
-    }
-}
-
 /// A follower refuses `FetchSnapshot` at its own epoch and names the leader.
 #[tokio::test]
 async fn fetch_snapshot_to_a_follower_names_the_leader() {
@@ -1077,4 +495,623 @@ async fn end_quorum_epoch_matches_candidate_directory_id() {
         EndQuorumEpochResponse::decode(&mut &body2[..], QUORUM_EPOCH_VERSION).expect("decode");
     check!(response2.error_code == 0);
     check!(engine.core.role().name() == "Prospective");
+}
+
+use rstest_bdd_macros::{given, then, when};
+
+#[derive(Default)]
+struct VoteAdmission {
+    leader: Option<EngineInDir>,
+    request: Option<VoteRequest>,
+    body: Option<bytes::Bytes>,
+}
+#[rstest::fixture]
+fn vote_admission() -> VoteAdmission {
+    // Each request owns fresh quorum state and its on-disk directory.
+    VoteAdmission::default()
+}
+#[given("a Vote request with {request}")]
+fn vote_input(vote_admission: &mut VoteAdmission, request: String) {
+    vote_admission.leader = Some(follower_of_2_in_epoch_5());
+    let input: VoteInput = serde_json::from_str(&request).expect("native Vote request fields");
+    vote_admission.request = Some(input.native());
+}
+#[when("the quorum controller handles the Vote request")]
+fn vote_operation(vote_admission: &mut VoteAdmission) {
+    let request = vote_admission.request.as_ref().expect("request prepared");
+    let engine = &mut vote_admission
+        .leader
+        .as_mut()
+        .expect("quorum configured")
+        .engine;
+    vote_admission.body =
+        Some(deliver(engine, vote, encode(request, VOTE_VERSION)).expect("controller answered"));
+}
+#[then("the Vote response matches every expected Kafka field {expected}")]
+fn vote_response(vote_admission: &VoteAdmission, expected: String) {
+    let expected: VoteExpected =
+        serde_json::from_str(&expected).expect("independent complete expected response");
+    let body = vote_admission.body.as_ref().expect("request handled");
+    let response =
+        VoteResponse::decode(&mut &body[..], VOTE_VERSION).expect("complete Kafka response");
+    check!(response == expected.native());
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "Vote validates the incoming request and returns the full Kafka response"
+)]
+#[tokio::test]
+async fn vote_runs_kafka_request_checks(
+    vote_admission: VoteAdmission,
+    request: String,
+    expected: String,
+) {
+    let _ = (vote_admission, request, expected);
+}
+
+#[derive(Default)]
+struct BeginQuorumEpochAdmission {
+    leader: Option<EngineInDir>,
+    request: Option<BeginQuorumEpochRequest>,
+    body: Option<bytes::Bytes>,
+}
+#[rstest::fixture]
+fn begin_quorum_epoch_admission() -> BeginQuorumEpochAdmission {
+    // Each request owns fresh quorum state and its on-disk directory.
+    BeginQuorumEpochAdmission::default()
+}
+#[given("a BeginQuorumEpoch request with {request}")]
+fn begin_quorum_epoch_input(
+    begin_quorum_epoch_admission: &mut BeginQuorumEpochAdmission,
+    request: String,
+) {
+    begin_quorum_epoch_admission.leader = Some(follower_of_2_in_epoch_5());
+    let input: BeginInput =
+        serde_json::from_str(&request).expect("native BeginQuorumEpoch request fields");
+    begin_quorum_epoch_admission.request = Some(input.native());
+}
+#[when("the quorum controller handles the BeginQuorumEpoch request")]
+fn begin_quorum_epoch_operation(begin_quorum_epoch_admission: &mut BeginQuorumEpochAdmission) {
+    let request = begin_quorum_epoch_admission
+        .request
+        .as_ref()
+        .expect("request prepared");
+    let engine = &mut begin_quorum_epoch_admission
+        .leader
+        .as_mut()
+        .expect("quorum configured")
+        .engine;
+    begin_quorum_epoch_admission.body = Some(
+        deliver(engine, begin, encode(request, QUORUM_EPOCH_VERSION)).expect("controller answered"),
+    );
+}
+#[then("the BeginQuorumEpoch response matches every expected Kafka field {expected}")]
+fn begin_quorum_epoch_response(
+    begin_quorum_epoch_admission: &BeginQuorumEpochAdmission,
+    expected: String,
+) {
+    let expected: EpochExpected =
+        serde_json::from_str(&expected).expect("independent complete expected response");
+    let body = begin_quorum_epoch_admission
+        .body
+        .as_ref()
+        .expect("request handled");
+    let response = BeginQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION)
+        .expect("complete Kafka response");
+    check!(response == expected.begin());
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "BeginQuorumEpoch validates the incoming request and returns the full Kafka response"
+)]
+#[tokio::test]
+async fn begin_quorum_epoch_runs_kafka_request_checks(
+    begin_quorum_epoch_admission: BeginQuorumEpochAdmission,
+    request: String,
+    expected: String,
+) {
+    let _ = (begin_quorum_epoch_admission, request, expected);
+}
+
+#[derive(Default)]
+struct EndQuorumEpochAdmission {
+    leader: Option<EngineInDir>,
+    request: Option<EndQuorumEpochRequest>,
+    body: Option<bytes::Bytes>,
+}
+#[rstest::fixture]
+fn end_quorum_epoch_admission() -> EndQuorumEpochAdmission {
+    // Each request owns fresh quorum state and its on-disk directory.
+    EndQuorumEpochAdmission::default()
+}
+#[given("a EndQuorumEpoch request with {request}")]
+fn end_quorum_epoch_input(
+    end_quorum_epoch_admission: &mut EndQuorumEpochAdmission,
+    request: String,
+) {
+    end_quorum_epoch_admission.leader = Some(follower_of_2_in_epoch_5());
+    let input: EndInput =
+        serde_json::from_str(&request).expect("native EndQuorumEpoch request fields");
+    end_quorum_epoch_admission.request = Some(input.native());
+}
+#[when("the quorum controller handles the EndQuorumEpoch request")]
+fn end_quorum_epoch_operation(end_quorum_epoch_admission: &mut EndQuorumEpochAdmission) {
+    let request = end_quorum_epoch_admission
+        .request
+        .as_ref()
+        .expect("request prepared");
+    let engine = &mut end_quorum_epoch_admission
+        .leader
+        .as_mut()
+        .expect("quorum configured")
+        .engine;
+    end_quorum_epoch_admission.body = Some(
+        deliver(engine, end, encode(request, QUORUM_EPOCH_VERSION)).expect("controller answered"),
+    );
+}
+#[then("the EndQuorumEpoch response matches every expected Kafka field {expected} and role {role}")]
+fn end_quorum_epoch_response(
+    end_quorum_epoch_admission: &EndQuorumEpochAdmission,
+    expected: String,
+    role: String,
+) {
+    let expected: EpochExpected =
+        serde_json::from_str(&expected).expect("independent complete expected response");
+    let body = end_quorum_epoch_admission
+        .body
+        .as_ref()
+        .expect("request handled");
+    let response = EndQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION)
+        .expect("complete Kafka response");
+    check!(response == expected.end());
+    check!(
+        end_quorum_epoch_admission
+            .leader
+            .as_ref()
+            .expect("quorum configured")
+            .engine
+            .core
+            .role()
+            .name()
+            == role
+    );
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "EndQuorumEpoch validates the incoming request and returns the full Kafka response"
+)]
+#[tokio::test]
+async fn end_quorum_epoch_runs_kafka_request_checks(
+    end_quorum_epoch_admission: EndQuorumEpochAdmission,
+    request: String,
+    expected: String,
+    role: String,
+) {
+    let _ = (end_quorum_epoch_admission, request, expected, role);
+}
+
+#[derive(Default)]
+struct FetchSnapshotAdmission {
+    leader: Option<EngineInDir>,
+    request: Option<FetchSnapshotRequest>,
+    body: Option<bytes::Bytes>,
+}
+#[rstest::fixture]
+fn fetch_snapshot_admission() -> FetchSnapshotAdmission {
+    // Each request owns fresh quorum state and its on-disk directory.
+    FetchSnapshotAdmission::default()
+}
+#[given("a FetchSnapshot request with {request}")]
+fn fetch_snapshot_input(fetch_snapshot_admission: &mut FetchSnapshotAdmission, request: String) {
+    fetch_snapshot_admission.leader = Some(single_voter_leader_with_checkpoints());
+    let input: SnapshotInput =
+        serde_json::from_str(&request).expect("native FetchSnapshot request fields");
+    fetch_snapshot_admission.request = Some(input.native());
+}
+#[when("the quorum controller handles the FetchSnapshot request")]
+fn fetch_snapshot_operation(fetch_snapshot_admission: &mut FetchSnapshotAdmission) {
+    let request = fetch_snapshot_admission
+        .request
+        .as_ref()
+        .expect("request prepared");
+    let engine = &mut fetch_snapshot_admission
+        .leader
+        .as_mut()
+        .expect("quorum configured")
+        .engine;
+    fetch_snapshot_admission.body = Some(
+        deliver(
+            engine,
+            fetch_snapshot,
+            encode(request, FETCH_SNAPSHOT_VERSION),
+        )
+        .expect("controller answered"),
+    );
+}
+#[then("the FetchSnapshot response matches every expected Kafka field {expected}")]
+fn fetch_snapshot_response(fetch_snapshot_admission: &FetchSnapshotAdmission, expected: String) {
+    let expected: SnapshotExpected =
+        serde_json::from_str(&expected).expect("independent complete expected response");
+    let body = fetch_snapshot_admission
+        .body
+        .as_ref()
+        .expect("request handled");
+    check!(*body == encode(&expected.native(), FETCH_SNAPSHOT_VERSION));
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "FetchSnapshot validates the incoming request and returns the full Kafka response"
+)]
+#[tokio::test]
+async fn fetch_snapshot_runs_kafka_request_checks(
+    fetch_snapshot_admission: FetchSnapshotAdmission,
+    request: String,
+    expected: String,
+) {
+    let _ = (fetch_snapshot_admission, request, expected);
+}
+
+type QuorumTopics<P> = Vec<(String, Vec<P>)>;
+type VotePartitionInput = (i32, i32, i32, i32, i64, bool);
+type BeginPartitionInput = (i32, i32, i32);
+type EndPartitionInput = (i32, i32, i32, Vec<i32>);
+type VotePartitionAnswer = (i32, i16, i32, i32, bool);
+type EpochPartitionAnswer = (i32, i16, i32, i32);
+type SnapshotPartitionInput = (i32, i32, i64, i32, i64);
+
+#[derive(serde::Deserialize)]
+struct VoteInput {
+    cluster: Option<String>,
+    voter: i32,
+    topics: QuorumTopics<VotePartitionInput>,
+}
+impl VoteInput {
+    fn native(self) -> VoteRequest {
+        let topics = self
+            .topics
+            .into_iter()
+            .map(|(topic_name, partitions)| vote_req::TopicData {
+                topic_name,
+                partitions: partitions
+                    .into_iter()
+                    .map(
+                        |(
+                            partition_index,
+                            replica_epoch,
+                            replica_id,
+                            last_offset_epoch,
+                            last_offset,
+                            pre_vote,
+                        )| vote_req::PartitionData {
+                            partition_index,
+                            replica_epoch,
+                            replica_id,
+                            last_offset_epoch,
+                            last_offset,
+                            pre_vote,
+                            ..Default::default()
+                        },
+                    )
+                    .collect(),
+                ..Default::default()
+            })
+            .collect();
+        VoteRequest {
+            cluster_id: self.cluster,
+            voter_id: self.voter,
+            topics,
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct BeginInput {
+    cluster: Option<String>,
+    voter: i32,
+    topics: QuorumTopics<BeginPartitionInput>,
+}
+impl BeginInput {
+    fn native(self) -> BeginQuorumEpochRequest {
+        BeginQuorumEpochRequest {
+            cluster_id: self.cluster,
+            voter_id: self.voter,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(topic_name, partitions)| bqe_req::TopicData {
+                    topic_name,
+                    partitions: partitions
+                        .into_iter()
+                        .map(
+                            |(partition_index, leader_id, leader_epoch)| bqe_req::PartitionData {
+                                partition_index,
+                                leader_id,
+                                leader_epoch,
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct EndInput {
+    cluster: Option<String>,
+    topics: QuorumTopics<EndPartitionInput>,
+}
+impl EndInput {
+    fn native(self) -> EndQuorumEpochRequest {
+        EndQuorumEpochRequest {
+            cluster_id: self.cluster,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(topic_name, partitions)| eqe_req::TopicData {
+                    topic_name,
+                    partitions: partitions
+                        .into_iter()
+                        .map(|(partition_index, leader_id, leader_epoch, preferred)| {
+                            eqe_req::PartitionData {
+                                partition_index,
+                                leader_id,
+                                leader_epoch,
+                                preferred_candidates: candidates(&preferred),
+                                ..Default::default()
+                            }
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct VoteExpected {
+    code: i16,
+    topics: QuorumTopics<VotePartitionAnswer>,
+    endpoints: Vec<(i32, String, u16)>,
+}
+impl VoteExpected {
+    fn native(self) -> VoteResponse {
+        VoteResponse {
+            error_code: self.code,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(topic_name, partitions)| vote_resp::TopicData {
+                    topic_name,
+                    partitions: partitions
+                        .into_iter()
+                        .map(
+                            |(
+                                partition_index,
+                                error_code,
+                                leader_id,
+                                leader_epoch,
+                                vote_granted,
+                            )| vote_resp::PartitionData {
+                                partition_index,
+                                error_code,
+                                leader_id,
+                                leader_epoch,
+                                vote_granted,
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            node_endpoints: self
+                .endpoints
+                .into_iter()
+                .map(|(node_id, host, port)| vote_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct EpochExpected {
+    code: i16,
+    topics: QuorumTopics<EpochPartitionAnswer>,
+    endpoints: Vec<(i32, String, u16)>,
+}
+fn begin_epoch_partition(
+    (partition_index, error_code, leader_id, leader_epoch): (i32, i16, i32, i32),
+) -> bqe_resp::PartitionData {
+    bqe_resp::PartitionData {
+        partition_index,
+        error_code,
+        leader_id,
+        leader_epoch,
+        ..Default::default()
+    }
+}
+fn end_epoch_partition(
+    (partition_index, error_code, leader_id, leader_epoch): (i32, i16, i32, i32),
+) -> eqe_resp::PartitionData {
+    eqe_resp::PartitionData {
+        partition_index,
+        error_code,
+        leader_id,
+        leader_epoch,
+        ..Default::default()
+    }
+}
+
+impl EpochExpected {
+    fn begin(self) -> BeginQuorumEpochResponse {
+        BeginQuorumEpochResponse {
+            error_code: self.code,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(topic_name, partitions)| bqe_resp::TopicData {
+                    topic_name,
+                    partitions: partitions.into_iter().map(begin_epoch_partition).collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            node_endpoints: self
+                .endpoints
+                .into_iter()
+                .map(|(node_id, host, port)| bqe_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn end(self) -> EndQuorumEpochResponse {
+        EndQuorumEpochResponse {
+            error_code: self.code,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(topic_name, partitions)| eqe_resp::TopicData {
+                    topic_name,
+                    partitions: partitions.into_iter().map(end_epoch_partition).collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            node_endpoints: self
+                .endpoints
+                .into_iter()
+                .map(|(node_id, host, port)| eqe_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct SnapshotInput {
+    cluster: Option<String>,
+    replica: i32,
+    max_bytes: i32,
+    topics: QuorumTopics<SnapshotPartitionInput>,
+}
+impl SnapshotInput {
+    fn native(self) -> FetchSnapshotRequest {
+        FetchSnapshotRequest {
+            cluster_id: self.cluster,
+            replica_id: self.replica,
+            max_bytes: self.max_bytes,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(name, partitions)| fs_req::TopicSnapshot {
+                    name,
+                    partitions: partitions
+                        .into_iter()
+                        .map(
+                            |(partition, current_leader_epoch, end_offset, epoch, position)| {
+                                fs_req::PartitionSnapshot {
+                                    partition,
+                                    current_leader_epoch,
+                                    position,
+                                    snapshot_id: fs_req::SnapshotId {
+                                        end_offset,
+                                        epoch,
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                }
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct ExpectedSnapshotPartition {
+    index: i32,
+    code: i16,
+    leader: Option<(i32, i32)>,
+    chunk: Option<(i64, i32, i64, i64, String)>,
+}
+#[derive(serde::Deserialize)]
+struct SnapshotExpected {
+    code: i16,
+    topics: Vec<(String, Vec<ExpectedSnapshotPartition>)>,
+    endpoints: Vec<(i32, String, u16)>,
+}
+impl SnapshotExpected {
+    fn native(self) -> FetchSnapshotResponse {
+        FetchSnapshotResponse {
+            error_code: self.code,
+            topics: self
+                .topics
+                .into_iter()
+                .map(|(name, partitions)| fs_resp::TopicSnapshot {
+                    name,
+                    partitions: partitions
+                        .into_iter()
+                        .map(|row| {
+                            let mut result = fs_resp::PartitionSnapshot {
+                                index: row.index,
+                                error_code: row.code,
+                                ..Default::default()
+                            };
+                            if let Some((leader_id, leader_epoch)) = row.leader {
+                                result.current_leader = fs_resp::LeaderIdAndEpoch {
+                                    leader_id,
+                                    leader_epoch,
+                                    ..Default::default()
+                                };
+                            }
+                            if let Some((end_offset, epoch, size, position, chunk)) = row.chunk {
+                                result.snapshot_id = fs_resp::SnapshotId {
+                                    end_offset,
+                                    epoch,
+                                    ..Default::default()
+                                };
+                                result.size = size;
+                                result.position = position;
+                                result.unaligned_records =
+                                    RecordsPayload::Raw(bytes::Bytes::from(chunk));
+                            }
+                            result
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            node_endpoints: self
+                .endpoints
+                .into_iter()
+                .map(|(node_id, host, port)| fs_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
 }

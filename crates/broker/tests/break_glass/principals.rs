@@ -12,7 +12,7 @@ pub const USERS: &[(&str, &str)] = &[
     ("alice", "alice-secret"),
     ("bob", "bob-secret"),
     ("carol", "carol-secret"),
-    ("mallory", "mallory-secret"),
+    (MALLORY, "mallory-secret"),
 ];
 
 /// The proposer in every case. She is an approver too, because the broker

@@ -243,16 +243,12 @@ mod tests {
 
     const VERSION: i16 = 1;
 
-    #[derive(Clone, Copy)]
-    struct QuotaMatchCode(i8);
-
     #[derive(Clone, Copy, Default)]
     enum QuotaNameMatch {
         Exact,
         DefaultEntity,
         #[default]
         Any,
-        Malformed(QuotaMatchCode),
     }
 
     impl QuotaNameMatch {
@@ -261,7 +257,6 @@ mod tests {
                 Self::Exact => MATCH_TYPE_EXACT,
                 Self::DefaultEntity => MATCH_TYPE_DEFAULT,
                 Self::Any => MATCH_TYPE_ANY,
-                Self::Malformed(code) => code.0,
             }
         }
     }
@@ -613,181 +608,170 @@ mod tests {
         );
     }
 
-    /// Kafka's `ClientQuotasImage.describe` rejects a bad filter before any
-    /// match, with `entries = null` (#674). Valid filters still match.
-    #[tokio::test]
-    async fn invalid_filters_answer_kafkas_top_level_error() {
-        /// A case label, the filter components, and the whole response they must answer with.
-        struct RefusalRow {
-            label: &'static str,
-            components: Vec<ComponentData>,
-            expected: DescribeClientQuotasResponse,
+    #[derive(Default)]
+    struct QuotaFilterScenario {
+        started: Option<HandlerStartedBroker>,
+        components: Vec<ComponentData>,
+        response: Option<DescribeClientQuotasResponse>,
+    }
+    #[rstest::fixture]
+    fn quota_filter() -> QuotaFilterScenario {
+        let started = None;
+        QuotaFilterScenario {
+            started,
+            ..Default::default()
         }
-
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_alice_quota(&broker_handle).await;
-        seed_quota(&broker_handle, QuotaRecordSetup {
+    }
+    #[rstest_bdd_macros::given(
+        "user alice has producer byte rate 1024 and the default user quota is 2048"
+    )]
+    async fn known_user_quotas(quota_filter: &mut QuotaFilterScenario) {
+        let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        seed_alice_quota(&started.broker).await;
+        seed_quota(&started.broker, QuotaRecordSetup {
             entity: vec![QuotaEntityInput::user(None)],
             value: QuotaValue(2048.0),
             ..Default::default()
         })
         .await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
-
-        let error = |code: i16, message: &str| {
-            krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
-                error_code: code,
-                error_message: Some(message.into()),
-                entries: None,
+        quota_filter.started = Some(started);
+    }
+    #[rstest_bdd_macros::given("the exact-type quota filter has components {components}")]
+    fn requested_quota_filter(quota_filter: &mut QuotaFilterScenario, components: String) {
+        quota_filter.components = components
+            .split(';')
+            .map(|spec| {
+                let columns: Vec<_> = spec.split(':').collect();
+                let [kind, matching, name] = columns.as_slice() else {
+                    panic!("entity type match rule and name required")
+                };
+                ComponentData {
+                    entity_type: if *kind == "empty" {
+                        String::new()
+                    } else {
+                        (*kind).into()
+                    },
+                    match_type: match *matching {
+                        "exact" => MATCH_TYPE_EXACT,
+                        "default" => MATCH_TYPE_DEFAULT,
+                        "specified" => MATCH_TYPE_ANY,
+                        _ => matching.parse().unwrap(),
+                    },
+                    match_: if *name == "null" {
+                        None
+                    } else {
+                        Some((*name).into())
+                    },
+                    ..Default::default()
+                }
             })
-        };
-        let rows: Vec<RefusalRow> = vec![
-            RefusalRow {
-                label: "empty entity type",
-                components: vec![comp().entity_type("").call()],
-                expected: error(INVALID_REQUEST, "Invalid empty entity type."),
-            },
-            RefusalRow {
-                label: "repeated entity type",
-                components: vec![
-                    comp()
-                        .matching(QuotaNameMatch::Exact)
-                        .maybe_name(Some("alice"))
-                        .call(),
-                    comp().call(),
-                ],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Entity type user cannot appear more than once in the filter.",
-                ),
-            },
-            RefusalRow {
-                label: "unknown entity type",
-                components: vec![comp().entity_type("group").call()],
-                expected: error(UNSUPPORTED_VERSION, "Unsupported entity type group"),
-            },
-            RefusalRow {
-                label: "exact with null match",
-                components: vec![comp().matching(QuotaNameMatch::Exact).call()],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Request specified MATCH_TYPE_EXACT, but set match string to null.",
-                ),
-            },
-            RefusalRow {
-                label: "default with a match string",
-                components: vec![
-                    comp()
-                        .matching(QuotaNameMatch::DefaultEntity)
-                        .maybe_name(Some("alice"))
-                        .call(),
-                ],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Request specified MATCH_TYPE_DEFAULT, but also specified a match string.",
-                ),
-            },
-            RefusalRow {
-                label: "specified with a match string",
-                components: vec![comp().maybe_name(Some("alice")).call()],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Request specified MATCH_TYPE_SPECIFIED, but also specified a match string.",
-                ),
-            },
-            RefusalRow {
-                label: "unknown match type",
-                components: vec![
-                    comp()
-                        .matching(QuotaNameMatch::Malformed(QuotaMatchCode(7)))
-                        .call(),
-                ],
-                expected: error(INVALID_REQUEST, "Unknown match type 7"),
-            },
-            RefusalRow {
-                label: "ip with user",
-                components: vec![comp().entity_type("ip").call(), comp().call()],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Invalid entity filter component combination. IP filter component should \
-                     not be used with user or clientId filter component.",
-                ),
-            },
-            RefusalRow {
-                label: "client-id with ip",
-                components: vec![
-                    comp()
-                        .entity_type("client-id")
-                        .matching(QuotaNameMatch::DefaultEntity)
-                        .call(),
-                    comp()
-                        .entity_type("ip")
-                        .matching(QuotaNameMatch::Exact)
-                        .maybe_name(Some("1.2.3.4"))
-                        .call(),
-                ],
-                expected: error(
-                    INVALID_REQUEST,
-                    "Invalid entity filter component combination. IP filter component should \
-                     not be used with user or clientId filter component.",
-                ),
-            },
-            RefusalRow {
-                label: "valid exact",
-                components: exact_user_filter("alice"),
-                expected: allowed_user_quota_response(Some("alice"), 1024.0),
-            },
-            RefusalRow {
-                label: "valid default",
-                components: vec![comp().matching(QuotaNameMatch::DefaultEntity).call()],
-                expected: allowed_user_quota_response(None, 2048.0),
-            },
-        ];
-        for RefusalRow {
-            label: name,
-            components,
-            expected,
-        } in rows
-        {
-            let resp = handle(
-                &broker,
-                &request()
-                    .components(components)
-                    .matching(QuotaEntityScope::ExactTypes)
-                    .call(),
-                VERSION,
-                &ctx,
-            );
-            check!(resp == expected, "row {name}");
-        }
-
-        // A valid SPECIFIED filter matches every user entity, named or default.
-        let resp = handle(
+            .collect();
+    }
+    #[rstest_bdd_macros::when("an admin describes quotas using that exact-type filter")]
+    fn describe_filtered_user_quotas(quota_filter: &mut QuotaFilterScenario) {
+        let broker = quota_filter
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        quota_filter.response = Some(handle(
             &broker,
             &request()
-                .components(vec![comp().call()])
+                .components(quota_filter.components.clone())
                 .matching(QuotaEntityScope::ExactTypes)
                 .call(),
             VERSION,
             &ctx,
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the complete quota description refusal has code {code} message {message} and null entries"
+    )]
+    async fn check_invalid_quota_filter(
+        quota_filter: &mut QuotaFilterScenario,
+        code: i16,
+        message: String,
+    ) {
+        check!(
+            quota_filter.response.as_ref().unwrap()
+                == &krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
+                    error_code: code,
+                    error_message: Some(message),
+                    entries: None
+                })
         );
-        let mut names: Vec<Option<String>> = resp
+        quota_filter.started.take().unwrap().broker.shutdown().await;
+    }
+    #[rstest_bdd_macros::then(
+        "the complete quota response names user {user} with producer byte rate {value}"
+    )]
+    async fn check_single_user_quota_filter(
+        quota_filter: &mut QuotaFilterScenario,
+        user: String,
+        value: f64,
+    ) {
+        let name = if user == "default" {
+            None
+        } else {
+            Some(user.as_str())
+        };
+        check!(
+            quota_filter.response.as_ref().unwrap() == &allowed_user_quota_response(name, value)
+        );
+        quota_filter.started.take().unwrap().broker.shutdown().await;
+    }
+    #[rstest_bdd_macros::then(
+        "the specified-user filter matches both default and named alice entities"
+    )]
+    async fn check_specified_user_quota_filter(quota_filter: &mut QuotaFilterScenario) {
+        let mut names: Vec<Option<String>> = quota_filter
+            .response
+            .as_ref()
+            .unwrap()
             .entries
+            .as_ref()
             .expect("entries")
-            .into_iter()
-            .flat_map(|e| e.entity.into_iter().map(|d| d.entity_name))
+            .iter()
+            .flat_map(|entry| entry.entity.iter().map(|part| part.entity_name.clone()))
             .collect();
         names.sort();
         check!(names == vec![None, Some("alice".to_owned())]);
-        broker_handle.shutdown().await;
+        quota_filter.started.take().unwrap().broker.shutdown().await;
     }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_describe_quota_filters/filter.feature",
+        name = "Invalid filter shapes fail the complete request before matching stored quotas"
+    )]
+    #[tokio::test]
+    async fn invalid_filters_answer_kafkas_top_level_error(
+        quota_filter: QuotaFilterScenario,
+        components: String,
+        code: i16,
+        message: String,
+    ) {
+        let _ = (quota_filter, components, code, message);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_describe_quota_filters/filter.feature",
+        name = "Exact and default filters preserve complete matching quota rows"
+    )]
+    #[tokio::test]
+    async fn valid_quota_filter_rows(
+        quota_filter: QuotaFilterScenario,
+        components: String,
+        user: String,
+        value: f64,
+    ) {
+        let _ = (quota_filter, components, user, value);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_describe_quota_filters/filter.feature",
+        name = "Specified-user matching includes default user entities"
+    )]
+    #[tokio::test]
+    async fn specified_user_quota_rows(quota_filter: QuotaFilterScenario) { let _ = quota_filter; }
 
     #[tokio::test]
     async fn successful_empty_match_uses_some_empty_entries() {

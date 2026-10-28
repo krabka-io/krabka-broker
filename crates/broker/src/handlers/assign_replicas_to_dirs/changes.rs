@@ -325,116 +325,120 @@ mod tests {
         assert!(assignment_change(&image, 2, "t", 0, DIR) == Ok(None));
     }
 
-    /// One request that reports, for broker 2, a partition it replicates, a
-    /// partition the topic does not have, a partition of a topic it does not
-    /// replicate, a topic id that names no topic, and the zero id. Only the
-    /// first partition gives a record, and each row carries Kafka's code.
-    #[test]
-    fn plan_answers_each_partition_with_kafkas_error_code() {
-        /// The error code the plan answers for one partition of a topic.
-        #[derive(Clone, Copy)]
-        struct PartitionAnswer {
-            partition_index: i32,
-            error_code: i16,
+    #[derive(Default)]
+    struct DirectoryPlanScenario {
+        image: Option<MetadataImage>,
+        request: Option<AssignReplicasToDirsRequest>,
+        plan: Option<AssignmentPlan>,
+    }
+    #[rstest::fixture]
+    fn directory_plan() -> DirectoryPlanScenario {
+        let image = None;
+        DirectoryPlanScenario {
+            image,
+            ..Default::default()
         }
-
-        let known = uuid::Uuid::from_u128(0x42);
-        let elsewhere = uuid::Uuid::from_u128(0x43);
-        let unknown = uuid::Uuid::from_u128(0x44);
-        let nil = uuid::Uuid::nil();
-        let mut image = image_with().topic_id(known).call();
+    }
+    #[rstest_bdd_macros::given(
+        "topic t UUID 66 has replicas 1 and 2 while topic other UUID 67 has only replica 1"
+    )]
+    fn directory_plan_metadata(directory_plan: &mut DirectoryPlanScenario) {
+        let mut image = image_with().topic_id(uuid::Uuid::from_u128(66)).call();
         apply_topic()
             .image(&mut image)
             .name("other")
-            .topic_id(elsewhere)
+            .topic_id(uuid::Uuid::from_u128(67))
             .replicas(&[NodeId(1)])
-            .directories(&[nil])
+            .directories(&[uuid::Uuid::nil()])
             .call();
-
-        let topic = |topic_id: uuid::Uuid, partitions: &[i32]| ReqTopicData {
-            topic_id: ProtocolUuid(topic_id.into_bytes()),
-            partitions: partitions
-                .iter()
-                .map(|&partition_index| ReqPartData {
-                    partition_index,
+        directory_plan.image = Some(image);
+    }
+    #[rstest_bdd_macros::given(
+        "broker 2 at epoch -1 reports directory UUID 170 for these topic partitions"
+    )]
+    fn directory_plan_request(
+        directory_plan: &mut DirectoryPlanScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let topics = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [id, partitions] = row.as_slice() else {
+                    panic!("topic UUID and partition indexes required")
+                };
+                ReqTopicData {
+                    topic_id: ProtocolUuid(uuid::Uuid::from_u128(id.parse().unwrap()).into_bytes()),
+                    partitions: partitions
+                        .split(',')
+                        .map(|partition| ReqPartData {
+                            partition_index: partition.parse().unwrap(),
+                            ..Default::default()
+                        })
+                        .collect(),
                     ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        };
-        let req = AssignReplicasToDirsRequest {
+                }
+            })
+            .collect();
+        directory_plan.request = Some(AssignReplicasToDirsRequest {
             broker_id: 2,
             broker_epoch: -1,
             directories: vec![ReqDirData {
                 id: ProtocolUuid(DIR.into_bytes()),
-                topics: vec![
-                    topic(known, &[0, 99]),
-                    topic(elsewhere, &[0]),
-                    topic(unknown, &[0, 1]),
-                    topic(nil, &[0]),
-                ],
+                topics,
                 ..Default::default()
             }],
             ..Default::default()
-        };
-
-        let answer = |topic_id: uuid::Uuid, partitions: &[PartitionAnswer]| RespTopicData {
-            topic_id: ProtocolUuid(topic_id.into_bytes()),
-            partitions: partitions
-                .iter()
-                .map(
-                    |&PartitionAnswer {
-                         partition_index,
-                         error_code,
-                     }| RespPartData {
-                        partition_index,
-                        error_code,
-                        ..Default::default()
-                    },
-                )
-                .collect(),
-            ..Default::default()
-        };
+        });
+    }
+    #[rstest_bdd_macros::when("the controller plans the complete directory assignment report")]
+    fn plan_reported_directories(directory_plan: &mut DirectoryPlanScenario) {
+        directory_plan.plan = Some(plan_assignments(
+            directory_plan.image.as_ref().unwrap(),
+            2,
+            directory_plan.request.as_ref().unwrap(),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "only replica 2 of t:0 gets an assignment record and the complete response contains these ordered partition codes"
+    )]
+    fn check_directory_plan(directory_plan: &DirectoryPlanScenario, datatable: Vec<Vec<String>>) {
+        let topics = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [id, partitions] = row.as_slice() else {
+                    panic!("topic UUID and partition errors required")
+                };
+                RespTopicData {
+                    topic_id: ProtocolUuid(uuid::Uuid::from_u128(id.parse().unwrap()).into_bytes()),
+                    partitions: partitions
+                        .split(',')
+                        .map(|item| {
+                            let (partition, code) = item.split_once('=').unwrap();
+                            RespPartData {
+                                partition_index: partition.parse().unwrap(),
+                                error_code: code.parse().unwrap(),
+                                ..Default::default()
+                            }
+                        })
+                        .collect(),
+                    ..Default::default()
+                }
+            })
+            .collect();
         let expected = AssignmentPlan {
             changes: vec![assigned("t", NodeId(2))],
             response: AssignReplicasToDirsResponse {
                 directories: vec![RespDirData {
                     id: ProtocolUuid(DIR.into_bytes()),
-                    topics: vec![
-                        answer(known, &[
-                            PartitionAnswer {
-                                partition_index: 0,
-                                error_code: codes::NONE,
-                            },
-                            PartitionAnswer {
-                                partition_index: 99,
-                                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                            },
-                        ]),
-                        answer(elsewhere, &[PartitionAnswer {
-                            partition_index: 0,
-                            error_code: codes::NOT_LEADER_OR_FOLLOWER,
-                        }]),
-                        answer(unknown, &[
-                            PartitionAnswer {
-                                partition_index: 0,
-                                error_code: codes::UNKNOWN_TOPIC_ID,
-                            },
-                            PartitionAnswer {
-                                partition_index: 1,
-                                error_code: codes::UNKNOWN_TOPIC_ID,
-                            },
-                        ]),
-                        answer(nil, &[PartitionAnswer {
-                            partition_index: 0,
-                            error_code: codes::UNKNOWN_TOPIC_ID,
-                        }]),
-                    ],
+                    topics,
                     ..Default::default()
                 }],
                 ..Default::default()
             },
         };
-        assert!(plan_assignments(&image, 2, &req) == expected);
+        assert!(directory_plan.plan.as_ref().unwrap() == &expected);
     }
+    rstest_bdd_macros::scenarios!("tests/features/handler_directory_assignment_plan",fixtures=[directory_plan:DirectoryPlanScenario]);
 }

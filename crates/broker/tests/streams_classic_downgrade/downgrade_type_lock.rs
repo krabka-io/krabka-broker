@@ -5,10 +5,9 @@
 
 use {
     crate::{
-        CONVERGE_TRIES, ERR_INCONSISTENT_GROUP_PROTOCOL, ERR_NON_EMPTY_GROUP, ERR_NONE,
+        ERR_INCONSISTENT_GROUP_PROTOCOL, ERR_NON_EMPTY_GROUP,
         downgrade_classic_join::{classic_join_sync, join_request},
-        downgrade_harness::{boot, connect, create_topic, finalize_streams_version},
-        downgrade_streams_join::{streams_join_and_converge, topology},
+        downgrade_harness::{DowngradeScenario, downgrade_case},
     },
     assert2::{assert, check},
     krabka_broker::coordinator::unified::GroupType,
@@ -18,96 +17,102 @@ use {
         join_group_response::JoinGroupResponse,
         leave_group_request::{LeaveGroupRequest, MemberIdentity},
         list_groups_request::ListGroupsRequest,
+        list_groups_response::ListGroupsResponse,
     },
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, scenario, then, when},
     std::time::Duration,
     tokio::time,
 };
 
-/// A streams group with a LIVE member refuses every classic `JoinGroup`, static
-/// or dynamic, and stays Streams-typed with its member.
-///
-/// Kafka 4.3.1's `classicGroupJoin` accepts a streams group only when it is
-/// empty, and answers any other with `INCONSISTENT_GROUP_PROTOCOL` (23) and
-/// the unknown member id, before the `MEMBER_ID_REQUIRED` exchange and before
-/// it looks at the instance id (`testClassicGroupJoinWithNonEmptyStreamsGroup`).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn streams_group_with_live_member_rejects_classic_join() {
-    let (broker, bootstrap, _dir) = boot().await;
-    let streams_client = connect(&bootstrap).await;
-    let classic_client = connect(&bootstrap).await;
+#[derive(Default)]
+struct DowngradeTypeLock {
+    joins: Vec<JoinGroupResponse>,
+    listed: Option<ListGroupsResponse>,
+    deleted: Option<i16>,
+}
 
-    finalize_streams_version(&streams_client).await;
-    create_topic(&streams_client, "in2", 1).await;
+#[fixture]
+fn downgrade_type_lock() -> DowngradeTypeLock {
+    // Preserve complete refused joins independently of classic admin observations.
+    DowngradeTypeLock::default()
+}
 
-    // Live streams member (converge, do NOT leave).
-    let (_mid, resp) =
-        streams_join_and_converge(&streams_client, "g2", topology("in2"), 1, CONVERGE_TRIES).await;
-    assert!(resp.error_code == ERR_NONE);
-    broker.wait_until_group_type("g2", GroupType::Streams).await;
-    broker.wait_until_streams_group_member_count("g2", 1).await;
+#[derive(DataTableRow)]
+struct ClassicJoinInput {
+    member: String,
+    instance: String,
+}
 
-    // (row, the JoinGroup)
-    let rows = [
-        ("a dynamic member's first join", join_request("g2", "")),
-        (
-            "a dynamic member's join with a member id",
-            join_request("g2", "m-1"),
-        ),
-        ("a static member's join", JoinGroupRequest {
-            group_instance_id: Some("instance-1".into()),
-            ..join_request("g2", "")
-        }),
-        (
-            "a static member's join with a member id",
-            JoinGroupRequest {
-                group_instance_id: Some("instance-1".into()),
-                ..join_request("g2", "m-1")
-            },
-        ),
-    ];
+#[then("the downgrade group retains one live Streams member")]
+async fn locked_streams_membership(downgrade_case: &DowngradeScenario) {
+    assert!(
+        downgrade_case
+            .broker()
+            .group_type_for_test(&downgrade_case.group)
+            == Some(GroupType::Streams)
+    );
+    downgrade_case
+        .broker()
+        .wait_until_streams_group_member_count(&downgrade_case.group, 1)
+        .await;
+}
+
+#[when("these classic JoinGroup requests target the live streams group")]
+async fn request_locked_downgrade(
+    downgrade_case: &DowngradeScenario,
+    downgrade_type_lock: &mut DowngradeTypeLock,
+    #[datatable] rows: Rows<ClassicJoinInput>,
+) {
+    for row in rows {
+        let request = JoinGroupRequest {
+            group_instance_id: (row.instance != "absent").then_some(row.instance),
+            ..join_request(
+                &downgrade_case.group,
+                if row.member == "empty" {
+                    ""
+                } else {
+                    &row.member
+                },
+            )
+        };
+        downgrade_type_lock.joins.push(
+            time::timeout(
+                Duration::from_secs(5),
+                downgrade_case.classic().send(request),
+            )
+            .await
+            .expect("JoinGroup timeout")
+            .expect("JoinGroup"),
+        );
+    }
+}
+
+#[then("all four classic joins return the complete INCONSISTENT_GROUP_PROTOCOL refusal")]
+fn refused_streams_downgrade(downgrade_type_lock: &DowngradeTypeLock) {
+    assert!(downgrade_type_lock.joins.len() == 4);
     let refused = JoinGroupResponse {
         error_code: ERR_INCONSISTENT_GROUP_PROTOCOL,
         member_id: String::new(),
-        // Kafka's `JoinGroupResponse` sends an empty protocol name as null
-        // from version 7 on.
         protocol_name: None,
         ..Default::default()
     };
-    for (row, request) in rows {
-        let response = time::timeout(Duration::from_secs(5), classic_client.send(request))
-            .await
-            .expect("JoinGroup timeout")
-            .expect("JoinGroup");
-        check!(response == refused, "{row}");
+    for response in &downgrade_type_lock.joins {
+        check!(response == &refused);
     }
-
-    assert!(
-        broker.group_type_for_test("g2") == Some(GroupType::Streams),
-        "group_type must remain Streams after rejected downgrade"
-    );
-    broker.wait_until_streams_group_member_count("g2", 1).await;
 }
 
-/// After a classic-to-streams conversion, `ListGroups` reports
-/// the converted group as `streams`. The classic path can NOT delete it while
-/// the streams group has a live member.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn converted_group_admin_views_respect_type_lock() {
-    let (broker, bootstrap, _dir) = boot().await;
-    let (classic_client, streams_client) = (connect(&bootstrap).await, connect(&bootstrap).await);
-
-    create_topic(&classic_client, "in3", 1).await;
-    finalize_streams_version(&classic_client).await;
-
-    // Drain a classic group, then upgrade it to streams via a heartbeat.
-    let (cm, _gen) = classic_join_sync(&classic_client, "g3").await;
-    // Leave so the classic group is drained.
-    let _ = classic_client
+#[when("a classic group is formed and its member leaves before streams conversion")]
+async fn classic_group_for_locked_upgrade(downgrade_case: &DowngradeScenario) {
+    let (member, _) = classic_join_sync(downgrade_case.classic(), &downgrade_case.group).await;
+    downgrade_case
+        .classic()
         .send(LeaveGroupRequest {
-            group_id: "g3".into(),
-            member_id: cm.clone(),
+            group_id: downgrade_case.group.clone(),
+            member_id: member.clone(),
             members: vec![MemberIdentity {
-                member_id: cm.clone(),
+                member_id: member,
                 group_instance_id: None,
                 ..Default::default()
             }],
@@ -115,46 +120,97 @@ async fn converted_group_admin_views_respect_type_lock() {
         })
         .await
         .expect("LeaveGroup");
+    downgrade_case
+        .broker()
+        .wait_until_group_empty(&downgrade_case.group)
+        .await;
+}
 
-    // Wait for the classic leave to propagate before upgrading to streams.
-    broker.wait_until_group_empty("g3").await;
-
-    let (_sm, hb) =
-        streams_join_and_converge(&streams_client, "g3", topology("in3"), 1, CONVERGE_TRIES).await;
-    assert!(hb.error_code == ERR_NONE);
-    broker.wait_until_group_type("g3", GroupType::Streams).await;
-    broker.wait_until_streams_group_member_count("g3", 1).await;
-    assert!(broker.group_type_for_test("g3") == Some(GroupType::Streams));
-
-    // ListGroups: the converted group appears exactly once, as `streams`.
-    let lg = classic_client
-        .send(ListGroupsRequest::default())
-        .await
-        .expect("ListGroups");
-    let rows: Vec<_> = lg.groups.iter().filter(|g| g.group_id == "g3").collect();
-    assert!(rows.len() == 1, "g3 listed once, got {}", rows.len());
-    assert!(
-        rows[0].group_type.eq_ignore_ascii_case("streams"),
-        "g3 must be typed streams, got {:?}",
-        rows[0].group_type
+#[when("the classic admin client lists all groups after streams conversion")]
+async fn list_locked_streams_group(
+    downgrade_case: &DowngradeScenario,
+    downgrade_type_lock: &mut DowngradeTypeLock,
+) {
+    downgrade_type_lock.listed = Some(
+        downgrade_case
+            .classic()
+            .send(ListGroupsRequest::default())
+            .await
+            .expect("ListGroups"),
     );
+}
 
-    // DeleteGroups via the classic path must NOT remove the live streams group's
-    // offset home: with a live streams member it is NON_EMPTY_GROUP.
-    let dg = classic_client
+#[then("the converted group is listed exactly once with streams type")]
+fn visible_locked_streams_group(
+    downgrade_case: &DowngradeScenario,
+    downgrade_type_lock: &DowngradeTypeLock,
+) {
+    let rows: Vec<_> = downgrade_type_lock
+        .listed
+        .as_ref()
+        .expect("groups listed")
+        .groups
+        .iter()
+        .filter(|group| group.group_id == downgrade_case.group)
+        .collect();
+    assert!(rows.len() == 1);
+    assert!(rows[0].group_type.eq_ignore_ascii_case("streams"));
+}
+
+#[when("the classic admin client attempts to delete the live converted streams group")]
+async fn delete_locked_streams_group(
+    downgrade_case: &DowngradeScenario,
+    downgrade_type_lock: &mut DowngradeTypeLock,
+) {
+    let response = downgrade_case
+        .classic()
         .send(DeleteGroupsRequest {
-            groups_names: vec!["g3".into()],
+            groups_names: vec![downgrade_case.group.clone()],
             ..Default::default()
         })
         .await
         .expect("DeleteGroups");
+    downgrade_type_lock.deleted = Some(response.results[0].error_code);
+}
+
+#[then("the live converted group refuses deletion with NON_EMPTY_GROUP and stays Streams-typed")]
+fn retained_locked_streams_group(
+    downgrade_case: &DowngradeScenario,
+    downgrade_type_lock: &DowngradeTypeLock,
+) {
+    assert!(downgrade_type_lock.deleted == Some(ERR_NON_EMPTY_GROUP));
     assert!(
-        dg.results[0].error_code == ERR_NON_EMPTY_GROUP,
-        "delete of a live streams group must be NON_EMPTY_GROUP, got {}",
-        dg.results[0].error_code
+        downgrade_case
+            .broker()
+            .group_type_for_test(&downgrade_case.group)
+            == Some(GroupType::Streams)
     );
-    assert!(
-        broker.group_type_for_test("g3") == Some(GroupType::Streams),
-        "the streams group must survive the rejected delete"
-    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_type_lock.feature",
+    name = "streams group with live member rejects classic join"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_group_with_live_member_rejects_classic_join(
+    downgrade_case: DowngradeScenario,
+    downgrade_type_lock: DowngradeTypeLock,
+) {
+    let _ = downgrade_type_lock;
+    downgrade_case.shutdown().await;
+    drop(downgrade_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_type_lock.feature",
+    name = "converted group admin views respect type lock"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn converted_group_admin_views_respect_type_lock(
+    downgrade_case: DowngradeScenario,
+    downgrade_type_lock: DowngradeTypeLock,
+) {
+    let _ = downgrade_type_lock;
+    downgrade_case.shutdown().await;
+    drop(downgrade_case);
 }

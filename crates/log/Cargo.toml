@@ -13,7 +13,7 @@ keywords = ["kafka", "log", "storage", "records", "krabka"]
 categories = ["database-implementations", "encoding"]
 # The library and the design document its README links to. Tests, benches and
 # fixtures stay out of the package.
-include = ["src/**/*.rs", "docs/design.md", "README.md", "CHANGELOG.md"]
+include = ["src/**/*.rs", "docs/design.md", "README.md", "CHANGELOG.md", "tests/features/**/*.feature"]
 
 [lints]
 workspace = true
@@ -60,6 +60,10 @@ compio = { version = "0.19.2", default-features = false, features = ["runtime", 
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 # An independent CRC-32C oracle for the checksums the library computes with
 # `krabka_protocol::records::crc32c`.
 crc32c = { workspace = true }

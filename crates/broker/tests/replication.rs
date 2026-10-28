@@ -17,8 +17,7 @@ use {
         records::batch_from_records,
         registered_cluster, shutdown_cluster,
         topics::{
-            AssignedTopicSetup, CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor,
-            create_topic_request,
+            CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor, create_topic_request,
         },
     },
     assert2::assert,
@@ -120,330 +119,6 @@ async fn metrics_cluster(topic: &str) -> MetricsCluster {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn replication_factor_three_propagates_to_all_followers() {
-    let _g = cluster_lock().lock().await;
-    let (
-        cluster,
-        ReplicatedPartition {
-            leader_addr,
-            topic_id,
-        },
-    ) = three_replica_topic("repl").await;
-
-    let producer = connect_client(leader_addr, None).await;
-    let batch = support::client::value_batch().records(20).call();
-    produce_replicated(&producer, "repl", topic_id, batch).await;
-
-    // Wait until every broker's local log shows log_end_offset >= 20.
-    for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset("repl", 0, 20).await;
-    }
-
-    shutdown_cluster(cluster).await;
-}
-
-/// What a follower holds once it has recovered from `OFFSET_OUT_OF_RANGE`.
-#[derive(Debug, PartialEq, Eq)]
-struct RecoveredFollower {
-    batch_bases: Option<Vec<i64>>,
-    log_start: Option<i64>,
-}
-
-/// Produces 50 records in batches of `records_per_batch`, empties broker 3,
-/// and advances the leader's log start to 25, as retention or `DeleteRecords`
-/// (KIP-107) would. Broker 3 then fetches at 0, the leader answers
-/// `OFFSET_OUT_OF_RANGE`, and the replicator restarts at the leader's log
-/// start and must copy the log from there to its end.
-async fn recover_from_out_of_range(topic: &str, records_per_batch: i32) -> RecoveredFollower {
-    let _g = cluster_lock().lock().await;
-    let (
-        cluster,
-        ReplicatedPartition {
-            leader_addr,
-            topic_id,
-        },
-    ) = three_replica_topic(topic).await;
-
-    let producer = connect_client(leader_addr, None).await;
-    for _ in 0..50 / records_per_batch {
-        let batch = support::client::value_batch()
-            .records(records_per_batch)
-            .call();
-        produce_replicated(&producer, topic, topic_id, batch).await;
-    }
-    for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset(topic, 0, 50).await;
-    }
-
-    cluster[2]
-        .0
-        .test_truncate_local_log(topic, 0, 0)
-        .await
-        .expect("truncate broker 3");
-    cluster[0]
-        .0
-        .test_advance_log_start(topic, 0, 25)
-        .await
-        .expect("advance leader log_start");
-
-    let follower = &cluster[2].0;
-    follower.wait_until_local_log_end_offset(topic, 0, 50).await;
-    // The response that carries the last batch also carries the leader's log
-    // start, which the follower raises its own to only after the append.
-    support::poll::within(
-        "the follower's log start reaching the leader's",
-        Duration::from_secs(30),
-        async {
-            while follower.partition_log_start_for_test(topic, 0) != Some(25) {
-                time::sleep(Duration::from_millis(20)).await;
-            }
-        },
-    )
-    .await;
-    let recovered = RecoveredFollower {
-        batch_bases: follower.local_batch_base_offsets_for_test(topic, 0),
-        log_start: follower.partition_log_start_for_test(topic, 0),
-    };
-
-    shutdown_cluster(cluster).await;
-    recovered
-}
-
-/// A leader log start on a batch boundary: the follower restarts there and
-/// takes every batch from it on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {
-    assert!(
-        recover_from_out_of_range("oor", 1).await
-            == RecoveredFollower {
-                batch_bases: Some((25..50).collect()),
-                log_start: Some(25),
-            }
-    );
-}
-
-/// A leader log start inside a batch: the leader serves the whole batch that
-/// holds it, which begins below the follower's restart offset. The empty
-/// follower restarts at that batch's base and takes it, as Kafka's
-/// `Partition.appendRecordsToFollowerOrFutureReplica` does, and then raises
-/// its log start to the leader's from the next Fetch response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn out_of_range_inside_a_batch_restarts_at_the_batch_base() {
-    assert!(
-        recover_from_out_of_range("oor-mid-batch", 10).await
-            == RecoveredFollower {
-                batch_bases: Some(vec![20, 30, 40]),
-                log_start: Some(25),
-            }
-    );
-}
-
-/// A follower that catches up across sealed segments copies every batch of the
-/// leader, in order, with no gap.
-///
-/// Each segment holds three batches of about 300 KB. A follower fetch of 1 MiB
-/// reads to the end of one segment, goes on into the next, and stops inside it
-/// with budget left. The leader once read on from that point into the segment
-/// after, and served the first batch of that segment. The follower then
-/// skipped every offset between the two. The throttled-reassignment system
-/// test found that gap: one new replica held 43 of the 666 big batches.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
-    const BATCHES: i64 = 12;
-    let _lock_guard = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    for (handle, _, _) in &cluster {
-        handle.wait_until_brokers_registered(3).await;
-    }
-
-    let ReplicatedPartition {
-        leader_addr,
-        topic_id,
-    } = create_replicated_partition(&cluster, CreatableTopic {
-        configs: vec![CreatableTopicConfig {
-            name: "segment.bytes".into(),
-            value: Some("1048576".into()),
-            ..Default::default()
-        }],
-        ..support::topic_on("seams", &[&[1, 2]])
-    })
-    .await;
-
-    let producer = connect_client(leader_addr, None).await;
-    for _ in 0..BATCHES {
-        let batch = batch_from_records(vec![Record {
-            value: Some(bytes::Bytes::from(vec![b'x'; 300_000])),
-            ..Default::default()
-        }]);
-        produce_replicated(&producer, "seams", topic_id, batch).await;
-    }
-    let leader = &cluster[0].0;
-    let follower = &cluster[1].0;
-    follower
-        .wait_until_local_log_end_offset("seams", 0, BATCHES)
-        .await;
-
-    // Empty the follower, so that it copies the whole log again in fetches of
-    // 1 MiB, from sealed segments that are already complete.
-    follower
-        .test_truncate_local_log("seams", 0, 0)
-        .await
-        .expect("truncate the follower");
-    follower
-        .wait_until_local_log_end_offset("seams", 0, BATCHES)
-        .await;
-
-    let every_batch: Vec<i64> = (0..BATCHES).collect();
-    assert!(leader.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch.clone()));
-    assert!(follower.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch));
-
-    shutdown_cluster(cluster).await;
-}
-
-/// KIP-107 (#746): `DeleteRecords` moves the log start offset on every
-/// replica, and answers only when every live follower has it. A follower reads
-/// the leader's `log_start_offset` from each Fetch response and raises its own,
-/// as Kafka's `ReplicaFetcherThread` does, and the leader's purgatory waits for
-/// the followers to report it. So when the response arrives, no replica still
-/// serves a deleted record, and a leader change cannot bring one back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delete_records_moves_every_replica_log_start_before_it_answers() {
-    use krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResult;
-
-    let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    for (h, _, _) in &cluster {
-        h.wait_until_brokers_registered(3).await;
-    }
-
-    // cluster[0] is node 1, and the topic pins it as the leader of partition 0.
-    let leader_addr = cluster[0].1.listen_addr.to_string();
-    let client = connect_client(leader_addr, None).await;
-    let topic_id = support::topics::create_assigned_partition()
-        .client(&client)
-        .name(AssignedTopicSetup::three_replicas("trimmed").name)
-        .replicas(AssignedTopicSetup::three_replicas("trimmed").replicas)
-        .brokers(cluster.iter().map(|(broker, _, _)| broker))
-        .call()
-        .await;
-
-    let batch = support::client::value_batch().records(20).call();
-    produce_replicated(&client, "trimmed", topic_id, batch).await;
-    for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset("trimmed", 0, 20).await;
-    }
-
-    let deleted = client
-        .send(delete_records_request(
-            vec![delete_records_topic("trimmed", vec![
-                delete_records_partition(0, 10),
-            ])],
-            30_000,
-        ))
-        .await
-        .unwrap();
-    assert!(
-        deleted.topics[0].partitions
-            == vec![DeleteRecordsPartitionResult {
-                partition_index: 0,
-                low_watermark: 10,
-                error_code: 0,
-                ..Default::default()
-            }]
-    );
-
-    // The response came after every replica moved, so no wait is needed here.
-    let log_starts: Vec<Option<i64>> = cluster
-        .iter()
-        .map(|(h, _, _)| h.partition_log_start_for_test("trimmed", 0))
-        .collect();
-    assert!(log_starts == vec![Some(10); 3]);
-
-    shutdown_cluster(cluster).await;
-}
-
-/// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
-/// follows from one leader into one connection and one in-flight `Fetch`.
-///
-/// Before this, the follower spawned one task, one connection and one
-/// single-partition sessionless `Fetch` per (topic, partition). A follower of
-/// twelve partitions therefore held twelve connections to the leader and
-/// parked twelve requests in its purgatory every round, which is the
-/// reconnect storm and the request amplification #415 describes.
-///
-/// The leader's own KIP-227 session cache is what makes this observable: a
-/// sessionless follower fetch caches nothing, so
-/// `krabka_broker_incremental_fetch_sessions` counted zero however many
-/// partitions were replicating. One session per *follower* -- not per
-/// partition -- is exactly the shape being asserted, and it stays at two while
-/// the partition count grows.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
-    let _g = cluster_lock().lock().await;
-    let MetricsCluster {
-        cluster,
-        metrics_addr,
-    } = metrics_cluster("batched").await;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut sessions = -1_i64;
-    while Instant::now() < deadline {
-        sessions = scrape_gauge(metrics_addr, "krabka_broker_incremental_fetch_sessions").await;
-        if sessions == 2 {
-            break;
-        }
-        time::sleep(Duration::from_millis(100)).await;
-    }
-
-    assert!(
-        sessions == 2,
-        "one incremental fetch session per follower, not per partition; got {sessions}"
-    );
-
-    shutdown_cluster(cluster).await;
-}
-
-/// The batching's other half: a caught-up follower's request *rate* is bounded
-/// by how many fetchers it runs, not by how many partitions it follows.
-///
-/// One task per partition meant at least `2P` Fetch requests per second per
-/// follower on an idle cluster, each parked in the leader's purgatory and
-/// decoded on its own. With one fetcher per leader it is a couple per second
-/// however many partitions there are. A regression that makes the fetcher spin
-/// -- a round that returns immediately and is re-sent at once -- shows up here
-/// as a rate in the thousands, and nowhere else until a profiler is pointed at
-/// it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows() {
-    let _g = cluster_lock().lock().await;
-    let MetricsCluster {
-        cluster,
-        metrics_addr,
-    } = metrics_cluster("idle-rate").await;
-    // Let the followers settle into their steady state before sampling.
-    time::sleep(Duration::from_secs(2)).await;
-    let before = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
-    let window = Duration::from_secs(3);
-    time::sleep(window).await;
-    let after = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
-
-    // The counter is a request count over three seconds; it does not reach
-    // the range where an `i64` stops fitting an `f64` exactly, and the
-    // conversion says so rather than truncating silently.
-    let observed = i32::try_from(after - before).expect("Fetch count over three seconds fits i32");
-    let per_second = f64::from(observed) / window.as_secs_f64();
-    // Two followers, each long-polling for `fetch_max_wait`, plus whatever
-    // internal topics the cluster keeps warm. Generous by two orders of
-    // magnitude against a spin, and far below the ~50/s the per-partition
-    // shape produced for this topic alone.
-    assert!(
-        per_second < 40.0,
-        "a caught-up follower must not busy-fetch; leader saw {per_second:.1} Fetch/s"
-    );
-
-    shutdown_cluster(cluster).await;
-}
-
 /// Reads one labelled counter out of a broker's `/metrics` body, summed over
 /// every series whose label set contains `label_value`.
 async fn scrape_counter(addr: SocketAddr, name: &str, label_value: &str) -> i64 {
@@ -478,4 +153,410 @@ async fn produce_replicated(
         .await
         .unwrap();
     assert!(response.responses[0].partition_responses[0].error_code == 0);
+}
+
+use {
+    krabka_client_core::Client,
+    krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResult,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::mem::take,
+    tokio::sync::MutexGuard,
+};
+
+#[derive(Default)]
+struct ReplicationScenario {
+    cluster: Cluster,
+    guard: Option<MutexGuard<'static, ()>>,
+    topic: String,
+    partition: Option<ReplicatedPartition>,
+    producer: Option<Client>,
+    metrics: Option<SocketAddr>,
+    deleted: Option<Vec<DeleteRecordsPartitionResult>>,
+    sessions: Option<i64>,
+    fetch_counts: Option<(i64, i64, Duration)>,
+}
+
+#[fixture]
+fn replication_case() -> ReplicationScenario {
+    // Keep actual local logs and wire/metrics observations in the same fresh cluster.
+    ReplicationScenario::default()
+}
+
+impl ReplicationScenario {
+    async fn shutdown(&mut self) {
+        shutdown_cluster(take(&mut self.cluster)).await;
+        self.producer.take();
+        self.guard.take();
+    }
+}
+
+#[given("a three-replica topic {topic} assigns brokers one, two, and three")]
+async fn three_replica_partition(replication_case: &mut ReplicationScenario, topic: String) {
+    replication_case.guard = Some(cluster_lock().lock().await);
+    let (cluster, partition) = three_replica_topic(&topic).await;
+    cluster[0]
+        .0
+        .wait_until_local_partition_leader(&topic, 0, krabka_broker::NodeId(1))
+        .await;
+    replication_case.producer = Some(connect_client(&partition.leader_addr, None).await);
+    replication_case.cluster = cluster;
+    replication_case.partition = Some(partition);
+    replication_case.topic = topic;
+}
+
+#[given(
+    "topic seams has replicas one and two with one-MiB segments in a registered three-broker cluster"
+)]
+async fn segmented_replicated_partition(replication_case: &mut ReplicationScenario) {
+    replication_case.guard = Some(cluster_lock().lock().await);
+    let cluster = support::start_n_node_with_retry(3).await;
+    for (broker, _, _) in &cluster {
+        broker.wait_until_brokers_registered(3).await;
+    }
+    let partition = create_replicated_partition(&cluster, CreatableTopic {
+        configs: vec![CreatableTopicConfig {
+            name: "segment.bytes".into(),
+            value: Some("1048576".into()),
+            ..Default::default()
+        }],
+        ..support::topic_on("seams", &[&[1, 2]])
+    })
+    .await;
+    replication_case.producer = Some(connect_client(&partition.leader_addr, None).await);
+    replication_case.cluster = cluster;
+    replication_case.partition = Some(partition);
+    replication_case.topic = "seams".into();
+}
+
+#[given("a metrics-enabled three-broker cluster replicates twelve partitions of topic {topic}")]
+async fn measured_replicated_partitions(replication_case: &mut ReplicationScenario, topic: String) {
+    replication_case.guard = Some(cluster_lock().lock().await);
+    let MetricsCluster {
+        cluster,
+        metrics_addr,
+    } = metrics_cluster(&topic).await;
+    replication_case.cluster = cluster;
+    replication_case.metrics = Some(metrics_addr);
+    replication_case.topic = topic;
+}
+
+#[when("the leader appends {records} records in batches of {batch_size}")]
+async fn append_replication_batches(
+    replication_case: &ReplicationScenario,
+    records: i32,
+    batch_size: i32,
+) {
+    assert!(records % batch_size == 0);
+    for _ in 0..records / batch_size {
+        produce_replicated(
+            replication_case.producer.as_ref().expect("leader producer"),
+            &replication_case.topic,
+            replication_case
+                .partition
+                .as_ref()
+                .expect("created partition")
+                .topic_id,
+            support::client::value_batch().records(batch_size).call(),
+        )
+        .await;
+    }
+}
+
+#[then("every replica's local log reaches end offset {offset}")]
+async fn replicated_log_end(replication_case: &ReplicationScenario, offset: i64) {
+    for (broker, _, _) in &replication_case.cluster {
+        broker
+            .wait_until_local_log_end_offset(&replication_case.topic, 0, offset)
+            .await;
+    }
+}
+
+#[when("broker three loses its local log and the leader advances its log start to twenty-five")]
+async fn lose_replication_prefix(replication_case: &ReplicationScenario) {
+    replication_case.cluster[2]
+        .0
+        .test_truncate_local_log(&replication_case.topic, 0, 0)
+        .await
+        .expect("truncate broker three");
+    replication_case.cluster[0]
+        .0
+        .test_advance_log_start(&replication_case.topic, 0, 25)
+        .await
+        .expect("advance leader log start");
+}
+
+#[then("broker three recovers to end fifty with log start twenty-five and batch bases {bases}")]
+async fn recovered_replication_prefix(replication_case: &ReplicationScenario, bases: String) {
+    replication_case.cluster[2]
+        .0
+        .wait_until_local_log_end_offset(&replication_case.topic, 0, 50)
+        .await;
+    support::poll::within(
+        "follower log start reaching leader",
+        Duration::from_secs(30),
+        async {
+            while replication_case.cluster[2]
+                .0
+                .partition_log_start_for_test(&replication_case.topic, 0)
+                != Some(25)
+            {
+                time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await;
+    let expected: Vec<i64> = if let Some((first, end)) = bases.split_once("..") {
+        (first.parse().unwrap()..end.parse().unwrap()).collect()
+    } else {
+        bases.split(',').map(|base| base.parse().unwrap()).collect()
+    };
+    assert!(
+        replication_case.cluster[2]
+            .0
+            .local_batch_base_offsets_for_test(&replication_case.topic, 0)
+            == Some(expected)
+    );
+    assert!(
+        replication_case.cluster[2]
+            .0
+            .partition_log_start_for_test(&replication_case.topic, 0)
+            == Some(25)
+    );
+}
+
+#[when("the seams leader appends twelve separate batches with 300000-byte records")]
+async fn append_segmented_replication(replication_case: &ReplicationScenario) {
+    for _ in 0..12 {
+        produce_replicated(
+            replication_case.producer.as_ref().expect("leader producer"),
+            &replication_case.topic,
+            replication_case
+                .partition
+                .as_ref()
+                .expect("created partition")
+                .topic_id,
+            batch_from_records(vec![Record {
+                value: Some(bytes::Bytes::from(vec![b'x'; 300_000])),
+                ..Default::default()
+            }]),
+        )
+        .await;
+    }
+}
+
+#[then("broker two's local log reaches end offset twelve")]
+async fn segmented_follower_caught_up(replication_case: &ReplicationScenario) {
+    replication_case.cluster[1]
+        .0
+        .wait_until_local_log_end_offset(&replication_case.topic, 0, 12)
+        .await;
+}
+
+#[when("broker two's local log is truncated to zero")]
+async fn empty_segmented_follower(replication_case: &ReplicationScenario) {
+    replication_case.cluster[1]
+        .0
+        .test_truncate_local_log(&replication_case.topic, 0, 0)
+        .await
+        .expect("truncate follower");
+}
+
+#[then("leader and follower both contain every batch base zero through eleven")]
+async fn every_segmented_batch_replicated(replication_case: &ReplicationScenario) {
+    replication_case.cluster[1]
+        .0
+        .wait_until_local_log_end_offset(&replication_case.topic, 0, 12)
+        .await;
+    for index in 0..2 {
+        assert!(
+            replication_case.cluster[index]
+                .0
+                .local_batch_base_offsets_for_test(&replication_case.topic, 0)
+                == Some((0..12).collect())
+        );
+    }
+}
+
+#[when("DeleteRecords trims the replicated partition to offset ten")]
+async fn trim_replicated_partition(replication_case: &mut ReplicationScenario) {
+    let response = replication_case
+        .producer
+        .as_ref()
+        .expect("leader producer")
+        .send(delete_records_request(
+            vec![delete_records_topic(&replication_case.topic, vec![
+                delete_records_partition(0, 10),
+            ])],
+            30_000,
+        ))
+        .await
+        .unwrap();
+    replication_case.deleted = Some(response.topics[0].partitions.clone());
+}
+
+#[then("DeleteRecords returns exactly partition zero at low watermark ten without error")]
+fn trimmed_replication_response(replication_case: &ReplicationScenario) {
+    assert!(
+        replication_case
+            .deleted
+            .as_ref()
+            .expect("DeleteRecords answered")
+            == &vec![DeleteRecordsPartitionResult {
+                partition_index: 0,
+                low_watermark: 10,
+                error_code: 0,
+                ..Default::default()
+            }]
+    );
+}
+
+#[then("all three replicas already report log start ten without waiting")]
+fn trimmed_replication_logs(replication_case: &ReplicationScenario) {
+    let starts: Vec<_> = replication_case
+        .cluster
+        .iter()
+        .map(|(broker, _, _)| broker.partition_log_start_for_test(&replication_case.topic, 0))
+        .collect();
+    assert!(starts == vec![Some(10); 3]);
+}
+
+#[when("incremental replication session count is observed for up to twenty seconds")]
+async fn count_replication_sessions(replication_case: &mut ReplicationScenario) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut sessions = -1;
+    while Instant::now() < deadline {
+        sessions = scrape_gauge(
+            replication_case.metrics.expect("metrics listener"),
+            "krabka_broker_incremental_fetch_sessions",
+        )
+        .await;
+        if sessions == 2 {
+            break;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    replication_case.sessions = Some(sessions);
+}
+
+#[then("the leader holds exactly two incremental fetch sessions for its two followers")]
+fn batched_replication_sessions(replication_case: &ReplicationScenario) {
+    assert!(replication_case.sessions == Some(2));
+}
+
+#[when("followers settle for two seconds and Fetch requests are sampled over three seconds")]
+async fn sample_idle_replication_requests(replication_case: &mut ReplicationScenario) {
+    time::sleep(Duration::from_secs(2)).await;
+    let before = scrape_counter(
+        replication_case.metrics.expect("metrics listener"),
+        "krabka_broker_api_requests_total",
+        "Fetch",
+    )
+    .await;
+    let window = Duration::from_secs(3);
+    time::sleep(window).await;
+    let after = scrape_counter(
+        replication_case.metrics.expect("metrics listener"),
+        "krabka_broker_api_requests_total",
+        "Fetch",
+    )
+    .await;
+    replication_case.fetch_counts = Some((before, after, window));
+}
+
+#[then("the caught-up leader receives fewer than forty Fetch requests per second")]
+fn bounded_idle_replication_requests(replication_case: &ReplicationScenario) {
+    let (before, after, window) = replication_case
+        .fetch_counts
+        .expect("request window sampled");
+    let observed = i32::try_from(after - before).expect("three-second request count fits i32");
+    let per_second = f64::from(observed) / window.as_secs_f64();
+    assert!(
+        per_second < 40.0,
+        "caught-up follower must not busy-fetch: {per_second:.1} Fetch/s"
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "replication factor three propagates to all followers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replication_factor_three_propagates_to_all_followers(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "out of range at a batch boundary restarts at the leader log start"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "out of range inside a batch restarts at the batch base"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn out_of_range_inside_a_batch_restarts_at_the_batch_base(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a follower that catches up across segments copies every batch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_that_catches_up_across_segments_copies_every_batch(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "delete records moves every replica log start before it answers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_records_moves_every_replica_log_start_before_it_answers(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a follower batches every partition of one leader into one session"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_batches_every_partition_of_one_leader_into_one_session(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a caught up follower fetches a few times a second whatever it follows"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows(
+    replication_case: ReplicationScenario,
+) {
+    replication_case.shutdown().await;
+    drop(replication_case);
 }

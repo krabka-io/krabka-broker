@@ -49,14 +49,6 @@ const INCREMENTAL_ALTER_CONFIGS: (i16, i16) = (44, 1);
 /// `DescribeConfigs`' API key and the flexible version this suite sends.
 const DESCRIBE_CONFIGS: (i16, i16) = (32, 4);
 
-/// Kafka's `ConfigSource` codes.
-const DYNAMIC_BROKER_CONFIG: i8 = 2;
-const DYNAMIC_DEFAULT_BROKER_CONFIG: i8 = 3;
-
-/// Kafka's `ConfigType` codes.
-const INT: i8 = 3;
-const PASSWORD: i8 = 9;
-
 /// How long a change may take to reach the broker's metadata image.
 const PROPAGATION: Duration = Duration::from_secs(10);
 
@@ -216,342 +208,6 @@ fn accepted(resource_name: String) -> AlterConfigsResourceResponse {
     }
 }
 
-/// `max.connections` and `max.connections.per.ip` set to 2, on either
-/// resource, refuse a third connection while two are held, and deleting the
-/// config serves it again. Kafka's `ConnectionQuotas.updateBrokerMaxConnections`
-/// and `updateMaxConnectionsPerIp` apply both at once. The cap is 2 rather
-/// than 1 so the alter that deletes it can still connect.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connection_cap_applies_and_lifts_without_restart() {
-    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let cases = [
-        ("max.connections", Scope::ClusterDefault),
-        ("max.connections", Scope::ThisBroker),
-        ("max.connections.per.ip", Scope::ClusterDefault),
-        ("max.connections.per.ip", Scope::ThisBroker),
-    ];
-    for (key, scope) in cases {
-        let resource = scope.resource_name(handle.node_id());
-
-        let set = alter_broker()
-            .addr(addr)
-            .resource_name(resource.clone())
-            .configs(vec![(key, ConfigOperation::Set, Some("2"))])
-            .call()
-            .await;
-        assert!(set == accepted(resource.clone()));
-        let held = (hold_one(addr).await, hold_one(addr).await);
-        assert!(
-            eventually_served(addr, false).await,
-            "{key}=2 on {scope:?} must refuse a third connection while two are held"
-        );
-        drop(held);
-
-        let deleted = alter_broker()
-            .addr(addr)
-            .resource_name(resource.clone())
-            .configs(vec![(key, ConfigOperation::Delete, None)])
-            .call()
-            .await;
-        assert!(deleted == accepted(resource));
-        let held = (hold_one(addr).await, hold_one(addr).await);
-        assert!(
-            eventually_served(addr, true).await,
-            "deleting {key} on {scope:?} must lift the cap"
-        );
-        drop(held);
-    }
-}
-
-/// A per-broker value wins over the cluster default, as Kafka's
-/// `DynamicBrokerConfig` layers `DYNAMIC_BROKER_CONFIG` over
-/// `DYNAMIC_DEFAULT_BROKER_CONFIG`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_broker_connection_cap_overrides_the_cluster_default() {
-    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
-
-    let default = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Set,
-            Some("2"),
-        )])
-        .call()
-        .await;
-    assert!(default == accepted(String::new()));
-    let held = (hold_one(addr).await, hold_one(addr).await);
-    assert!(eventually_served(addr, false).await);
-    drop(held);
-
-    let per_broker = alter_broker()
-        .addr(addr)
-        .resource_name(this_broker.clone())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Set,
-            Some("100"),
-        )])
-        .call()
-        .await;
-    assert!(per_broker == accepted(this_broker));
-    let held = (hold_one(addr).await, hold_one(addr).await);
-    assert!(
-        eventually_served(addr, true).await,
-        "the per-broker 100 must win over the cluster default 2"
-    );
-    drop(held);
-}
-
-/// A dynamic cap the operator never set leaves the static one in force: a
-/// broker started with `max.connections.per.ip = 1` still refuses a second
-/// connection after a dynamic change to the other cap.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn static_connection_cap_holds_without_a_dynamic_value() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|config| {
-        config.max_connections_per_ip = 1;
-    })
-    .await;
-
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections",
-            ConfigOperation::Set,
-            Some("1000"),
-        )])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
-
-    let held = hold_one(addr).await;
-    assert!(
-        connect_served(addr).await.is_none(),
-        "the static max.connections.per.ip=1 still applies"
-    );
-    drop(held);
-}
-
-/// Kafka's `DynamicBrokerConfig.validateConfigs` refusals, on the wire: each
-/// answers `INVALID_REQUEST` (42) with Kafka's message, `validate_only` or
-/// not, and none of them is stored.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invalid_broker_config_changes_are_refused_with_kafkas_errors() {
-    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
-    let cases = [
-        (
-            String::new(),
-            "log.dirs",
-            "/tmp",
-            "Cannot update these configs dynamically: [log.dirs]".to_owned(),
-        ),
-        (
-            this_broker.clone(),
-            "ssl.keystore.location",
-            "/k",
-            "These security configs can be dynamically updated only per-listener using the \
-             listener prefix: [ssl.keystore.location]"
-                .to_owned(),
-        ),
-        (
-            String::new(),
-            "listener.name.plaintext.ssl.keystore.location",
-            "/k",
-            "Cannot update these configs at default cluster level, broker id must be \
-             specified: [listener.name.plaintext.ssl.keystore.location]"
-                .to_owned(),
-        ),
-        (
-            String::new(),
-            "max.connections",
-            "-5",
-            "Invalid value -5 for configuration max.connections: Value must be at least 0"
-                .to_owned(),
-        ),
-        (
-            this_broker.clone(),
-            "max.connections.per.ip",
-            "many",
-            "Invalid value many for configuration max.connections.per.ip: Not a number of type \
-             INT"
-            .to_owned(),
-        ),
-        (
-            "7".to_owned(),
-            "max.connections",
-            "1",
-            format!(
-                "Unexpected broker id, expected {}, but received 7",
-                handle.node_id()
-            ),
-        ),
-    ];
-    for mutation in [ConfigMutation::Validate, ConfigMutation::Apply] {
-        for (resource, key, value, message) in &cases {
-            let row = alter_broker()
-                .addr(addr)
-                .resource_name(resource.clone())
-                .configs(vec![(key, ConfigOperation::Set, Some(value))])
-                .mutation(mutation)
-                .call()
-                .await;
-            assert!(
-                row == AlterConfigsResourceResponse {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(message.clone()),
-                    ..accepted(resource.clone())
-                },
-                "{key}={value} on {resource:?}"
-            );
-        }
-    }
-    let held = (hold_one(addr).await, hold_one(addr).await);
-    assert!(
-        connect_served(addr).await.is_some(),
-        "no refused cap was stored"
-    );
-    drop(held);
-}
-
-/// `validate_only` answers as the alter would and changes nothing: the cap it
-/// validated never applies.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn validate_only_broker_change_has_no_effect() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let row = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Set,
-            Some("2"),
-        )])
-        .mutation(ConfigMutation::Validate)
-        .call()
-        .await;
-    assert!(row == accepted(String::new()));
-    let held = (hold_one(addr).await, hold_one(addr).await);
-    assert!(
-        connect_served(addr).await.is_some(),
-        "a validate_only cap must not apply"
-    );
-    drop(held);
-    assert!(
-        describe_broker(addr, String::new(), "max.connections.per.ip")
-            .await
-            .is_none(),
-        "a validate_only cap must not be stored"
-    );
-}
-
-/// `DescribeConfigs` withholds a dynamic `PASSWORD` value, as Kafka's
-/// `KafkaConfig.maybeSensitive` does: the value is null, `is_sensitive` is
-/// set, and the type is `PASSWORD`. A non-sensitive dynamic value is
-/// reported with its source. Kafka's `ConfigHelper.createBrokerConfigEntry`
-/// reads `read_only` as `!ALL_DYNAMIC_CONFIGS.contains(name)` on the exact
-/// name, so a listener-prefixed key reports `read_only` although it was just
-/// altered.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_reports_dynamic_values_and_redacts_passwords() {
-    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
-    let password = "listener.name.plaintext.ssl.keystore.password";
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(this_broker.clone())
-        .configs(vec![
-            (password, ConfigOperation::Set, Some("s3cret")),
-            ("max.connections.per.ip", ConfigOperation::Set, Some("50")),
-        ])
-        .call()
-        .await;
-    assert!(set == accepted(this_broker.clone()));
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![("max.connections", ConfigOperation::Set, Some("500"))])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
-
-    let entry = |name: &str, value: Option<&str>, source: i8, sensitive: bool, kind: i8| {
-        DescribeConfigsResourceResult {
-            name: name.to_owned(),
-            value: value.map(ToOwned::to_owned),
-            read_only: name.starts_with("listener.name."),
-            config_source: source,
-            is_sensitive: sensitive,
-            synonyms: Vec::new(),
-            config_type: kind,
-            documentation: None,
-            ..Default::default()
-        }
-    };
-    let cases = [
-        (
-            this_broker.clone(),
-            password,
-            entry(password, None, DYNAMIC_BROKER_CONFIG, true, PASSWORD),
-        ),
-        (
-            this_broker.clone(),
-            "max.connections.per.ip",
-            entry(
-                "max.connections.per.ip",
-                Some("50"),
-                DYNAMIC_BROKER_CONFIG,
-                false,
-                INT,
-            ),
-        ),
-        (
-            this_broker,
-            "max.connections",
-            entry(
-                "max.connections",
-                Some("500"),
-                DYNAMIC_DEFAULT_BROKER_CONFIG,
-                false,
-                INT,
-            ),
-        ),
-        (
-            String::new(),
-            "max.connections",
-            entry(
-                "max.connections",
-                Some("500"),
-                DYNAMIC_DEFAULT_BROKER_CONFIG,
-                false,
-                INT,
-            ),
-        ),
-    ];
-    for (resource, key, want) in cases {
-        let got = describe_broker(addr, resource.clone(), key).await;
-        assert!(got == Some(want), "{key} on {resource:?}: {got:#?}");
-    }
-}
-
-/// Alter the cluster-default `BROKER` resource and check the alter was
-/// accepted.
-async fn alter_cluster_default(
-    addr: SocketAddr,
-    configs: Vec<(&str, ConfigOperation, Option<&str>)>,
-) {
-    let row = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(configs)
-        .call()
-        .await;
-    assert!(row == accepted(String::new()));
-}
-
 /// Hold two connections from `source`, and report whether a third reaches
 /// the `served` state within [`PROPAGATION`].
 async fn third_served_after_two(addr: SocketAddr, source: Option<IpAddr>, served: bool) -> bool {
@@ -564,127 +220,6 @@ async fn third_served_after_two(addr: SocketAddr, source: Option<IpAddr>, served
     reached
 }
 
-/// The controller listener of a combined node takes the same dynamic caps,
-/// as Kafka's `DynamicBrokerConfig.addReconfigurables(controller)` registers
-/// the controller's `SocketServer`. The node's own raft and forwarding
-/// connections reach that listener from 127.0.0.1, so the probes come from
-/// 127.0.0.2 and the per-IP cap counts them alone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_ip_cap_applies_to_the_controller_listener() {
-    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let controller = handle.controller_addr();
-    let source = Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
-
-    alter_cluster_default(addr, vec![(
-        "max.connections.per.ip",
-        ConfigOperation::Set,
-        Some("2"),
-    )])
-    .await;
-    assert!(
-        third_served_after_two(controller, source, false).await,
-        "max.connections.per.ip=2 must refuse a third controller connection while two are held"
-    );
-
-    alter_cluster_default(addr, vec![(
-        "max.connections.per.ip",
-        ConfigOperation::Delete,
-        None,
-    )])
-    .await;
-    assert!(
-        third_served_after_two(controller, source, true).await,
-        "deleting max.connections.per.ip must lift the controller listener's cap"
-    );
-}
-
-/// `max.connections.per.ip=0` is stored, as Kafka's controller validates
-/// only `atLeast(0)`, but not applied: `KafkaConfig.validateValues` allows 0
-/// only beside `max.connections.per.ip.overrides`, so Kafka's broker keeps
-/// its previous config. Applying it would refuse every client.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    alter_cluster_default(addr, vec![(
-        "max.connections.per.ip",
-        ConfigOperation::Set,
-        Some("0"),
-    )])
-    .await;
-    let stored = describe_broker(addr, String::new(), "max.connections.per.ip")
-        .await
-        .and_then(|entry| entry.value);
-    assert!(stored.as_deref() == Some("0"));
-    let held = hold_one(addr).await;
-    assert!(
-        connect_served(addr).await.is_some(),
-        "a zero per-IP cap must not refuse clients"
-    );
-    drop(held);
-}
-
-/// The loopback address the override tests treat as a second client.
-const OTHER_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
-
-/// `max.connections.per.ip.overrides` gives 127.0.0.1 its own cap beside a
-/// default of 0, which Kafka allows only with overrides: 127.0.0.1 gets two
-/// connections and 127.0.0.2 none. Deleting both restores the static caps.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_ip_overrides_apply_and_lift_without_restart() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    alter_cluster_default(addr, vec![
-        ("max.connections.per.ip", ConfigOperation::Set, Some("0")),
-        (
-            "max.connections.per.ip.overrides",
-            ConfigOperation::Set,
-            Some("127.0.0.1:2"),
-        ),
-    ])
-    .await;
-    assert!(
-        eventually_served_from(addr, Some(OTHER_CLIENT), false).await,
-        "127.0.0.2 has no override, so the default of 0 must refuse it"
-    );
-    assert!(
-        third_served_after_two(addr, None, false).await,
-        "the override of 2 must refuse a third connection from 127.0.0.1"
-    );
-
-    alter_cluster_default(addr, vec![
-        ("max.connections.per.ip", ConfigOperation::Delete, None),
-        (
-            "max.connections.per.ip.overrides",
-            ConfigOperation::Delete,
-            None,
-        ),
-    ])
-    .await;
-    let held = (hold_one(addr).await, hold_one(addr).await);
-    assert!(eventually_served(addr, true).await);
-    assert!(eventually_served_from(addr, Some(OTHER_CLIENT), true).await);
-    drop(held);
-}
-
-/// `listener.name.plaintext.max.connections`, which Kafka allows on the
-/// cluster default, caps the listener on its own, below an unlimited
-/// broker-wide `max.connections`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn listener_cap_applies_and_lifts_without_restart() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let key = "listener.name.plaintext.max.connections";
-    alter_cluster_default(addr, vec![(key, ConfigOperation::Set, Some("2"))]).await;
-    assert!(
-        third_served_after_two(addr, None, false).await,
-        "{key}=2 must refuse a third connection while two are held"
-    );
-
-    alter_cluster_default(addr, vec![(key, ConfigOperation::Delete, None)]).await;
-    assert!(
-        third_served_after_two(addr, None, true).await,
-        "deleting {key} must lift the cap"
-    );
-}
-
 /// How long three connections, opened one after another, take to be served.
 async fn three_connections(addr: SocketAddr) -> Duration {
     let start = Instant::now();
@@ -694,25 +229,416 @@ async fn three_connections(addr: SocketAddr) -> Duration {
     start.elapsed()
 }
 
-/// A creation rate of 1 per second, broker-wide or for the listener, holds
-/// the acceptor between connections: three connections take at least a
-/// second and a half where they took milliseconds. The bound is a lower one,
-/// which a slow runner only makes easier to meet.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn creation_rate_holds_the_acceptor_without_restart() {
-    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    for key in [
-        "max.connection.creation.rate",
-        "listener.name.plaintext.max.connection.creation.rate",
-    ] {
-        alter_cluster_default(addr, vec![(key, ConfigOperation::Set, Some("1"))]).await;
-        let deadline = Instant::now() + PROPAGATION;
-        let mut throttled = false;
-        while !throttled && Instant::now() < deadline {
-            throttled = three_connections(addr).await >= Duration::from_millis(1500);
-        }
-        assert!(throttled, "{key}=1 must space connections a second apart");
-
-        alter_cluster_default(addr, vec![(key, ConfigOperation::Delete, None)]).await;
+use {
+    krabka_broker::BrokerHandle,
+    rstest_bdd::{Slot, datatable::Rows},
+    rstest_bdd_macros::DataTableRow,
+    tempfile::TempDir,
+};
+const OTHER_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+struct DynamicBroker {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    address: Option<SocketAddr>,
+    resource: String,
+    changed: Option<AlterConfigsResourceResponse>,
+    described: Slot<Option<DescribeConfigsResourceResult>>,
+    elapsed: Option<Duration>,
+}
+impl DynamicBroker {
+    async fn alter_configs(
+        &mut self,
+        scope: &str,
+        configs: Vec<(&str, ConfigOperation, Option<&str>)>,
+        mutation: ConfigMutation,
+    ) {
+        self.resource = self.resource_name(scope);
+        self.changed = Some(
+            alter_broker()
+                .addr(self.addr())
+                .resource_name(self.resource.clone())
+                .configs(configs)
+                .mutation(mutation)
+                .call()
+                .await,
+        );
     }
+
+    fn addr(&self) -> SocketAddr { self.address.expect("dynamic broker started") }
+
+    fn resource_name(&self, scope: &str) -> String {
+        match scope {
+            "default" => Scope::ClusterDefault.resource_name(
+                self.broker
+                    .as_ref()
+                    .expect("dynamic broker started")
+                    .node_id(),
+            ),
+            "this-broker" => Scope::ThisBroker.resource_name(
+                self.broker
+                    .as_ref()
+                    .expect("dynamic broker started")
+                    .node_id(),
+            ),
+            node => node.parse::<u64>().expect("broker resource id").to_string(),
+        }
+    }
+
+    async fn shutdown(self) {
+        self.broker
+            .expect("dynamic broker started")
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+fn dynamic() -> DynamicBroker {
+    // Start this scenario with fresh inputs and observations.
+
+    DynamicBroker {
+        broker: None,
+        directory: None,
+        address: None,
+        resource: String::new(),
+        changed: None,
+        described: Slot::default(),
+        elapsed: None,
+    }
+}
+#[rstest_bdd_macros::given("a running plaintext broker has its default static connection settings")]
+async fn dynamic_broker_defaults(dynamic: &mut DynamicBroker) {
+    let (broker, directory, address) = start_plaintext_configured(|_| {}).await;
+    dynamic.broker = Some(broker);
+    dynamic.directory = Some(directory);
+    dynamic.address = Some(address);
+}
+#[rstest_bdd_macros::given("a plaintext broker starts with static per-IP cap {cap}")]
+async fn dynamic_broker_static_cap(dynamic: &mut DynamicBroker, cap: usize) {
+    let (broker, directory, address) = start_plaintext_configured(|config| {
+        config.max_connections_per_ip = cap;
+    })
+    .await;
+    dynamic.broker = Some(broker);
+    dynamic.directory = Some(directory);
+    dynamic.address = Some(address);
+}
+#[rstest_bdd_macros::when(
+    "config {key} on resource {scope} is set to {value} with validate only {validate}"
+)]
+async fn set_live_broker_config(
+    dynamic: &mut DynamicBroker,
+    key: String,
+    scope: String,
+    value: String,
+    validate: bool,
+) {
+    dynamic
+        .alter_configs(
+            &scope,
+            vec![(&key, ConfigOperation::Set, Some(&value))],
+            if validate {
+                ConfigMutation::Validate
+            } else {
+                ConfigMutation::Apply
+            },
+        )
+        .await;
+}
+#[rstest_bdd_macros::when("config {key} is deleted from resource {scope}")]
+async fn delete_live_broker_config(dynamic: &mut DynamicBroker, key: String, scope: String) {
+    dynamic
+        .alter_configs(
+            &scope,
+            vec![(&key, ConfigOperation::Delete, None)],
+            ConfigMutation::Apply,
+        )
+        .await;
+}
+#[derive(DataTableRow)]
+struct BrokerMutation {
+    key: String,
+    operation: String,
+    value: String,
+}
+#[rstest_bdd_macros::when("broker resource {scope} receives these config mutations:")]
+async fn mutate_live_broker_config(
+    dynamic: &mut DynamicBroker,
+    scope: String,
+    #[datatable] rows: Rows<BrokerMutation>,
+) {
+    let rows: Vec<_> = rows.into_iter().collect();
+    let configs = rows
+        .iter()
+        .map(|row| match row.operation.as_str() {
+            "set" => (
+                row.key.as_str(),
+                ConfigOperation::Set,
+                Some(row.value.as_str()),
+            ),
+            "delete" => (row.key.as_str(), ConfigOperation::Delete, None),
+            other => panic!("unknown config operation {other}"),
+        })
+        .collect();
+    dynamic
+        .alter_configs(&scope, configs, ConfigMutation::Apply)
+        .await;
+}
+#[rstest_bdd_macros::then(
+    "the complete broker config change response is successful for the requested resource"
+)]
+fn broker_config_accepted(dynamic: &DynamicBroker) {
+    assert!(
+        dynamic.changed.as_ref().expect("config mutation attempted")
+            == &accepted(dynamic.resource.clone())
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete broker config change response has error 42 and message {message}"
+)]
+fn broker_config_refused(dynamic: &DynamicBroker, message: String) {
+    assert!(
+        dynamic.changed.as_ref().expect("config mutation attempted")
+            == &AlterConfigsResourceResponse {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(message),
+                ..accepted(dynamic.resource.clone())
+            }
+    );
+}
+#[rstest_bdd_macros::then(
+    "with two held {listener} connections from {source} a third is eventually served {served}"
+)]
+async fn live_broker_third_connection(
+    dynamic: &DynamicBroker,
+    listener: String,
+    source: String,
+    served: bool,
+) {
+    let addr = match listener.as_str() {
+        "data" => dynamic.addr(),
+        "controller" => dynamic
+            .broker
+            .as_ref()
+            .expect("dynamic broker started")
+            .controller_addr(),
+        other => panic!("unknown listener {other}"),
+    };
+    let source = if source == "default" {
+        None
+    } else {
+        Some(source.parse::<IpAddr>().expect("client source IP"))
+    };
+    assert!(third_served_after_two(addr, source, served).await);
+}
+#[rstest_bdd_macros::then(
+    "with {held_count} held data connections the next is immediately served {served}"
+)]
+async fn live_broker_next_connection(dynamic: &DynamicBroker, held_count: usize, served: bool) {
+    let mut held = Vec::new();
+    for _ in 0..held_count {
+        held.push(hold_one(dynamic.addr()).await);
+    }
+    assert!(connect_served(dynamic.addr()).await.is_some() == served);
+    drop(held);
+}
+#[rstest_bdd_macros::then("a new data connection from 127.0.0.2 is eventually served {served}")]
+async fn live_broker_other_ip(dynamic: &DynamicBroker, served: bool) {
+    assert!(eventually_served_from(dynamic.addr(), Some(OTHER_CLIENT), served).await);
+}
+#[rstest_bdd_macros::then(
+    "two held default-source connections allow both another default-source and a 127.0.0.2 connection"
+)]
+async fn restored_broker_source_limits(dynamic: &DynamicBroker) {
+    let addr = dynamic.addr();
+    let held = (hold_one(addr).await, hold_one(addr).await);
+    assert!(eventually_served(addr, true).await);
+    assert!(eventually_served_from(addr, Some(OTHER_CLIENT), true).await);
+    drop(held);
+}
+#[rstest_bdd_macros::when("the client describes config {key} on resource {scope}")]
+async fn describe_live_broker_config(dynamic: &mut DynamicBroker, key: String, scope: String) {
+    dynamic
+        .described
+        .set(describe_broker(dynamic.addr(), dynamic.resource_name(&scope), &key).await);
+}
+#[rstest_bdd_macros::then("the described config entry is absent")]
+fn unstored_broker_config(dynamic: &DynamicBroker) {
+    assert!(dynamic.described.get().expect("config described").is_none());
+}
+#[rstest_bdd_macros::then("the described config value is {value}")]
+fn stored_broker_config_value(dynamic: &DynamicBroker, value: String) {
+    assert!(
+        dynamic
+            .described
+            .get()
+            .expect("config described")
+            .and_then(|entry| entry.value)
+            .as_deref()
+            == Some(value.as_str())
+    );
+}
+#[derive(DataTableRow)]
+struct ExpectedBrokerConfig {
+    name: String,
+    value: String,
+    source: i8,
+    sensitive: bool,
+    kind: i8,
+    read_only: bool,
+}
+#[rstest_bdd_macros::then("the complete described config entry has these fields:")]
+fn live_broker_config_fields(
+    dynamic: &DynamicBroker,
+    #[datatable] rows: Rows<ExpectedBrokerConfig>,
+) {
+    let rows: Vec<_> = rows.into_iter().collect();
+    let [row] = rows.as_slice() else {
+        panic!("one expected config entry")
+    };
+    let expected = DescribeConfigsResourceResult {
+        name: row.name.clone(),
+        value: if row.value == "redacted" {
+            None
+        } else {
+            Some(row.value.clone())
+        },
+        config_source: row.source,
+        is_sensitive: row.sensitive,
+        config_type: row.kind,
+        read_only: row.read_only,
+        synonyms: Vec::new(),
+        documentation: None,
+        ..Default::default()
+    };
+    assert!(dynamic.described.get().expect("config described") == Some(expected));
+}
+#[rstest_bdd_macros::when(
+    "three consecutive data connections are timed until the creation rate propagates"
+)]
+async fn measure_live_creation_rate(dynamic: &mut DynamicBroker) {
+    let deadline = Instant::now() + PROPAGATION;
+    loop {
+        let elapsed = three_connections(dynamic.addr()).await;
+        dynamic.elapsed = Some(elapsed);
+        if elapsed >= Duration::from_millis(1500) || Instant::now() >= deadline {
+            break;
+        }
+    }
+}
+#[rstest_bdd_macros::then("serving three connections took at least 1500 milliseconds")]
+fn live_creation_rate_delayed(dynamic: &DynamicBroker) {
+    assert!(dynamic.elapsed.expect("connections timed") >= Duration::from_millis(1500));
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "connection cap applies and lifts without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_cap_applies_and_lifts_without_restart(
+    dynamic: DynamicBroker,
+    key: String,
+    scope: String,
+) {
+    let _ = (key, scope);
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per broker connection cap overrides the cluster default"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_broker_connection_cap_overrides_the_cluster_default(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "static connection cap holds without a dynamic value"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn static_connection_cap_holds_without_a_dynamic_value(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "invalid broker config changes are refused with kafkas errors"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_broker_config_changes_are_refused_with_kafkas_errors(
+    dynamic: DynamicBroker,
+    scope: String,
+    key: String,
+    value: String,
+    validate: bool,
+    message: String,
+) {
+    let _ = (scope, key, value, validate, message);
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "validate only broker change has no effect"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_only_broker_change_has_no_effect(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "describe reports dynamic values and redacts passwords"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_reports_dynamic_values_and_redacts_passwords(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per ip cap applies to the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_ip_cap_applies_to_the_controller_listener(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "zero per ip cap without overrides is stored but not applied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per ip overrides apply and lift without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_ip_overrides_apply_and_lift_without_restart(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "listener cap applies and lifts without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn listener_cap_applies_and_lifts_without_restart(dynamic: DynamicBroker) {
+    dynamic.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "creation rate holds the acceptor without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn creation_rate_holds_the_acceptor_without_restart(dynamic: DynamicBroker, key: String) {
+    let _ = key;
+    dynamic.shutdown().await;
 }

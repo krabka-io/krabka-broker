@@ -225,16 +225,14 @@ mod tests {
     use {
         super::*,
         crate::{
-            cordoned_log_dirs::CORDONED_LOG_DIRS,
             features::{ELR_VERSION, METADATA_VERSION},
             handlers::{
                 incremental_alter_configs::test_support::{
                     make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
                 },
-                test_support::{BrokerConfigMutationSetup, broker_config_context},
+                test_support::broker_config_context,
             },
             test_support::broker_registration,
-            throttle::LEADER_THROTTLED_RATE_KEY,
         },
         assert2::check,
         krabka_metadata::{MetadataImage, NodeId},
@@ -243,15 +241,6 @@ mod tests {
     };
 
     const SERVING: NodeId = NodeId(1);
-
-    fn op(key: &str, operation: i8, value: &str) -> AlterableConfig {
-        AlterableConfig {
-            name: key.into(),
-            config_operation: operation,
-            value: Some(value.into()),
-            ..Default::default()
-        }
-    }
 
     fn record(node: NodeId, key: &str, value: Option<&str>) -> MetadataRecord {
         MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
@@ -291,232 +280,143 @@ mod tests {
         image
     }
 
-    /// One row of the broker-resource table.
-    struct Case<'a> {
-        name: &'a str,
-        image: MetadataImage,
-        configs: Vec<AlterableConfig>,
-        want: Result<Vec<MetadataRecord>, (i16, &'a str)>,
+    #[derive(Default)]
+    struct IncrementalBrokerConfiguration {
+        image: Option<MetadataImage>,
+        resource: AlterConfigsResource,
+        log_dirs: Vec<PathBuf>,
+        result: Option<Result<Vec<MetadataRecord>, (i16, String)>>,
     }
-
-    fn check_broker_record_cases(cases: Vec<Case<'_>>, setup: BrokerConfigMutationSetup<'_>) {
-        for Case {
-            name,
+    #[rstest::fixture]
+    fn incremental_broker() -> IncrementalBrokerConfiguration {
+        let image = None;
+        IncrementalBrokerConfiguration {
             image,
-            configs,
-            want,
-        } in cases
-        {
-            let resource = make_resource(name, configs.clone());
-            let got = broker_records(
-                &resource,
-                broker_config_context()
-                    .image(&image)
-                    .serving(setup.serving)
-                    .log_dirs(setup.log_dirs)
-                    .unstable(setup.unstable)
-                    .call(),
-            );
-            let want = want.map_err(|(code, message)| (code, message.to_owned()));
-            check!(got == want, "{name:?} {configs:?}");
+            ..Default::default()
         }
     }
-
-    /// Each row is a resource name, the stored state, the operations, and the
-    /// whole expected outcome: the staged records, or the error.
-    #[test]
-    fn broker_resources_follow_kafkas_dynamic_config_rules() {
-        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-        let rate = LEADER_THROTTLED_RATE_KEY;
-        let min_isr = config_keys::MIN_INSYNC_REPLICAS;
-        let cases: Vec<Case<'_>> = vec![
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(rate, "2048")],
-                want: Ok(vec![record(SERVING, rate, Some("2048"))]),
+    #[rstest_bdd_macros::given(
+        "broker 1 serves resource \"{resource}\" with ELR enabled {elr} at metadata.version {level}"
+    )]
+    fn broker_configuration_context(
+        incremental_broker: &mut IncrementalBrokerConfiguration,
+        resource: String,
+        elr: bool,
+        level: i16,
+    ) {
+        let mut image = image_with(&[], elr);
+        image.apply(&MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: METADATA_VERSION.into(),
+                level,
             },
-            Case {
-                name: "2",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(rate, "2048")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Unexpected broker id, expected 1, but received 2",
-                )),
-            },
-            Case {
-                name: "x",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(rate, "2048")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Node id must be an integer, but it is: x",
-                )),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![op(rate, 7, "1")],
-                want: Err((codes::INVALID_REQUEST, "Unknown operations type 7")),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg("log.retention.ms", "86400000")],
-                want: Ok(vec![record(cluster, "log.retention.ms", Some("86400000"))]),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg("num.io.threads", "16")],
-                want: Ok(vec![record(cluster, "num.io.threads", Some("16"))]),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(
-                    "listener.name.client.ssl.keystore.location",
-                    "/k",
-                )],
-                want: Ok(vec![record(
-                    SERVING,
-                    "listener.name.client.ssl.keystore.location",
-                    Some("/k"),
-                )]),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg("log.dirs", "/tmp")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: [log.dirs]",
-                )),
-            },
-            // `kafka-configs --entity-type brokers --entity-default
-            // --add-config auto.leader.rebalance.enable=false` is refused, as
-            // is every other `KafkaConfig` key that is not dynamic.
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg("auto.leader.rebalance.enable", "false")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs dynamically: [auto.leader.rebalance.enable]",
-                )),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg("max.connections", "-5")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Invalid value -5 for configuration max.connections: Value must be at least 0",
-                )),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![op("metric.reporters", OP_APPEND, "com.example.Reporter")],
-                want: Ok(vec![record(
-                    krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                    "metric.reporters",
-                    Some("org.apache.kafka.common.metrics.JmxReporter,com.example.Reporter"),
-                )]),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(rate, "-5")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Invalid value -5 for configuration leader.replication.throttled.rate: \
-                     Value must be at least 0",
-                )),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(
-                    config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-                    "true",
-                )],
-                want: Ok(vec![record(
-                    SERVING,
-                    config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-                    Some("true"),
-                )]),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![make_set_cfg(min_isr, "2")],
-                want: Ok(vec![record(SERVING, min_isr, Some("2"))]),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], true),
-                configs: vec![make_set_cfg(min_isr, "2")],
-                want: Err((
-                    codes::INVALID_CONFIG,
-                    "Broker-level min.insync.replicas cannot be altered while ELR is enabled.",
-                )),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], true),
-                configs: vec![make_del_cfg(min_isr)],
-                want: Err((
-                    codes::INVALID_CONFIG,
-                    "Cluster-level min.insync.replicas cannot be removed while ELR is enabled.",
-                )),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![op(rate, OP_APPEND, "1")],
-                want: Err((
-                    codes::INVALID_CONFIG,
-                    "Config value append is not allowed for config key: \
-                     leader.replication.throttled.rate",
-                )),
-            },
-            Case {
-                name: "1",
-                image: image_with(&[], false),
-                configs: vec![op("not.a.kafka.key", OP_SUBTRACT, "1")],
-                want: Err((
-                    codes::INVALID_CONFIG,
-                    "Unknown config name: not.a.kafka.key",
-                )),
-            },
-            Case {
-                name: "",
-                image: image_with(&[], false),
-                configs: vec![op("log.cleanup.policy", OP_APPEND, "compact")],
-                want: Ok(vec![record(
-                    cluster,
-                    "log.cleanup.policy",
-                    Some("delete,compact"),
-                )]),
-            },
-            Case {
-                name: "",
-                image: image_with(
-                    &[StoredConfig {
-                        node: cluster,
-                        key: "log.cleanup.policy",
-                        value: "compact,delete",
-                    }],
-                    false,
-                ),
-                configs: vec![op("log.cleanup.policy", OP_SUBTRACT, "delete")],
-                want: Ok(vec![record(cluster, "log.cleanup.policy", Some("compact"))]),
-            },
-        ];
-        check_broker_record_cases(cases, BrokerConfigMutationSetup::default());
+        ));
+        incremental_broker.image = Some(image);
+        incremental_broker.resource = make_resource(
+            if resource == "<empty>" { "" } else { &resource },
+            Vec::new(),
+        );
     }
+    #[rstest_bdd_macros::given("the broker has configured log directories /tmp/d1 and /tmp/d2")]
+    fn configured_cordon_directories(incremental_broker: &mut IncrementalBrokerConfiguration) {
+        incremental_broker.log_dirs = vec![PathBuf::from("/tmp/d1"), PathBuf::from("/tmp/d2")];
+    }
+    #[rstest_bdd_macros::given(
+        "broker configuration already stores node {node}, key {key} and value \"{value}\""
+    )]
+    fn stored_incremental_broker_config(
+        incremental_broker: &mut IncrementalBrokerConfiguration,
+        node: i64,
+        key: String,
+        value: String,
+    ) {
+        let node = if node == -1 {
+            krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+        } else {
+            NodeId(u64::try_from(node).expect("broker ID"))
+        };
+        incremental_broker
+            .image
+            .as_mut()
+            .expect("configuration context")
+            .apply(&record(node, &key, Some(&value)));
+    }
+    #[rstest_bdd_macros::when(
+        "IncrementalAlterConfigs applies operation {operation} to key {key} with value \"{value}\""
+    )]
+    fn alter_incremental_broker_config(
+        incremental_broker: &mut IncrementalBrokerConfiguration,
+        operation: i8,
+        key: String,
+        value: String,
+    ) {
+        let value = if value == "<empty>" {
+            String::new()
+        } else {
+            value
+        };
+        incremental_broker.resource.configs = vec![AlterableConfig {
+            name: key,
+            config_operation: operation,
+            value: (value != "null").then_some(value),
+            ..Default::default()
+        }];
+        incremental_broker.result = Some(broker_records(
+            &incremental_broker.resource,
+            broker_config_context()
+                .image(
+                    incremental_broker
+                        .image
+                        .as_ref()
+                        .expect("configuration image"),
+                )
+                .log_dirs(&incremental_broker.log_dirs)
+                .call(),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the staged broker config is node {node}, key {key} and value \"{value}\""
+    )]
+    fn staged_incremental_broker_config(
+        incremental_broker: &IncrementalBrokerConfiguration,
+        node: i64,
+        key: String,
+        value: String,
+    ) {
+        let node = if node == -1 {
+            krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+        } else {
+            NodeId(u64::try_from(node).expect("broker ID"))
+        };
+        check!(
+            incremental_broker
+                .result
+                .as_ref()
+                .expect("configuration result")
+                == &Ok(vec![record(
+                    node,
+                    &key,
+                    (value != "null").then_some(value.as_str())
+                )])
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the incremental broker config is refused with code {code} and message \"{message}\""
+    )]
+    fn refused_incremental_broker_config(
+        incremental_broker: &IncrementalBrokerConfiguration,
+        code: i16,
+        message: String,
+    ) {
+        check!(
+            incremental_broker
+                .result
+                .as_ref()
+                .expect("configuration result")
+                == &Err((code, message))
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_incremental_broker_configuration.feature", fixtures = [incremental_broker: IncrementalBrokerConfiguration]);
 
     /// Kafka stores the string the client sent
     /// (`ConfigurationControlManager.incrementalAlterConfigResource` takes the
@@ -576,120 +476,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// KIP-1066 `cordoned.log.dirs`, with each refusal a live
-    /// `apache/kafka:4.3.1` gave `kafka-configs --alter` on a broker with
-    /// `log.dirs=/tmp/d1,/tmp/d2`: a per-broker key, a `LIST` that APPEND and
-    /// SUBTRACT act on, a value checked against this node's `log.dirs`, and a
-    /// write the controller refuses below `metadata.version` `4.3-IV0`.
-    #[test]
-    fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
-        const KEY: &str = CORDONED_LOG_DIRS;
-        let log_dirs = [PathBuf::from("/tmp/d1"), PathBuf::from("/tmp/d2")];
-        let at_level = |level: i16, configs: &[StoredConfig<'_>]| {
-            let mut image = image_with(configs, false);
-            image.apply(&MetadataRecord::V1FeatureLevel(
-                krabka_metadata::FeatureLevelRecord {
-                    name: METADATA_VERSION.into(),
-                    level,
-                },
-            ));
-            image
-        };
-        let disabled = (
-            codes::INVALID_CONFIG,
-            "The cordoned.log.dirs configuration value cannot be set because it requires \
-             metadata.version >= 4.3-IV0",
-        );
-        let cases: Vec<Case<'_>> = vec![
-            Case {
-                name: "1",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "/tmp/d1")],
-                want: Ok(vec![record(SERVING, KEY, Some("/tmp/d1"))]),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "*")],
-                want: Ok(vec![record(SERVING, KEY, Some("*"))]),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[StoredConfig {
-                    node: SERVING,
-                    key: KEY,
-                    value: "/tmp/d1",
-                }]),
-                configs: vec![op(KEY, OP_APPEND, "/tmp/d2")],
-                want: Ok(vec![record(SERVING, KEY, Some("/tmp/d1,/tmp/d2"))]),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[StoredConfig {
-                    node: SERVING,
-                    key: KEY,
-                    value: "/tmp/d1,/tmp/d2",
-                }]),
-                configs: vec![op(KEY, OP_SUBTRACT, "/tmp/d1")],
-                want: Ok(vec![record(SERVING, KEY, Some("/tmp/d2"))]),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "/tmp/nope")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "requirement failed: All entries in cordoned.log.dirs must be present in \
-                     log.dirs or log.dir. Missing entries : /tmp/nope",
-                )),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "*,/tmp/d1")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "requirement failed: When cordoned.log.dirs is set to *, it must not \
-                     contain other values",
-                )),
-            },
-            Case {
-                name: "1",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "/tmp/d1,")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Configuration 'cordoned.log.dirs' values must not be empty.",
-                )),
-            },
-            Case {
-                name: "",
-                image: at_level(30, &[]),
-                configs: vec![make_set_cfg(KEY, "/tmp/d1")],
-                want: Err((
-                    codes::INVALID_REQUEST,
-                    "Cannot update these configs at default cluster level, broker id must be \
-                     specified: [cordoned.log.dirs]",
-                )),
-            },
-            Case {
-                name: "1",
-                image: at_level(29, &[]),
-                configs: vec![make_set_cfg(KEY, "")],
-                want: Err(disabled),
-            },
-            Case {
-                name: "1",
-                image: at_level(29, &[]),
-                configs: vec![make_del_cfg(KEY)],
-                want: Err(disabled),
-            },
-        ];
-        check_broker_record_cases(cases, BrokerConfigMutationSetup {
-            log_dirs: &log_dirs,
-            ..Default::default()
-        });
     }
 }

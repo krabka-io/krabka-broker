@@ -69,19 +69,8 @@ async fn create_topic_named(addr: SocketAddr, topic: &str) {
     assert!(r.topics[0].error_code == 0, "create: {:?}", r.topics[0]);
 }
 
-async fn produce_one(addr: SocketAddr) -> u64 {
-    let ProduceOutcome {
-        response_bytes,
-        error_code,
-    } = produce_to(addr, TOPIC, 0).await;
-    assert!(error_code == 0, "produce error code: {error_code}");
-    response_bytes
-}
-
 /// What a produce to one partition answered with.
 struct ProduceOutcome {
-    /// The length of the response body.
-    response_bytes: u64,
     /// The partition's error code.
     error_code: i16,
 }
@@ -106,7 +95,7 @@ async fn produce_to(addr: SocketAddr, topic: &str, partition: i32) -> ProduceOut
         }],
         ..Default::default()
     };
-    let (body_len, r) = kafka_wire::request_once::<_, ProduceResponse>(
+    let (_body_len, r) = kafka_wire::request_once::<_, ProduceResponse>(
         addr,
         &req,
         (0, PRODUCE_VERSION),
@@ -121,20 +110,18 @@ async fn produce_to(addr: SocketAddr, topic: &str, partition: i32) -> ProduceOut
         .next()
         .expect("one partition in resp");
     ProduceOutcome {
-        response_bytes: body_len as u64,
         error_code: part.error_code,
     }
 }
 
-async fn fetch_one(addr: SocketAddr) {
-    use krabka_protocol::owned::fetch_response::FetchResponse;
+async fn fetch_one(addr: SocketAddr) -> FetchResponse {
     let req = single_partition_fetch()
         .topic(TOPIC.into())
         .topic_id(Uuid::default())
         .call();
     let (_, r): (usize, FetchResponse) =
         kafka_wire::request_once(addr, &req, (1, FETCH_VERSION), CLIENT_ID, (1, true)).await;
-    assert!(r.error_code == 0, "fetch top-level: {r:?}");
+    r
 }
 
 async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
@@ -156,51 +143,71 @@ async fn wait_until_absent(addr: SocketAddr, needle: &str) -> String {
         .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejected_client_labels_leave_the_metrics_body() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
-    let handle = Broker::start(cfg).await.unwrap();
-    let kafka_addr = handle.listen_addr();
-    let metrics_addr = handle.metrics_addr().expect("metrics listener");
-
-    let unknown = produce_to(kafka_addr, "invented-topic", 0).await;
-    check!(unknown.error_code != 0);
-    create_topic_named(kafka_addr, TOPIC).await;
-    handle.wait_until_partition_present(TOPIC, 0).await;
-    let body = wait_until_absent(metrics_addr, "invented-topic").await;
-    check!(!body.contains("invented-topic"));
-
-    let out_of_range = produce_to(kafka_addr, TOPIC, 99).await;
-    check!(out_of_range.error_code != 0);
-    create_topic_named(kafka_addr, "eviction-trigger").await;
-    handle
-        .wait_until_partition_present("eviction-trigger", 0)
-        .await;
-    let pair = format!("topic=\"{TOPIC}\",partition=\"99\"");
-    let body = wait_until_absent(metrics_addr, &pair).await;
-    check!(!body.contains(&pair));
-
-    handle.shutdown().await;
+use {
+    krabka_broker::BrokerHandle,
+    krabka_protocol::owned::fetch_response::FetchResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+struct MetricEndpoint {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    body: Option<String>,
+    produced: Option<ProduceOutcome>,
+    fetched: Option<FetchResponse>,
 }
+#[fixture]
+fn endpoint() -> MetricEndpoint {
+    // Start this scenario with fresh inputs and observations.
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = metrics_config(log_dir.path().to_path_buf());
-
-    let handle = Broker::start(cfg).await.unwrap();
-    let kafka_addr = handle.listen_addr();
-    let metrics_addr = handle
+    MetricEndpoint {
+        broker: None,
+        directory: None,
+        body: None,
+        produced: None,
+        fetched: None,
+    }
+}
+async fn start_endpoint(endpoint: &mut MetricEndpoint, directory: TempDir, config: BrokerConfig) {
+    endpoint.broker = Some(Broker::start(config).await.expect("metrics broker starts"));
+    endpoint.directory = Some(directory);
+}
+#[given("a broker exposes its default metric families before any client traffic")]
+async fn default_metrics(endpoint: &mut MetricEndpoint) {
+    let directory = tempfile::tempdir().expect("log directory");
+    let config = metrics_config(directory.path().to_path_buf());
+    start_endpoint(endpoint, directory, config).await;
+}
+#[given("a broker exposes metrics and scans partition disk usage once per second")]
+async fn disk_metrics(endpoint: &mut MetricEndpoint) {
+    let directory = tempfile::tempdir().expect("log directory");
+    let mut config = metrics_config(directory.path().to_path_buf());
+    config.partition_disk_scan_interval = krabka_units::secs(1);
+    start_endpoint(endpoint, directory, config).await;
+}
+#[given("a broker exposes metrics with client label eviction enabled by its default configuration")]
+async fn eviction_metrics(endpoint: &mut MetricEndpoint) {
+    let directory = tempfile::tempdir().expect("log directory");
+    let mut config = BrokerConfig::for_tests(directory.path().to_path_buf());
+    config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    start_endpoint(endpoint, directory, config).await;
+}
+#[when("the operator scrapes the OpenMetrics endpoint")]
+async fn scrape_endpoint(endpoint: &mut MetricEndpoint) {
+    let address = endpoint
+        .broker
+        .as_ref()
+        .expect("metrics broker")
         .metrics_addr()
-        .expect("metrics server should be bound");
-
-    // Initial scrape: gauges and scalar counters are present
-    // immediately, even pre-traffic. (Topic-labelled `Family` metrics
-    // need at least one label entry to emit a series — those are
-    // verified after we drive traffic below.)
-    let body = scrape(metrics_addr).await;
+        .expect("metrics listener");
+    endpoint.body = Some(scrape(address).await);
+}
+#[then(
+    "the initial exposition includes scalar gauges counters replica lag and the OpenMetrics EOF marker"
+)]
+fn initial_families(endpoint: &MetricEndpoint) {
+    let body = endpoint.body.as_ref().expect("metrics scraped");
     for needle in [
         "krabka_broker_partitions_led",
         "krabka_broker_active_controller",
@@ -213,25 +220,51 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
         assert!(body.contains(needle), "missing {needle} in:\n{body}");
     }
     assert!(body.contains("# EOF"), "no EOF marker in:\n{body}");
+}
+async fn produce_metric_record(endpoint: &mut MetricEndpoint) {
+    let broker = endpoint.broker.as_ref().expect("metrics broker");
+    create_topic(broker.listen_addr()).await;
+    broker.wait_until_partition_present(TOPIC, 0).await;
+    endpoint.produced = Some(produce_to(broker.listen_addr(), TOPIC, 0).await);
+}
 
-    // Drive a CreateTopics + Produce + Fetch so the topic-labelled
-    // counters get at least one entry and start emitting series.
-    create_topic(kafka_addr).await;
-    // Wait for the partition to materialize in the metadata image (the
-    // partition writer is ready on commit) instead of guessing a duration.
-    handle.wait_until_partition_present(TOPIC, 0).await;
-    produce_one(kafka_addr).await;
-    handle.wait_until_high_watermark(TOPIC, 0, 1).await;
-    fetch_one(kafka_addr).await;
-
-    // Wait for the background gauge sampler (1s tick) to publish
-    // partitions_led rather than sleeping past one tick. active_controller
-    // is set in the same sampler iteration, so it is live once this holds.
-    handle
-        .wait_for_metrics("partitions_led >= 1", |m| m.partitions_led.get() >= 1)
+#[when("the client creates a topic produces one record and fetches it after commitment")]
+async fn drive_traffic(endpoint: &mut MetricEndpoint) {
+    produce_metric_record(endpoint).await;
+    let broker = endpoint.broker.as_ref().expect("metrics broker");
+    let address = broker.listen_addr();
+    broker.wait_until_high_watermark(TOPIC, 0, 1).await;
+    endpoint.fetched = Some(fetch_one(address).await);
+    broker
+        .wait_for_metrics("partitions_led >=1", |metrics| {
+            metrics.partitions_led.get() >= 1
+        })
         .await;
-
-    let body = scrape(metrics_addr).await;
+}
+#[then(
+    "the successful traffic appears in topic counters controller event timings and live controller gauges"
+)]
+fn traffic_families(endpoint: &MetricEndpoint) {
+    assert!(
+        endpoint
+            .produced
+            .as_ref()
+            .expect("produce completed")
+            .error_code
+            == 0
+    );
+    assert!(
+        endpoint
+            .fetched
+            .as_ref()
+            .expect("fetch completed")
+            .error_code
+            == 0
+    );
+    let body = endpoint
+        .body
+        .as_ref()
+        .expect("post traffic metrics scraped");
     for needle in [
         "krabka_broker_topic_bytes_in_total",
         "krabka_broker_topic_bytes_out_total",
@@ -298,40 +331,15 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
             "{series} should count the controller's events, body:\n{body}"
         );
     }
-
-    handle.shutdown().await;
 }
-
-/// Confirms that the per-partition counters appear next to the topic-level
-/// ones, and that the disk-scanner gauge reports non-zero values for
-/// materialized partitions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn partition_level_metrics_and_disk_gauge_render() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = metrics_config(log_dir.path().to_path_buf());
-    // Enable the disk scanner with a 1s tick so the gauge gets a
-    // chance to populate within the test's wait window.
-    cfg.partition_disk_scan_interval = krabka_units::secs(1);
-
-    let handle = Broker::start(cfg).await.unwrap();
-    let kafka_addr = handle.listen_addr();
-    let metrics_addr = handle
-        .metrics_addr()
-        .expect("metrics server should be bound");
-
-    // Create the topic + produce a record so the per-partition
-    // counters fire and the on-disk segment exists for the scanner.
-    create_topic(kafka_addr).await;
-    // Wait for the partition to materialize (writer ready on commit)
-    // instead of guessing a duration.
-    handle.wait_until_partition_present(TOPIC, 0).await;
-    produce_one(kafka_addr).await;
-
-    // Wait for the disk scanner to publish a non-zero on-disk size for the
-    // materialized partition rather than sleeping past its 1s tick.
-    handle
-        .wait_for_metrics("partition_disk_bytes > 0", |m| {
-            m.partition_disk_bytes
+#[when("one produced record materializes a local segment and the disk scanner observes its size")]
+async fn drive_disk(endpoint: &mut MetricEndpoint) {
+    produce_metric_record(endpoint).await;
+    let broker = endpoint.broker.as_ref().expect("metrics broker");
+    broker
+        .wait_for_metrics("partition_disk_bytes >0", |metrics| {
+            metrics
+                .partition_disk_bytes
                 .get_or_create(&PartitionLabel {
                     topic: TOPIC.into(),
                     partition: 0,
@@ -340,9 +348,18 @@ async fn partition_level_metrics_and_disk_gauge_render() {
                 > 0
         })
         .await;
-
-    let body = scrape(metrics_addr).await;
-
+}
+#[then("successful production exposes topic and partition bytes CPU time and a disk usage gauge")]
+fn partition_families(endpoint: &MetricEndpoint) {
+    assert!(
+        endpoint
+            .produced
+            .as_ref()
+            .expect("produce completed")
+            .error_code
+            == 0
+    );
+    let body = endpoint.body.as_ref().expect("partition metrics scraped");
     // Topic-level still present.
     let topic_needle = format!("krabka_broker_topic_bytes_in_total{{topic=\"{TOPIC}\"}}");
     assert!(
@@ -388,6 +405,104 @@ async fn partition_level_metrics_and_disk_gauge_render() {
         body.contains(&disk_prefix),
         "missing partition_disk_bytes for materialized partition in:\n{body}"
     );
+}
+#[when("the client produces to topic {topic} partition {partition}")]
+async fn invalid_destination(endpoint: &mut MetricEndpoint, topic: String, partition: i32) {
+    let address = endpoint
+        .broker
+        .as_ref()
+        .expect("metrics broker")
+        .listen_addr();
+    endpoint.produced = Some(produce_to(address, &topic, partition).await);
+}
+#[then("the invalid produce destination is refused")]
+fn refused(endpoint: &MetricEndpoint) {
+    check!(
+        endpoint
+            .produced
+            .as_ref()
+            .expect("invalid produce completed")
+            .error_code
+            != 0
+    );
+}
+#[when(
+    "creating the valid topic triggers reconciliation and metrics are observed until the invented topic label disappears"
+)]
+async fn evict_topic(endpoint: &mut MetricEndpoint) {
+    let broker = endpoint.broker.as_ref().expect("metrics broker");
+    create_topic_named(broker.listen_addr(), TOPIC).await;
+    broker.wait_until_partition_present(TOPIC, 0).await;
+    endpoint.body = Some(
+        wait_until_absent(
+            broker.metrics_addr().expect("metrics listener"),
+            "invented-topic",
+        )
+        .await,
+    );
+}
+#[then("the invented topic does not remain in the metrics body")]
+fn topic_evicted(endpoint: &MetricEndpoint) {
+    check!(
+        !endpoint
+            .body
+            .as_ref()
+            .expect("eviction metrics observed")
+            .contains("invented-topic")
+    );
+}
+#[when(
+    "creating another topic triggers reconciliation and metrics are observed until partition ninety nine disappears"
+)]
+async fn evict_partition(endpoint: &mut MetricEndpoint) {
+    let broker = endpoint.broker.as_ref().expect("metrics broker");
+    create_topic_named(broker.listen_addr(), "eviction-trigger").await;
+    broker
+        .wait_until_partition_present("eviction-trigger", 0)
+        .await;
+    let pair = format!("topic=\"{TOPIC}\",partition=\"99\"");
+    endpoint.body =
+        Some(wait_until_absent(broker.metrics_addr().expect("metrics listener"), &pair).await);
+}
+#[then("the rejected topic partition pair does not remain in the metrics body")]
+fn partition_evicted(endpoint: &MetricEndpoint) {
+    let pair = format!("topic=\"{TOPIC}\",partition=\"99\"");
+    check!(
+        !endpoint
+            .body
+            .as_ref()
+            .expect("eviction metrics observed")
+            .contains(&pair)
+    );
+}
 
-    let _ = time::timeout(Duration::from_secs(10), handle.shutdown()).await;
+#[scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "Rejected topic and partition labels are removed during reconciliation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_client_labels_leave_the_metrics_body(endpoint: MetricEndpoint) {
+    endpoint.broker.expect("metrics broker").shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "OpenMetrics exposes initial families and records client traffic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metrics_endpoint_serves_openmetrics_and_counters_tick(endpoint: MetricEndpoint) {
+    endpoint.broker.expect("metrics broker").shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "Partition traffic and disk usage appear alongside topic metrics"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn partition_level_metrics_and_disk_gauge_render(endpoint: MetricEndpoint) {
+    let _ = time::timeout(
+        Duration::from_secs(10),
+        endpoint.broker.expect("metrics broker").shutdown(),
+    )
+    .await;
 }

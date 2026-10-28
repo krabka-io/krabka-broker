@@ -25,9 +25,7 @@
 //! the last sample happens to be. A slope over a whole number of teeth is zero,
 //! and over a partial one is small -- which is why the tolerance is a fraction
 //! of the series' own mean rather than an absolute number of bytes, and why
-//! [`a_segment_roll_sawtooth_is_level`] is one of the tests below.
-//!
-//! [`a_segment_roll_sawtooth_is_level`]: tests::a_segment_roll_sawtooth_is_level
+//! the segment-roll sawtooth scenario is one of the tests below.
 
 use std::{fmt, time::Duration};
 
@@ -291,35 +289,26 @@ pub fn judge_all(series: &[BoundedSeries]) -> Vec<Verdict> {
         .collect()
 }
 
+#[cfg(test)]
 mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
     };
 
-    /// Equal to within a hair, so a comparison against a small exact integer
-    /// is written without a Clippy suppression.
     fn near(a: f64, b: f64) -> bool { (a - b).abs() < 1.0e-9 }
 
-    /// A bound loose enough that only the shape under test can fail it.
-    const BOUND: Bound = Bound {
-        ceiling: 1_000.0,
-        drift_fraction: 0.20,
-        floor: 10.0,
-    };
-
-    /// A series sampled every 10 seconds, from `values`.
     fn series(values: &[f64]) -> Series {
         let mut series = Series::new("probe", "widgets");
-        for (i, value) in values.iter().enumerate() {
-            let step = u64::try_from(i).expect("a test series is short");
-            series.push(Duration::from_secs(10 * step), *value);
+        for (index, value) in values.iter().enumerate() {
+            let index = u64::try_from(index).expect("a test series is short");
+            series.push(Duration::from_secs(10 * index), *value);
         }
         series
     }
 
-    /// A sawtooth: `teeth` repetitions of a ramp of `height` over `period`
-    /// samples, sitting on `base` and gaining `per_tooth` each repetition.
     fn sawtooth(teeth: usize, period: usize, base: f64, height: f64, per_tooth: f64) -> Vec<f64> {
         let mut values = Vec::new();
         for tooth in 0..teeth {
@@ -331,34 +320,122 @@ mod tests {
         values
     }
 
-    /// A resident set that does not move is the whole point of the lane.
-    #[test]
-    fn a_flat_series_is_level() {
-        let judged = judge(&series(&[500.0; 40]), BOUND);
-        assert!(let Verdict::Level { .. } = &judged);
-        let Verdict::Level { rise, .. } = judged else {
+    struct DriftScenario {
+        observations: Vec<Series>,
+        bound: Bound,
+        verdicts: Vec<Verdict>,
+    }
+
+    #[fixture]
+    fn drift() -> DriftScenario {
+        // Resource observations and verdicts are private to each scenario.
+        DriftScenario {
+            observations: Vec::new(),
+            bound: Bound {
+                ceiling: 1_000.0,
+                drift_fraction: 0.20,
+                floor: 10.0,
+            },
+            verdicts: Vec::new(),
+        }
+    }
+
+    #[given("resource bounds allow ceiling {ceiling} drift fraction {fraction} and floor {floor}")]
+    fn configured_bound(drift: &mut DriftScenario, ceiling: f64, fraction: f64, floor: f64) {
+        drift.bound = Bound {
+            ceiling,
+            drift_fraction: fraction,
+            floor,
+        };
+    }
+
+    #[given("{samples} resource samples are constant at {value}")]
+    fn constant_observations(drift: &mut DriftScenario, samples: usize, value: f64) {
+        drift.observations = vec![series(&vec![value; samples])];
+    }
+
+    #[given("{samples} resource samples repeat values {values}")]
+    fn cyclic_observations(drift: &mut DriftScenario, samples: usize, values: String) {
+        let cycle: Vec<f64> = values
+            .split(',')
+            .map(|value| value.parse().expect("a numeric resource sample"))
+            .collect();
+        let values: Vec<_> = (0..samples)
+            .map(|index| cycle[index % cycle.len()])
+            .collect();
+        drift.observations = vec![series(&values)];
+    }
+
+    #[given("{samples} resource samples start at {base} and change by {change}")]
+    fn linear_observations(drift: &mut DriftScenario, samples: i32, base: f64, change: f64) {
+        let values: Vec<_> = (0..samples)
+            .map(|index| change.mul_add(f64::from(index), base))
+            .collect();
+        drift.observations = vec![series(&values)];
+    }
+
+    #[given(
+        "ten retention sawteeth have six samples with base 400 amplitude 120 and baseline rise {rise}"
+    )]
+    fn retention_observations(drift: &mut DriftScenario, rise: f64) {
+        drift.observations = vec![series(&sawtooth(10, 6, 400.0, 120.0, rise))];
+    }
+
+    #[given("resource sample {index} is replaced by {value}")]
+    fn anomalous_observation(drift: &mut DriftScenario, index: usize, value: f64) {
+        drift.observations[0].points[index].value = value;
+    }
+
+    #[given("named rising and flat resource series occur in that order")]
+    fn ordered_resource_series(drift: &mut DriftScenario) {
+        let values: Vec<_> = (0..40)
+            .map(|index| 8.0f64.mul_add(f64::from(index), 300.0))
+            .collect();
+        let mut rising = series(&values);
+        rising.name = "rising".into();
+        let mut flat = series(&[500.0; 40]);
+        flat.name = "flat".into();
+        drift.observations = vec![rising, flat];
+    }
+
+    #[when("the soak judge evaluates the resource series")]
+    fn judge_observations(drift: &mut DriftScenario) {
+        drift.verdicts = vec![judge(&drift.observations[0], drift.bound)];
+    }
+
+    #[when("the soak judge evaluates all named series together")]
+    fn judge_named_observations(drift: &mut DriftScenario) {
+        let bounded: Vec<_> = drift
+            .observations
+            .iter()
+            .cloned()
+            .map(|series| BoundedSeries {
+                series,
+                bound: drift.bound,
+            })
+            .collect();
+        drift.verdicts = judge_all(&bounded);
+    }
+
+    #[then("the resource series does not fail its bound")]
+    fn resource_is_level(drift: &DriftScenario) {
+        check!(!drift.verdicts[0].is_failure());
+    }
+
+    #[then("the flat resource verdict is Level with absolute fitted rise below one")]
+    fn flat_resource_level(drift: &DriftScenario) {
+        assert!(let Verdict::Level { .. } = &drift.verdicts[0]);
+        let Verdict::Level { rise, .. } = &drift.verdicts[0] else {
             unreachable!("checked above")
         };
         check!(rise.abs() < 1.0);
     }
 
-    /// Sampling jitter around a fixed mean is not drift.
-    #[test]
-    fn noise_around_a_flat_mean_is_level() {
-        let wobble = [500.0, 512.0, 488.0, 505.0, 495.0, 517.0, 483.0, 501.0];
-        let values: Vec<f64> = (0..40).map(|i| wobble[i % wobble.len()]).collect();
-        check!(!judge(&series(&values), BOUND).is_failure());
-    }
-
-    /// The failure this lane exists for: a series that climbs steadily.
-    #[test]
-    fn a_rising_series_drifts() {
-        let values: Vec<f64> = (0..40)
-            .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
-            .collect();
-        let judged = judge(&series(&values), BOUND);
-        assert!(let Verdict::Drift { .. } = &judged);
-        let Verdict::Drift { from, to, rise, .. } = &judged else {
+    #[then("the rising verdict describes drift from seconds 200 through 390 exceeding 140 widgets")]
+    fn rising_resource_drift(drift: &DriftScenario) {
+        let judged = &drift.verdicts[0];
+        assert!(let Verdict::Drift { .. } = judged);
+        let Verdict::Drift { from, to, rise, .. } = judged else {
             unreachable!("checked above")
         };
         check!(from.elapsed == Duration::from_secs(200));
@@ -367,35 +444,20 @@ mod tests {
         check!(judged.to_string().contains("trends upward"));
     }
 
-    /// Segment roll and retention make every log-directory series a sawtooth.
-    /// A rule that read the first and last sample would call this a leak
-    /// whenever the run ended near a tooth's peak.
-    #[test]
-    fn a_segment_roll_sawtooth_is_level() {
-        let values = sawtooth(10, 6, 400.0, 120.0, 0.0);
-        check!(!judge(&series(&values), BOUND).is_failure());
-    }
-
-    /// The same sawtooth on a baseline that creeps: what a log directory does
-    /// when retention deletes less than the producer writes. It must fail even
-    /// though the teeth dwarf the creep.
-    #[test]
-    fn a_sawtooth_on_a_rising_baseline_drifts() {
-        let values = sawtooth(10, 6, 400.0, 120.0, 40.0);
-        let judged = judge(&series(&values), BOUND);
+    #[then("the rising retention baseline fails with a Drift verdict")]
+    fn rising_retention_drift(drift: &DriftScenario) {
+        let judged = &drift.verdicts[0];
         check!(judged.is_failure(), "{judged}");
         assert!(let Verdict::Drift { .. } = judged);
     }
 
-    /// A ceiling breach names the sample that broke it, wherever in the run it
-    /// landed -- warm-up included.
-    #[test]
-    fn a_ceiling_breach_names_the_sample() {
-        let mut values = vec![500.0; 40];
-        values[3] = 1_400.0;
-        let judged = judge(&series(&values), BOUND);
-        assert!(let Verdict::Ceiling { .. } = &judged);
-        let Verdict::Ceiling { worst, .. } = &judged else {
+    #[then(
+        "the ceiling verdict identifies 1400 widgets at second 30 and names the 1000 widget ceiling"
+    )]
+    fn ceiling_breach_identified(drift: &DriftScenario) {
+        let judged = &drift.verdicts[0];
+        assert!(let Verdict::Ceiling { .. } = judged);
+        let Verdict::Ceiling { worst, .. } = judged else {
             unreachable!("checked above")
         };
         check!(worst.elapsed == Duration::from_secs(30));
@@ -403,71 +465,33 @@ mod tests {
         check!(judged.to_string().contains("over the 1000 widgets ceiling"));
     }
 
-    /// A ceiling is a ceiling, not an average: one breach fails a series whose
-    /// every other sample is comfortable.
-    #[test]
-    fn the_ceiling_outranks_a_flat_trend() {
-        let mut values = vec![500.0; 40];
-        values[39] = 1_001.0;
-        check!(judge(&series(&values), BOUND).is_failure());
+    #[then("the resource series fails its bound")]
+    fn resource_fails(drift: &DriftScenario) {
+        check!(drift.verdicts[0].is_failure());
     }
 
-    /// A soak that sampled four times has measured nothing, and must not be
-    /// able to report level.
-    #[test]
-    fn too_few_samples_is_not_a_pass() {
-        let judged = judge(&series(&[500.0; 4]), BOUND);
-        assert!(let Verdict::TooFewSamples { .. } = &judged);
-        let Verdict::TooFewSamples { judged: n, .. } = judged else {
+    #[then("the verdict rejects too few second-half observations")]
+    fn insufficient_observations(drift: &DriftScenario) {
+        let judged = &drift.verdicts[0];
+        assert!(let Verdict::TooFewSamples { .. } = judged);
+        let Verdict::TooFewSamples {
+            judged: observations,
+            ..
+        } = judged
+        else {
             unreachable!("checked above")
         };
-        check!(n < MIN_TREND_SAMPLES);
-        check!(judge(&series(&[]), BOUND).is_failure());
+        check!(*observations < MIN_TREND_SAMPLES);
     }
 
-    /// A series that falls is not a drift failure: the tolerance is one-sided
-    /// on purpose, because a cache that shrinks is not a leak.
-    #[test]
-    fn a_falling_series_is_level() {
-        let values: Vec<f64> = (0..40)
-            .map(|i| 5.0f64.mul_add(-f64::from(i), 900.0))
-            .collect();
-        check!(!judge(&series(&values), BOUND).is_failure());
+    #[then("rising fails and flat passes with named verdicts in input order")]
+    fn ordered_verdicts(drift: &DriftScenario) {
+        check!(drift.verdicts.len() == 2);
+        check!(drift.verdicts[0].is_failure());
+        check!(!drift.verdicts[1].is_failure());
+        check!(drift.verdicts[0].to_string().starts_with("rising:"));
+        check!(drift.verdicts[1].to_string().starts_with("flat:"));
     }
 
-    /// The floor keeps a near-zero series from being failed by its own noise:
-    /// 20% of a mean of 2 is 0.4, which one sample of jitter clears.
-    #[test]
-    fn the_floor_protects_a_near_zero_series() {
-        let values: Vec<f64> = (0..40).map(|i| f64::from(i % 5)).collect();
-        check!(!judge(&series(&values), BOUND).is_failure());
-    }
-
-    /// Every series is judged, and in the order given.
-    #[test]
-    fn judge_all_reports_one_verdict_per_series() {
-        let mut rising = series(
-            &(0..40)
-                .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
-                .collect::<Vec<_>>(),
-        );
-        rising.name = "rising".into();
-        let mut flat = series(&[500.0; 40]);
-        flat.name = "flat".into();
-        let verdicts = judge_all(&[
-            BoundedSeries {
-                series: rising,
-                bound: BOUND,
-            },
-            BoundedSeries {
-                series: flat,
-                bound: BOUND,
-            },
-        ]);
-        check!(verdicts.len() == 2);
-        check!(verdicts[0].is_failure());
-        check!(!verdicts[1].is_failure());
-        check!(verdicts[0].to_string().starts_with("rising:"));
-        check!(verdicts[1].to_string().starts_with("flat:"));
-    }
+    scenarios!("tests/features/migrated/tests/soak/drift.feature", fixtures = [drift: DriftScenario]);
 }

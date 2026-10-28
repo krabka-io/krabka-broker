@@ -130,10 +130,7 @@ struct OpaFixture {
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::{
-    kafka_wire::{
-        PlainAuthenticationSetup, create_topic_as_super_user, drive_produce_as_plain,
-        plain_authentication_setup,
-    },
+    kafka_wire::{PlainAuthenticationSetup, create_topic_as_super_user, drive_produce_as_plain},
     support::{
         produce::single_partition_response,
         sasl::{sasl_temp_config, start_broker},
@@ -199,83 +196,89 @@ async fn produce_when_partition_ready(
 // Tests.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Spec §4.2 test 1.
-///
-/// The OPA mock returns `{"result": false}` for every POST. `alice`
-/// authenticates through SASL/PLAIN and sends Produce against a topic that the
-/// super-user `admin` created beforehand. The per-partition response must carry
-/// `TOPIC_AUTHORIZATION_FAILED (29)`, because alice's Write check on the topic
-/// goes through OPA, which always denies it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
-    let OpaFixture {
-        opa: _opa,
-        handle,
-        dir: _dir,
-        addr,
-    } = opa_fixture(false).await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct ExternalPolicy {
+    server: Option<OpaFixture>,
+    topic: String,
+    response: Option<ProduceResponse>,
+}
+#[fixture]
+fn policy() -> ExternalPolicy {
+    // Start this scenario with fresh inputs and observations.
 
-    // Bootstrap the topic via admin (super-user → OPA bypassed).
-    create_topic_as_admin(addr, "blocked-topic").await;
-
-    // alice (non-super-user) tries to Produce → OPA returns deny → 29.
-    let resp = drive_produce_as_plain(
-        addr,
-        single_record_produce_request("blocked-topic", 0, b"hello"),
-        &plain_authentication_setup()
-            .client_id(CLIENT_ID)
-            .password(alice_password())
-            .call(),
-    )
-    .await
-    .expect("Produce must round-trip");
-
-    handle.shutdown().await;
-
-    let p = single_partition_response(&resp);
-    assert!(
-        p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
-        "OPA denied alice's Write on blocked-topic, expected \
-         TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
+    ExternalPolicy {
+        server: None,
+        topic: String::new(),
+        response: None,
+    }
+}
+#[given("OPA returns {decision} while the administrator creates topic {topic}")]
+async fn decision(policy: &mut ExternalPolicy, decision: bool, topic: String) {
+    let server = opa_fixture(decision).await;
+    create_topic_as_admin(server.addr, &topic).await;
+    policy.server = Some(server);
+    policy.topic = topic;
+}
+#[when("ordinary PLAIN user alice produces hello to the administrator's topic")]
+async fn write(policy: &mut ExternalPolicy) {
+    let server = policy
+        .server
+        .as_ref()
+        .expect("OPA broker and topic created");
+    policy.response = Some(
+        produce_when_partition_ready(
+            &server.handle,
+            server.addr,
+            "alice",
+            &alice_password(),
+            &policy.topic,
+        )
+        .await
+        .expect("Produce must round-trip"),
     );
 }
-
-/// Spec §4.2 test 2.
-///
-/// The OPA mock returns `{"result": true}` for every POST. `alice`
-/// authenticates and produces, and the per-partition response row must carry
-/// `error_code = 0`.
-///
-/// `produce_when_partition_ready` waits on the broker handle, event-driven, for
-/// the partition's local writer to materialise, and only then sends the single
-/// Produce. That wait closes the raft commit-then-apply gap between
-/// `CreateTopics` returning and the partition appearing in the local
-/// `MetadataImage`, so the test needs no fixed sleep.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_allowed_by_opa_succeeds() {
-    let OpaFixture {
-        opa: _opa,
-        handle,
-        dir: _dir,
-        addr,
-    } = opa_fixture(true).await;
-
-    create_topic_as_admin(addr, "permitted-topic").await;
-
-    let resp =
-        produce_when_partition_ready(&handle, addr, "alice", &alice_password(), "permitted-topic")
-            .await
-            .expect("Produce must round-trip");
-
-    handle.shutdown().await;
-
-    let p = single_partition_response(&resp);
+#[then("the partition returns topic authorization failed")]
+fn refused(policy: &ExternalPolicy) {
+    let response = policy.response.as_ref().expect("Produce completed");
+    let partition = single_partition_response(response);
     assert!(
-        p.error_code == 0,
-        "OPA allowed alice's Write on permitted-topic, expected \
-         error_code=0, got {p:?}"
+        partition.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
+        "OPA denied alice's Write, expected TOPIC_AUTHORIZATION_FAILED (29), got {partition:?}"
     );
 }
+#[then("the partition accepts the authorized write")]
+fn accepted(policy: &ExternalPolicy) {
+    let response = policy.response.as_ref().expect("Produce completed");
+    let partition = single_partition_response(response);
+    assert!(
+        partition.error_code == 0,
+        "OPA allowed alice's Write, expected error_code0, got {partition:?}"
+    );
+}
+async fn shutdown_policy(policy: ExternalPolicy) {
+    let OpaFixture {
+        opa, handle, dir, ..
+    } = policy.server.expect("OPA broker started");
+    handle.shutdown().await;
+    drop((opa, dir));
+}
+#[scenario(
+    path = "tests/features/migrated/tests/opa_authorizer.feature",
+    name = "OPA denial prevents an ordinary authenticated topic write"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_blocked_by_opa_returns_topic_authorization_failed(policy: ExternalPolicy) {
+    shutdown_policy(policy).await;
+}
+#[scenario(
+    path = "tests/features/migrated/tests/opa_authorizer.feature",
+    name = "OPA permission admits an ordinary authenticated topic write"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_allowed_by_opa_succeeds(policy: ExternalPolicy) { shutdown_policy(policy).await; }
 
 async fn opa_fixture(allowed: bool) -> OpaFixture {
     let opa = MockServer::start().await;

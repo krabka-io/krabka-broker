@@ -918,122 +918,6 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
     handle.shutdown().await;
 }
 
-/// The streams group a [`StreamsCommitRow`] commits to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamsGroup {
-    /// Member `m1` at member epoch 5.
-    Live,
-    /// The same group after its actor exited, as one does after a failed
-    /// write. A respawned actor holds no member.
-    Stopped,
-}
-
-/// One `TxnOffsetCommit` to a streams group and the code Kafka answers on its
-/// row.
-struct StreamsCommitRow {
-    name: &'static str,
-    group: StreamsGroup,
-    member_id: &'static str,
-    group_instance_id: Option<&'static str>,
-    member_epoch: i32,
-    expected: i16,
-}
-
-/// Kafka's `StreamsGroup.validateOffsetCommit` with `isTransactional`: a
-/// commit skips the member check only when it names no member id, the
-/// unknown generation and no group instance id. A streams actor that exited
-/// is respawned to validate the commit instead of refusing it with
-/// `UNKNOWN_SERVER_ERROR`.
-#[tokio::test]
-async fn txn_offset_commit_to_a_streams_group_follows_kafka() {
-    let rows = [
-        StreamsCommitRow {
-            name: "no member, generation or instance id",
-            group: StreamsGroup::Live,
-            member_id: "",
-            group_instance_id: None,
-            member_epoch: -1,
-            expected: codes::NONE,
-        },
-        StreamsCommitRow {
-            name: "a group instance id and no member",
-            group: StreamsGroup::Live,
-            member_id: "",
-            group_instance_id: Some("instance"),
-            member_epoch: -1,
-            expected: codes::UNKNOWN_MEMBER_ID,
-        },
-        StreamsCommitRow {
-            name: "the member at its epoch",
-            group: StreamsGroup::Live,
-            member_id: "m1",
-            group_instance_id: None,
-            member_epoch: 5,
-            expected: codes::NONE,
-        },
-        StreamsCommitRow {
-            name: "no member, generation or instance id, stopped actor",
-            group: StreamsGroup::Stopped,
-            member_id: "",
-            group_instance_id: None,
-            member_epoch: -1,
-            expected: codes::NONE,
-        },
-        StreamsCommitRow {
-            name: "a member the respawned actor does not hold",
-            group: StreamsGroup::Stopped,
-            member_id: "m1",
-            group_instance_id: None,
-            member_epoch: 5,
-            expected: codes::UNKNOWN_MEMBER_ID,
-        },
-    ];
-
-    let SeededBroker { handle, dir: _dir } = start_seeded_broker().await;
-    let broker = handle.broker_arc_for_test();
-    let ReadIdentity { address, user } = read_identity();
-    let ctx = request_context(&user, &address, "txn-offset-commit-streams");
-
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (i, row) in rows.iter().enumerate() {
-        let group_id = format!("streams-{i}");
-        seed_streams_group()
-            .coordinator(&broker.group_coordinator)
-            .group_id(&group_id)
-            .call()
-            .await;
-        if row.group == StreamsGroup::Stopped {
-            stop_streams_actor(&broker.group_coordinator, &group_id).await;
-        }
-        let producer = super::test_support::TxnCommitProducer::initial(krabka_ids::ProducerId(
-            142 + i64::try_from(i).expect("small"),
-        ));
-        let request = TxnOffsetCommitRequest {
-            member_id: row.member_id.into(),
-            group_instance_id: row.group_instance_id.map(str::to_owned),
-            generation_id_or_member_epoch: row.member_epoch,
-            ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
-                transactional_id: format!("tid-streams-{i}"),
-                group_id: &group_id,
-                producer,
-                topics: vec![topic("a", &[0])],
-            })
-            .await
-        };
-        let response = commit_response(&broker, &request, 5, &ctx).await;
-        actual.push((row.name, response_rows(&response)));
-        expected.push((row.name, vec![ResponseRow {
-            topic: "a".into(),
-            partition: 0,
-            code: row.expected,
-        }]));
-    }
-    check!(actual == expected);
-
-    handle.shutdown().await;
-}
-
 /// The transaction the coordinator holds for one verification case: its state,
 /// its producer epoch, and whether it holds the group's offsets partition.
 #[derive(Clone, Copy)]
@@ -1406,4 +1290,107 @@ fn response_rows(response: &TxnOffsetCommitResponse) -> Vec<ResponseRow> {
             })
         })
         .collect()
+}
+
+#[derive(serde::Deserialize)]
+struct StreamsCommitInput {
+    stopped: bool,
+    member_id: String,
+    group_instance_id: Option<String>,
+    member_epoch: i32,
+}
+#[derive(Default)]
+struct StreamsOffsetCommit {
+    seeded: Option<SeededBroker>,
+    input: Option<StreamsCommitInput>,
+    rows: Option<Vec<ResponseRow>>,
+}
+#[rstest::fixture]
+fn streams_offset_commit() -> StreamsOffsetCommit {
+    // A fresh broker and streams actor belong to each transactional commit.
+    StreamsOffsetCommit::default()
+}
+#[rstest_bdd_macros::given("a streams member m1 at epoch 5 and transactional commit input {input}")]
+async fn streams_commit_group(streams_offset_commit: &mut StreamsOffsetCommit, input: String) {
+    let input: StreamsCommitInput = serde_json::from_str(&input).expect("streams commit input");
+    let seeded = start_seeded_broker().await;
+    let broker = seeded.handle.broker_arc_for_test();
+    seed_streams_group()
+        .coordinator(&broker.group_coordinator)
+        .group_id("streams-bdd")
+        .call()
+        .await;
+    if input.stopped {
+        stop_streams_actor(&broker.group_coordinator, "streams-bdd").await;
+    }
+    streams_offset_commit.seeded = Some(seeded);
+    streams_offset_commit.input = Some(input);
+}
+#[rstest_bdd_macros::when(
+    "the producer transactionally commits topic a partition 0 using API version 5"
+)]
+async fn commit_streams_offset(streams_offset_commit: &mut StreamsOffsetCommit) {
+    use {
+        super::test_support::{TxnCommitProducer, TxnCommitSetup},
+        krabka_ids::ProducerId,
+    };
+    let broker = streams_offset_commit
+        .seeded
+        .as_ref()
+        .expect("seeded broker")
+        .handle
+        .broker_arc_for_test();
+    let input = streams_offset_commit.input.as_ref().expect("commit input");
+    let request = TxnOffsetCommitRequest {
+        member_id: input.member_id.clone(),
+        group_instance_id: input.group_instance_id.clone(),
+        generation_id_or_member_epoch: input.member_epoch,
+        ..open_commit_request(&broker, TxnCommitSetup {
+            transactional_id: "tid-streams-bdd".into(),
+            group_id: "streams-bdd",
+            producer: TxnCommitProducer::initial(ProducerId(142)),
+            topics: vec![topic("a", &[0])],
+        })
+        .await
+    };
+    let ReadIdentity { address, user } = read_identity();
+    let ctx = request_context(&user, &address, "txn-offset-commit-streams");
+    streams_offset_commit.rows = Some(response_rows(
+        &commit_response(&broker, &request, 5, &ctx).await,
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the complete commit response is topic a partition 0 with Kafka code {code}"
+)]
+async fn streams_commit_response(streams_offset_commit: &mut StreamsOffsetCommit, code: i16) {
+    check!(
+        streams_offset_commit
+            .rows
+            .as_ref()
+            .expect("commit executed")
+            == &vec![ResponseRow {
+                topic: "a".into(),
+                partition: 0,
+                code,
+            }]
+    );
+    streams_offset_commit
+        .seeded
+        .take()
+        .expect("seeded broker")
+        .handle
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/handlers/txn_offset_commit/integration_tests.feature",
+    name = "Validate transactional streams membership including a respawned actor"
+)]
+#[tokio::test]
+async fn txn_offset_commit_to_a_streams_group_follows_kafka(
+    streams_offset_commit: StreamsOffsetCommit,
+    input: String,
+    code: i16,
+) {
+    let _ = (streams_offset_commit, input, code);
 }

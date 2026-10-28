@@ -16,15 +16,18 @@ mod support;
 
 use {
     crate::{
-        jvm_acceptance::{broker0_advertised, start_host_broker, start_host_broker_with},
+        jvm_acceptance::{broker0_advertised, start_host_broker_with},
         support::admin::topic_spec,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
     krabka_client_admin::AdminClient,
+    rstest_bdd::datatable::Rows,
     std::{
         io::Write,
         process::{Command, Output, Stdio},
     },
+    tempfile::TempDir,
 };
 
 /// One librdkafka client this suite runs the whole round trip against.
@@ -148,229 +151,347 @@ fn max_sent_version(trace: &str, request: &str) -> Option<u32> {
         .max()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn round_trip_group_join_and_api_versions_with_kcat() {
-    let (broker, _dir) = start_host_broker().await;
-    let bootstrap = broker0_advertised();
-    let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
-        .await
-        .expect("admin client");
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct LibraryClientInput {
+    image: String,
+    program: String,
+    library: String,
+    version_marker: String,
+    topic: String,
+    group: String,
+    payload: String,
+}
 
-    for (
-        index,
-        ClientCase {
-            image,
-            program,
-            library,
-            version_marker,
-        },
-    ) in CLIENTS.iter().enumerate()
-    {
-        check_client_version(image, program, library, version_marker);
+struct LibraryClientRun {
+    input: LibraryClientInput,
+    metadata: Option<Output>,
+    produced: Option<Output>,
+    consumed: Option<Output>,
+}
 
-        let topic = format!("librdkafka-conformance-{index}");
-        admin
-            .create_topics(
-                &[topic_spec(topic.clone(), 1, 1)],
-                krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
-            )
-            .await
-            .expect("create conformance topic");
+#[derive(Default)]
+struct LibraryConformance {
+    host: Option<(BrokerHandle, TempDir)>,
+    admin: Option<AdminClient>,
+    clients: Vec<LibraryClientRun>,
+}
 
-        let metadata = run_client(
-            image,
-            program,
-            &[
-                "-L",
+#[rstest::fixture]
+fn library_conformance() -> LibraryConformance {
+    // Each pinned client speaks to one new broker and its own topic/group.
+    LibraryConformance::default()
+}
+
+impl LibraryConformance {
+    async fn shutdown(self) {
+        let Self { host, admin, .. } = self;
+        drop(admin);
+        let (broker, directory) = host.expect("host broker");
+        broker.shutdown().await;
+        drop(directory);
+    }
+
+    fn produce(&mut self, settings: &[&str]) {
+        for client in &mut self.clients {
+            let mut args = vec![
+                "-P",
                 "-b",
-                bootstrap,
+                broker0_advertised(),
                 "-t",
-                &topic,
-                "-X",
-                "api.version.request=true",
-                "-d",
-                "protocol",
-            ],
-            None,
-        );
-        let trace = String::from_utf8_lossy(&metadata.stderr);
-        assert!(
-            trace.contains("ApiVersionRequest") && trace.contains("ApiVersionResponse"),
-            "{program} did not negotiate ApiVersions: {trace}"
-        );
+                &client.input.topic,
+                "-p",
+                "0",
+            ];
+            args.extend_from_slice(settings);
+            client.produced = Some(run_client(
+                &client.input.image,
+                &client.input.program,
+                &args,
+                Some(&format!("{}\n", client.input.payload)),
+            ));
+        }
+    }
 
-        let payload = format!("hello-from-{program}\n");
-        run_client(
-            image,
-            program,
-            &["-P", "-b", bootstrap, "-t", &topic, "-p", "0"],
-            Some(&payload),
-        );
-
-        let group = format!("librdkafka-group-{index}");
-        let consumed = run_client(
-            image,
-            program,
-            &[
-                "-G",
-                &group,
-                "-b",
-                bootstrap,
-                "-X",
-                "auto.offset.reset=earliest",
-                "-X",
-                "enable.auto.commit=false",
-                "-X",
-                "enable.auto.offset.store=false",
+    fn consume(&mut self, settings: &[&str]) {
+        for client in &mut self.clients {
+            let mut args = vec!["-G", &client.input.group, "-b", broker0_advertised()];
+            args.extend_from_slice(settings);
+            args.extend_from_slice(&[
                 "-c",
                 "1",
                 "-f",
                 "%s\\n",
                 "-d",
                 "cgrp,protocol",
-                &topic,
+                &client.input.topic,
+            ]);
+            client.consumed = Some(run_client(
+                &client.input.image,
+                &client.input.program,
+                &args,
+                None,
+            ));
+        }
+    }
+}
+
+#[rstest_bdd_macros::given("a host broker has client metrics enabled {enabled}")]
+async fn library_host_broker(library_conformance: &mut LibraryConformance, enabled: bool) {
+    library_conformance.host =
+        Some(start_host_broker_with(|config| config.client_metrics_enable = enabled).await);
+    library_conformance.admin = Some(
+        AdminClient::connect(&[library_conformance
+            .host
+            .as_ref()
+            .expect("host broker")
+            .0
+            .listen_addr()
+            .to_string()])
+        .await
+        .expect("admin client"),
+    );
+}
+
+#[rstest_bdd_macros::given(
+    "these pinned clients have separate RF1 single-partition topics and consumer groups"
+)]
+async fn library_client_topics(
+    library_conformance: &mut LibraryConformance,
+    #[datatable] rows: Rows<LibraryClientInput>,
+) {
+    for row in rows {
+        let pinned = CLIENTS
+            .iter()
+            .find(|pinned| pinned.image == row.image)
+            .expect("a repository-pinned client image");
+        assert!(
+            pinned.program == row.program
+                && pinned.library == row.library
+                && pinned.version_marker == row.version_marker,
+            "the feature's client metadata agrees with the evidence catalog"
+        );
+        library_conformance
+            .admin
+            .as_mut()
+            .expect("admin client")
+            .create_topics(
+                &[topic_spec(row.topic.clone(), 1, 1)],
+                krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
+            )
+            .await
+            .expect("create conformance topic");
+        library_conformance.clients.push(LibraryClientRun {
+            input: row,
+            metadata: None,
+            produced: None,
+            consumed: None,
+        });
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "every client version banner contains its declared linked-library marker"
+)]
+fn pinned_library_versions(library_conformance: &LibraryConformance) {
+    for client in &library_conformance.clients {
+        check_client_version(
+            &client.input.image,
+            &client.input.program,
+            &client.input.library,
+            &client.input.version_marker,
+        );
+    }
+}
+
+#[rstest_bdd_macros::then("the sole client is the pinned librdkafka 2.15.0 client")]
+fn modern_pinned_library_client(library_conformance: &LibraryConformance) {
+    assert!(library_conformance.clients.len() == 1);
+    let client = &library_conformance.clients[0].input;
+    let pinned = librdkafka_2x();
+    assert!(client.image == pinned.image && client.library == pinned.library);
+}
+
+#[rstest_bdd_macros::when(
+    "each client requests topic metadata with api.version.request enabled and protocol tracing"
+)]
+fn library_metadata_requests(library_conformance: &mut LibraryConformance) {
+    for client in &mut library_conformance.clients {
+        client.metadata = Some(run_client(
+            &client.input.image,
+            &client.input.program,
+            &[
+                "-L",
+                "-b",
+                broker0_advertised(),
+                "-t",
+                &client.input.topic,
+                "-X",
+                "api.version.request=true",
+                "-d",
+                "protocol",
             ],
             None,
+        ));
+    }
+}
+
+#[rstest_bdd_macros::then("every metadata trace contains ApiVersionRequest and ApiVersionResponse")]
+fn negotiated_library_versions(library_conformance: &LibraryConformance) {
+    for client in &library_conformance.clients {
+        let trace =
+            String::from_utf8_lossy(&client.metadata.as_ref().expect("metadata requested").stderr);
+        assert!(
+            trace.contains("ApiVersionRequest") && trace.contains("ApiVersionResponse"),
+            "{} did not negotiate ApiVersions: {trace}",
+            client.input.program
         );
-        check_consumed_payload(&consumed, &payload, program);
+    }
+}
+
+#[rstest_bdd_macros::when("each client produces its declared payload to partition 0")]
+fn classic_library_produce(library_conformance: &mut LibraryConformance) {
+    library_conformance.produce(&[]);
+}
+
+#[rstest_bdd_macros::when(
+    "each client consumes one record through a classic group from earliest with auto commit and auto offset store disabled"
+)]
+fn classic_library_consume(library_conformance: &mut LibraryConformance) {
+    library_conformance.consume(&[
+        "-X",
+        "auto.offset.reset=earliest",
+        "-X",
+        "enable.auto.commit=false",
+        "-X",
+        "enable.auto.offset.store=false",
+    ]);
+}
+
+#[rstest_bdd_macros::then(
+    "each consumer prints exactly its declared payload followed by one newline and its trace contains JoinGroup"
+)]
+fn classic_library_round_trip(library_conformance: &LibraryConformance) {
+    for client in &library_conformance.clients {
+        let consumed = client.consumed.as_ref().expect("classic group consumed");
+        check_consumed_payload(
+            consumed,
+            &format!("{}\n", client.input.payload),
+            &client.input.program,
+        );
         let trace = String::from_utf8_lossy(&consumed.stderr);
         assert!(
             trace.contains("JoinGroup"),
-            "{program} did not join a consumer group: {trace}"
+            "{} did not join a consumer group: {trace}",
+            client.input.program
         );
     }
-
-    broker.shutdown().await;
 }
 
-/// What the 1.x client cannot reach, driven by the librdkafka 2.15.0 image.
-///
-/// Three things the older row says nothing about, all read out of the client's
-/// own `protocol` debug trace, which is where a client's negotiated versions
-/// and the requests it actually chose to send are observable:
-///
-///   - KIP-848: with `group.protocol=consumer` the client subscribes through
-///     `ConsumerGroupHeartbeat` and sends neither `JoinGroup` nor `SyncGroup`.
-///   - KIP-516: the consumer's `Fetch` is at v13 or above, the versions from
-///     which the request carries topic ids in place of topic names, so a
-///     krabka `Fetch` reply is being resolved by id for this client.
-///   - KIP-98: an idempotent produce opens with `InitProducerId`.
-///   - KIP-714: with a `client_metrics_enable` broker the client opens the
-///     telemetry handshake with `GetTelemetrySubscriptions`. The broker
-///     advertises keys 71 and 72 only behind a configured receiver, so this
-///     also establishes that the client reads the advertised set: the same
-///     client against the default broker of the test above opens no handshake.
-///     `PushTelemetry` is not asserted: krabka answers a subscription-less
-///     handshake with a 300s push interval, and no subscription can be
-///     configured from here -- `AdminClient::incremental_alter_configs` is
-///     topic-typed, and the `CLIENT_METRICS` resource type it would need is
-///     what `tests/client_telemetry.rs` reaches through the raw protocol.
-///
-/// KIP-951 is left out: the leader hint rides a `Produce` or `Fetch` response
-/// on a leader change, and kcat's trace names neither the hint nor a metadata
-/// refresh caused by one, so a single-broker run has no observable to assert.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[rstest_bdd_macros::when(
+    "the modern client produces its payload with idempotence, metrics push and protocol tracing enabled"
+)]
+fn modern_library_produce(library_conformance: &mut LibraryConformance) {
+    library_conformance.produce(&[
+        "-X",
+        "enable.idempotence=true",
+        "-X",
+        "enable.metrics.push=true",
+        "-d",
+        "protocol",
+    ]);
+}
+
+#[rstest_bdd_macros::then(
+    "the producer trace sends and receives InitProducerId and GetTelemetrySubscriptions"
+)]
+fn modern_library_handshakes(library_conformance: &LibraryConformance) {
+    for client in &library_conformance.clients {
+        let trace = String::from_utf8_lossy(
+            &client
+                .produced
+                .as_ref()
+                .expect("modern client produced")
+                .stderr,
+        );
+        assert!(
+            trace.contains("Sent InitProducerIdRequest")
+                && trace.contains("Received InitProducerIdResponse"),
+            "idempotent {} did not acquire a producer id: {trace}",
+            client.input.program
+        );
+        assert!(
+            trace.contains("Sent GetTelemetrySubscriptionsRequest")
+                && trace.contains("Received GetTelemetrySubscriptionsResponse"),
+            "{} opened no telemetry handshake against a client-metrics broker: {trace}",
+            client.input.program
+        );
+    }
+}
+
+#[rstest_bdd_macros::when(
+    "the modern client consumes one record using group.protocol consumer from earliest with auto commit disabled"
+)]
+fn modern_library_consume(library_conformance: &mut LibraryConformance) {
+    library_conformance.consume(&[
+        "-X",
+        "group.protocol=consumer",
+        "-X",
+        "auto.offset.reset=earliest",
+        "-X",
+        "enable.auto.commit=false",
+    ]);
+}
+
+#[rstest_bdd_macros::then(
+    "the payload matches exactly, the trace sends and receives ConsumerGroupHeartbeat without JoinGroup or SyncGroup, and the highest Fetch version is at least 13"
+)]
+fn modern_library_protocol(library_conformance: &LibraryConformance) {
+    for client in &library_conformance.clients {
+        let consumed = client.consumed.as_ref().expect("modern group consumed");
+        check_consumed_payload(
+            consumed,
+            &format!("{}\n", client.input.payload),
+            &client.input.program,
+        );
+        let trace = String::from_utf8_lossy(&consumed.stderr);
+        assert!(
+            trace.contains("Sent ConsumerGroupHeartbeatRequest")
+                && trace.contains("Received ConsumerGroupHeartbeatResponse"),
+            "{} did not use the KIP-848 group protocol: {trace}",
+            client.input.program
+        );
+        assert!(
+            !trace.contains("Sent JoinGroupRequest") && !trace.contains("Sent SyncGroupRequest"),
+            "{} fell back to the classic group protocol: {trace}",
+            client.input.program
+        );
+        let fetch_version = max_sent_version(&trace, "Fetch");
+        assert!(
+            fetch_version.is_some_and(|version| version >= 13),
+            "{} did not send a topic-id Fetch (v13 or above): {fetch_version:?} in {trace}",
+            client.input.program
+        );
+    }
+}
+
 #[ignore = "requires Docker"]
-async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
-    // A receiver has to be configured, or the broker withholds the KIP-714
-    // keys and librdkafka opens no telemetry handshake at all.
-    let (broker, _dir) = start_host_broker_with(|config| config.client_metrics_enable = true).await;
-    let bootstrap = broker0_advertised();
-    let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
-        .await
-        .expect("admin client");
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/librdkafka_conformance.feature",
+    name = "round trip group join and api versions with kcat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn round_trip_group_join_and_api_versions_with_kcat(library_conformance: LibraryConformance) {
+    library_conformance.shutdown().await;
+}
 
-    let ClientCase {
-        image,
-        program,
-        library,
-        version_marker,
-    } = librdkafka_2x();
-    check_client_version(image, program, library, version_marker);
-
-    let topic = "librdkafka-2x-next-gen";
-    admin
-        .create_topics(
-            &[topic_spec(topic.to_owned(), 1, 1)],
-            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
-        )
-        .await
-        .expect("create conformance topic");
-
-    let payload = "hello-from-librdkafka-2x\n";
-    let produced = run_client(
-        image,
-        program,
-        &[
-            "-P",
-            "-b",
-            bootstrap,
-            "-t",
-            topic,
-            "-p",
-            "0",
-            "-X",
-            "enable.idempotence=true",
-            "-X",
-            "enable.metrics.push=true",
-            "-d",
-            "protocol",
-        ],
-        Some(payload),
-    );
-    let trace = String::from_utf8_lossy(&produced.stderr);
-    assert!(
-        trace.contains("Sent InitProducerIdRequest")
-            && trace.contains("Received InitProducerIdResponse"),
-        "idempotent {program} did not acquire a producer id: {trace}"
-    );
-    assert!(
-        trace.contains("Sent GetTelemetrySubscriptionsRequest")
-            && trace.contains("Received GetTelemetrySubscriptionsResponse"),
-        "{program} opened no telemetry handshake against a client-metrics broker: {trace}"
-    );
-
-    let consumed = run_client(
-        image,
-        program,
-        &[
-            "-G",
-            "librdkafka-2x-consumer-group",
-            "-b",
-            bootstrap,
-            "-X",
-            "group.protocol=consumer",
-            "-X",
-            "auto.offset.reset=earliest",
-            "-X",
-            "enable.auto.commit=false",
-            "-c",
-            "1",
-            "-f",
-            "%s\\n",
-            "-d",
-            "cgrp,protocol",
-            topic,
-        ],
-        None,
-    );
-    check_consumed_payload(&consumed, payload, program);
-    let trace = String::from_utf8_lossy(&consumed.stderr);
-    assert!(
-        trace.contains("Sent ConsumerGroupHeartbeatRequest")
-            && trace.contains("Received ConsumerGroupHeartbeatResponse"),
-        "{program} did not use the KIP-848 group protocol: {trace}"
-    );
-    assert!(
-        !trace.contains("Sent JoinGroupRequest") && !trace.contains("Sent SyncGroupRequest"),
-        "{program} fell back to the classic group protocol: {trace}"
-    );
-    let fetch_version = max_sent_version(&trace, "Fetch");
-    assert!(
-        fetch_version.is_some_and(|v| v >= 13),
-        "{program} did not send a topic-id Fetch (v13 or above): {fetch_version:?} in {trace}"
-    );
-
-    broker.shutdown().await;
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/librdkafka_conformance.feature",
+    name = "next gen group topic ids and telemetry with librdkafka 2x"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x(
+    library_conformance: LibraryConformance,
+) {
+    library_conformance.shutdown().await;
 }

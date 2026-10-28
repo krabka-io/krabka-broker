@@ -205,23 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn member_metadata_bytes_match_kafka_schema() {
-        let want = wire_bytes(&[
-            "0000",                   // value version 0
-            "036931",                 // InstanceId, compact string
-            "00",                     // RackId, compact null
-            "036331",                 // ClientId
-            "0b2f3132372e302e302e31", // ClientHost
-            "0302610262",             // SubscribedTopicNames
-            "00",                     // SubscribedTopicRegex, null
-            "0000ea60",               // RebalanceTimeoutMs
-            "08756e69666f726d",       // ServerAssignor
-            "00",                     // no tagged fields
-        ]);
-        assert!(&native().encode()[..] == &want[..]);
-    }
-
-    #[test]
     fn member_metadata_roundtrip() {
         let v = native();
         assert!(MemberMetadataValue::decode(&v.encode()).unwrap() == v);
@@ -239,37 +222,6 @@ mod tests {
             ..native()
         };
         assert!(MemberMetadataValue::decode(&v.encode()).unwrap() == v);
-    }
-
-    #[test]
-    fn classic_sub_state_bytes_match_kafka_schema() {
-        let v = MemberMetadataValue {
-            classic: Some(ClassicMemberMetadata {
-                session_timeout_ms: 2,
-                supported_protocols: vec![("range".into(), Bytes::from_static(b"m"))],
-            }),
-            client_id: "c".into(),
-            client_host: "h".into(),
-            rebalance_timeout_ms: 1,
-            ..Default::default()
-        };
-        let want = wire_bytes(&[
-            "0000",         // version
-            "0000",         // InstanceId, RackId null
-            "02630268",     // ClientId, ClientHost
-            "01",           // empty SubscribedTopicNames
-            "00",           // SubscribedTopicRegex null
-            "00000001",     // RebalanceTimeoutMs
-            "00",           // ServerAssignor null
-            "01000f",       // one tagged field: tag 0, payload length 15
-            "00000002",     // SessionTimeoutMs
-            "02",           // one supported protocol
-            "0672616e6765", // Name "range"
-            "026d",         // Metadata "m", compact bytes
-            "00",           // ClassicProtocol tagged fields
-            "00",           // ClassicMemberMetadata tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
     }
 
     #[test]
@@ -295,5 +247,96 @@ mod tests {
     fn member_metadata_rejects_a_missing_tagged_trailer() {
         let full = native().encode();
         assert!(MemberMetadataValue::decode(&full[..full.len() - 1]).is_err());
+    }
+    mod bdd_member_metadata {
+        use {
+            super::*,
+            crate::coordinator::unified::codec_observations::KafkaEncodedRecord,
+            assert2::assert,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type EncodedValue = KafkaEncodedRecord<MemberMetadataValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a consumer member i1 at client c1 subscribes to a and b with the uniform assignor and timeout 60000"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = native();
+
+            let want = wire_bytes(&[
+                "0000",                   // value version 0
+                "036931",                 // InstanceId, compact string
+                "00",                     // RackId, compact null
+                "036331",                 // ClientId
+                "0b2f3132372e302e302e31", // ClientHost
+                "0302610262",             // SubscribedTopicNames
+                "00",                     // SubscribedTopicRegex, null
+                "0000ea60",               // RebalanceTimeoutMs
+                "08756e69666f726d",       // ServerAssignor
+                "00",                     // no tagged fields
+            ]);
+
+            stored_value.golden = want;
+            stored_value.value = Some(v);
+        }
+        #[given(
+            "a consumer member c at host h carries classic range protocol metadata m with session timeout 2"
+        )]
+        fn prepared_classic_value(stored_value: &mut EncodedValue) {
+            let v = MemberMetadataValue {
+                classic: Some(ClassicMemberMetadata {
+                    session_timeout_ms: 2,
+                    supported_protocols: vec![("range".into(), Bytes::from_static(b"m"))],
+                }),
+                client_id: "c".into(),
+                client_host: "h".into(),
+                rebalance_timeout_ms: 1,
+                ..Default::default()
+            };
+
+            let want = wire_bytes(&[
+                "0000",         // version
+                "0000",         // InstanceId, RackId null
+                "02630268",     // ClientId, ClientHost
+                "01",           // empty SubscribedTopicNames
+                "00",           // SubscribedTopicRegex null
+                "00000001",     // RebalanceTimeoutMs
+                "00",           // ServerAssignor null
+                "01000f",       // one tagged field: tag 0, payload length 15
+                "00000002",     // SessionTimeoutMs
+                "02",           // one supported protocol
+                "0672616e6765", // Name "range"
+                "026d",         // Metadata "m", compact bytes
+                "00",           // ClassicProtocol tagged fields
+                "00",           // ClassicMemberMetadata tagged fields
+            ]);
+
+            stored_value.golden = want;
+            stored_value.value = Some(v);
+        }
+        #[when("the coordinator persists the consumer member metadata in the compacted group log")]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted consumer member metadata matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            assert!(
+                &stored_value.encoded.as_ref().expect("record encoded")[..]
+                    == &stored_value.golden[..]
+            );
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/member.feature",tags="@member_metadata or @classic_sub_state",fixtures=[stored_value: EncodedValue]);
     }
 }

@@ -45,58 +45,15 @@ pub struct TargetAssignmentMetadataValue {
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::test_support::assignment_metadata_golden_cases,
-        assert2::{assert, check},
+        crate::coordinator::unified::test_support::wire_bytes,
+        assert2::assert,
+        rstest_bdd_macros::{given, scenarios, then, when},
     };
 
     /// `ConsumerGroupMetadataValue` as Kafka 4.3.1's generated writer lays it
     /// out: i16 version 0, i32 `Epoch`, then the tagged-field trailer, which
     /// holds `MetadataHash` as tag 0 with an eight-byte payload unless it is
     /// the default 0.
-    #[test]
-    fn group_metadata_value_bytes_match_kafka_schema() {
-        struct GoldenRow {
-            case: &'static str,
-            value: GroupMetadataValue,
-            /// Kafka's bytes.
-            bytes: &'static [u8],
-        }
-
-        let rows: [GoldenRow; 3] = [
-            GoldenRow {
-                case: "no subscribed topic: the hash is the default and absent",
-                value: GroupMetadataValue {
-                    epoch: 7,
-                    metadata_hash: 0,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x07\x00",
-            },
-            GoldenRow {
-                case: "a small hash",
-                value: GroupMetadataValue {
-                    epoch: 7,
-                    metadata_hash: 0x2a,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x07\x01\x00\x08\x00\x00\x00\x00\x00\x00\x00\x2a",
-            },
-            GoldenRow {
-                case: "Kafka's group hash of the golden topics foo and bar",
-                value: GroupMetadataValue {
-                    epoch: 2,
-                    metadata_hash: -556_879_919_459_959_918,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x02\x01\x00\x08\xf8\x45\x90\xa9\xea\x0a\x7b\x92",
-            },
-        ];
-        for GoldenRow { case, value, bytes } in rows {
-            check!(&value.encode()[..] == bytes, "{case}");
-            check!(
-                GroupMetadataValue::decode(bytes).unwrap() == value,
-                "{case}"
-            );
-        }
-    }
-
     #[test]
     fn group_metadata_value_rejects_a_missing_tagged_trailer() {
         // This is the byte whose absence made Kafka's generated reader throw
@@ -114,23 +71,57 @@ mod tests {
     /// generated writer lays it out: i16 version 0, i32 `AssignmentEpoch`,
     /// then the tagged-field trailer, which holds `AssignmentTimestamp` as tag
     /// 0 with an eight-byte payload unless it is the default 0.
-    #[test]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows = assignment_metadata_golden_cases()
-            .unknown_time_description("a converted classic group: the time is unknown")
-            .call();
-        for row in rows {
-            let case = row.description;
-            let bytes = row.bytes;
-            let value = TargetAssignmentMetadataValue {
-                assignment_epoch: row.epoch.0,
-                assignment_timestamp_ms: row.timestamp.0,
-            };
-            check!(&value.encode()[..] == bytes, "{case}");
-            check!(
-                TargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
-                "{case}"
-            );
-        }
+    #[derive(Debug, PartialEq)]
+    enum ConsumerEpochRecord {
+        Group(GroupMetadataValue),
+        Target(TargetAssignmentMetadataValue),
     }
+    use crate::coordinator::unified::codec_observations::KafkaRecordRoundTrip;
+    type ConsumerEpochCompatibility = KafkaRecordRoundTrip<ConsumerEpochRecord>;
+    #[rstest::fixture]
+    fn epochs() -> ConsumerEpochCompatibility {
+        // Start this scenario with fresh inputs and observations.
+        ConsumerEpochCompatibility::default()
+    }
+    #[given("the consumer group epoch is {epoch} with metadata hash {hash}")]
+    fn group_epoch_input(epochs: &mut ConsumerEpochCompatibility, epoch: i32, hash: i64) {
+        epochs.input = Some(ConsumerEpochRecord::Group(GroupMetadataValue {
+            epoch,
+            metadata_hash: hash,
+        }));
+    }
+    #[given("the consumer assignment epoch is {epoch} with completion timestamp {timestamp}")]
+    fn target_epoch_input(epochs: &mut ConsumerEpochCompatibility, epoch: i32, timestamp: i64) {
+        epochs.input = Some(ConsumerEpochRecord::Target(TargetAssignmentMetadataValue {
+            assignment_epoch: epoch,
+            assignment_timestamp_ms: timestamp,
+        }));
+    }
+    #[given("Kafka encodes that consumer epoch record as {hex}")]
+    fn kafka_epoch_bytes(epochs: &mut ConsumerEpochCompatibility, hex: String) {
+        epochs.golden = wire_bytes(&[&hex]);
+    }
+    #[when("the coordinator writes the consumer epoch record and reads Kafka bytes")]
+    fn epoch_codec(epochs: &mut ConsumerEpochCompatibility) {
+        let (encoded, decoded) = match epochs.input.as_ref().expect("epoch record prepared") {
+            ConsumerEpochRecord::Group(value) => (
+                value.encode(),
+                ConsumerEpochRecord::Group(
+                    GroupMetadataValue::decode(&epochs.golden).expect("read Kafka group epoch"),
+                ),
+            ),
+            ConsumerEpochRecord::Target(value) => (
+                value.encode(),
+                ConsumerEpochRecord::Target(
+                    TargetAssignmentMetadataValue::decode(&epochs.golden)
+                        .expect("read Kafka assignment epoch"),
+                ),
+            ),
+        };
+        epochs.encoded = Some(encoded);
+        epochs.decoded = Some(decoded);
+    }
+    #[then("the consumer epoch bytes match Kafka exactly and all epoch fields are recovered")]
+    fn epoch_golden(epochs: &ConsumerEpochCompatibility) { epochs.assert_compatible(); }
+    scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/epochs.feature",fixtures=[epochs:ConsumerEpochCompatibility]);
 }

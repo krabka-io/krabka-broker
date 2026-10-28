@@ -68,6 +68,8 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
+    # Pinned upstream i18n-config fix for the archived basic-toml parser.
+    "https://github.com/kellpossible/cargo-i18n",
     "https://github.com/krabka-io/krabka-broker",
     "https://github.com/krabka-io/krabka-client-rs",
     "https://github.com/krabka-io/krabka-connect",

@@ -212,41 +212,44 @@ mod tests {
         stable
     }
 
-    #[yare::parameterized(
-        empty_empty_type = { "empty, empty type", false, "", &["range"][..], false },
-        empty_no_protocols = { "empty, no protocols", false, "consumer", &[][..], false },
-        empty_other_type = { "empty, anything else", false, "connect", &["x"][..], true },
-        stable_other_type = { "stable, other type", true, "connect", &["sticky"][..], false },
-        stable_missing_protocol = {
-            "stable, protocol one member lacks",
-            true,
-            "consumer",
-            &["range"][..],
-            false,
-        },
-        stable_shared_protocol = {
-            "stable, shared protocol",
-            true,
-            "consumer",
-            &["x", "sticky"][..],
-            true,
-        },
-    )]
-    fn supports_protocols_matches_kafka(
-        name: &str,
-        stable: bool,
-        protocol_type: &str,
-        names: &[&str],
-        want: bool,
-    ) {
-        let group = if stable {
-            stable_protocol_group()
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct ProtocolNegotiation {
+        group: Option<ClassicGroup>,
+        supported: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn negotiation() -> ProtocolNegotiation {
+        // Start this scenario with fresh inputs and observations.
+        ProtocolNegotiation::default()
+    }
+    #[given("the classic group is {state} with existing consumer protocol support")]
+    fn classic_protocol_group(negotiation: &mut ProtocolNegotiation, state: String) {
+        negotiation.group = Some(match state.as_str() {
+            "empty" => empty_protocol_group(),
+            "stable" => stable_protocol_group(),
+            _ => panic!("unknown classic group state"),
+        });
+    }
+    #[when("a joining member offers protocol type {kind} with preference list {names}")]
+    fn negotiate_protocol(negotiation: &mut ProtocolNegotiation, kind: String, names: String) {
+        let kind = if kind == "empty" { "" } else { &kind };
+        let names = if names == "none" {
+            vec![]
         } else {
-            empty_protocol_group()
+            names.split(',').collect::<Vec<_>>()
         };
-        assert2::assert!(
-            group.supports_protocols(protocol_type, names.iter().copied()) == want,
-            "{name}"
+        negotiation.supported = Some(
+            negotiation
+                .group
+                .as_ref()
+                .expect("group prepared")
+                .supports_protocols(kind, names.into_iter()),
         );
     }
+    #[then("the offered protocols are compatible {compatible}")]
+    fn compatible_protocols(negotiation: &ProtocolNegotiation, compatible: bool) {
+        assert2::assert!(negotiation.supported == Some(compatible));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",fixtures=[negotiation:ProtocolNegotiation]);
 }

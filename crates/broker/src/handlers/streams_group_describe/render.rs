@@ -315,89 +315,140 @@ mod tests {
         assert!(topology == expected_rendered_topology());
     }
 
-    /// Kafka renders the subtopologies by id and every topic list by name,
-    /// for the stored topology (`StreamsTopology`) and for the configured
-    /// one (`ConfiguredTopology`), whatever order the members sent.
-    #[test]
-    fn topologies_render_in_kafka_order() {
-        use {
-            crate::coordinator::unified::streams::topology::ConfiguredSubtopology,
-            std::collections::BTreeSet,
-        };
-
-        let info = |name: &str, partitions| StoredTopicInfo {
+    enum SubmittedTopology {
+        Stored(StreamsGroupTopologyValue),
+        Configured(ConfiguredTopology),
+    }
+    #[derive(Default)]
+    struct TopologyOrderScenario {
+        submitted: Option<SubmittedTopology>,
+        rendered: Option<Topology>,
+    }
+    #[rstest::fixture]
+    fn topology_order() -> TopologyOrderScenario {
+        let submitted = None;
+        TopologyOrderScenario {
+            submitted,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "members submit a {representation} topology at epoch 4 with reversed topic lists"
+    )]
+    fn submitted_topology_order(
+        topology_order: &mut TopologyOrderScenario,
+        representation: String,
+        datatable: Vec<Vec<String>>,
+    ) {
+        use crate::coordinator::unified::streams::topology::ConfiguredSubtopology;
+        let stored: Vec<_> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [id, sources, sinks, changelogs, repartitions] = row.as_slice() else {
+                    panic!("subtopology ID and four topic lists required")
+                };
+                let info = |name: &str| StoredTopicInfo {
+                    name: name.into(),
+                    partitions: 0,
+                    replication_factor: 0,
+                    topic_configs: Vec::new(),
+                };
+                StoredSubtopology {
+                    subtopology_id: id.clone(),
+                    source_topics: sources.split(',').map(str::to_owned).collect(),
+                    source_topic_regex: Vec::new(),
+                    repartition_sink_topics: sinks.split(',').map(str::to_owned).collect(),
+                    state_changelog_topics: changelogs.split(',').map(info).collect(),
+                    repartition_source_topics: repartitions.split(',').map(info).collect(),
+                    copartition_groups: Vec::new(),
+                }
+            })
+            .collect();
+        topology_order.submitted = Some(match representation.as_str() {
+            "stored" => SubmittedTopology::Stored(StreamsGroupTopologyValue {
+                epoch: 4,
+                subtopologies: stored,
+            }),
+            "configured" => {
+                let internal = |topic: StoredTopicInfo| {
+                    let name = topic.name;
+                    (name.clone(), ConfiguredInternalTopic {
+                        name,
+                        partitions: 3,
+                        replication_factor: None,
+                        configs: BTreeMap::new(),
+                    })
+                };
+                let subtopologies = stored
+                    .into_iter()
+                    .map(|s| {
+                        (s.subtopology_id, ConfiguredSubtopology {
+                            number_of_tasks: 3,
+                            source_topics: s.source_topics.into_iter().collect(),
+                            repartition_source_topics: s
+                                .repartition_source_topics
+                                .into_iter()
+                                .map(internal)
+                                .collect(),
+                            repartition_sink_topics: s
+                                .repartition_sink_topics
+                                .into_iter()
+                                .collect(),
+                            state_changelog_topics: s
+                                .state_changelog_topics
+                                .into_iter()
+                                .map(internal)
+                                .collect(),
+                        })
+                    })
+                    .collect();
+                SubmittedTopology::Configured(ConfiguredTopology {
+                    topology_epoch: 4,
+                    subtopologies: Some(subtopologies),
+                    internal_topics_to_create: BTreeMap::new(),
+                    status: None,
+                })
+            }
+            _ => panic!("unknown topology representation: {representation}"),
+        });
+    }
+    #[rstest_bdd_macros::when("StreamsGroupDescribe renders the submitted topology")]
+    fn render_submitted_topology(topology_order: &mut TopologyOrderScenario) {
+        topology_order.rendered = Some(match topology_order.submitted.take().unwrap() {
+            SubmittedTopology::Stored(topology) => render_topology(topology),
+            SubmittedTopology::Configured(topology) => render_configured_topology(topology),
+        });
+    }
+    #[rstest_bdd_macros::then(
+        "the complete topology orders subtopologies a,b and every topic list by name with {partitions} internal partitions"
+    )]
+    fn check_rendered_topology_order(topology_order: &TopologyOrderScenario, partitions: i32) {
+        let topic = |name: &str| TopicInfo {
             name: name.into(),
             partitions,
             replication_factor: 0,
             topic_configs: Vec::new(),
+            ..Default::default()
         };
-        let stored = |id: &str| StoredSubtopology {
+        let subtopology = |id: &str| Subtopology {
             subtopology_id: id.into(),
-            source_topics: vec!["t2".into(), "t1".into()],
-            source_topic_regex: Vec::new(),
-            repartition_sink_topics: vec!["s2".into(), "s1".into()],
-            state_changelog_topics: vec![info("c2", 0), info("c1", 0)],
-            repartition_source_topics: vec![info("r2", 0), info("r1", 0)],
-            copartition_groups: Vec::new(),
+            source_topics: vec!["t1".into(), "t2".into()],
+            repartition_sink_topics: vec!["s1".into(), "s2".into()],
+            state_changelog_topics: vec![topic("c1"), topic("c2")],
+            repartition_source_topics: vec![topic("r1"), topic("r2")],
+            ..Default::default()
         };
-        let internal = |name: &str| ConfiguredInternalTopic {
-            name: name.into(),
-            partitions: 3,
-            replication_factor: None,
-            configs: BTreeMap::new(),
-        };
-        let configured = |id: &str| {
-            (id.to_owned(), ConfiguredSubtopology {
-                number_of_tasks: 3,
-                source_topics: BTreeSet::from(["t2".to_owned(), "t1".to_owned()]),
-                repartition_source_topics: [("r2", internal("r2")), ("r1", internal("r1"))]
-                    .into_iter()
-                    .map(|(name, topic)| (name.to_owned(), topic))
-                    .collect(),
-                repartition_sink_topics: BTreeSet::from(["s2".to_owned(), "s1".to_owned()]),
-                state_changelog_topics: [("c2", internal("c2")), ("c1", internal("c1"))]
-                    .into_iter()
-                    .map(|(name, topic)| (name.to_owned(), topic))
-                    .collect(),
-            })
-        };
-        let wire = |partitions| {
-            let topic = |name: &str| TopicInfo {
-                name: name.into(),
-                partitions,
-                replication_factor: 0,
-                topic_configs: Vec::new(),
-                ..Default::default()
-            };
-            let subtopology = |id: &str| Subtopology {
-                subtopology_id: id.into(),
-                source_topics: vec!["t1".into(), "t2".into()],
-                repartition_sink_topics: vec!["s1".into(), "s2".into()],
-                state_changelog_topics: vec![topic("c1"), topic("c2")],
-                repartition_source_topics: vec![topic("r1"), topic("r2")],
-                ..Default::default()
-            };
-            Topology {
-                epoch: 4,
-                subtopologies: Some(vec![subtopology("a"), subtopology("b")]),
-                ..Default::default()
-            }
-        };
-
-        let rendered_stored = render_topology(StreamsGroupTopologyValue {
-            epoch: 4,
-            subtopologies: vec![stored("b"), stored("a")],
-        });
-        let rendered_configured = render_configured_topology(ConfiguredTopology {
-            topology_epoch: 4,
-            subtopologies: Some([configured("b"), configured("a")].into_iter().collect()),
-            internal_topics_to_create: BTreeMap::new(),
-            status: None,
-        });
-
-        assert!(rendered_stored == wire(0));
-        assert!(rendered_configured == wire(3));
+        assert!(
+            topology_order.rendered.as_ref().unwrap()
+                == &Topology {
+                    epoch: 4,
+                    subtopologies: Some(vec![subtopology("a"), subtopology("b")]),
+                    ..Default::default()
+                }
+        );
     }
+    rstest_bdd_macros::scenarios!("tests/features/handler_streams_topology_order",fixtures=[topology_order:TopologyOrderScenario]);
 
     #[test]
     fn task_map_to_ids_preserves_sorted_task_maps() {

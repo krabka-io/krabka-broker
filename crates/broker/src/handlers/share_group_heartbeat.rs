@@ -414,113 +414,220 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka's `KafkaApis.isMemberIdValid` and
-    /// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`:
-    /// each malformed heartbeat answers `INVALID_REQUEST`, with the
-    /// coordinator's message where Kafka sets one, and creates no group.
-    #[tokio::test]
-    async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
-        let version = VERSION;
-        allow_all_broker_setup!(
-            (broker_handle, _dir, broker, ctx),
-            start_broker,
-            "ANONYMOUS"
-        );
-        let valid = heartbeat_request()
-            .group_id("g".into())
-            .member_id("member-1".into())
-            .member_epoch(0)
-            .call();
-        let invalid = |message: Option<&str>| ShareGroupHeartbeatResponse {
-            error_code: codes::INVALID_REQUEST,
-            error_message: message.map(str::to_owned),
+    #[derive(Default)]
+    struct ShareHeartbeatScenario {
+        started: Option<HandlerStartedBroker>,
+        request: Option<ShareGroupHeartbeatRequest>,
+        response: Option<ShareGroupHeartbeatResponse>,
+    }
+    #[rstest::fixture]
+    fn share_heartbeat() -> ShareHeartbeatScenario {
+        let started = None;
+        ShareHeartbeatScenario {
+            started,
             ..Default::default()
-        };
-        // (row, request, expected response)
-        let rows = [
-            (
-                "empty member id",
-                ShareGroupHeartbeatRequest {
-                    member_id: String::new(),
-                    ..valid.clone()
-                },
-                invalid(None),
-            ),
-            (
-                "member id of 37 characters",
-                ShareGroupHeartbeatRequest {
-                    member_id: "m".repeat(37),
-                    ..valid.clone()
-                },
-                invalid(None),
-            ),
-            (
-                "blank member id",
-                ShareGroupHeartbeatRequest {
-                    member_id: "  ".into(),
-                    ..valid.clone()
-                },
-                invalid(Some("MemberId can't be empty.")),
-            ),
-            (
-                "empty group id",
-                ShareGroupHeartbeatRequest {
-                    group_id: String::new(),
-                    ..valid.clone()
-                },
-                invalid(Some("GroupId can't be empty.")),
-            ),
-            (
-                "blank group id",
-                ShareGroupHeartbeatRequest {
-                    group_id: " \t".into(),
-                    ..valid.clone()
-                },
-                invalid(Some("GroupId can't be empty.")),
-            ),
-            (
-                "empty rack id",
-                ShareGroupHeartbeatRequest {
-                    rack_id: Some(String::new()),
-                    ..valid.clone()
-                },
-                invalid(Some("RackId can't be empty.")),
-            ),
-            (
-                "first heartbeat with no subscription",
-                ShareGroupHeartbeatRequest {
-                    subscribed_topic_names: None,
-                    ..valid.clone()
-                },
-                invalid(Some("SubscribedTopicNames must be set in first request.")),
-            ),
-            (
-                "first heartbeat with an empty subscription",
-                ShareGroupHeartbeatRequest {
-                    subscribed_topic_names: Some(Vec::new()),
-                    ..valid.clone()
-                },
-                invalid(Some("SubscribedTopicNames must be set in first request.")),
-            ),
-            (
-                "member epoch below -1",
-                ShareGroupHeartbeatRequest {
-                    member_epoch: -2,
-                    ..valid.clone()
-                },
-                invalid(Some("MemberEpoch is invalid.")),
-            ),
-        ];
-
-        for (row, req, expected) in rows {
-            let resp = handle(&broker, req, version, &ctx)
-                .await
-                .expect("ShareGroupHeartbeat handler");
-            assert!(resp == expected, "{row}");
         }
-        assert!(broker.group_coordinator.share_group_ids().is_empty());
-
-        broker_handle.shutdown().await;
+    }
+    #[rstest_bdd_macros::given(
+        "an authorized share coordinator and a joining member-1 heartbeat for group g"
+    )]
+    async fn joining_share_heartbeat(share_heartbeat: &mut ShareHeartbeatScenario) {
+        share_heartbeat.started = Some(start_broker(Arc::new(AllowAllAuthorizer)).await);
+        share_heartbeat.request = Some(
+            heartbeat_request()
+                .group_id("g".into())
+                .member_id("member-1".into())
+                .member_epoch(0)
+                .call(),
+        );
+    }
+    #[rstest_bdd_macros::given("the share heartbeat field {field} is {value}")]
+    fn share_heartbeat_field(
+        share_heartbeat: &mut ShareHeartbeatScenario,
+        field: String,
+        value: String,
+    ) {
+        let request = share_heartbeat.request.as_mut().unwrap();
+        let text = match value.as_str() {
+            "empty" => String::new(),
+            "blank" => "  ".into(),
+            "space-and-tab" => " \t".into(),
+            "37 characters" => "m".repeat(37),
+            _ => value.clone(),
+        };
+        match field.as_str() {
+            "member ID" => request.member_id = text,
+            "group ID" => request.group_id = text,
+            "rack ID" => request.rack_id = Some(text),
+            "subscription" => {
+                request.subscribed_topic_names = match value.as_str() {
+                    "null" => None,
+                    "empty" => Some(Vec::new()),
+                    _ => panic!("unknown share subscription"),
+                }
+            }
+            "member epoch" => request.member_epoch = value.parse().unwrap(),
+            _ => panic!("unknown share heartbeat field: {field}"),
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the share coordinator contains a classic group a consumer group and a streams marker"
+    )]
+    async fn other_share_group_kinds(share_heartbeat: &mut ShareHeartbeatScenario) {
+        use crate::coordinator::unified::actor::GroupKindTag;
+        let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        started.broker.wait_until_group_coordinator_ready().await;
+        let broker = started.broker.broker_arc_for_test();
+        let coordinator = &broker.group_coordinator;
+        let _classic = coordinator.get_or_create_classic("classic");
+        let _consumer = coordinator.get_or_create_group("consumer", GroupKindTag::Consumer);
+        coordinator.mark_streams("streams");
+        share_heartbeat.started = Some(started);
+    }
+    #[rstest_bdd_macros::given("share member m1 sends epoch {epoch} for group {group}")]
+    fn share_group_creation_request(
+        share_heartbeat: &mut ShareHeartbeatScenario,
+        epoch: i32,
+        group: String,
+    ) {
+        share_heartbeat.request = Some(
+            heartbeat_request()
+                .group_id(group)
+                .member_id("m1".into())
+                .member_epoch(epoch)
+                .call(),
+        );
+    }
+    #[rstest_bdd_macros::when("the share coordinator handles the member heartbeat")]
+    async fn handle_share_heartbeat(share_heartbeat: &mut ShareHeartbeatScenario) {
+        let broker = share_heartbeat
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
+        share_heartbeat.response = Some(
+            handle(
+                &broker,
+                share_heartbeat.request.as_ref().unwrap().clone(),
+                VERSION,
+                &ctx,
+            )
+            .await
+            .expect("ShareGroupHeartbeat handler"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the malformed share heartbeat returns code 42 message {message} and creates no share group"
+    )]
+    async fn check_malformed_share_heartbeat(
+        share_heartbeat: &mut ShareHeartbeatScenario,
+        message: String,
+    ) {
+        let error_message = if message == "null" {
+            None
+        } else {
+            Some(message)
+        };
+        assert!(
+            share_heartbeat.response.as_ref().unwrap()
+                == &ShareGroupHeartbeatResponse {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message,
+                    ..Default::default()
+                }
+        );
+        assert!(
+            share_heartbeat
+                .started
+                .as_ref()
+                .unwrap()
+                .broker
+                .broker_arc_for_test()
+                .group_coordinator
+                .share_group_ids()
+                .is_empty()
+        );
+        share_heartbeat
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::then(
+        "the share coordinator returns error {code} message {message} and creates only accepted joins"
+    )]
+    async fn check_share_group_creation(
+        share_heartbeat: &mut ShareHeartbeatScenario,
+        code: i16,
+        message: String,
+    ) {
+        let response = share_heartbeat.response.as_ref().unwrap();
+        if code == codes::NONE {
+            assert!(response.error_code == codes::NONE);
+        } else {
+            assert!(
+                response
+                    == &ShareGroupHeartbeatResponse {
+                        error_code: code,
+                        error_message: Some(message),
+                        ..Default::default()
+                    }
+            );
+        }
+        let expected = if code == codes::NONE {
+            vec!["joined".to_owned()]
+        } else {
+            Vec::new()
+        };
+        assert!(
+            share_heartbeat
+                .started
+                .as_ref()
+                .unwrap()
+                .broker
+                .broker_arc_for_test()
+                .group_coordinator
+                .share_group_ids()
+                == expected
+        );
+        share_heartbeat
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "Malformed member identity join subscription and epoch fields cannot create a group"
+    )]
+    #[tokio::test]
+    async fn handle_refuses_malformed_heartbeats_as_kafka_does(
+        share_heartbeat: ShareHeartbeatScenario,
+        field: String,
+        value: String,
+        message: String,
+    ) {
+        let _ = (share_heartbeat, field, value, message);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "Only a join can create a share group and other group kinds remain distinct"
+    )]
+    #[tokio::test]
+    async fn handle_creates_share_group_only_on_join_as_kafka_does(
+        share_heartbeat: ShareHeartbeatScenario,
+        epoch: i32,
+        group: String,
+        code: i16,
+        message: String,
+    ) {
+        let _ = (share_heartbeat, epoch, group, code, message);
     }
 
     #[test]
@@ -668,85 +775,6 @@ mod tests {
         assert!(view.members[0].client_id == "client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
-        broker_handle.shutdown().await;
-    }
-
-    /// Kafka's `getOrMaybeCreateShareGroup` and `shareGroupLeave`: only a join
-    /// creates a share group, and a group of another type is refused. Each row
-    /// sends one heartbeat for its own group id and compares the whole
-    /// response; `None` expects an accepted join.
-    #[tokio::test]
-    async fn handle_creates_share_group_only_on_join_as_kafka_does() {
-        use crate::coordinator::unified::actor::GroupKindTag;
-
-        let version = VERSION;
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        broker_handle.wait_until_group_coordinator_ready().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let coordinator = &broker.group_coordinator;
-        let _classic = coordinator.get_or_create_classic("classic");
-        let _consumer = coordinator.get_or_create_group("consumer", GroupKindTag::Consumer);
-        coordinator.mark_streams("streams");
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["ANONYMOUS"];
-        };
-        let not_found = |message: &str| {
-            Some(ShareGroupHeartbeatResponse {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: Some(message.into()),
-                ..Default::default()
-            })
-        };
-        // (group id, member epoch, expected response)
-        let rows = [
-            (
-                "absent-heartbeat",
-                3,
-                not_found("Share group absent-heartbeat not found."),
-            ),
-            (
-                "absent-leave",
-                -1,
-                not_found("Group absent-leave not found."),
-            ),
-            (
-                "classic",
-                0,
-                not_found("Group classic is not a share group."),
-            ),
-            (
-                "consumer",
-                3,
-                not_found("Group consumer is not a share group."),
-            ),
-            (
-                "streams",
-                -1,
-                not_found("Group streams is not a share group."),
-            ),
-            ("joined", 0, None),
-        ];
-
-        for (group_id, member_epoch, expected) in rows {
-            let req = heartbeat_request()
-                .group_id(group_id.into())
-                .member_id("m1".into())
-                .member_epoch(member_epoch)
-                .call();
-            let resp = handle(&broker, req, version, &ctx)
-                .await
-                .expect("ShareGroupHeartbeat handler");
-            match expected {
-                Some(expected) => assert!(resp == expected, "{group_id}"),
-                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
-            }
-        }
-
-        assert!(coordinator.share_group_ids() == vec!["joined".to_owned()]);
         broker_handle.shutdown().await;
     }
 }

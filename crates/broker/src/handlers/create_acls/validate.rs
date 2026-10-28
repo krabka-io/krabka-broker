@@ -254,350 +254,162 @@ fn validate_host(host: &str, cidr_hosts_supported: bool) -> Result<(), AclRefusa
 mod tests {
     use {
         super::{AclRefusal, HostCheck, has_filter_only_element, has_unknown_element},
-        crate::{
-            codes::{self, INVALID_REQUEST, UNSUPPORTED_VERSION},
-            handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
-            test_support::allow_acl,
-        },
+        crate::handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
         assert2::assert,
         krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType},
         krabka_protocol::owned::create_acls_request::AclCreation,
     };
 
-    #[test]
-    fn validate_accepts_any_principal_type_and_the_kafka_cluster_name() {
-        /// A mutation of the baseline creation, and the entry `validate` builds from it.
-        struct ShapeCase {
-            shape: fn(&mut AclCreation),
-            expected: AclEntry,
-        }
-
-        let cases: [ShapeCase; 4] = [
-            ShapeCase {
-                shape: |_| {},
-                expected: AclEntry {
-                    resource_type: ResourceType::Topic,
-                    resource_name: "topic-a".into(),
-                    pattern_type: PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: AclOperation::Read,
-                    permission_type: PermissionType::Allow,
-                },
-            },
-            ShapeCase {
-                shape: |c| c.principal = "Group:ops".into(),
-                expected: AclEntry {
-                    resource_type: ResourceType::Topic,
-                    resource_name: "topic-a".into(),
-                    pattern_type: PatternType::Literal,
-                    principal: "Group:ops".into(),
-                    host: "*".into(),
-                    operation: AclOperation::Read,
-                    permission_type: PermissionType::Allow,
-                },
-            },
-            ShapeCase {
-                shape: |c| {
-                    c.resource_type = 4;
-                    c.resource_name = "kafka-cluster".into();
-                    c.operation = 7;
-                    c.permission_type = 2;
-                },
-                expected: AclEntry {
-                    resource_type: ResourceType::Cluster,
-                    resource_name: "kafka-cluster".into(),
-                    pattern_type: PatternType::Literal,
-                    principal: "User:alice".into(),
-                    host: "*".into(),
-                    operation: AclOperation::Alter,
-                    permission_type: PermissionType::Deny,
-                },
-            },
-            // KIP-373: Kafka's `validateNewAcl` accepts the `USER` resource
-            // type and the `CREATE_TOKENS` operation like any other.
-            ShapeCase {
-                shape: |c| {
-                    c.resource_type = 7;
-                    c.resource_name = "User:bob".into();
-                    c.operation = 13;
-                },
-                expected: allow_acl()
-                    .resource_type(ResourceType::User)
-                    .resource_name("User:bob")
-                    .operation(AclOperation::CreateTokens)
-                    .call(),
-            },
-        ];
-        for ShapeCase { shape, expected } in cases {
-            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
-            shape(&mut c);
-            assert!(validate(&c) == Ok(expected));
+    struct AclValidationScenario {
+        creation: AclCreation,
+        result: Option<Result<AclEntry, AclRefusal>>,
+        classification: Option<(bool, bool)>,
+        cidr_supported: bool,
+    }
+    #[rstest::fixture]
+    fn acl_validation() -> AclValidationScenario {
+        let creation = creation("topic-a", "User:alice", OPERATION_READ);
+        AclValidationScenario {
+            creation,
+            result: None,
+            classification: None,
+            cidr_supported: false,
         }
     }
-
-    /// Every per-binding refusal, with Kafka's code and message from
-    /// `AclApis.handleCreateAcls` and `AclControlManager.validateNewAcl`.
-    #[test]
-    fn validate_refuses_with_kafka_messages() {
-        /// A corruption of the baseline creation, and the message `validate` refuses it with.
-        struct CorruptCase {
-            corrupt: fn(&mut AclCreation),
-            want: &'static str,
-        }
-
-        let cases: [CorruptCase; 9] = [
-            CorruptCase {
-                corrupt: |c| {
-                    c.resource_type = 4;
-                    c.resource_name = "my-cluster".into();
-                },
-                want: "The only valid name for the CLUSTER resource is kafka-cluster",
-            },
-            CorruptCase {
-                corrupt: |c| {
-                    c.resource_type = 4;
-                    c.resource_name.clear();
-                },
-                want: "The only valid name for the CLUSTER resource is kafka-cluster",
-            },
-            CorruptCase {
-                corrupt: |c| c.resource_name.clear(),
-                want: "Invalid empty resource name",
-            },
-            CorruptCase {
-                corrupt: |c| c.resource_type = 99,
-                want: "Invalid resourceType UNKNOWN",
-            },
-            CorruptCase {
-                corrupt: |c| c.resource_pattern_type = 9,
-                want: "Invalid patternType UNKNOWN",
-            },
-            CorruptCase {
-                corrupt: |c| c.operation = 42,
-                want: "Invalid operation UNKNOWN",
-            },
-            CorruptCase {
-                corrupt: |c| c.permission_type = 5,
-                want: "Invalid permissionType UNKNOWN",
-            },
-            CorruptCase {
-                corrupt: |c| c.principal = "alice".into(),
-                want: "Could not parse principal from `alice` (no colon is present separating the \
-                 principal type from the principal name)",
-            },
-            CorruptCase {
-                corrupt: |c| c.host.clear(),
-                want: "Host pattern cannot be null or empty",
-            },
-        ];
-        for CorruptCase { corrupt, want } in cases {
-            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
-            corrupt(&mut c);
-            assert!(
-                validate(&c)
-                    == Err(AclRefusal {
-                        code: codes::INVALID_REQUEST,
-                        message: want.to_owned()
-                    }),
-                "expected {want:?}"
-            );
+    #[rstest_bdd_macros::given(
+        "an ACL creation for resource type {resource} name {name} principal {principal} operation {operation} permission {permission}"
+    )]
+    fn acl_binding(
+        acl_validation: &mut AclValidationScenario,
+        resource: i8,
+        name: String,
+        principal: String,
+        operation: i8,
+        permission: i8,
+    ) {
+        let c = &mut acl_validation.creation;
+        c.resource_type = resource;
+        c.resource_name = name;
+        c.principal = principal;
+        c.operation = operation;
+        c.permission_type = permission;
+    }
+    #[rstest_bdd_macros::given("the ACL creation field {field} is {value}")]
+    fn acl_field(acl_validation: &mut AclValidationScenario, field: String, value: String) {
+        let c = &mut acl_validation.creation;
+        let value = if value == "empty" {
+            String::new()
+        } else {
+            value
+        };
+        match field.as_str() {
+            "resource type" => c.resource_type = value.parse().unwrap(),
+            "pattern type" => c.resource_pattern_type = value.parse().unwrap(),
+            "operation" => c.operation = value.parse().unwrap(),
+            "permission" => c.permission_type = value.parse().unwrap(),
+            "resource name" => c.resource_name = value,
+            "principal" => c.principal = value,
+            "host" => c.host = value,
+            _ => panic!("unknown ACL field: {field}"),
         }
     }
+    #[rstest_bdd_macros::given("the ACL host is {host} and CIDR host support is {supported}")]
+    fn acl_host(acl_validation: &mut AclValidationScenario, host: String, supported: bool) {
+        acl_validation.creation.host = if host == "empty" { String::new() } else { host };
+        acl_validation.cidr_supported = supported;
+    }
+    #[rstest_bdd_macros::when("the ACL creation is validated using Kafka 4.3 rules")]
+    fn validate_acl_creation(acl_validation: &mut AclValidationScenario) {
+        acl_validation.result = Some(validate(&acl_validation.creation));
+    }
+    #[rstest_bdd_macros::when("the ACL creation is validated using trunk host rules")]
+    fn validate_acl_host(acl_validation: &mut AclValidationScenario) {
+        acl_validation.result = Some(super::validate(
+            &acl_validation.creation,
+            HostCheck::Trunk {
+                cidr_hosts_supported: acl_validation.cidr_supported,
+            },
+        ));
+    }
+    #[rstest_bdd_macros::when(
+        "the request checks the creation beside a valid baseline for unknown and filter-only elements"
+    )]
+    fn classify_acl_creation(acl_validation: &mut AclValidationScenario) {
+        let creations = [
+            creation("topic-a", "User:alice", OPERATION_READ),
+            acl_validation.creation.clone(),
+        ];
+        acl_validation.classification = Some((
+            has_unknown_element(&creations),
+            has_filter_only_element(&creations),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the stored ACL has resource {resource} name {name} principal {principal} operation {operation} permission {permission}"
+    )]
+    fn check_acl_entry(
+        acl_validation: &AclValidationScenario,
+        resource: String,
+        name: String,
+        principal: String,
+        operation: String,
+        permission: String,
+    ) {
+        let resource_type = match resource.as_str() {
+            "Topic" => ResourceType::Topic,
+            "Cluster" => ResourceType::Cluster,
+            "User" => ResourceType::User,
+            _ => panic!("unknown resource: {resource}"),
+        };
+        let operation = match operation.as_str() {
+            "Read" => AclOperation::Read,
+            "Alter" => AclOperation::Alter,
+            "CreateTokens" => AclOperation::CreateTokens,
+            _ => panic!("unknown operation: {operation}"),
+        };
+        let permission_type = match permission.as_str() {
+            "Allow" => PermissionType::Allow,
+            "Deny" => PermissionType::Deny,
+            _ => panic!("unknown permission: {permission}"),
+        };
+        assert!(
+            acl_validation.result.as_ref().unwrap()
+                == &Ok(AclEntry {
+                    resource_type,
+                    resource_name: name,
+                    pattern_type: PatternType::Literal,
+                    principal,
+                    host: "*".into(),
+                    operation,
+                    permission_type
+                })
+        );
+    }
+    #[rstest_bdd_macros::then("ACL creation is refused with code {code} and message {message}")]
+    fn check_acl_refusal(acl_validation: &AclValidationScenario, code: i16, message: String) {
+        assert!(acl_validation.result.as_ref().unwrap() == &Err(AclRefusal { code, message }));
+    }
+    #[rstest_bdd_macros::then("the ACL host is accepted")]
+    fn check_acl_host_accepted(acl_validation: &AclValidationScenario) {
+        assert!(acl_validation.result.as_ref().unwrap().is_ok());
+    }
+    #[rstest_bdd_macros::then(
+        "unknown elements are {unknown} and filter-only elements are {filter_only}"
+    )]
+    fn check_acl_classification(
+        acl_validation: &AclValidationScenario,
+        unknown: bool,
+        filter_only: bool,
+    ) {
+        assert!(acl_validation.classification.unwrap() == (unknown, filter_only));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_acl_validation",fixtures=[acl_validation:AclValidationScenario]);
 
     /// A resource name with a NUL byte is a valid Kafka resource name.
     #[test]
     fn validate_accepts_a_nul_in_the_resource_name() {
         let c = creation("bad\0name", "User:alice", OPERATION_READ);
         assert!(validate(&c).map(|entry| entry.resource_name) == Ok("bad\0name".to_owned()));
-    }
-
-    #[test]
-    fn whole_request_element_checks_match_kafka_parse_and_binding_construction() {
-        /// A mutation of the baseline creation, whether it makes an UNKNOWN element, and
-        /// whether it makes a filter-only element.
-        struct ElementCase {
-            shape: fn(&mut AclCreation),
-            unknown: bool,
-            filter_only: bool,
-        }
-
-        let cases: [ElementCase; 10] = [
-            ElementCase {
-                shape: |_| {},
-                unknown: false,
-                filter_only: false,
-            },
-            ElementCase {
-                shape: |c| c.resource_type = 0,
-                unknown: true,
-                filter_only: false,
-            },
-            ElementCase {
-                shape: |c| c.resource_pattern_type = 0,
-                unknown: true,
-                filter_only: false,
-            },
-            ElementCase {
-                shape: |c| c.operation = 0,
-                unknown: true,
-                filter_only: false,
-            },
-            ElementCase {
-                shape: |c| c.permission_type = 0,
-                unknown: true,
-                filter_only: false,
-            },
-            ElementCase {
-                shape: |c| c.resource_type = 1,
-                unknown: false,
-                filter_only: true,
-            },
-            ElementCase {
-                shape: |c| c.resource_pattern_type = 1,
-                unknown: false,
-                filter_only: true,
-            },
-            ElementCase {
-                shape: |c| c.resource_pattern_type = 2,
-                unknown: false,
-                filter_only: true,
-            },
-            ElementCase {
-                shape: |c| c.operation = 1,
-                unknown: false,
-                filter_only: true,
-            },
-            ElementCase {
-                shape: |c| c.permission_type = 1,
-                unknown: false,
-                filter_only: true,
-            },
-        ];
-        for ElementCase {
-            shape,
-            unknown,
-            filter_only,
-        } in cases
-        {
-            let valid = creation("topic-a", "User:alice", OPERATION_READ);
-            let mut c = valid.clone();
-            shape(&mut c);
-            let creations = [valid, c];
-            assert!(
-                (
-                    has_unknown_element(&creations),
-                    has_filter_only_element(&creations)
-                ) == (unknown, filter_only)
-            );
-        }
-    }
-
-    /// KIP-1276 host validation, table-driven against
-    /// `AclControlManager.validateHostPattern`'s four outcomes: the wildcard
-    /// and a plain address always pass; a CIDR host needs
-    /// `cidr_hosts_supported` and must parse; an empty host is always
-    /// rejected regardless of the gate.
-    #[test]
-    fn validate_host_matches_kafka_cidr_gating() {
-        /// The refusal expected for a host: Kafka's code and message.
-        struct HostRefusal {
-            code: i16,
-            message: &'static str,
-        }
-
-        /// A host, whether CIDR hosts are supported, and the refusal expected, if any.
-        struct HostCase {
-            host: &'static str,
-            cidr_hosts_supported: bool,
-            expected_err: Option<HostRefusal>,
-        }
-
-        let cases: &[HostCase] = &[
-            HostCase {
-                host: "*",
-                cidr_hosts_supported: false,
-                expected_err: None,
-            },
-            HostCase {
-                host: "*",
-                cidr_hosts_supported: true,
-                expected_err: None,
-            },
-            HostCase {
-                host: "10.0.0.1",
-                cidr_hosts_supported: false,
-                expected_err: None,
-            },
-            HostCase {
-                host: "10.0.0.1",
-                cidr_hosts_supported: true,
-                expected_err: None,
-            },
-            HostCase {
-                host: "10.0.0.0/8",
-                cidr_hosts_supported: true,
-                expected_err: None,
-            },
-            HostCase {
-                host: "10.0.0.0/8",
-                cidr_hosts_supported: false,
-                expected_err: Some(HostRefusal {
-                    code: UNSUPPORTED_VERSION,
-                    message: "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.",
-                }),
-            },
-            HostCase {
-                host: "10.0.0.0/33",
-                cidr_hosts_supported: true,
-                expected_err: Some(HostRefusal {
-                    code: INVALID_REQUEST,
-                    message: "Invalid CIDR notation '10.0.0.0/33': Value [33] not in range [0,32]",
-                }),
-            },
-            HostCase {
-                host: "2001:db8::/32",
-                cidr_hosts_supported: true,
-                expected_err: None,
-            },
-            HostCase {
-                host: "",
-                cidr_hosts_supported: true,
-                expected_err: Some(HostRefusal {
-                    code: INVALID_REQUEST,
-                    message: "Host pattern cannot be null or empty",
-                }),
-            },
-            HostCase {
-                host: "",
-                cidr_hosts_supported: false,
-                expected_err: Some(HostRefusal {
-                    code: INVALID_REQUEST,
-                    message: "Host pattern cannot be null or empty",
-                }),
-            },
-        ];
-        for HostCase {
-            host,
-            cidr_hosts_supported,
-            expected_err,
-        } in cases
-        {
-            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
-            c.host = (*host).into();
-            let got = super::validate(&c, HostCheck::Trunk {
-                cidr_hosts_supported: *cidr_hosts_supported,
-            })
-            .err();
-            let expected = expected_err.as_ref().map(|refusal| AclRefusal {
-                code: refusal.code,
-                message: refusal.message.to_owned(),
-            });
-            assert!(
-                got == expected,
-                "host {host:?} cidr_hosts_supported {cidr_hosts_supported}"
-            );
-        }
     }
 
     /// Kafka 4.3.1 has no host check, so every host is stored as the text it

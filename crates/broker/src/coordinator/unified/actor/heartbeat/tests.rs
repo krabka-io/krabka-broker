@@ -2,27 +2,24 @@
 
 use {
     super::*,
-    crate::{
-        coordinator::unified::{
-            ClientIdentity,
-            actor::{
-                member_state::build_member,
-                test_support::{
-                    StaticMetadata, classic_member_for_topic, consumer_native_join_request,
-                    coordinator_with_log, empty_metadata, make_coordinator,
-                    make_coordinator_with_topic, make_coordinator_with_topic_policy,
-                    rpc::{self, consumer_request},
-                    seed_classic_member,
-                },
-            },
-            persistence_next_gen::GroupMetadataValue,
-            reconciler::{ReconcileInput, metadata_hash},
+    crate::coordinator::unified::{
+        ClientIdentity,
+        actor::{
+            member_state::build_member,
             test_support::{
-                MemberEpoch, assert_next_tombstone_batch, assert_single_member_limit_with_log,
-                consumer_join_request, heartbeat_write_failures,
+                StaticMetadata, classic_member_for_topic, consumer_native_join_request,
+                coordinator_with_log, empty_metadata, make_coordinator,
+                make_coordinator_with_topic, make_coordinator_with_topic_policy,
+                rpc::{self, consumer_request},
+                seed_classic_member,
             },
         },
-        test_support::KafkaErrorCode,
+        persistence_next_gen::GroupMetadataValue,
+        reconciler::{ReconcileInput, metadata_hash},
+        test_support::{
+            MemberEpoch, assert_next_tombstone_batch, assert_single_member_limit_with_log,
+            consumer_join_request, heartbeat_write_failures,
+        },
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
@@ -308,48 +305,6 @@ fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
     check!(state.members["b"].assignment_state == Stable);
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum StaticMemberPresence {
-    #[default]
-    Present,
-    Released,
-}
-
-/// A member id and its epoch.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct IdentityMember<'a> {
-    member_id: &'a str,
-    epoch: MemberEpoch,
-}
-
-fn member(member_id: &'static str, epoch: i32) -> IdentityMember<'static> {
-    IdentityMember {
-        member_id,
-        epoch: MemberEpoch(epoch),
-    }
-}
-
-/// One row of [`heartbeat_identity_rules_follow_kafka`].
-#[derive(krabka_macros::FieldDefaults)]
-struct IdentityRow {
-    #[default("identity row")]
-    name: &'static str,
-    /// Whether to send a static leave for `s1` before the row's request.
-    static_member: StaticMemberPresence,
-    #[default("m1")]
-    member_id: &'static str,
-    instance_id: Option<&'static str>,
-    #[default(MemberEpoch(5))]
-    member_epoch: MemberEpoch,
-    owned: Option<Vec<PartitionIndex>>,
-    expected: ConsumerGroupHeartbeatResponse,
-    /// The sorted member identities and epochs after the request.
-    #[default(vec![member("m1", 5), member("s1", 5)])]
-    members_after: Vec<IdentityMember<'static>>,
-    #[default(Some("s1"))]
-    i1_after: Option<&'static str>,
-}
-
 fn heartbeat_interval_ms() -> i32 {
     i32::try_from(
         NextGenConfig::assigning_at_once()
@@ -407,165 +362,6 @@ fn identity_ok(
     }
 }
 
-fn identity_error(error_code: KafkaErrorCode, message: &str) -> ConsumerGroupHeartbeatResponse {
-    ConsumerGroupHeartbeatResponse {
-        error_code: error_code.0,
-        error_message: Some(message.into()),
-        ..Default::default()
-    }
-}
-
-fn fenced_epoch(direction: &str, received: MemberEpoch) -> ConsumerGroupHeartbeatResponse {
-    let received = received.0;
-    identity_error(
-        KafkaErrorCode(codes::FENCED_MEMBER_EPOCH),
-        &format!(
-            "The consumer group member has a {direction} member epoch ({received}) than the one \
-             known by the group coordinator (5). The member must abandon all its partitions and \
-             rejoin."
-        ),
-    )
-}
-
-fn identity_rows() -> Vec<IdentityRow> {
-    let fenced_instance = || {
-        identity_error(
-            KafkaErrorCode(codes::FENCED_INSTANCE_ID),
-            "Static member m9 with instance id i1 was fenced by member s1.",
-        )
-    };
-    vec![
-        IdentityRow {
-            members_after: vec![member("m1", 5), member("s1", -2)],
-            name: "static member leaves with epoch -2",
-            member_id: "s1",
-            instance_id: Some("i1"),
-            member_epoch: MemberEpoch(-2),
-            expected: identity_ok().member_id("s1").epoch(-2).call(),
-            ..Default::default()
-        },
-        IdentityRow {
-            static_member: StaticMemberPresence::Released,
-            members_after: vec![member("m1", 5), member("s2", 5)],
-            i1_after: Some("s2"),
-            name: "new member takes a released instance id",
-            member_id: "s2",
-            instance_id: Some("i1"),
-            member_epoch: MemberEpoch(0),
-            owned: Some(vec![]),
-            expected: identity_ok()
-                .member_id("s2")
-                .maybe_partitions(Some(vec![PartitionIndex(2), PartitionIndex(3)]))
-                .call(),
-        },
-        IdentityRow {
-            name: "new member with an unreleased instance id",
-            member_id: "s2",
-            instance_id: Some("i1"),
-            member_epoch: MemberEpoch(0),
-            owned: Some(vec![]),
-            expected: identity_error(
-                KafkaErrorCode(codes::UNRELEASED_INSTANCE_ID),
-                "Static member s2 with instance id i1 cannot join the group because the instance \
-                 id is owned by s1 member.",
-            ),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "known member rejoins with epoch 0",
-            member_epoch: MemberEpoch(0),
-            owned: Some(vec![]),
-            expected: identity_ok_two_partitions(),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "previous epoch with a subset of the assignment",
-            member_epoch: MemberEpoch(4),
-            owned: Some(vec![krabka_ids::PartitionIndex(0)]),
-            expected: identity_ok_two_partitions(),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "previous epoch with a superset of the assignment",
-            member_epoch: MemberEpoch(4),
-            owned: Some(vec![
-                krabka_ids::PartitionIndex(0),
-                krabka_ids::PartitionIndex(1),
-                krabka_ids::PartitionIndex(2),
-            ]),
-            expected: fenced_epoch("smaller", MemberEpoch(4)),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "epoch older than the previous epoch",
-            member_epoch: MemberEpoch(3),
-            owned: Some(vec![krabka_ids::PartitionIndex(0)]),
-            expected: fenced_epoch("smaller", MemberEpoch(3)),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "greater epoch",
-            member_epoch: MemberEpoch(6),
-            owned: Some(vec![
-                krabka_ids::PartitionIndex(0),
-                krabka_ids::PartitionIndex(1),
-            ]),
-            expected: fenced_epoch("greater", MemberEpoch(6)),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "leave of an unknown member",
-            member_id: "ghost",
-            member_epoch: MemberEpoch(-1),
-            expected: identity_error(
-                KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
-                "Member ghost is not a member of group g.",
-            ),
-            ..Default::default()
-        },
-        IdentityRow {
-            members_after: vec![member("s1", 5)],
-            name: "dynamic member leaves with epoch -1",
-            member_epoch: MemberEpoch(-1),
-            expected: identity_ok().epoch(-1).call(),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "static heartbeat from another member id",
-            member_id: "m9",
-            instance_id: Some("i1"),
-            owned: Some(vec![
-                krabka_ids::PartitionIndex(2),
-                krabka_ids::PartitionIndex(3),
-            ]),
-            expected: fenced_instance(),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "static leave from another member id",
-            member_id: "m9",
-            instance_id: Some("i1"),
-            member_epoch: MemberEpoch(-2),
-            expected: fenced_instance(),
-            ..Default::default()
-        },
-        IdentityRow {
-            name: "static heartbeat with an unknown instance id",
-            member_id: "s1",
-            instance_id: Some("i9"),
-            owned: Some(vec![
-                krabka_ids::PartitionIndex(2),
-                krabka_ids::PartitionIndex(3),
-            ]),
-            expected: identity_error(
-                KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
-                "Instance id i9 is unknown.",
-            ),
-            ..Default::default()
-        },
-    ]
-}
-
 #[derive(krabka_macros::FieldDefaults)]
 struct IdentityRequestSetup<'a> {
     #[default("m1")]
@@ -612,111 +408,6 @@ fn identity_request(
             }]
         }),
         ..Default::default()
-    }
-}
-
-/// A group with a dynamic member `m1` on partitions 0 and 1 and a static
-/// member `s1` (instance `i1`) on partitions 2 and 3, both at epoch 5 with
-/// previous epoch 4, and a settled target.
-fn identity_group() -> GroupState {
-    let mut state = GroupState::new("g");
-    state.group_epoch = 5;
-    for (member_id, instance_id, partitions) in
-        [("m1", None, vec![0, 1]), ("s1", Some("i1"), vec![2, 3])]
-    {
-        let mut member = build_member(
-            member_id,
-            &identity_request()
-                .member_id(member_id)
-                .maybe_instance_id(instance_id)
-                .member_epoch(0)
-                .call(),
-            ClientIdentity { id: "c", host: "h" },
-            Instant::now(),
-        );
-        member.member_epoch = 5;
-        member.previous_member_epoch = 4;
-        member.assigned_partitions = HashMap::from([(IDENTITY_TOPIC, partitions.clone())]);
-        state.add_or_update_member(member);
-        state.target.per_member.insert(
-            member_id.to_owned(),
-            HashMap::from([(IDENTITY_TOPIC, partitions)]),
-        );
-    }
-    state.target.epoch = 5;
-    state
-}
-
-/// Kafka's KIP-848 identity rules for `ConsumerGroupHeartbeat`
-/// (`GroupMetadataManager.consumerGroupHeartbeat`, `consumerGroupLeave`,
-/// `throwIfConsumerGroupMemberEpochIsInvalid`, the instance checks and
-/// `getOrMaybeSubscribeStaticConsumerGroupMember`). Each row starts from
-/// [`identity_group`] and compares the whole response and the members after.
-#[test]
-fn heartbeat_identity_rules_follow_kafka() {
-    let config = NextGenConfig::assigning_at_once();
-    let metadata = StaticMetadata {
-        input: ReconcileInput {
-            topic_id_by_name: HashMap::from([("t".to_owned(), IDENTITY_TOPIC)]),
-            partitions_per_topic: HashMap::from([(IDENTITY_TOPIC, 4)]),
-            ..Default::default()
-        },
-    };
-    let client = ClientIdentity { id: "c", host: "h" };
-
-    for row in identity_rows() {
-        let mut state = identity_group();
-        // The group recorded the hash of its topics, so its first heartbeat's
-        // refresh finds nothing new.
-        state.record_metadata_hash(metadata_hash(&state, &metadata.input));
-        if row.static_member == StaticMemberPresence::Released {
-            let released = step_heartbeat(
-                &mut state,
-                &config,
-                &metadata,
-                &identity_request()
-                    .member_id("s1")
-                    .maybe_instance_id(Some("i1"))
-                    .member_epoch(-2)
-                    .call(),
-                client,
-                Instant::now(),
-                &RegexResolution::none(),
-            );
-            check!(released.response.error_code == codes::NONE, "{}", row.name);
-        }
-
-        let step = step_heartbeat(
-            &mut state,
-            &config,
-            &metadata,
-            &identity_request()
-                .member_id(row.member_id)
-                .maybe_instance_id(row.instance_id)
-                .member_epoch(row.member_epoch)
-                .maybe_owned(row.owned)
-                .call(),
-            client,
-            Instant::now(),
-            &RegexResolution::none(),
-        );
-
-        let mut members: Vec<IdentityMember<'_>> = state
-            .members
-            .values()
-            .map(|member| IdentityMember {
-                member_id: member.member_id.as_str(),
-                epoch: MemberEpoch(member.member_epoch),
-            })
-            .collect();
-        members.sort_unstable();
-        check!(step.response == row.expected, "{}", row.name);
-        check!(members == row.members_after, "{}", row.name);
-        check!(
-            state.current_member_for_instance("i1") == row.i1_after,
-            "{}",
-            row.name
-        );
     }
 }
 
@@ -1079,108 +770,345 @@ fn step_heartbeat_first_join_targets_all_partitions() {
     );
 }
 
-/// Kafka's `getOrMaybeCreateConsumerGroup` for a heartbeat that meets a
-/// classic group: (label, policy, classic group members, protocol type,
-/// heartbeat epoch) to (error code, error message, classic k2 tombstone
-/// written). An empty classic group, such as one that only holds committed
-/// offsets, is replaced whatever the policy and protocol type; a non-empty
-/// one goes through `validateOnlineUpgrade`; only a joining heartbeat may
-/// create a consumer group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
+use {
+    crate::coordinator::unified::{
+        GroupCoordinator, actor::GroupActorHandle, offsets_log::fake::InMemoryOffsetsLog,
+    },
+    krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions as IdentityAssignmentPartition,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    serde::Deserialize,
+    std::sync::Arc,
+};
+#[derive(Default)]
+struct ConsumerIdentityBehavior {
+    state: Option<GroupState>,
+    metadata: Option<StaticMetadata>,
+    release_code: Option<i16>,
+    response: Option<ConsumerGroupHeartbeatResponse>,
+}
+#[rstest::fixture]
+fn consumer_identity() -> ConsumerIdentityBehavior {
+    // Start this scenario with fresh inputs and observations.
+    ConsumerIdentityBehavior::default()
+}
+#[derive(DataTableRow)]
+struct ExistingConsumerIdentity {
+    member: String,
+    instance: String,
+    epoch: i32,
+    previous_epoch: i32,
+    partitions: String,
+}
+#[given(
+    "consumer group g has group and target epochs 5 with four partitions of topic t UUID 09090909-0909-0909-0909-090909090909 and these settled members"
+)]
+fn existing_consumer_identities(
+    consumer_identity: &mut ConsumerIdentityBehavior,
+    #[datatable] rows: Rows<ExistingConsumerIdentity>,
+) {
+    let metadata = StaticMetadata {
+        input: ReconcileInput {
+            topic_id_by_name: HashMap::from([("t".to_owned(), IDENTITY_TOPIC)]),
+            partitions_per_topic: HashMap::from([(IDENTITY_TOPIC, 4)]),
+            ..Default::default()
+        },
+    };
+    let mut state = GroupState::new("g");
+    state.group_epoch = 5;
+    state.target.epoch = 5;
+    for row in rows {
+        let instance: Option<String> =
+            serde_json::from_str(&row.instance).expect("literal static instance");
+        let partitions: Vec<i32> =
+            serde_json::from_str(&row.partitions).expect("literal settled assignment");
+        let mut member = build_member(
+            &row.member,
+            &identity_request()
+                .member_id(&row.member)
+                .maybe_instance_id(instance.as_deref())
+                .member_epoch(0)
+                .call(),
+            ClientIdentity { id: "c", host: "h" },
+            Instant::now(),
+        );
+        member.member_epoch = row.epoch;
+        member.previous_member_epoch = row.previous_epoch;
+        member.assigned_partitions = HashMap::from([(IDENTITY_TOPIC, partitions.clone())]);
+        state
+            .target
+            .per_member
+            .insert(row.member, HashMap::from([(IDENTITY_TOPIC, partitions)]));
+        state.add_or_update_member(member);
+    }
+    state.record_metadata_hash(metadata_hash(&state, &metadata.input));
+    consumer_identity.state = Some(state);
+    consumer_identity.metadata = Some(metadata);
+}
+#[given("static instance i1 has already released member s1 with epoch -2")]
+fn released_consumer_identity(consumer_identity: &mut ConsumerIdentityBehavior) {
+    let released = step_heartbeat(
+        consumer_identity.state.as_mut().expect("group prepared"),
+        &NextGenConfig::assigning_at_once(),
+        consumer_identity.metadata.as_ref().expect("topic metadata"),
+        &identity_request()
+            .member_id("s1")
+            .maybe_instance_id(Some("i1"))
+            .member_epoch(-2)
+            .call(),
+        ClientIdentity { id: "c", host: "h" },
+        Instant::now(),
+        &RegexResolution::none(),
+    );
+    consumer_identity.release_code = Some(released.response.error_code);
+}
+#[derive(DataTableRow)]
+struct ConsumerIdentityRequest {
+    member: String,
+    instance: String,
+    epoch: i32,
+    owned: String,
+}
+#[when(
+    "that consumer heartbeats subscribed to t with rebalance timeout 60000 ms and these identity fields"
+)]
+fn request_consumer_identity(
+    consumer_identity: &mut ConsumerIdentityBehavior,
+    #[datatable] rows: Rows<ConsumerIdentityRequest>,
+) {
+    for row in rows {
+        let instance: Option<String> =
+            serde_json::from_str(&row.instance).expect("literal request instance");
+        let owned: Option<Vec<i32>> =
+            serde_json::from_str(&row.owned).expect("literal owned partitions");
+        let request = identity_request()
+            .member_id(&row.member)
+            .maybe_instance_id(instance.as_deref())
+            .member_epoch(row.epoch)
+            .maybe_owned(
+                owned.map(|partitions| partitions.into_iter().map(PartitionIndex).collect()),
+            )
+            .call();
+        let step = step_heartbeat(
+            consumer_identity.state.as_mut().expect("group prepared"),
+            &NextGenConfig::assigning_at_once(),
+            consumer_identity.metadata.as_ref().expect("topic metadata"),
+            &request,
+            ClientIdentity { id: "c", host: "h" },
+            Instant::now(),
+            &RegexResolution::none(),
+        );
+        consumer_identity.response = Some(step.response);
+    }
+}
+#[derive(Deserialize)]
+struct ExpectedIdentityResponse {
+    error_code: i16,
+    error_message: Option<String>,
+    member_id: Option<String>,
+    member_epoch: i32,
+    heartbeat_interval_ms: i32,
+    assignment: Option<Vec<i32>>,
+}
+#[derive(Deserialize)]
+struct ExpectedConsumerIdentity {
+    response: ExpectedIdentityResponse,
+    members: Vec<(String, i32)>,
+    instance_i1: Option<String>,
+}
+#[then("the complete consumer response and remaining member epochs and instance owner are")]
+fn consumer_identity_result(consumer_identity: &ConsumerIdentityBehavior, docstring: String) {
+    let expected: ExpectedConsumerIdentity =
+        serde_json::from_str(&docstring).expect("literal independent identity result");
+    let response = expected.response;
+    let expected_response = ConsumerGroupHeartbeatResponse {
+        error_code: response.error_code,
+        error_message: response.error_message,
+        member_id: response.member_id,
+        member_epoch: response.member_epoch,
+        heartbeat_interval_ms: response.heartbeat_interval_ms,
+        assignment: response.assignment.map(|partitions| RespAssignment {
+            topic_partitions: vec![IdentityAssignmentPartition {
+                topic_id: IDENTITY_TOPIC,
+                partitions,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    check!(consumer_identity.response.as_ref() == Some(&expected_response));
+    let state = consumer_identity.state.as_ref().expect("heartbeat applied");
+    let mut members = state
+        .members
+        .values()
+        .map(|member| (member.member_id.clone(), member.member_epoch))
+        .collect::<Vec<_>>();
+    members.sort_unstable();
+    check!(members == expected.members);
+    check!(state.current_member_for_instance("i1") == expected.instance_i1.as_deref());
+    if let Some(code) = consumer_identity.release_code {
+        check!(code == codes::NONE);
+    }
+}
+mod identity_scenarios {
+    use super::*;
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",tags="@consumer-identity",fixtures=[consumer_identity:ConsumerIdentityBehavior]);
+}
+#[derive(Default)]
+struct ClassicHeartbeatMigration {
+    coordinator: Option<Arc<GroupCoordinator>>,
+    log: Option<Arc<InMemoryOffsetsLog>>,
+    handle: Option<Arc<GroupActorHandle>>,
+    response: Option<ConsumerGroupHeartbeatResponse>,
+    tombstone: Option<bool>,
+}
+#[rstest::fixture]
+fn classic_heartbeat_migration() -> ClassicHeartbeatMigration {
+    // Start this scenario with fresh inputs and observations.
+
+    ClassicHeartbeatMigration::default()
+}
+#[given(
+    "classic group g at generation 1 has {members} members subscribed to one-partition topic t with protocol {protocol} and migration policy {policy}"
+)]
+fn classic_group_before_consumer_heartbeat(
+    classic_heartbeat_migration: &mut ClassicHeartbeatMigration,
+    members: usize,
+    protocol: String,
+    policy: String,
+) {
     use crate::coordinator::unified::{
-        classic_state::ClassicGroup as ClassicState,
+        classic_state::ClassicGroup,
         config::ConsumerGroupMigrationPolicy as Policy,
         group::{CoordinatorGroup, GroupKind},
     };
-
-    let disabled = "Cannot upgrade classic group g to consumer group because online upgrade is \
-                    disabled.";
-    let rows = [
-        (
-            "offset-only group, policy disabled",
-            Policy::Disabled,
-            0,
-            None,
-            0,
-            (codes::NONE, None, true),
-        ),
-        (
-            "empty connect group",
-            Policy::Bidirectional,
-            0,
-            Some("connect"),
-            0,
-            (codes::NONE, None, true),
-        ),
-        (
-            "live group, policy disabled",
-            Policy::Disabled,
-            1,
-            Some("consumer"),
-            0,
-            (codes::GROUP_ID_NOT_FOUND, Some(disabled), false),
-        ),
-        (
-            "live group, upgrade allowed",
-            Policy::Upgrade,
-            1,
-            Some("consumer"),
-            0,
-            (codes::NONE, None, true),
-        ),
-        (
-            "offset-only group, steady heartbeat",
-            Policy::Bidirectional,
-            0,
-            None,
-            3,
-            (
-                codes::GROUP_ID_NOT_FOUND,
-                Some("Group g is not a consumer group."),
-                false,
-            ),
-        ),
-    ];
-    for (label, policy, members, protocol_type, epoch, want) in rows {
-        let (coord, log) = make_coordinator_with_topic_policy("t", 1, policy);
-        let mut classic = ClassicState::new("g");
-        classic.protocol_type = protocol_type.map(String::from);
-        for index in 0..members {
-            classic.add_member(classic_member_for_topic(format!("classic-{index}"), "t"));
-        }
-        classic.generation_id = 1;
-        coord.seed_classic(
-            "g",
-            Box::new(CoordinatorGroup::seeded(
-                "g",
-                GroupKind::Classic(classic),
-                HashMap::new(),
-            )),
-        );
-        let handle = coord.find("g").expect("seeded classic actor");
-        let response = consumer_request(&handle, ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "native".into(),
-            member_epoch: epoch,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            topic_partitions: Some(vec![]),
-            ..Default::default()
-        })
-        .await;
-        let got = (
-            response.error_code,
-            response.error_message.as_deref(),
-            log.has_classic_group_metadata_tombstone("g").await,
-        );
-        check!(got == want, "{label}");
+    let policy = match policy.as_str() {
+        "disabled" => Policy::Disabled,
+        "upgrade" => Policy::Upgrade,
+        "bidirectional" => Policy::Bidirectional,
+        _ => panic!("unknown migration policy"),
+    };
+    let (coordinator, log) = make_coordinator_with_topic_policy("t", 1, policy);
+    let mut classic = ClassicGroup::new("g");
+    classic.protocol_type = if protocol == "absent" {
+        None
+    } else {
+        Some(protocol)
+    };
+    for index in 0..members {
+        classic.add_member(classic_member_for_topic(format!("classic-{index}"), "t"));
     }
+    classic.generation_id = 1;
+    coordinator.seed_classic(
+        "g",
+        Box::new(CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Classic(classic),
+            HashMap::new(),
+        )),
+    );
+    classic_heartbeat_migration.handle = Some(coordinator.find("g").expect("seeded classic actor"));
+    classic_heartbeat_migration.coordinator = Some(coordinator);
+    classic_heartbeat_migration.log = Some(log);
 }
-
-/// Independent success expectation for both partitions of the fixture topic.
-fn identity_ok_two_partitions() -> ConsumerGroupHeartbeatResponse {
-    identity_ok()
-        .maybe_partitions(Some(vec![PartitionIndex(0), PartitionIndex(1)]))
-        .call()
+#[when(
+    "native consumer native heartbeats at epoch {epoch} subscribed to t with rebalance timeout 60000 ms and no owned partitions"
+)]
+async fn consumer_heartbeat_to_classic_group(
+    classic_heartbeat_migration: &mut ClassicHeartbeatMigration,
+    epoch: i32,
+) {
+    classic_heartbeat_migration.response = Some(
+        consumer_request(
+            classic_heartbeat_migration
+                .handle
+                .as_ref()
+                .expect("classic group prepared"),
+            ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "native".into(),
+                member_epoch: epoch,
+                subscribed_topic_names: Some(vec!["t".into()]),
+                rebalance_timeout_ms: 60000,
+                topic_partitions: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await,
+    );
+    classic_heartbeat_migration.tombstone = Some(
+        classic_heartbeat_migration
+            .log
+            .as_ref()
+            .expect("offsets log")
+            .has_classic_group_metadata_tombstone("g")
+            .await,
+    );
+}
+#[derive(Deserialize)]
+struct ExpectedClassicMigration {
+    error_code: i16,
+    error_message: Option<String>,
+    classic_tombstone: bool,
+}
+#[then("the consumer admission error and classic metadata tombstone are")]
+fn classic_heartbeat_migration_result(
+    classic_heartbeat_migration: &ClassicHeartbeatMigration,
+    docstring: String,
+) {
+    let expected: ExpectedClassicMigration =
+        serde_json::from_str(&docstring).expect("literal migration outcome");
+    let response = classic_heartbeat_migration
+        .response
+        .as_ref()
+        .expect("heartbeat answered");
+    check!(response.error_code == expected.error_code);
+    check!(response.error_message == expected.error_message);
+    check!(classic_heartbeat_migration.tombstone == Some(expected.classic_tombstone));
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "An offset-only classic group upgrades even with migration disabled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does(
+    classic_heartbeat_migration: ClassicHeartbeatMigration,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "An empty connect group is replaced by a consumer group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_classic_heartbeat_migration_1(
+    classic_heartbeat_migration: ClassicHeartbeatMigration,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "A live classic group refuses a consumer join when online upgrade is disabled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_classic_heartbeat_migration_2(
+    classic_heartbeat_migration: ClassicHeartbeatMigration,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "A live classic group upgrades when online upgrade is allowed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_classic_heartbeat_migration_3(
+    classic_heartbeat_migration: ClassicHeartbeatMigration,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "A steady heartbeat cannot create a consumer group over an offset-only group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_classic_heartbeat_migration_4(
+    classic_heartbeat_migration: ClassicHeartbeatMigration,
+) {
 }

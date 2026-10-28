@@ -251,91 +251,87 @@ mod tests {
         check!(actual == expected);
     }
 
-    /// Kafka's `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochs`.
-    #[test]
-    fn a_segment_is_within_the_lineage_as_kafka_decides() {
-        const LEADER: &[(i32, LogOffset)] =
-            &[(0, 0), (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (7, 70)];
-        run(LEADER, &[
-            Case {
-                label: "several epochs within the lineage",
-                segment_epochs: &[(1, 15), (2, 20), (3, 30)],
-                segment_end: 35,
-                log_end_offset: 90,
-                want: true,
-            },
-            Case {
-                label: "one epoch within the lineage",
-                segment_epochs: &[(1, 15)],
-                segment_end: 19,
-                log_end_offset: 90,
-                want: true,
-            },
-            Case {
-                label: "starts at the lineage's first epoch start",
-                segment_epochs: &[(0, 0)],
-                segment_end: 5,
-                log_end_offset: 90,
-                want: true,
-            },
-            Case {
-                label: "starts at the lineage's last epoch start",
-                segment_epochs: &[(7, 70)],
-                segment_end: 75,
-                log_end_offset: 90,
-                want: true,
-            },
-            Case {
-                label: "ends at the last offset of its last epoch",
-                segment_epochs: &[(1, 15), (2, 20)],
-                segment_end: 29,
-                log_end_offset: 90,
-                want: true,
-            },
-            Case {
-                label: "an epoch the lineage does not hold",
-                segment_epochs: &[(5, 55), (6, 60), (7, 70)],
-                segment_end: 85,
-                log_end_offset: 90,
-                want: false,
-            },
-            Case {
-                label: "skips an epoch the lineage holds",
-                segment_epochs: &[(1, 15), (2, 20), (4, 40)],
-                segment_end: 45,
-                log_end_offset: 90,
-                want: false,
-            },
-            Case {
-                label: "ends past the log end offset",
-                segment_epochs: LEADER,
-                segment_end: 95,
-                log_end_offset: 90,
-                want: false,
-            },
-            Case {
-                label: "ends at the log end offset",
-                segment_epochs: LEADER,
-                segment_end: 90,
-                log_end_offset: 90,
-                want: false,
-            },
-            Case {
-                label: "starts before its first epoch's start",
-                segment_epochs: &[(1, 5), (2, 20)],
-                segment_end: 25,
-                log_end_offset: 90,
-                want: false,
-            },
-            Case {
-                label: "ends past its last epoch's end",
-                segment_epochs: &[(1, 15), (2, 20)],
-                segment_end: 35,
-                log_end_offset: 90,
-                want: false,
-            },
-        ]);
+    #[derive(Default)]
+    struct RemoteSegmentLineage {
+        leader: Option<BTreeMap<LeaderEpoch, LogOffset>>,
+        segment: Option<BTreeMap<LeaderEpoch, LogOffset>>,
+        segment_end: Option<LogOffset>,
+        log_end: Option<LogOffset>,
+        within_lineage: Option<bool>,
     }
+
+    #[rstest::fixture]
+    fn remote_segment_lineage() -> RemoteSegmentLineage {
+        // Candidate remote segments are judged against their own leader history.
+        RemoteSegmentLineage::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the leader epoch starts are JSON {epochs} and the leader log end is {end}"
+    )]
+    fn supplied_remote_leader_lineage(
+        remote_segment_lineage: &mut RemoteSegmentLineage,
+        epochs: String,
+        end: LogOffset,
+    ) {
+        let epochs: Vec<(i32, LogOffset)> =
+            serde_json::from_str(&epochs).expect("explicit leader epoch offsets");
+        remote_segment_lineage.leader = Some(epoch_map(&epochs));
+        remote_segment_lineage.log_end = Some(end);
+    }
+
+    #[rstest_bdd_macros::given(
+        "a remote segment has epoch starts JSON {epochs} and inclusive end offset {end}"
+    )]
+    fn supplied_remote_segment_lineage(
+        remote_segment_lineage: &mut RemoteSegmentLineage,
+        epochs: String,
+        end: LogOffset,
+    ) {
+        let epochs: Vec<(i32, LogOffset)> =
+            serde_json::from_str(&epochs).expect("explicit segment epoch offsets");
+        remote_segment_lineage.segment = Some(epoch_map(&epochs));
+        remote_segment_lineage.segment_end = Some(end);
+    }
+
+    #[rstest_bdd_macros::when(
+        "the remote reader checks whether the segment belongs to the leader history"
+    )]
+    fn check_remote_segment_lineage(remote_segment_lineage: &mut RemoteSegmentLineage) {
+        remote_segment_lineage.within_lineage = Some(segment_within_leader_epochs(
+            remote_segment_lineage
+                .segment
+                .as_ref()
+                .expect("remote segment epochs were given"),
+            remote_segment_lineage
+                .segment_end
+                .expect("remote segment end was given"),
+            remote_segment_lineage
+                .log_end
+                .expect("leader log end was given"),
+            remote_segment_lineage
+                .leader
+                .as_ref()
+                .expect("leader history was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the remote segment belongs to the current leader lineage")]
+    fn matching_remote_segment_lineage(remote_segment_lineage: &RemoteSegmentLineage) {
+        check!(remote_segment_lineage.within_lineage == Some(true));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the remote segment is refused as outside the current leader lineage"
+    )]
+    fn diverging_remote_segment_lineage(remote_segment_lineage: &RemoteSegmentLineage) {
+        check!(remote_segment_lineage.within_lineage == Some(false));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/remote_reader/lineage.feature",
+        fixtures = [remote_segment_lineage: RemoteSegmentLineage]
+    );
 
     /// Kafka's
     /// `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochsForOverlappingSegments`.

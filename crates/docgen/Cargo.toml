@@ -39,5 +39,9 @@ krabka-protocol = { version = "0.7.0", default-features = false }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 tempfile = { workspace = true }
 yare = { workspace = true }

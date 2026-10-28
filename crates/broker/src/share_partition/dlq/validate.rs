@@ -226,80 +226,116 @@ mod tests {
         Err(DlqError::Config(message.to_owned()))
     }
 
-    /// Each rule of `validateDlqTopic`, with Kafka's message, and the order in
-    /// which they apply.
-    #[test]
-    fn a_topic_is_checked_against_the_rules_in_kafkas_order() {
-        let named = |topic: &'static str| [entry(KEY_DLQ_TOPIC_NAME, topic)];
-        let enabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")];
-        let disabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "false")];
-        let auto_create = |image: &mut MetadataImage| {
-            image.apply(&broker_config(
+    #[derive(Default)]
+    struct GroupDeadLetterTopic {
+        image: Option<MetadataImage>,
+        validated: Option<Result<TopicState, DlqError>>,
+    }
+
+    #[rstest::fixture]
+    fn group_dead_letter_topic() -> GroupDeadLetterTopic {
+        // Each share group validates against an independently configured cluster.
+        GroupDeadLetterTopic::default()
+    }
+
+    #[rstest_bdd_macros::given("share group g has no configured dead-letter topic")]
+    fn unconfigured_group_dead_letter_topic(group_dead_letter_topic: &mut GroupDeadLetterTopic) {
+        group_dead_letter_topic.image = Some(image(&[], None));
+    }
+
+    #[rstest_bdd_macros::given("share group g names dead-letter topic {topic}")]
+    fn named_group_dead_letter_topic(
+        group_dead_letter_topic: &mut GroupDeadLetterTopic,
+        topic: String,
+    ) {
+        group_dead_letter_topic
+            .image
+            .as_mut()
+            .expect("share group was given")
+            .apply(&MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                group_id: "g".to_owned(),
+                configs: configs(&[entry(KEY_DLQ_TOPIC_NAME, &topic)]),
+            }));
+    }
+
+    #[rstest_bdd_macros::given("topic dlq.g exists with dead-letter opt-in {flag}")]
+    fn existing_group_dead_letter_topic(
+        group_dead_letter_topic: &mut GroupDeadLetterTopic,
+        flag: String,
+    ) {
+        use uuid::Uuid;
+        let image = group_dead_letter_topic
+            .image
+            .as_mut()
+            .expect("share group was given");
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "dlq.g".to_owned(),
+            topic_id: Uuid::from_bytes([9; 16]),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        let overrides = match flag.as_str() {
+            "true" => configs(&[entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")]),
+            "false" => configs(&[entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "false")]),
+            "unset" => configs(&[]),
+            _ => panic!("unknown dead-letter opt-in setting {flag}"),
+        };
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "dlq.g".to_owned(),
+            overrides,
+        }));
+    }
+
+    #[rstest_bdd_macros::given("the cluster permits automatic dead-letter topic creation")]
+    fn automatically_created_group_dead_letter_topic(
+        group_dead_letter_topic: &mut GroupDeadLetterTopic,
+    ) {
+        group_dead_letter_topic
+            .image
+            .as_mut()
+            .expect("share group was given")
+            .apply(&broker_config(
                 DEFAULT_BROKER_CONFIG_NODE_ID,
                 KEY_AUTO_CREATE,
                 "true",
             ));
-        };
-
-        let no_topic = image(&[], None);
-        let internal = image(&named("__consumer_offsets"), None);
-        let not_enabled = image(&named("dlq.g"), Some(&disabled));
-        let no_flag = image(&named("dlq.g"), Some(&[]));
-        let wrong_prefix = image(&named("orders.dead"), None);
-        let missing = image(&named("dlq.g"), None);
-        let mut creatable = image(&named("dlq.g"), None);
-        auto_create(&mut creatable);
-        let ready = image(&named("dlq.g"), Some(&enabled));
-        // The rules apply in order: `__` beats the prefix, and the prefix
-        // beats the missing topic.
-        let internal_and_wrong_prefix = image(&named("__x"), None);
-
-        let actual = [
-            &no_topic,
-            &internal,
-            &not_enabled,
-            &no_flag,
-            &wrong_prefix,
-            &missing,
-            &creatable,
-            &ready,
-            &internal_and_wrong_prefix,
-        ]
-        .map(outcome);
-
-        assert!(
-            actual
-                == [
-                    config_error("Configured DLQ topic name in share group: g is empty."),
-                    config_error(
-                        "Configured DLQ topic name in share group: g cannot start with __, \
-                         topic: __consumer_offsets."
-                    ),
-                    config_error(
-                        "DLQ is not enabled on configured DLQ topic for share group: g, \
-                         topic: dlq.g"
-                    ),
-                    config_error(
-                        "DLQ is not enabled on configured DLQ topic for share group: g, \
-                         topic: dlq.g"
-                    ),
-                    config_error(
-                        "Configured DLQ topic name does not comply with the DLQ topic prefix in \
-                         share group: g, topic: orders.dead, prefix: dlq."
-                    ),
-                    config_error(
-                        "DLQ topic does not exist and auto create is disabled on cluster for \
-                         share group: g, topic: dlq.g."
-                    ),
-                    Ok(TopicState::Missing),
-                    Ok(TopicState::Exists),
-                    config_error(
-                        "Configured DLQ topic name in share group: g cannot start with __, \
-                         topic: __x."
-                    ),
-                ]
-        );
     }
+
+    #[rstest_bdd_macros::when("the share partition validates group g's dead-letter topic")]
+    fn validate_group_dead_letter_topic(group_dead_letter_topic: &mut GroupDeadLetterTopic) {
+        group_dead_letter_topic.validated = Some(outcome(
+            group_dead_letter_topic
+                .image
+                .as_ref()
+                .expect("share group was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("dead-letter configuration fails with {message}")]
+    fn refused_group_dead_letter_topic(
+        group_dead_letter_topic: &GroupDeadLetterTopic,
+        message: String,
+    ) {
+        assert!(group_dead_letter_topic.validated.as_ref() == Some(&config_error(&message)));
+    }
+
+    #[rstest_bdd_macros::then("dead-letter validation accepts topic state {state}")]
+    fn accepted_group_dead_letter_topic(
+        group_dead_letter_topic: &GroupDeadLetterTopic,
+        state: String,
+    ) {
+        let expected = match state.as_str() {
+            "exists" => TopicState::Exists,
+            "missing and creatable" => TopicState::Missing,
+            _ => panic!("unknown expected DLQ topic state {state}"),
+        };
+        assert!(group_dead_letter_topic.validated.as_ref() == Some(&Ok(expected)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_partition/dlq/validate.feature",
+        fixtures = [group_dead_letter_topic: GroupDeadLetterTopic]
+    );
 
     /// The prefix is a dynamic cluster config: an empty one lifts the rule, and
     /// a broker's own value beats the cluster default.

@@ -510,39 +510,69 @@ mod tests {
             assign_replicas_to_dirs_request,
             assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
         },
+        rstest_bdd::datatable::Rows,
         std::collections::BTreeSet,
         tokio::task,
     };
 
-    /// The Kafka 4.x controller-listener set, as a live
-    /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
-    /// set the 4.0.0 request schemas tag `controller`), minus the keys the
-    /// controller listener answers without this router.
-    #[test]
-    fn supported_set_matches_the_kafka_controller_listener_surface() {
-        let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
-
-        check!(keys.len() == SUPPORTED_APIS.len());
-        check!(
-            keys == maplit::btreeset! {
-                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 56, 57,
-                58, 62, 63, 64, 67, 73, 94,
-            }
-        );
+    #[derive(Default)]
+    struct ControllerCatalogScenario {
+        router: Option<BrokerControllerAdminRouter>,
+        advertised: Option<Vec<ControllerApiVersion>>,
     }
 
-    /// `Envelope` is advertised at the versions `kafka-clients-4.3.1.jar`
-    /// publishes: `ApiKeys.ENVELOPE` is `0..=0`, flexible from 0. The
-    /// controller listener merges this row into its `ApiVersions` table and
-    /// frames the request header from `flexible_min`, so a wrong minimum here
-    /// eats the first byte of the envelope body.
-    #[test]
-    fn envelope_is_advertised_at_the_versions_kafka_publishes() {
-        let envelope = SUPPORTED_APIS
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ControllerApiKey {
+        key: i16,
+    }
+
+    #[rstest::fixture]
+    fn controller_catalog() -> ControllerCatalogScenario {
+        // A fresh router publishes its own catalog independently of other cases.
+        ControllerCatalogScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("a new broker controller-admin router")]
+    fn controller_admin_router(controller_catalog: &mut ControllerCatalogScenario) {
+        controller_catalog.router = Some(BrokerControllerAdminRouter::new());
+    }
+
+    #[rstest_bdd_macros::when("the controller router's supported API versions are queried")]
+    fn query_controller_versions(controller_catalog: &mut ControllerCatalogScenario) {
+        let router = controller_catalog
+            .router
+            .as_ref()
+            .expect("a controller router was given");
+        controller_catalog.advertised = Some(router.api_versions().to_vec());
+    }
+
+    #[rstest_bdd_macros::then("the controller API keys occur once and are exactly:")]
+    fn kafka_controller_api_keys(
+        controller_catalog: &ControllerCatalogScenario,
+        #[datatable] rows: Rows<ControllerApiKey>,
+    ) {
+        let advertised = controller_catalog
+            .advertised
+            .as_ref()
+            .expect("the controller catalog was queried");
+        let keys: BTreeSet<_> = advertised.iter().map(|api| api.api_key).collect();
+        let expected: BTreeSet<_> = rows.into_iter().map(|row| row.key).collect();
+        check!(keys.len() == advertised.len());
+        check!(keys == expected);
+    }
+
+    #[rstest_bdd_macros::then(
+        "Envelope API 58 has minimum, maximum, released maximum, and flexible minimum all zero"
+    )]
+    fn kafka_controller_envelope_version(controller_catalog: &ControllerCatalogScenario) {
+        let advertised = controller_catalog
+            .advertised
+            .as_ref()
+            .expect("the controller catalog was queried");
+        let envelope = advertised
             .iter()
             .find(|api| api.api_key == ENVELOPE_API_KEY)
             .copied();
-
         check!(
             envelope
                 == Some(ControllerApiVersion {
@@ -554,6 +584,12 @@ mod tests {
                 })
         );
     }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/controller_admin.feature",
+        fixtures = [controller_catalog: ControllerCatalogScenario]
+    );
+
     fn request(api_key: i16, api_version: i16) -> ControllerAdminRequest {
         ControllerAdminRequest {
             api_key,

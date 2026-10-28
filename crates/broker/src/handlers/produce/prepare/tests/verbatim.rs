@@ -16,7 +16,7 @@ use {
         Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload,
         TimestampType,
     },
-    std::sync::Arc,
+    std::{mem, sync::Arc},
 };
 
 /// Prepare against the fixture topic with the caller's compression, metrics
@@ -294,97 +294,63 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
     }
 }
 
-/// Kafka answers a records field it cannot frame, or whose batch CRC does not
-/// match, with `CORRUPT_MESSAGE` (`CorruptRecordException`, which the JVM
-/// producer retries), and every other refusal with `INVALID_RECORD`.
-/// `ProduceRequest.validateRecords` frames the field before the log checks a
-/// CRC, so a second batch is `INVALID_RECORD` whatever the first one's CRC.
-#[test]
-fn an_undecodable_slice_gets_the_code_kafka_gives_it() {
-    use crate::codes::{CORRUPT_MESSAGE, INVALID_RECORD};
-
-    struct Case {
-        name: &'static str,
-        wire: Vec<u8>,
-        error_code: i16,
-    }
-    let clean = encode(&plain_batch()).to_vec();
-    let with_size = |size: i32| {
-        let mut wire = clean.clone();
-        wire[8..12].copy_from_slice(&size.to_be_bytes());
-        wire
-    };
-    let with_magic = |magic: u8| {
-        let mut wire = clean.clone();
-        wire[16] = magic;
-        wire
-    };
-    let mut corrupt_crc = clean.clone();
-    corrupt_crc[HEADER_LEN] ^= 0xFF;
-    let followed_by_a_batch = |first: &[u8]| [first, &clean].concat();
-    let cases = [
-        Case {
-            name: "a CRC that does not match",
-            wire: corrupt_crc.clone(),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a CRC that does not match, then a second batch",
-            wire: followed_by_a_batch(&corrupt_crc),
-            error_code: INVALID_RECORD,
-        },
-        Case {
-            name: "two batches that check out",
-            wire: followed_by_a_batch(&clean),
-            error_code: INVALID_RECORD,
-        },
-        Case {
-            name: "a size field below any batch",
-            wire: with_size(13),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a negative size field",
-            wire: with_size(-1),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a batch shorter than a v2 header",
-            wire: with_size(20)[..32].to_vec(),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a magic above the current one",
-            wire: with_magic(3),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a magic with the sign bit set",
-            wire: with_magic(0xFF),
-            error_code: CORRUPT_MESSAGE,
-        },
-        Case {
-            name: "a body that stops short of its size field",
-            wire: clean[..clean.len() - 1].to_vec(),
-            error_code: INVALID_RECORD,
-        },
-        Case {
-            name: "less than a size field",
-            wire: clean[..11].to_vec(),
-            error_code: INVALID_RECORD,
-        },
-    ];
-    for case in cases {
-        let error_code = prepare_for_topic(
-            PartitionPayload::Slice(Bytes::from(case.wire)),
-            None,
-            &BrokerMetrics::new(),
-            13,
-        )
-        .unwrap_err();
-        assert!(error_code == case.error_code, "{}", case.name);
+#[derive(Default)]
+struct InvalidProduceSliceScenario {
+    wire: Vec<u8>,
+    result: Option<Result<PreparedBatch, i16>>,
+}
+#[rstest::fixture]
+fn invalid_produce_slice() -> InvalidProduceSliceScenario {
+    let wire = Vec::new();
+    InvalidProduceSliceScenario {
+        wire,
+        ..Default::default()
     }
 }
+#[rstest_bdd_macros::given("a Produce records slice contains {shape}")]
+fn malformed_produce_records(
+    invalid_produce_slice: &mut InvalidProduceSliceScenario,
+    shape: String,
+) {
+    let clean = encode(&plain_batch()).to_vec();
+    let mut wire = clean.clone();
+    match shape.as_str() {
+        "a CRC mismatch" => wire[HEADER_LEN] ^= 0xFF,
+        "a CRC mismatch followed by a second batch" => {
+            wire[HEADER_LEN] ^= 0xFF;
+            wire.extend_from_slice(&clean);
+        }
+        "two valid batches" => wire.extend_from_slice(&clean),
+        "batch size 13" => wire[8..12].copy_from_slice(&13i32.to_be_bytes()),
+        "batch size -1" => wire[8..12].copy_from_slice(&(-1i32).to_be_bytes()),
+        "batch size 20 truncated to 32 bytes" => {
+            wire[8..12].copy_from_slice(&20i32.to_be_bytes());
+            wire.truncate(32);
+        }
+        "magic 3" => wire[16] = 3,
+        "magic 255" => wire[16] = 0xFF,
+        "one byte missing from the record body" => {
+            wire.pop();
+        }
+        "only the first 11 bytes" => wire.truncate(11),
+        _ => panic!("unknown record slice shape: {shape}"),
+    }
+    invalid_produce_slice.wire = wire;
+}
+#[rstest_bdd_macros::when("Produce version 13 prepares that records slice without recompression")]
+fn prepare_invalid_produce_slice(invalid_produce_slice: &mut InvalidProduceSliceScenario) {
+    invalid_produce_slice.result = Some(prepare_for_topic(
+        PartitionPayload::Slice(Bytes::from(mem::take(&mut invalid_produce_slice.wire))),
+        None,
+        &BrokerMetrics::new(),
+        13,
+    ));
+}
+#[rstest_bdd_macros::then("the records slice is rejected with Kafka error {code}")]
+fn check_invalid_produce_slice(invalid_produce_slice: &InvalidProduceSliceScenario, code: i16) {
+    assert!(matches!(invalid_produce_slice.result.as_ref().unwrap(),Err(error)if *error==code));
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_invalid_produce_slice",fixtures=[invalid_produce_slice:InvalidProduceSliceScenario]);
 
 #[test]
 fn rejects_crc_valid_malformed_record_body() {

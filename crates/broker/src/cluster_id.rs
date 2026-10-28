@@ -28,23 +28,56 @@ mod tests {
     use {
         super::{encode, matches},
         assert2::assert,
+        rstest::fixture,
+        rstest_bdd_macros::{given, then, when},
         uuid::Uuid,
     };
 
-    #[test]
-    fn encodes_kafkas_base64_uuid_form() {
-        let id = Uuid::from_bytes([
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-            0x0f, 0x10,
-        ]);
-        assert!(encode(id) == "AQIDBAUGBwgJCgsMDQ4PEA");
+    #[derive(Default)]
+    struct ClusterIdentity {
+        id: Uuid,
+        encoded: Option<String>,
+        requested: Option<String>,
+        accepted: Option<bool>,
     }
 
-    #[test]
-    fn matches_accepts_both_kafka_base64_and_hyphenated_forms() {
-        let id = Uuid::from_u128(0x00000000_0000_0000_0000_0000000000ff);
-        assert!(matches(&encode(id), id));
-        assert!(matches(&id.to_string(), id));
-        assert!(!matches("different", id));
+    #[fixture]
+    fn identity() -> ClusterIdentity {
+        // Keep identity inputs and observations fresh for each scenario.
+        ClusterIdentity::default()
     }
+
+    #[given("the cluster UUID is {id}")]
+    fn cluster_uuid(identity: &mut ClusterIdentity, id: Uuid) { identity.id = id; }
+
+    #[given("a request identifies the cluster as {requested}")]
+    fn requested_identity(identity: &mut ClusterIdentity, requested: String) {
+        identity.requested = Some(requested);
+    }
+
+    #[when("the broker encodes the cluster UUID for Kafka metadata")]
+    fn encode_identity(identity: &mut ClusterIdentity) {
+        identity.encoded = Some(encode(identity.id));
+    }
+
+    #[when("the broker checks the request's cluster identity")]
+    fn check_identity(identity: &mut ClusterIdentity) {
+        let requested = identity
+            .requested
+            .as_deref()
+            .expect("a request identity was given");
+        identity.accepted = Some(matches(requested, identity.id));
+    }
+
+    #[then("the metadata cluster ID is {expected}")]
+    fn encoded_identity(identity: &ClusterIdentity, expected: String) {
+        assert!(identity.encoded.as_ref() == Some(&expected));
+    }
+
+    #[then("the request identity is accepted {accepted}")]
+    fn accepted_identity(identity: &ClusterIdentity, accepted: bool) {
+        assert!(identity.accepted == Some(accepted));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/cluster_id.feature", fixtures = [identity: ClusterIdentity]);
 }

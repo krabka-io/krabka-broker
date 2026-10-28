@@ -47,7 +47,7 @@ use {
     bytes::Bytes,
     krabka_broker::BrokerHandle,
     krabka_client_core::Client,
-    krabka_client_producer::{Producer, ProducerError, ProducerRecord},
+    krabka_client_producer::{OwnedTransaction, Producer, ProducerError, ProducerRecord},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest,
         describe_producers_request::{DescribeProducersRequest, TopicRequest},
@@ -181,127 +181,194 @@ async fn harness(client_id: &str, topics: &[&str]) -> Harness {
     }
 }
 
-/// A Kafka 4.x transactional producer against a `transaction.version=2`
-/// broker: the commit/abort split is what `read_committed` sees, no
-/// `AddPartitionsToTxn` is sent, and the epoch advances across the second
-/// transaction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {
-    let Harness {
-        broker,
-        _dir,
-        bootstrap,
-        metrics_addr,
-        admin,
-        ..
-    } = harness("krabka-tv2-producer", &[TOPIC]).await;
-
-    // 1. Compile the shared JVM helper where a `javac` exists, then run the
-    //    class under the Kafka 4.3.1 client jars.
-    let classes = compile_transactional_producer();
-    let produced = run_transactional_producer(classes.path(), bootstrap, TOPIC);
-    assert!(
-        tool_output(&produced).contains("TXNPROBE OK"),
-        "the 4.x transactional producer did not report success: {}",
-        tool_output(&produced),
-    );
-
-    // 2. Both transactions are complete once the coordinator says so, which is
-    //    also the point at which the commit and abort markers have been written
-    //    to the partition. Waiting on that is exact, where sleeping is not.
-    wait_for_transaction_state(&admin, EOS_TID, "CompleteAbort").await;
-
-    // 3. The isolation levels must disagree exactly over the aborted batch.
-    let committed = consume(bootstrap, TOPIC, "read_committed", 7);
-    assert!(
-        committed
-            == [
-                "committed-0",
-                "committed-1",
-                "committed-2",
-                "committed-3",
-                "committed-4",
-                "committed-5",
-                "after-abort",
-            ],
-        "read_committed returned the wrong records: {committed:?}",
-    );
-    let uncommitted = consume(bootstrap, TOPIC, "read_uncommitted", 9);
-    assert!(
-        uncommitted
-            == [
-                "committed-0",
-                "committed-1",
-                "committed-2",
-                "committed-3",
-                "committed-4",
-                "committed-5",
-                "aborted-0",
-                "aborted-1",
-                "after-abort",
-            ],
-        "read_uncommitted returned the wrong records: {uncommitted:?}",
-    );
-
-    // 4. KIP-890 part 2, read from the broker rather than from a client trace:
-    //    nothing in the exchange above was an `AddPartitionsToTxn`. The series
-    //    is created on the first dispatched request of that api key, so its
-    //    absence -- or a zero, if some later change makes the family
-    //    pre-register its labels -- is the assertion. This is scraped before
-    //    the in-process producer below runs, so only the JVM client's traffic
-    //    can have moved it.
-    let body = scrape_metrics(metrics_addr).await;
-    let add_partitions = series_value(&body, ADD_PARTITIONS_SERIES);
-    assert!(
-        add_partitions.is_none_or(|count| count == 0.0),
-        "a transaction.version=2 client must not send AddPartitionsToTxn; \
-         the broker counted {add_partitions:?} of them.\n{body}",
-    );
-
-    // 5. KIP-890's other half: the epoch the client took from the `EndTxn` v5
-    //    response. The helper commits one transaction, then re-inits the same
-    //    `transactional.id` and aborts a second. Under TV_0 or TV_1 only the
-    //    second `InitProducerId` bumps, so the coordinator ends at epoch 1;
-    //    under TV_2 both `EndTxn`s bump as well, so it ends well above that.
-    //    An epoch below 2 therefore falsifies the bump.
-    let described = describe_transaction(&admin, EOS_TID).await;
-    assert!(
-        described.producer_epoch >= 2,
-        "the coordinator's epoch for {EOS_TID} did not advance across the \
-         second transaction: {described:?}",
-    );
-    let written = active_producers(&admin, TOPIC, 0).await;
-    let highest = written
-        .iter()
-        .map(|state| state.producer_epoch)
-        .max()
-        .expect("the partition holds the transactional producer's state");
-    assert!(
-        highest >= 2,
-        "the aborted batch must have been written at a higher epoch than the \
-         committed one: {written:?}",
-    );
-
-    broker.shutdown().await;
+struct ToolSnapshot {
+    transaction: TransactionState,
+    listed_id: i64,
+    listed_state: String,
+    producers: Vec<ProducerState>,
+    list_row: Vec<String>,
+    transaction_row: Vec<String>,
+    producer_row: Vec<String>,
+    hanging: Vec<Vec<String>>,
 }
+struct Tv2 {
+    harness: Option<Harness>,
+    output: Option<Output>,
+    consumed: Vec<String>,
+    metrics: String,
+    transaction_state: Option<TransactionState>,
+    producers: Vec<ProducerState>,
+    producer: Option<Arc<Producer>>,
+    transaction: Option<OwnedTransaction>,
+    snapshot: Option<ToolSnapshot>,
+    producer_row: Vec<String>,
+    final_row: Vec<String>,
+}
+#[rstest::fixture]
+fn tv2() -> Tv2 {
+    // Start this scenario with fresh inputs and observations.
 
-/// Every read command of `kafka-transactions` against the open transaction,
-/// each compared with the answer the same broker gives in process.
-///
-/// Split out of the case body because one scenario drives four subcommands and
-/// the comparisons are what carry the parity claim, not the flow around them.
-async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client) -> ProducerState {
-    let expected = describe_transaction(admin, OPEN_TID).await;
-    let listed = list_transactions(admin)
+    Tv2 {
+        harness: None,
+        output: None,
+        consumed: Vec::new(),
+        metrics: String::new(),
+        transaction_state: None,
+        producers: Vec::new(),
+        producer: None,
+        transaction: None,
+        snapshot: None,
+        producer_row: Vec::new(),
+        final_row: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "a transaction.version 2 broker exposes topic {topic} to admin client {client}"
+)]
+async fn version_two(tv2: &mut Tv2, topic: String, client: String) {
+    tv2.harness = Some(harness(&client, &[&topic]).await);
+}
+#[rstest_bdd_macros::when(
+    "the compiled Kafka 3.5 transactional helper runs under Kafka 4.3.1 jars"
+)]
+async fn modern_transactions(tv2: &mut Tv2) {
+    let classes = compile_transactional_producer();
+    let harness = tv2.harness.as_ref().expect("harness");
+    tv2.output = Some(run_transactional_producer(
+        classes.path(),
+        harness.bootstrap,
+        TOPIC,
+    ));
+    wait_for_transaction_state(&harness.admin, EOS_TID, "CompleteAbort").await;
+}
+#[rstest_bdd_macros::then("the transactional helper reports TXNPROBE OK")]
+fn helper_success(tv2: &Tv2) {
+    assert!(tool_output(tv2.output.as_ref().expect("helper ran")).contains("TXNPROBE OK"));
+}
+#[rstest_bdd_macros::when("the console reads {count} records using isolation {isolation}")]
+fn isolated_read(tv2: &mut Tv2, count: usize, isolation: String) {
+    tv2.consumed = consume(
+        tv2.harness.as_ref().expect("harness").bootstrap,
+        TOPIC,
+        &isolation,
+        count,
+    );
+}
+#[rstest_bdd_macros::then("the transactional records are exactly these values in log order")]
+fn ordered_records(tv2: &Tv2, datatable: Vec<Vec<String>>) {
+    let expected: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [value]: [String; 1] = row.try_into().expect("value");
+            value
+        })
+        .collect();
+    assert!(tv2.consumed == expected);
+}
+#[rstest_bdd_macros::when(
+    "the administrator scrapes API counters and describes eos-tid and its partition producers"
+)]
+async fn protocol_observations(tv2: &mut Tv2) {
+    let harness = tv2.harness.as_ref().expect("harness");
+    tv2.metrics = scrape_metrics(harness.metrics_addr).await;
+    tv2.transaction_state = Some(describe_transaction(&harness.admin, EOS_TID).await);
+    tv2.producers = active_producers(&harness.admin, TOPIC, 0).await;
+}
+#[rstest_bdd_macros::then(
+    "AddPartitionsToTxn has zero requests and both coordinator and written producer epochs are at least {minimum}"
+)]
+fn optimized_transactions(tv2: &Tv2, minimum: i16) {
+    assert!(
+        series_value(&tv2.metrics, ADD_PARTITIONS_SERIES).is_none_or(|count| count == 0.0),
+        "{}",
+        tv2.metrics
+    );
+    assert!(
+        tv2.transaction_state
+            .as_ref()
+            .expect("transaction described")
+            .producer_epoch
+            >= minimum
+    );
+    assert!(
+        tv2.producers
+            .iter()
+            .map(|state| state.producer_epoch)
+            .max()
+            .expect("partition producer state")
+            >= i32::from(minimum)
+    );
+}
+#[rstest_bdd_macros::given(
+    "an initialized producer holds tv2-open-tid open after flushing value open to krabka-tv2-open"
+)]
+async fn open_transaction(tv2: &mut Tv2) {
+    tv2.producer = Some(Arc::new(
+        Producer::builder()
+            .bootstrap(
+                tv2.harness
+                    .as_ref()
+                    .expect("harness")
+                    .host_bootstrap
+                    .clone(),
+            )
+            .transactional_id(OPEN_TID)
+            .build()
+            .await
+            .expect("producer"),
+    ));
+    tv2.producer
+        .as_ref()
+        .expect("producer")
+        .init_transactions()
+        .await
+        .expect("init transactions");
+    tv2.transaction = Some(
+        Arc::clone(tv2.producer.as_ref().expect("producer"))
+            .begin_transaction_owned()
+            .await
+            .expect("begin"),
+    );
+    drop(
+        tv2.producer
+            .as_ref()
+            .expect("producer")
+            .enqueue(ProducerRecord {
+                topic: HANGING_TOPIC.into(),
+                value: Some(Bytes::from_static(b"open")),
+                ..Default::default()
+            })
+            .await
+            .expect("queued"),
+    );
+    tv2.producer
+        .as_ref()
+        .expect("producer")
+        .flush()
+        .await
+        .expect("flush");
+    wait_for_transaction_state(
+        &tv2.harness.as_ref().expect("harness").admin,
+        OPEN_TID,
+        "Ongoing",
+    )
+    .await;
+}
+#[rstest_bdd_macros::when(
+    "the transactions tool and native administrator list, describe, inspect producers, and find hanging transactions"
+)]
+async fn inspect_open(tv2: &mut Tv2) {
+    let harness = tv2.harness.as_ref().expect("harness");
+    let transaction = describe_transaction(&harness.admin, OPEN_TID).await;
+    let listed = list_transactions(&harness.admin)
         .await
         .transaction_states
         .into_iter()
         .find(|row| row.transactional_id == OPEN_TID)
-        .expect("the open transaction is listed in process");
-
-    let row = tool_row(
-        &kafka_transactions(bootstrap, &["list"]),
+        .expect("open transaction listed");
+    let list_row = tool_row(
+        &kafka_transactions(harness.bootstrap, &["list"]),
         &[
             "TransactionalId",
             "Coordinator",
@@ -310,178 +377,157 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
         ],
         OPEN_TID,
     );
-    assert!(
-        row == vec![
-            OPEN_TID.to_owned(),
-            "1".to_owned(),
-            listed.producer_id.to_string(),
-            listed.transaction_state.clone(),
-        ],
-        "`kafka-transactions list` disagrees with the in-process \
-         ListTransactions answer {listed:?}: {row:?}",
+    let transaction_row = describe_open_transaction_row(harness.bootstrap);
+    let producers = active_producers(&harness.admin, HANGING_TOPIC, 0).await;
+    let producer_row = describe_open_producer_row(
+        harness.bootstrap,
+        producers.first().expect("open producer").producer_id,
     );
-
-    let row = describe_open_transaction_row(bootstrap);
+    let hanging = tool_rows(
+        &kafka_transactions(harness.bootstrap, &["find-hanging", "--broker-id", "1"]),
+        &[
+            "Topic",
+            "Partition",
+            "ProducerId",
+            "ProducerEpoch",
+            "CoordinatorEpoch",
+            "StartOffset",
+            "LastTimestamp",
+            "Duration(min)",
+        ],
+    );
+    tv2.snapshot = Some(ToolSnapshot {
+        transaction,
+        listed_id: listed.producer_id,
+        listed_state: listed.transaction_state,
+        producers,
+        list_row,
+        transaction_row,
+        producer_row,
+        hanging,
+    });
+}
+#[rstest_bdd_macros::then(
+    "the tools agree with native transaction identity, epoch, state, coordinator 1, partition krabka-tv2-open-0, and producer start offset"
+)]
+fn transaction_parity(tv2: &Tv2) {
+    let snapshot = tv2.snapshot.as_ref().expect("tools inspected");
     assert!(
-        row[1..5]
+        snapshot.list_row
+            == vec![
+                OPEN_TID.to_owned(),
+                "1".to_owned(),
+                snapshot.listed_id.to_string(),
+                snapshot.listed_state.clone()
+            ]
+    );
+    assert!(
+        snapshot.transaction_row[1..5]
             == [
                 OPEN_TID.to_owned(),
-                expected.producer_id.to_string(),
-                expected.producer_epoch.to_string(),
-                expected.transaction_state.clone(),
-            ],
-        "`kafka-transactions describe` disagrees with the in-process \
-         DescribeTransactions answer {expected:?}: {row:?}",
+                snapshot.transaction.producer_id.to_string(),
+                snapshot.transaction.producer_epoch.to_string(),
+                snapshot.transaction.transaction_state.clone()
+            ]
     );
+    assert!(snapshot.transaction_row[8] == format!("{HANGING_TOPIC}-0"));
+    assert!(snapshot.producers.len() == 1);
+    let state = &snapshot.producers[0];
     assert!(
-        row[8] == format!("{HANGING_TOPIC}-0"),
-        "the described transaction must name the partition it wrote to: {row:?}",
-    );
-
-    let in_process = active_producers(admin, HANGING_TOPIC, 0).await;
-    assert!(
-        in_process.len() == 1,
-        "one producer wrote to {HANGING_TOPIC}-0: {in_process:?}",
-    );
-    let open_producer_state = in_process[0].clone();
-    let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
-    assert!(
-        row[..3]
+        snapshot.producer_row[..3]
             == [
-                open_producer_state.producer_id.to_string(),
-                open_producer_state.producer_epoch.to_string(),
-                open_producer_state.coordinator_epoch.to_string(),
-            ],
-        "`kafka-transactions describe-producers` disagrees with the in-process \
-         DescribeProducers answer {open_producer_state:?}: {row:?}",
+                state.producer_id.to_string(),
+                state.producer_epoch.to_string(),
+                state.coordinator_epoch.to_string()
+            ]
     );
-    assert!(
-        row[5] == open_producer_state.current_txn_start_offset.to_string(),
-        "the tool and the broker disagree about where the open transaction \
-         starts: {open_producer_state:?} vs {row:?}",
-    );
-
-    // 7. The transaction is open but not hanging: the coordinator still names
-    //    the partition, so `find-hanging` has nothing to report. A row here
-    //    would mean the broker's DescribeTransactions dropped the partition
-    //    that DescribeProducers still shows an open transaction on.
-    let hanging = kafka_transactions(bootstrap, &["find-hanging", "--broker-id", "1"]);
-    let rows = tool_rows(&hanging, &[
-        "Topic",
-        "Partition",
-        "ProducerId",
-        "ProducerEpoch",
-        "CoordinatorEpoch",
-        "StartOffset",
-        "LastTimestamp",
-        "Duration(min)",
-    ]);
-    assert!(
-        rows.is_empty(),
-        "a transaction the coordinator still owns is not hanging: {rows:?}",
-    );
-
-    open_producer_state
+    assert!(snapshot.producer_row[5] == state.current_txn_start_offset.to_string());
 }
-
-/// `kafka-transactions` (KIP-664) against a transaction left open, compared
-/// column for column with the answers the same broker gives an in-process
-/// admin client, and then aborted through the tool.
-///
-/// The open transaction is held by an in-process producer rather than by the
-/// JVM helper, because the helper commits, aborts and exits: nothing in it can
-/// be made to hold a transaction open while a container runs beside it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
-    let Harness {
-        broker,
-        _dir,
-        bootstrap,
-        host_bootstrap,
-        admin,
-        ..
-    } = harness("krabka-tv2-tool", &[HANGING_TOPIC]).await;
-
-    {
-        let open_producer = Arc::new(
-            Producer::builder()
-                .bootstrap(host_bootstrap.clone())
-                .transactional_id(OPEN_TID)
-                .build()
-                .await
-                .expect("in-process transactional producer"),
-        );
-        open_producer
-            .init_transactions()
-            .await
-            .expect("init transactions");
-        let transaction = Arc::clone(&open_producer)
-            .begin_transaction_owned()
-            .await
-            .expect("begin transaction");
-        drop(
-            open_producer
-                .enqueue(ProducerRecord {
-                    topic: HANGING_TOPIC.into(),
-                    value: Some(Bytes::from_static(b"open")),
-                    ..Default::default()
-                })
-                .await
-                .expect("record is queued"),
-        );
-        open_producer
-            .flush()
-            .await
-            .expect("flush the open transaction");
-        wait_for_transaction_state(&admin, OPEN_TID, "Ongoing").await;
-
-        let open_producer_state = assert_the_tool_agrees_with_the_broker(bootstrap, &admin).await;
-
-        // 8. `abort` is the operator's `WriteTxnMarkers` path. It writes the abort
-        //    marker straight to the partition and, exactly as in Kafka, leaves the
-        //    coordinator's own state alone -- so the partition stops showing an
-        //    open transaction while `describe` still reads `Ongoing`.
-        kafka_transactions(bootstrap, &[
-            "abort",
-            "--topic",
-            HANGING_TOPIC,
-            "--partition",
-            "0",
-            "--start-offset",
-            &open_producer_state.current_txn_start_offset.to_string(),
-        ]);
-        let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
+#[rstest_bdd_macros::then("the ongoing coordinator-owned transaction is not reported as hanging")]
+fn not_hanging(tv2: &Tv2) {
+    assert!(tv2.snapshot.as_ref().expect("snapshot").hanging.is_empty());
+}
+#[rstest_bdd_macros::when(
+    "the operator aborts the open partition transaction through kafka-transactions"
+)]
+fn operator_abort(tv2: &mut Tv2) {
+    let state = &tv2.snapshot.as_ref().expect("snapshot").producers[0];
+    let harness = tv2.harness.as_ref().expect("harness");
+    tv2.output = Some(kafka_transactions(harness.bootstrap, &[
+        "abort",
+        "--topic",
+        HANGING_TOPIC,
+        "--partition",
+        "0",
+        "--start-offset",
+        &state.current_txn_start_offset.to_string(),
+    ]));
+    tv2.producer_row = describe_open_producer_row(harness.bootstrap, state.producer_id);
+}
+#[rstest_bdd_macros::then("the producer table reports transaction start offset None")]
+fn partition_aborted(tv2: &Tv2) {
+    assert!(tv2.producer_row[5] == "None");
+}
+#[rstest_bdd_macros::when(
+    "the producer aborts its owned transaction and the transaction tool observes completion"
+)]
+async fn coordinator_abort(tv2: &mut Tv2) {
+    tv2.transaction
+        .take()
+        .expect("open transaction")
+        .abort()
+        .await
+        .expect("abort");
+    let deadline = Instant::now() + SETTLE_DEADLINE;
+    loop {
+        tv2.final_row =
+            describe_open_transaction_row(tv2.harness.as_ref().expect("harness").bootstrap);
+        if tv2.final_row[4] == "CompleteAbort" {
+            break;
+        }
         assert!(
-            row[5] == "None",
-            "the aborted transaction must no longer be open on the partition: {row:?}",
+            Instant::now() <= deadline,
+            "transaction never reached CompleteAbort: {:?}",
+            tv2.final_row
         );
-
-        // 9. The coordinator reaches `CompleteAbort` when the producer ends the
-        //    transaction it was holding. The marker the tool already wrote is
-        //    recognised as the same one, so the fan-out is a no-op and the state
-        //    still lands.
+        time::sleep(Duration::from_millis(250)).await;
+    }
+}
+#[rstest_bdd_macros::then("the transaction coordinator reports CompleteAbort")]
+fn coordinator_complete(tv2: &Tv2) {
+    assert!(tv2.final_row[4] == "CompleteAbort");
+}
+async fn shutdown(tv2: &mut Tv2) {
+    if let Some(transaction) = tv2.transaction.take() {
         transaction
             .abort()
             .await
-            .expect("abort the open transaction");
-        let deadline = Instant::now() + SETTLE_DEADLINE;
-        loop {
-            let row = describe_open_transaction_row(bootstrap);
-            if row[4] == "CompleteAbort" {
-                break;
-            }
-            assert!(
-                Instant::now() <= deadline,
-                "the aborted transaction never reached CompleteAbort: {row:?}",
-            );
-            time::sleep(Duration::from_millis(250)).await;
-        }
-
-        close_released(open_producer).await
+            .expect("abort remaining transaction");
     }
-    .expect("close the in-process producer");
-    broker.shutdown().await;
+    if let Some(producer) = tv2.producer.take() {
+        close_released(producer).await.expect("close producer");
+    }
+    tv2.harness.take().expect("harness").broker.shutdown().await;
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_tv2.feature",
+    name = "a kafka 4x client runs transactions without add partitions to txn"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn(tv2: Tv2) {
+    shutdown(&mut tv2).await;
+    drop(tv2);
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_tv2.feature",
+    name = "the transactions tool agrees with the broker and can abort"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_transactions_tool_agrees_with_the_broker_and_can_abort(tv2: Tv2) {
+    shutdown(&mut tv2).await;
+    drop(tv2);
 }
 
 /// Close the in-process producer once its transaction guard has let go of it.

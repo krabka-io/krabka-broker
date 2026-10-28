@@ -81,23 +81,45 @@ pub(super) use crate::simulation_support::voter_set as make_voter_set;
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    #[yare::parameterized(
-        first = { NodeId(1), 1050 },
-        second = { NodeId(2), 1100 },
-        third = { NodeId(3), 1150 },
-        seventh = { NodeId(7), 1350 },
-    )]
-    fn election_timeouts_land_on_whole_staggered_milliseconds(id: NodeId, expected_millis: u64) {
-        // The scheduler's clock is an integer millisecond timeline, and which
-        // voter wins a race is decided by these exact values. Pin them so a
-        // rounding shift in the extent arithmetic cannot silently rewrite the
-        // simulated timeline.
-        check!(
-            deadline_millis(election_timeout_of(id)) == expected_millis,
-            "node {id}"
-        );
-        check!(deadline_millis(HEARTBEAT) == 300);
+    struct NodeTimers {
+        id: Option<NodeId>,
+        election_millis: Option<u64>,
+        heartbeat_millis: Option<u64>,
     }
+
+    #[fixture]
+    fn timers() -> NodeTimers {
+        // Start this scenario with fresh inputs and observations.
+
+        NodeTimers {
+            id: None,
+            election_millis: None,
+            heartbeat_millis: None,
+        }
+    }
+
+    #[given("playground voter {node_id}")]
+    fn voter(timers: &mut NodeTimers, node_id: u64) { timers.id = Some(NodeId(node_id)); }
+
+    #[when("its election and heartbeat deadlines are converted to scheduler milliseconds")]
+    fn scheduler_deadlines(timers: &mut NodeTimers) {
+        let id = timers.id.expect("a voter was given");
+        timers.election_millis = Some(deadline_millis(election_timeout_of(id)));
+        timers.heartbeat_millis = Some(deadline_millis(HEARTBEAT));
+    }
+
+    #[then("its election timer is {election_ms} ms and its heartbeat timer is 300 ms")]
+    fn exact_deadlines(timers: &NodeTimers, election_ms: u64) {
+        check!(timers.election_millis == Some(election_ms));
+        check!(timers.heartbeat_millis == Some(300));
+    }
+
+    scenarios!("tests/features/migrated/src/sim/node.feature", fixtures = [timers: NodeTimers]);
 }

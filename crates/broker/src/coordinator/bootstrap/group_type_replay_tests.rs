@@ -107,51 +107,48 @@ fn replay(records: Vec<LogRecord>) -> Held {
     }
 }
 
-#[test]
-fn one_group_per_id_as_kafka() {
-    let rows = [
-        (
-            "an offset commit creates a simple classic group",
-            vec![offset_commit()],
-            Held::Classic,
-        ),
-        (
-            "a consumer record replaces the simple classic group",
-            vec![offset_commit(), consumer_epoch()],
-            Held::Consumer,
-        ),
-        (
-            "a consumer record does not replace a classic group with members",
-            vec![classic_group(), consumer_epoch()],
-            Held::Failed("Group g is not a consumer group".into()),
-        ),
-        (
-            "an upgrade tombstones the classic group first",
-            vec![classic_group(), classic_tombstone(), consumer_epoch()],
-            Held::Consumer,
-        ),
-        (
-            "a share record does not replace even a simple classic group",
-            vec![offset_commit(), share_epoch()],
-            Held::Failed("Group g is not a share group.".into()),
-        ),
-        (
-            "a share record does not replace a consumer group",
-            vec![consumer_epoch(), share_epoch()],
-            Held::Failed("Group g is not a share group.".into()),
-        ),
-        (
-            "a classic value replaces a consumer group",
-            vec![consumer_epoch(), classic_group()],
-            Held::Classic,
-        ),
-        (
-            "a classic tombstone removes a consumer group",
-            vec![consumer_epoch(), classic_tombstone()],
-            Held::Nothing,
-        ),
-    ];
-    for (case, records, expected) in rows {
-        check!(replay(records) == expected, "{case}");
-    }
+use {
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::mem,
+};
+#[derive(Default)]
+struct GroupTypeLoad {
+    records: Vec<LogRecord>,
+    held: Option<Held>,
 }
+#[rstest::fixture]
+fn group_type_load() -> GroupTypeLoad {
+    // Start this scenario with fresh inputs and observations.
+
+    GroupTypeLoad::default()
+}
+#[given("the coordinator log contains group g records {records}")]
+fn persisted_group_types(group_type_load: &mut GroupTypeLoad, records: String) {
+    group_type_load.records = records
+        .split(',')
+        .map(|record| match record {
+            "offset" => offset_commit(),
+            "consumer" => consumer_epoch(),
+            "classic" => classic_group(),
+            "classic-tombstone" => classic_tombstone(),
+            "share" => share_epoch(),
+            _ => panic!("unknown persisted group record"),
+        })
+        .collect();
+}
+#[when("bootstrap replays the records under the single group identifier")]
+fn load_group_types(group_type_load: &mut GroupTypeLoad) {
+    group_type_load.held = Some(replay(mem::take(&mut group_type_load.records)));
+}
+#[then("group g holds {kind} with load error {message}")]
+fn loaded_group_type(group_type_load: &GroupTypeLoad, kind: String, message: String) {
+    let expected = match kind.as_str() {
+        "classic" => Held::Classic,
+        "consumer" => Held::Consumer,
+        "nothing" => Held::Nothing,
+        "failed" => Held::Failed(message),
+        _ => panic!("unknown group replay outcome"),
+    };
+    check!(group_type_load.held.as_ref() == Some(&expected));
+}
+scenarios!("tests/features/migrated/src/coordinator/bootstrap/group_type_replay_tests.feature",fixtures=[group_type_load:GroupTypeLoad]);

@@ -13,10 +13,10 @@ use {
         support,
         topic_admin::create_mixed_topic,
     },
-    krabka_broker::BrokerHandle,
-    krabka_metadata::metadata_version,
+    krabka_metadata::{MetadataImage, metadata_version},
     std::{
         process::Output,
+        sync::Arc,
         time::{Duration, Instant},
     },
     tokio::time,
@@ -84,15 +84,26 @@ async fn wait_for_voter_registrations(cluster: &MixedCluster) {
     }
 }
 
-/// 4.0-IV3 (25) to 3.7-IV1 (16) crosses 4.0-IV1 and 3.7-IV2, which both
-/// changed metadata, so Kafka refuses it as a safe and as an unsafe downgrade,
-/// with its own message for each, and nothing changes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + published controller/data ports; Linux-bound"]
-async fn metadata_version_downgrade_refuses_lossy_levels() {
-    const EXISTING_TOPIC: &str = "krabka-mv-capability-existing";
-    const UPPER_LEVEL: i16 = 25; // 4.0-IV3.
-
+#[derive(Default)]
+struct MetadataDowngrade {
+    cluster: Option<MixedCluster>,
+    topic: String,
+    before: Vec<Arc<MetadataImage>>,
+    output: Option<Output>,
+}
+#[rstest::fixture]
+fn metadata_downgrade() -> MetadataDowngrade {
+    // A mixed cluster and its metadata baseline belong to this downgrade sequence.
+    MetadataDowngrade::default()
+}
+#[rstest_bdd_macros::given(
+    "a three-broker mixed cluster at metadata capability {upper_level} with topic {topic}"
+)]
+async fn mixed_metadata_baseline(
+    metadata_downgrade: &mut MetadataDowngrade,
+    upper_level: i16,
+    topic: String,
+) {
     let container = support::unique_container_name("krabka-mv-capability-jvm-broker");
 
     let cluster = start_mixed_cluster(&container, false).await;
@@ -100,16 +111,16 @@ async fn metadata_version_downgrade_refuses_lossy_levels() {
         cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
         "JVM broker never joined the mixed cluster"
     );
-    wait_for_jvm_metadata_max(&cluster, UPPER_LEVEL).await;
+    wait_for_jvm_metadata_max(&cluster, upper_level).await;
     wait_for_voter_registrations(&cluster).await;
-    create_mixed_topic(&cluster.bootstrap_all, EXISTING_TOPIC).await;
+    create_mixed_topic(&cluster.bootstrap_all, &topic).await;
     // The JVM reports its replica directory asynchronously after topic
     // creation. Wait for that report before capturing the metadata baseline;
     // other replicas of this empty topic may retain an unassigned slot.
     for (broker, _) in &cluster.krabka {
         broker
             .wait_for_image(|image| {
-                image.partition(EXISTING_TOPIC, 0).is_some_and(|partition| {
+                image.partition(&topic, 0).is_some_and(|partition| {
                     partition
                         .replicas
                         .iter()
@@ -125,62 +136,89 @@ async fn metadata_version_downgrade_refuses_lossy_levels() {
             })
             .await;
     }
-    let state = |broker: &BrokerHandle| {
-        let image = broker.controller_image_for_test();
-        (
-            image.finalized_metadata_version(),
-            image
-                .brokers()
-                .map(|registration| (registration.node_id, registration.log_dirs.clone()))
-                .collect::<Vec<_>>(),
-            image
-                .partition(EXISTING_TOPIC, 0)
-                .expect("existing mixed topic")
-                .directories
-                .clone(),
-        )
-    };
-    let before = cluster
+
+    metadata_downgrade.before = cluster
         .krabka
         .iter()
-        .map(|(broker, _)| state(broker))
-        .collect::<Vec<_>>();
-    for (kind, command, reason) in [
-        (
-            "safe",
-            vec!["downgrade", "--metadata", "3.7-IV1"],
-            "Refusing to perform the requested downgrade because it might delete metadata \
-             information.",
-        ),
-        (
-            "unsafe",
-            vec!["downgrade", "--metadata", "3.7-IV1", "--unsafe"],
-            "Unsafe metadata downgrade is not supported in this version.",
-        ),
-    ] {
-        let output = run_features(&cluster.bootstrap_all, &command);
-        let error = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        .map(|(broker, _)| broker.controller_image_for_test())
+        .collect();
+    metadata_downgrade.cluster = Some(cluster);
+    metadata_downgrade.topic = topic;
+}
+#[rstest_bdd_macros::when("Kafka features runs downgrade arguments {arguments}")]
+fn request_metadata_downgrade(metadata_downgrade: &mut MetadataDowngrade, arguments: String) {
+    let arguments: Vec<String> = serde_json::from_str(&arguments).expect("feature CLI arguments");
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    metadata_downgrade.output = Some(run_features(
+        &metadata_downgrade
+            .cluster
+            .as_ref()
+            .expect("mixed cluster")
+            .bootstrap_all,
+        &arguments,
+    ));
+}
+#[rstest_bdd_macros::then("the metadata downgrade fails with message {message}")]
+fn refused_metadata_downgrade(metadata_downgrade: &MetadataDowngrade, message: String) {
+    let output = metadata_downgrade
+        .output
+        .as_ref()
+        .expect("downgrade command executed");
+    let error = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert2::assert!(
+        !output.status.success() && error.contains(&message),
+        "downgrade was not refused as lossy: {error}"
+    );
+}
+#[rstest_bdd_macros::then(
+    "finalized metadata versions, broker log directories and topic directories equal their baseline"
+)]
+fn unchanged_metadata_directory_state(metadata_downgrade: &MetadataDowngrade) {
+    let cluster = metadata_downgrade.cluster.as_ref().expect("mixed cluster");
+    for ((broker, _), before) in cluster.krabka.iter().zip(&metadata_downgrade.before) {
+        let after = broker.controller_image_for_test();
+        let topic = &metadata_downgrade.topic;
+        assert2::assert!(after.finalized_metadata_version() == before.finalized_metadata_version());
+        let previous = before
+            .brokers()
+            .map(|registration| (registration.node_id, registration.log_dirs.clone()))
+            .collect::<Vec<_>>();
+        let current = after
+            .brokers()
+            .map(|registration| (registration.node_id, registration.log_dirs.clone()))
+            .collect::<Vec<_>>();
+        assert2::assert!(current == previous);
         assert2::assert!(
-            !output.status.success()
-                && error.contains(&format!(
-                    "Unsupported metadata.version downgrade from {UPPER_LEVEL} to 16. {reason}"
-                )),
-            "{kind} downgrade was not refused as lossy: {error}"
+            after
+                .partition(topic, 0)
+                .expect("existing topic")
+                .directories
+                == before
+                    .partition(topic, 0)
+                    .expect("baseline topic")
+                    .directories
         );
     }
-
-    let after = cluster
-        .krabka
-        .iter()
-        .map(|(broker, _)| state(broker))
-        .collect::<Vec<_>>();
-    assert2::assert!(
-        after == before,
-        "a refused downgrade changed finalized or directory metadata"
-    );
-    cluster.shutdown().await;
+}
+#[rstest_bdd_macros::then("the metadata downgrade cluster is shut down")]
+async fn finish_metadata_downgrade(metadata_downgrade: &mut MetadataDowngrade) {
+    metadata_downgrade
+        .cluster
+        .take()
+        .expect("mixed cluster")
+        .shutdown()
+        .await;
+}
+#[ignore = "requires Docker + published controller/data ports; Linux-bound"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/metadata_version_downgrade.feature",
+    name = "Reject safe and unsafe metadata loss without changing directory metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metadata_version_downgrade_refuses_lossy_levels(metadata_downgrade: MetadataDowngrade) {
+    let _ = metadata_downgrade;
 }

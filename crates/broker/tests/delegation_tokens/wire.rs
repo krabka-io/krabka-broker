@@ -9,14 +9,9 @@
 //! send admin RPCs on the session it just authenticated.
 
 use {
-    crate::{
-        kafka_wire::{self, PlainAuthenticationSetup, exchange},
-        rpc::send_create_delegation_token,
-    },
-    base64::{Engine, engine::general_purpose},
+    crate::kafka_wire::{self, PlainAuthenticationSetup, exchange},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        create_delegation_token_request::CreateDelegationTokenRequest,
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
     },
@@ -192,34 +187,4 @@ impl TokenScramClient {
     }
 }
 
-pub async fn token_session(
-    addr: SocketAddr,
-    token_id: &str,
-    hmac: &[u8],
-) -> Result<TcpStream, String> {
-    let password = general_purpose::STANDARD.encode(hmac);
-    let mut session = sasl_scram_sha256_authenticate(addr, token_id, &password)
-        .await
-        .map_err(|e| format!("token SCRAM auth: {e}"))?;
-    let create = send_create_delegation_token(&mut session, 200, &CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    })
-    .await
-    .map_err(|e| format!("CreateDelegationToken(token-auth): {e}"))?;
-    assert2::assert!(
-        create.error_code == crate::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-        "token-authed Create must return DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64); got {} — principal override may have regressed",
-        create.error_code
-    );
-    Ok(session)
-}
-
 krabka_macros::scram_client_proof_fixture!(scram_client_proof);
-
-/// Open the suite's super-user PLAIN session with its shared authentication diagnostic.
-pub async fn admin_plain(addr: SocketAddr) -> Result<TcpStream, String> {
-    sasl_plain_authenticate(addr, "admin", b"admin-pw")
-        .await
-        .map_err(|error| format!("admin PLAIN auth: {error}"))
-}

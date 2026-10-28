@@ -38,6 +38,7 @@ use {
     std::{
         collections::HashSet,
         net::SocketAddr,
+        str,
         time::{Duration, Instant},
     },
     tokio::time,
@@ -114,40 +115,9 @@ async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
     .await
 }
 
-/// Configures a match-all `CLIENT_METRICS` subscription with
-/// `IncrementalAlterConfigs`.
-async fn configure_match_all_subscription(
-    client: &krabka_client_core::Client,
-    name: &str,
-    interval_ms: &str,
-) {
-    let alter_req = client_metrics_subscription()
-        .name(name)
-        .interval(interval_ms)
-        .call();
-
-    let alter_resp: IncrementalAlterConfigsResponse = client
-        .send(alter_req)
-        .await
-        .expect("IncrementalAlterConfigs");
-
-    assert!(
-        alter_resp.responses.len() == 1,
-        "expected one resource response, got {}",
-        alter_resp.responses.len()
-    );
-    let r = &alter_resp.responses[0];
-    assert!(
-        r.error_code == 0,
-        "IncrementalAlterConfigs CLIENT_METRICS must succeed; error_code={} message={:?}",
-        r.error_code,
-        r.error_message,
-    );
-}
-
 /// Builds a minimal valid OTLP `MetricsData` payload. It is uncompressed, so
 /// `compression_type=0`.
-fn sample_otlp_metrics() -> bytes::Bytes {
+fn sample_otlp_metrics(name: String, value: i64) -> bytes::Bytes {
     use {
         opentelemetry_proto::tonic::metrics::v1::{
             Gauge, Metric, MetricsData, NumberDataPoint, ResourceMetrics, ScopeMetrics,
@@ -156,11 +126,11 @@ fn sample_otlp_metrics() -> bytes::Bytes {
         prost::Message,
     };
     let dp = NumberDataPoint {
-        value: Some(Value::AsInt(7)),
+        value: Some(Value::AsInt(value)),
         ..Default::default()
     };
     let metric = Metric {
-        name: "org.apache.kafka.consumer.fetch.size".into(),
+        name,
         data: Some(Data::Gauge(Gauge {
             data_points: vec![dp],
         })),
@@ -241,363 +211,390 @@ fn telemetry_push_request(
     }
 }
 
-// ── Part 1: fixed legacy tests ────────────────────────────────────────────────
+use {
+    krabka_client_core::Client,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-#[tokio::test]
-async fn api_versions_advertises_telemetry_apis() {
-    let p = start_with_client_metrics().await;
-    let advertised = advertised_apis(&p.client).await;
-    assert!(
-        advertised.contains(&71),
-        "ApiVersions must advertise GetTelemetrySubscriptions (71), got {advertised:?}",
-    );
-    assert!(
-        advertised.contains(&72),
-        "ApiVersions must advertise PushTelemetry (72), got {advertised:?}",
-    );
-
-    p.broker.shutdown().await;
+enum TelemetryBroker {
+    Standalone(support::InProcess),
+    Controller(TelemetryCluster),
 }
 
-/// With no client-metrics receiver -- the default, and what a stock Kafka
-/// broker answers when `metric.reporters` holds no `ClientTelemetry`
-/// implementation -- neither KIP-714 key is advertised, so a modern Java or
-/// librdkafka client opens no telemetry handshake.
-#[tokio::test]
-async fn api_versions_withholds_telemetry_apis_without_a_receiver() {
-    let p = support::start().await;
-    let advertised = advertised_apis(&p.client).await;
-    check!(
-        !advertised.contains(&71),
-        "GetTelemetrySubscriptions (71) must stay unadvertised, got {advertised:?}",
-    );
-    check!(
-        !advertised.contains(&72),
-        "PushTelemetry (72) must stay unadvertised, got {advertised:?}",
-    );
+impl TelemetryBroker {
+    fn client(&self) -> &Client {
+        match self {
+            Self::Standalone(broker) => &broker.client,
+            Self::Controller(broker) => &broker.client,
+        }
+    }
 
-    p.broker.shutdown().await;
+    fn address(&self) -> SocketAddr {
+        match self {
+            Self::Standalone(broker) => broker.broker.listen_addr(),
+            Self::Controller(broker) => broker.cluster[0].0.listen_addr(),
+        }
+    }
+
+    async fn shutdown(self) {
+        match self {
+            Self::Standalone(broker) => {
+                broker.client.close();
+                broker.broker.shutdown().await;
+            }
+            Self::Controller(broker) => {
+                broker.client.close();
+                support::shutdown_cluster(broker.cluster).await;
+            }
+        }
+    }
 }
 
-/// With no subscriptions configured, the broker assigns a fresh id, returns an
-/// empty `requested_metrics`, and advertises the standard compression types
-/// and limits.
-#[tokio::test]
-async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription() {
-    let p = start_with_client_metrics().await;
+#[derive(Default)]
+struct TelemetrySession {
+    broker: Option<TelemetryBroker>,
+    separate_client: Option<Client>,
+    advertised: Option<HashSet<i16>>,
+    subscription: Option<GetTelemetrySubscriptionsResponse>,
+    alter: Option<IncrementalAlterConfigsResponse>,
+    push: Option<PushTelemetryResponse>,
+    metrics: bytes::Bytes,
+    get_codes: Vec<i16>,
+    reconnected_codes: Vec<i16>,
+}
 
-    let resp = p
-        .client
+#[fixture]
+fn telemetry() -> TelemetrySession {
+    // Start this scenario with fresh inputs and observations.
+
+    TelemetrySession {
+        broker: None,
+        separate_client: None,
+        advertised: None,
+        subscription: None,
+        alter: None,
+        push: None,
+        metrics: bytes::Bytes::new(),
+        get_codes: Vec::new(),
+        reconnected_codes: Vec::new(),
+    }
+}
+
+fn hex_bytes(value: &str) -> Vec<u8> {
+    let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
+    assert!(remainder.is_empty(), "hex payload must contain whole bytes");
+    pairs
+        .iter()
+        .map(|pair| {
+            u8::from_str_radix(str::from_utf8(pair).expect("ASCII hex pair"), 16).expect("hex byte")
+        })
+        .collect()
+}
+
+fn uuid_hex(value: &str) -> WireUuid {
+    WireUuid(
+        hex_bytes(value)
+            .try_into()
+            .expect("UUID must contain sixteen hex bytes"),
+    )
+}
+
+impl TelemetrySession {
+    fn client(&self) -> &Client {
+        self.separate_client
+            .as_ref()
+            .unwrap_or_else(|| self.broker.as_ref().unwrap().client())
+    }
+}
+
+#[given("a standalone broker with client metrics receiver {enabled}")]
+async fn receiver(telemetry: &mut TelemetrySession, enabled: bool) {
+    telemetry.broker = Some(TelemetryBroker::Standalone(if enabled {
+        start_with_client_metrics().await
+    } else {
+        support::start().await
+    }));
+}
+
+#[given("a controller-backed broker with a client metrics receiver")]
+async fn controller(telemetry: &mut TelemetrySession) {
+    telemetry.broker = Some(TelemetryBroker::Controller(
+        start_one_node_with_client_metrics().await,
+    ));
+}
+
+#[given("an uncompressed OTLP gauge {name} with integer value {value}")]
+fn metric(telemetry: &mut TelemetrySession, name: String, value: i64) {
+    telemetry.metrics = sample_otlp_metrics(name, value);
+}
+
+#[when("ApiVersions is requested")]
+async fn versions(telemetry: &mut TelemetrySession) {
+    telemetry.advertised = Some(advertised_apis(telemetry.client()).await);
+}
+
+#[then("API keys {keys} are advertised {expected}")]
+fn api_keys(telemetry: &TelemetrySession, keys: String, expected: bool) {
+    let advertised = telemetry.advertised.as_ref().unwrap();
+    for key in keys.split(',').map(|key| key.parse::<i16>().unwrap()) {
+        assert!(
+            advertised.contains(&key) == expected,
+            "API key {key}, advertised: {advertised:?}"
+        );
+    }
+}
+
+#[when("GetTelemetrySubscriptions requests instance hex {id}")]
+async fn get(telemetry: &mut TelemetrySession, id: String) {
+    let response = telemetry
+        .client()
         .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: WireUuid::ZERO,
+            client_instance_id: uuid_hex(&id),
             ..Default::default()
         })
         .await
         .expect("GetTelemetrySubscriptions");
-
-    check!(resp.error_code == 0, "handler must succeed: {resp:?}");
-    check!(
-        resp.client_instance_id != WireUuid::ZERO,
-        "broker must assign a fresh client_instance_id when caller sent nil"
-    );
-    // No subscriptions configured → empty requested_metrics (the "don't push" signal).
-    check!(
-        resp.requested_metrics.is_empty(),
-        "no subscription configured → requested_metrics must be empty, got {:?}",
-        resp.requested_metrics,
-    );
-    // Standard KIP-714 compression advertisement: ZSTD(4), LZ4(3), GZIP(1), SNAPPY(2).
-    check!(
-        resp.accepted_compression_types == vec![4i8, 3, 1, 2],
-        "accepted_compression_types must be [4,3,1,2], got {:?}",
-        resp.accepted_compression_types,
-    );
-    check!(
-        resp.telemetry_max_bytes == 1_048_576,
-        "telemetry_max_bytes must be 1 MiB, got {}",
-        resp.telemetry_max_bytes,
-    );
-    check!(resp.delta_temporality, "delta_temporality must be true",);
-    // Default interval when no subscription is matched: 300 000 ms (5 min).
-    check!(
-        resp.push_interval_ms == 300_000,
-        "push_interval_ms must be 300_000 when no subscription configured, got {}",
-        resp.push_interval_ms,
-    );
-
-    p.broker.shutdown().await;
+    telemetry.get_codes.push(response.error_code);
+    telemetry.subscription = Some(response);
 }
 
-/// Kafka's `ClientMetricsManager` answers with the id the client sent, and the
-/// Java client rejects a zero id in a successful response
-/// (`ClientTelemetryUtils.validateClientInstanceId`), whatever the schema
-/// text says.
-#[tokio::test]
-async fn get_telemetry_subscriptions_with_set_id_echoes_it() {
-    let p = start_with_client_metrics().await;
-
-    let prior_id = WireUuid([0x11; 16]);
-    let resp = p
-        .client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: prior_id,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-
-    assert!(resp.error_code == 0);
-    assert!(resp.client_instance_id == prior_id);
-
-    p.broker.shutdown().await;
+#[then("the subscription succeeds and assigns a nonzero instance")]
+fn assigned(telemetry: &TelemetrySession) {
+    let response = telemetry.subscription.as_ref().unwrap();
+    check!(response.error_code == 0);
+    check!(response.client_instance_id != WireUuid::ZERO);
 }
 
-/// Kafka answers `INVALID_REQUEST` (42) only for the ids in `Uuid.RESERVED`.
-/// For any other id it builds the instance from the current subscriptions, so
-/// a push that carries some other subscription id gets
-/// `UNKNOWN_SUBSCRIPTION_ID` (117) and the client fetches its subscription.
-#[tokio::test]
-async fn push_telemetry_unknown_instance_rejected() {
-    let p = start_with_client_metrics().await;
+#[then("the subscription succeeds and echoes instance hex {id}")]
+fn echo(telemetry: &TelemetrySession, id: String) {
+    let response = telemetry.subscription.as_ref().unwrap();
+    assert!(response.error_code == 0);
+    assert!(response.client_instance_id == uuid_hex(&id));
+}
 
-    let mut one = [0; 16];
-    one[15] = 1;
-    for (instance, expected) in [
-        (WireUuid::ZERO, 42),
-        (WireUuid(one), 42),
-        (WireUuid([0x22; 16]), 117),
-    ] {
-        let resp: PushTelemetryResponse = p
-            .client
+#[then("requested metrics are {metrics} and the push interval is {interval} ms")]
+fn subscription(telemetry: &TelemetrySession, metrics: String, interval: i32) {
+    let response = telemetry.subscription.as_ref().unwrap();
+    let expected: Vec<String> = if metrics == "empty" {
+        Vec::new()
+    } else {
+        metrics.split(',').map(str::to_owned).collect()
+    };
+    check!(response.requested_metrics == expected);
+    check!(response.push_interval_ms == interval);
+}
+
+#[then(
+    "compression codes are {codes}, the maximum is {maximum} bytes, and delta temporality is {delta}"
+)]
+fn capabilities(telemetry: &TelemetrySession, codes: String, maximum: i32, delta: bool) {
+    let response = telemetry.subscription.as_ref().unwrap();
+    let expected: Vec<i8> = codes.split(',').map(|code| code.parse().unwrap()).collect();
+    check!(response.accepted_compression_types == expected);
+    check!(response.telemetry_max_bytes == maximum);
+    check!(response.delta_temporality == delta);
+}
+
+#[when("match-all subscription {name} is configured with interval {interval} ms")]
+async fn configure(telemetry: &mut TelemetrySession, name: String, interval: String) {
+    telemetry.alter = Some(
+        telemetry
+            .client()
             .send(
-                telemetry_push_request()
-                    .client_instance_id(instance)
-                    .metrics(bytes::Bytes::from_static(b"\x00\x01\x02"))
+                client_metrics_subscription()
+                    .name(&name)
+                    .interval(&interval)
                     .call(),
             )
             .await
-            .expect("PushTelemetry");
+            .expect("IncrementalAlterConfigs"),
+    );
+}
 
-        assert!(
-            resp == PushTelemetryResponse {
-                error_code: expected,
+#[then("the client metrics configuration has one successful resource response")]
+fn configured(telemetry: &TelemetrySession) {
+    let response = telemetry.alter.as_ref().unwrap();
+    assert!(response.responses.len() == 1);
+    assert!(
+        response.responses[0].error_code == 0,
+        "configuration failed: {response:?}"
+    );
+}
+
+#[when(
+    "PushTelemetry sends instance hex {id}, subscription {subscription}, compression {compression}, and payload hex {payload}"
+)]
+async fn raw_push(
+    telemetry: &mut TelemetrySession,
+    id: String,
+    subscription: i32,
+    compression: i8,
+    payload: String,
+) {
+    let metrics = hex_bytes(&payload);
+    telemetry.push = Some(
+        telemetry
+            .client()
+            .send(
+                telemetry_push_request()
+                    .client_instance_id(uuid_hex(&id))
+                    .subscription_id(subscription)
+                    .compression(TelemetryCompression::Invalid(TelemetryCompressionCode(
+                        compression,
+                    )))
+                    .metrics(metrics.into())
+                    .call(),
+            )
+            .await
+            .expect("PushTelemetry"),
+    );
+}
+
+#[when(
+    "the assigned instance pushes the OTLP gauge with subscription XOR {xor} and compression {compression}"
+)]
+async fn enrolled_push(telemetry: &mut TelemetrySession, xor: i32, compression: i8) {
+    let assigned = telemetry.subscription.as_ref().unwrap();
+    telemetry.push = Some(
+        telemetry
+            .client()
+            .send(
+                telemetry_push_request()
+                    .client_instance_id(assigned.client_instance_id)
+                    .subscription_id(assigned.subscription_id ^ xor)
+                    .compression(TelemetryCompression::Invalid(TelemetryCompressionCode(
+                        compression,
+                    )))
+                    .metrics(telemetry.metrics.clone())
+                    .call(),
+            )
+            .await
+            .expect("PushTelemetry"),
+    );
+}
+
+#[then("PushTelemetry is exactly a default response with error {error}")]
+fn full_push(telemetry: &TelemetrySession, error: i16) {
+    assert!(
+        telemetry.push.as_ref().unwrap()
+            == &PushTelemetryResponse {
+                error_code: error,
                 ..Default::default()
-            },
-            "instance {instance:?}"
-        );
-    }
-
-    p.broker.shutdown().await;
-}
-
-// ── Part 2: e2e coverage (controller-backed) ─────────────────────────────────
-
-/// Happy path: configure a subscription, run a `GetTelemetrySubscriptions`
-/// handshake, then push a valid OTLP payload. All three must succeed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_happy_path_after_subscription() {
-    let TelemetryCluster {
-        cluster: _cluster,
-        client,
-    } = start_one_node_with_client_metrics().await;
-
-    // ── Step 1: configure a match-all subscription ───────────────────────────
-    configure_match_all_subscription(&client, "all", "100").await;
-
-    // ── Step 2: GetTelemetrySubscriptions (nil id → assigned) ────────────────
-    let get_resp: GetTelemetrySubscriptionsResponse = client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: WireUuid::ZERO,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-
-    check!(
-        get_resp.error_code == 0,
-        "GetTelemetrySubscriptions must succeed: {get_resp:?}"
-    );
-    check!(
-        get_resp.client_instance_id != WireUuid::ZERO,
-        "broker must assign a fresh client_instance_id"
-    );
-    check!(
-        get_resp.requested_metrics == vec!["*".to_owned()],
-        "match-all subscription must reflect as [\"*\"], got {:?}",
-        get_resp.requested_metrics,
-    );
-    check!(
-        get_resp.push_interval_ms == 100,
-        "push_interval_ms must equal the configured interval (100), got {}",
-        get_resp.push_interval_ms,
-    );
-    check!(
-        get_resp.accepted_compression_types == vec![4i8, 3, 1, 2],
-        "accepted_compression_types must be [4,3,1,2], got {:?}",
-        get_resp.accepted_compression_types,
-    );
-    check!(get_resp.delta_temporality, "delta_temporality must be true");
-    check!(
-        get_resp.telemetry_max_bytes == 1_048_576,
-        "telemetry_max_bytes must be 1 MiB, got {}",
-        get_resp.telemetry_max_bytes,
-    );
-
-    let assigned_id = get_resp.client_instance_id;
-    let subscription_id = get_resp.subscription_id;
-
-    // ── Step 3: PushTelemetry with the assigned id + subscription id ──────────
-    // compression_type = 0 is NONE (uncompressed); sample_otlp_metrics()
-    // returns raw (uncompressed) proto bytes, so no codec mismatch.
-    let push_resp: PushTelemetryResponse = client
-        .send(
-            telemetry_push_request()
-                .client_instance_id(assigned_id)
-                .subscription_id(subscription_id)
-                .metrics(sample_otlp_metrics())
-                .call(),
-        )
-        .await
-        .expect("PushTelemetry");
-
-    assert!(
-        push_resp.error_code == 0,
-        "valid push must succeed, got error_code={}",
-        push_resp.error_code,
+            }
     );
 }
 
-/// The broker must reject a push from a registered instance that carries a
-/// stale `subscription_id`, with `UNKNOWN_SUBSCRIPTION_ID` (117).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_stale_subscription_id_rejected() {
-    let TelemetryCluster {
-        cluster: _cluster,
-        client,
-    } = start_one_node_with_client_metrics().await;
-
-    let get_resp = enroll_telemetry(&client).await;
-    let assigned_id = get_resp.client_instance_id;
-    let real_sub_id = get_resp.subscription_id;
-    // XOR with a constant to produce a definitely-wrong subscription id.
-    let stale_sub_id = real_sub_id ^ 0x5555;
-
-    let push_resp: PushTelemetryResponse = client
-        .send(
-            telemetry_push_request()
-                .client_instance_id(assigned_id)
-                .subscription_id(stale_sub_id)
-                .metrics(sample_otlp_metrics())
-                .call(),
-        )
-        .await
-        .expect("PushTelemetry");
-
-    assert!(
-        push_resp.error_code == 117,
-        "stale subscription_id must yield UNKNOWN_SUBSCRIPTION_ID (117), got {}",
-        push_resp.error_code,
-    );
+#[then("PushTelemetry returns error {error}")]
+fn push_error(telemetry: &TelemetrySession, error: i16) {
+    assert!(telemetry.push.as_ref().unwrap().error_code == error);
 }
 
-/// An unsupported `compression_type` must give
-/// `UNSUPPORTED_COMPRESSION_TYPE` (76). The manager allows the first push
-/// after a `GetTelemetrySubscriptions`, the "`first_after_get`" window, so the
-/// request reaches the codec check.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_unsupported_compression_rejected() {
-    let TelemetryCluster {
-        cluster: _cluster,
-        client,
-    } = start_one_node_with_client_metrics().await;
-
-    let get_resp = enroll_telemetry(&client).await;
-    let assigned_id = get_resp.client_instance_id;
-    let subscription_id = get_resp.subscription_id;
-
-    // Kafka's `CompressionType.forId` knows the ids 0 to 4 only.
-    let push_resp: PushTelemetryResponse = client
-        .send(
-            telemetry_push_request()
-                .client_instance_id(assigned_id)
-                .subscription_id(subscription_id)
-                .compression(TelemetryCompression::Invalid(TelemetryCompressionCode(5)))
-                .metrics(sample_otlp_metrics())
-                .call(),
-        )
-        .await
-        .expect("PushTelemetry");
-
-    assert!(
-        push_resp.error_code == 76,
-        "unsupported compression_type must yield UNSUPPORTED_COMPRESSION_TYPE (76), got {}",
-        push_resp.error_code,
-    );
+#[when("a separate telemetry connection is opened")]
+async fn separate(telemetry: &mut TelemetrySession) {
+    telemetry.separate_client =
+        Some(build_client(telemetry.broker.as_ref().unwrap().address()).await);
 }
 
-/// Sends `GetTelemetrySubscriptions` for `id` and returns the error code.
-async fn get_error_code(client: &krabka_client_core::Client, id: WireUuid) -> i16 {
-    let resp: GetTelemetrySubscriptionsResponse = client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: id,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-    resp.error_code
+#[then("the GetTelemetrySubscriptions response codes are {codes}")]
+fn get_codes(telemetry: &TelemetrySession, codes: String) {
+    let expected: Vec<i16> = codes.split(',').map(|code| code.parse().unwrap()).collect();
+    assert!(telemetry.get_codes == expected);
 }
 
-/// Kafka registers `ClientMetricsManager.connectionDisconnectListener` with the
-/// socket server, so closing the connection that carried a client's telemetry
-/// request drops its instance (#1246). A client that reconnects and asks again
-/// inside its push interval gets an assignment, where the instance it left
-/// behind would answer `THROTTLING_QUOTA_EXCEEDED` (89).
-#[tokio::test]
-async fn closing_the_connection_drops_the_client_instance() {
-    const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
-    let p = start_with_client_metrics().await;
-    let addr = p.broker.listen_addr();
-    let id = WireUuid([0x33; 16]);
-
-    let first = build_client(addr).await;
-    assert!(
-        get_error_code(&first, id).await == 0,
-        "the first get is assigned"
-    );
-    assert!(
-        get_error_code(&first, id).await == THROTTLING_QUOTA_EXCEEDED,
-        "a get inside the push interval is throttled"
-    );
-    drop(first);
-
-    let deadline = Instant::now() + Duration::from_secs(10);
+#[when(
+    "that connection closes and instance hex {id} reconnects every {retry} ms for at most {budget} ms"
+)]
+async fn reconnect(telemetry: &mut TelemetrySession, id: String, retry: u64, budget: u64) {
+    drop(telemetry.separate_client.take());
+    let address = telemetry.broker.as_ref().unwrap().address();
+    let deadline = Instant::now() + Duration::from_millis(budget);
     loop {
-        let reconnected = build_client(addr).await;
-        let error_code = get_error_code(&reconnected, id).await;
-        if error_code == 0 {
+        let client = build_client(address).await;
+        let response = client
+            .send(GetTelemetrySubscriptionsRequest {
+                client_instance_id: uuid_hex(&id),
+                ..Default::default()
+            })
+            .await
+            .expect("GetTelemetrySubscriptions");
+        telemetry.reconnected_codes.push(response.error_code);
+        if response.error_code != 89 || Instant::now() >= deadline {
             break;
         }
-        assert!(
-            error_code == THROTTLING_QUOTA_EXCEEDED && Instant::now() < deadline,
-            "the reconnected client's instance survived: error_code={error_code}"
-        );
-        time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(retry)).await;
     }
-
-    p.broker.shutdown().await;
 }
 
-async fn enroll_telemetry(
-    client: &krabka_client_core::Client,
-) -> GetTelemetrySubscriptionsResponse {
-    configure_match_all_subscription(client, "all", "100").await;
-    let response: GetTelemetrySubscriptionsResponse = client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: WireUuid::ZERO,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-    assert!(response.error_code == 0);
-    response
+#[then(
+    "reconnection eventually assigns the instance with error {success}, with only error {transient} before it"
+)]
+fn disconnected_instance(telemetry: &TelemetrySession, success: i16, transient: i16) {
+    let (last, before) = telemetry.reconnected_codes.split_last().unwrap();
+    assert!(*last == success);
+    assert!(before.iter().all(|code| *code == transient));
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "API advertisement follows receiver configuration"
+)]
+#[tokio::test]
+async fn api_advertisement(telemetry: TelemetrySession, enabled: bool, advertised: bool) {
+    let _ = (enabled, advertised);
+    telemetry.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "get telemetry subscriptions with nil id returns assigned id and no subscription"
+)]
+#[tokio::test]
+async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription(
+    telemetry: TelemetrySession,
+) {
+    telemetry.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "get telemetry subscriptions with set id echoes it"
+)]
+#[tokio::test]
+async fn get_telemetry_subscriptions_with_set_id_echoes_it(telemetry: TelemetrySession) {
+    telemetry.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "unregistered pushes distinguish reserved and unknown instances"
+)]
+#[tokio::test]
+async fn unregistered_push(telemetry: TelemetrySession, id: String, error: i16) {
+    let _ = (id, error);
+    telemetry.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "enrolled pushes validate subscription identity and compression"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enrolled_push_contract(
+    telemetry: TelemetrySession,
+    xor: i32,
+    compression: i8,
+    error: i16,
+) {
+    let _ = (xor, compression, error);
+    telemetry.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "closing the connection drops the client instance"
+)]
+#[tokio::test]
+async fn closing_the_connection_drops_the_client_instance(telemetry: TelemetrySession) {
+    telemetry.broker.unwrap().shutdown().await;
 }

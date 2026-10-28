@@ -62,27 +62,58 @@ pub fn murmur2_partition(data: &[u8], num_partitions: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::{murmur2, murmur2_partition},
+        assert2::assert,
+        rstest::fixture,
+        rstest_bdd_macros::{given, then, when},
+    };
 
-    #[yare::parameterized(
-        empty = { b"", 0x106e_08d9 },
-        one_byte = { b"a", 0xa2d0_b27c },
-        two_bytes = { b"ab", 0x12d8_262a },
-        three_bytes = { b"abc", 0x1c94_221b },
-        four_bytes = { b"abcd", 0xb11a_b5f4 },
-        five_bytes = { b"abcde", 0x1b89_7edd },
-    )]
-    fn murmur2_matches_kafka_vectors_for_remainder_lengths(input: &[u8], expected: u32) {
-        assert2::assert!(murmur2(input) == expected);
+    #[derive(Default)]
+    struct HashScenario {
+        key: Vec<u8>,
+        partitions: i32,
+        hash: Option<u32>,
+        partition: Option<i32>,
     }
 
-    #[yare::parameterized(
-        transaction_id = { b"my-tid", 50, 43 },
-        producer_id = { b"producer-1", 50, 45 },
-        orders_transaction = { b"tx-orders-prod", 50, 26 },
-        five_byte_key = { b"abcde", 7, 4 },
-    )]
-    fn murmur2_partition_matches_kafka_utils_abs_mod(input: &[u8], partitions: i32, expected: i32) {
-        assert2::assert!(murmur2_partition(input, partitions) == expected);
+    #[fixture]
+    fn hashing() -> HashScenario {
+        // Keep hashing inputs and observations fresh for each scenario.
+        HashScenario::default()
     }
+
+    #[given("the Kafka hash key is {key}")]
+    fn key_bytes(hashing: &mut HashScenario, key: String) {
+        hashing.key = if key == "(empty)" {
+            Vec::new()
+        } else {
+            key.into_bytes()
+        };
+    }
+
+    #[given("the destination topic has {partitions} partitions")]
+    fn partition_count(hashing: &mut HashScenario, partitions: i32) {
+        hashing.partitions = partitions;
+    }
+
+    #[when("the key is hashed with Kafka Murmur2")]
+    fn hash_key(hashing: &mut HashScenario) { hashing.hash = Some(murmur2(&hashing.key)); }
+
+    #[when("Kafka's absolute-hash partition rule is applied")]
+    fn choose_partition(hashing: &mut HashScenario) {
+        hashing.partition = Some(murmur2_partition(&hashing.key, hashing.partitions));
+    }
+
+    #[then("the unsigned hash is {expected}")]
+    fn hash_matches(hashing: &HashScenario, expected: u32) {
+        assert!(hashing.hash == Some(expected));
+    }
+
+    #[then("the destination partition is {expected}")]
+    fn partition_matches(hashing: &HashScenario, expected: i32) {
+        assert!(hashing.partition == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/kafka_hash.feature", fixtures = [hashing: HashScenario]);
 }

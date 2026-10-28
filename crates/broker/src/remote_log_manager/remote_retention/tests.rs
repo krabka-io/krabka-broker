@@ -249,38 +249,6 @@ async fn scheduled_remote_retention_holds_unreadable_activation_evidence() {
     check!(rsm_impl.deletes_attempted.load(Ordering::Relaxed) == 0);
 }
 
-/// Kafka's `isSegmentBreachedByRetentionTime`: a segment goes when its
-/// `maxTimestampMs` is strictly below `cleanupUntilMs = now - retention.ms`,
-/// whatever that timestamp is, and there is no time axis at all while
-/// `cleanupUntilMs` is negative. `now` is 10 000 ms throughout.
-#[yare::parameterized(
-    unknown_timestamp = { -1, 1, true },
-    below_cutoff = { 8_999, 1_000, true },
-    on_cutoff = { 9_000, 1_000, false },
-    window_longer_than_clock = { -1, 10_001, false },
-    window_at_clock = { -1, 10_000, true },
-)]
-fn remote_time_retention_follows_kafkas_cleanup_until(
-    max_ts: i64,
-    retention_ms: u32,
-    deleted: bool,
-) {
-    let segments = vec![synth_remote_md(10, 0, 9, max_ts, 100)];
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &segments,
-        Some(millis(retention_ms)),
-        None,
-        None,
-        10_000,
-        NO_BYTES,
-    );
-    check!(
-        out.len() == usize::from(deleted),
-        "{max_ts}, {retention_ms}"
-    );
-}
-
 /// Kafka's `buildRetentionSizeData` counts the local bytes the remote tier
 /// does not hold yet (`onlyLocalLogSegmentsSize`) toward `retention.bytes`,
 /// so they push the oldest remote segment out. Two 100-byte remote segments
@@ -1228,3 +1196,63 @@ async fn a_retention_pass_finishes_the_deletes_started_below_the_floor(
     );
     check!(segment_states(&rlmm) == remaining);
 }
+
+#[derive(Default)]
+struct RemoteTimeRetention {
+    segments: Vec<RemoteLogSegmentMetadata>,
+    retention: Option<Time>,
+    evicted: Option<Vec<RemoteLogSegmentMetadata>>,
+}
+
+#[rstest::fixture]
+fn remote_time_retention() -> RemoteTimeRetention {
+    // The retention window and metadata segment belong to an independent pass.
+    RemoteTimeRetention::default()
+}
+
+#[rstest_bdd_macros::given(
+    "remote segment 10 covers offsets 0 through 9, has 100 bytes and maximum timestamp {timestamp}"
+)]
+fn supplied_remote_time_segment(remote_time_retention: &mut RemoteTimeRetention, timestamp: i64) {
+    remote_time_retention.segments = vec![synth_remote_md(10, 0, 9, timestamp, 100)];
+}
+
+#[rstest_bdd_macros::given("remote time retention is {milliseconds} milliseconds")]
+fn supplied_remote_time_retention(
+    remote_time_retention: &mut RemoteTimeRetention,
+    milliseconds: u32,
+) {
+    remote_time_retention.retention = Some(millis(milliseconds));
+}
+
+#[rstest_bdd_macros::when(
+    "mutable archive retention is evaluated at millisecond 10000 without size or deletion-floor pressure"
+)]
+fn evaluate_remote_time_retention(remote_time_retention: &mut RemoteTimeRetention) {
+    remote_time_retention.evicted = Some(remote_retention_eviction_set(
+        ArchiveMode::Mutable.into(),
+        &remote_time_retention.segments,
+        remote_time_retention.retention,
+        None,
+        None,
+        10000,
+        NO_BYTES,
+    ));
+}
+
+#[rstest_bdd_macros::then("the remote retention eviction set contains {count} segments")]
+fn expected_remote_time_retention(remote_time_retention: &RemoteTimeRetention, count: usize) {
+    check!(
+        remote_time_retention
+            .evicted
+            .as_ref()
+            .expect("retention was evaluated")
+            .len()
+            == count
+    );
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/remote_log_manager/remote_retention/tests.feature",
+    fixtures = [remote_time_retention: RemoteTimeRetention]
+);

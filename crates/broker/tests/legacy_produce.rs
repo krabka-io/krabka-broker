@@ -61,13 +61,31 @@ fn build_v0_messageset(pairs: &[KeyValue<'_>]) -> Bytes {
 /// and v0 response headers; see [`kafka_wire::round_trip`]. Panics on an I/O
 /// error.
 pub use crate::kafka_wire::legacy_round_trip as round_trip_v0;
-
 // ── Topic helpers ─────────────────────────────────────────────────────────────
 
 // ── Test ──────────────────────────────────────────────────────────────────────
+use {
+    krabka_protocol::owned::fetch_response::FetchResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct LegacyConversion {
+    process: Option<support::InProcess>,
+    produced: Option<LegacyProduceResponse>,
+    fetched: Option<FetchResponse>,
+}
+#[fixture]
+fn conversion() -> LegacyConversion {
+    // Start this scenario with fresh inputs and observations.
 
-#[tokio::test]
-async fn produce_v0_upconverts_and_is_readable_via_fetch() {
+    LegacyConversion {
+        process: None,
+        produced: None,
+        fetched: None,
+    }
+}
+#[given("a legacy compatible broker hosts a single partition legacy v0 topic")]
+async fn topic(conversion: &mut LegacyConversion) {
     let p = support::start_legacy().await;
 
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
@@ -82,6 +100,11 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
         cr.topics[0].error_code
     );
 
+    conversion.process = Some(p);
+}
+#[when("a raw Produce version zero appends key k and value v")]
+async fn legacy_append(conversion: &mut LegacyConversion) {
+    let p = conversion.process.as_ref().expect("legacy topic created");
     // 2. Open a raw TCP connection to the broker to send the v0 Produce.
     let addr = p.broker.listen_addr();
     let mut stream = TcpStream::connect(addr)
@@ -128,19 +151,28 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let mut cur: &[u8] = &resp_body;
     let produce_resp =
         LegacyProduceResponse::decode(&mut cur, 0).expect("decode ProduceResponse v0");
+    conversion.produced = Some(produce_resp);
+}
+#[then("the version zero response acknowledges exactly one topic without an error")]
+fn acknowledged(conversion: &LegacyConversion) {
+    let response = conversion
+        .produced
+        .as_ref()
+        .expect("legacy produce completed");
     assert!(
-        produce_resp.responses.len() == 1,
-        "expected 1 topic in response"
+        response.responses.len() == 1,
+        "expected one topic in response"
     );
-    let part_resp = &produce_resp.responses[0].partition_responses[0];
+    let partition = &response.responses[0].partition_responses[0];
     assert!(
-        part_resp.error_code == 0,
+        partition.error_code == 0,
         "produce v0 error_code: {}",
-        part_resp.error_code
+        partition.error_code
     );
-
-    // 7. Fetch via the typed client (which negotiates the highest supported
-    //    Fetch version). The data stored on disk is a v2 RecordBatch.
+}
+#[when("a modern typed client fetches the converted record")]
+async fn modern_fetch(conversion: &mut LegacyConversion) {
+    let p = conversion.process.as_ref().expect("legacy topic created");
     let topic_id = topic_id_for(&p.client, "legacy_v0").await;
     let fetch_resp = p
         .client
@@ -153,6 +185,11 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
         .await
         .expect("Fetch");
 
+    conversion.fetched = Some(fetch_resp);
+}
+#[then("the successful fetch contains one v2 record retaining key k and value v")]
+fn retained(conversion: &LegacyConversion) {
+    let fetch_resp = conversion.fetched.as_ref().expect("modern fetch completed");
     let part = &fetch_resp.responses[0].partitions[0];
     assert!(
         part.error_code == 0,
@@ -182,6 +219,17 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
         "value mismatch: {:?}",
         rec.value
     );
-
-    p.broker.shutdown().await;
+}
+#[scenario(
+    path = "tests/features/migrated/tests/legacy_produce.feature",
+    name = "A version zero message set is readable as a modern record batch"
+)]
+#[tokio::test]
+async fn produce_v0_upconverts_and_is_readable_via_fetch(conversion: LegacyConversion) {
+    conversion
+        .process
+        .expect("legacy broker started")
+        .broker
+        .shutdown()
+        .await;
 }

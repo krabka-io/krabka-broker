@@ -190,55 +190,57 @@ pub fn build_marker_batch(
 mod tests {
     use {super::*, assert2::assert};
 
-    /// One row per branch of Kafka's
-    /// `TransactionMarkerRequestCompletionHandler.onComplete` error match.
-    #[test]
-    fn classifies_every_write_txn_markers_code_as_kafka_does() {
-        let cases = [
-            (codes::NONE, MarkerCodeClass::Written),
-            (UNSUPPORTED_FOR_MESSAGE_FORMAT, MarkerCodeClass::Dropped),
-            (codes::UNSUPPORTED_VERSION, MarkerCodeClass::Dropped),
-            (
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                MarkerCodeClass::Retriable,
-            ),
-            (codes::NOT_LEADER_OR_FOLLOWER, MarkerCodeClass::Retriable),
-            (codes::NOT_ENOUGH_REPLICAS, MarkerCodeClass::Retriable),
-            (
-                codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
-                MarkerCodeClass::Retriable,
-            ),
-            (codes::REQUEST_TIMED_OUT, MarkerCodeClass::Retriable),
-            (codes::KAFKA_STORAGE_ERROR, MarkerCodeClass::Retriable),
-            (codes::INVALID_PRODUCER_EPOCH, MarkerCodeClass::Fenced),
-            (
-                codes::TRANSACTION_COORDINATOR_FENCED,
-                MarkerCodeClass::Fenced,
-            ),
-            (codes::CORRUPT_MESSAGE, MarkerCodeClass::Unexpected),
-            (codes::MESSAGE_TOO_LARGE, MarkerCodeClass::Unexpected),
-            (codes::RECORD_LIST_TOO_LARGE, MarkerCodeClass::Unexpected),
-            (codes::INVALID_REQUIRED_ACKS, MarkerCodeClass::Unexpected),
-            (codes::UNKNOWN_SERVER_ERROR, MarkerCodeClass::Unexpected),
-            (
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                MarkerCodeClass::Unexpected,
-            ),
-            (codes::NOT_COORDINATOR, MarkerCodeClass::Unexpected),
-            (
-                codes::COORDINATOR_LOAD_IN_PROGRESS,
-                MarkerCodeClass::Unexpected,
-            ),
-            (codes::INVALID_TXN_STATE, MarkerCodeClass::Unexpected),
-        ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (code, class) in cases {
-            actual.push((code, classify_marker_code(code)));
-            expected.push((code, class));
-        }
-        assert!(actual == expected);
+    #[derive(Default)]
+    struct TransactionMarkerResponse {
+        code: Option<i16>,
+        classification: Option<MarkerCodeClass>,
     }
+
+    #[rstest::fixture]
+    fn transaction_marker_response() -> TransactionMarkerResponse {
+        // Each partition marker response has an independent retry/fencing decision.
+        TransactionMarkerResponse::default()
+    }
+
+    #[rstest_bdd_macros::given("a WriteTxnMarkers partition response has Kafka error code {code}")]
+    fn supplied_transaction_marker_response(
+        transaction_marker_response: &mut TransactionMarkerResponse,
+        code: i16,
+    ) {
+        transaction_marker_response.code = Some(code);
+    }
+
+    #[rstest_bdd_macros::when("the transaction coordinator classifies the marker response")]
+    fn classify_transaction_marker_response(
+        transaction_marker_response: &mut TransactionMarkerResponse,
+    ) {
+        transaction_marker_response.classification = Some(classify_marker_code(
+            transaction_marker_response
+                .code
+                .expect("partition response was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the marker response decision is {decision}")]
+    fn expected_transaction_marker_response(
+        transaction_marker_response: &TransactionMarkerResponse,
+        decision: String,
+    ) {
+        let expected = match decision.as_str() {
+            "Written" => MarkerCodeClass::Written,
+            "Dropped" => MarkerCodeClass::Dropped,
+            "Retriable" => MarkerCodeClass::Retriable,
+            "Fenced" => MarkerCodeClass::Fenced,
+            "Unexpected" => MarkerCodeClass::Unexpected,
+            _ => panic!("unknown expected marker decision {decision}"),
+        };
+        assert!(transaction_marker_response.classification == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/txn/marker.feature",
+        fixtures = [transaction_marker_response: TransactionMarkerResponse]
+    );
 
     #[test]
     fn classifies_marker_failures_by_the_code_they_carry() {

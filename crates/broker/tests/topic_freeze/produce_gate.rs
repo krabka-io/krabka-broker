@@ -1,98 +1,161 @@
-//! The gate itself: a frozen topic refuses `Produce`, and the topic beside it
-//! does not.
-//!
-//! The literal case is the feature in one test, the prefix case is the
-//! namespace scope that an ACL cannot express atomically, and the late-topic
-//! case is the disaster-recovery order in which an operator freezes a
-//! namespace before a restore writes into it.
+//! Freeze scopes reject writes without affecting a neighboring topic.
 
 use {
     crate::{
         control_plane::freeze_scope,
-        support,
-        wire::{CONTROL, accepted, controlled_fixture, create_topic, produce_outcome, refused},
+        support::{self, InProcess},
+        wire::{ProduceOutcome, accepted, create_topic, produce_outcome, refused},
     },
     assert2::check,
-    krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
+    krabka_protocol::{
+        krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
+        primitives::uuid::Uuid,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::collections::HashMap,
 };
 
-/// A literal freeze stops writes to the topic it names, and to nothing else.
-///
-/// This is the feature in one case. Both topics take a write before the freeze
-/// lands, so the refusal afterwards is the registry entry rather than a produce
-/// path that stopped working; and the control topic keeps taking writes after
-/// it, so the refusal is scoped rather than global. Delete this case and
-/// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {
-    let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
-
-    check!(produce_outcome(&p.broker, &p.client, "orders", frozen).await == accepted(1));
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
-
-    freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "DR cutover").await;
-
-    check!(
-        produce_outcome(&p.broker, &p.client, "orders", frozen).await
-            == refused("literal", "orders", "DR cutover", 1)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(2));
-
-    p.broker.shutdown().await;
+#[derive(Default)]
+struct FreezeWrites {
+    broker: Option<InProcess>,
+    topics: HashMap<String, Uuid>,
+    writes: HashMap<String, ProduceOutcome>,
+    pattern: String,
+    scope: String,
+    reason: String,
 }
 
-/// A prefixed freeze stops writes to every topic in the namespace, and stops at
-/// the namespace boundary.
-///
-/// The namespace scope is the half an ACL cannot express atomically, and it is
-/// the reason this feature exists rather than a deny binding per topic. The
-/// case runs two controls on purpose: `CONTROL` shows the produce path works at
-/// all, and `tenant-b.orders` shows the prefix walk stops where the scope stops
-/// rather than matching every topic once the registry is non-empty.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
-    let p = support::start().await;
-    let covered = create_topic(&p.broker, &p.client, "tenant-a.orders").await;
-    let neighbour = create_topic(&p.broker, &p.client, "tenant-b.orders").await;
-    let control = create_topic(&p.broker, &p.client, CONTROL).await;
+impl FreezeWrites {
+    fn broker(&self) -> &InProcess { self.broker.as_ref().expect("the freeze broker is running") }
 
-    check!(produce_outcome(&p.broker, &p.client, "tenant-a.orders", covered).await == accepted(1));
+    async fn shutdown(self) {
+        self.broker
+            .expect("the freeze broker is running")
+            .broker
+            .shutdown()
+            .await;
+    }
 
-    freeze_scope(&p.client, PATTERN_TYPE_PREFIXED, "tenant-a.", "offboarding").await;
-
-    check!(
-        produce_outcome(&p.broker, &p.client, "tenant-a.orders", covered).await
-            == refused("prefixed", "tenant-a.", "offboarding", 1)
-    );
-    check!(
-        produce_outcome(&p.broker, &p.client, "tenant-b.orders", neighbour).await == accepted(1)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
-
-    p.broker.shutdown().await;
+    async fn create(&mut self, name: String) {
+        let id = create_topic(&self.broker().broker, &self.broker().client, &name).await;
+        self.topics.insert(name, id);
+    }
 }
 
-/// A topic created after a covering prefix freeze is frozen the moment it
-/// exists.
-///
-/// This is the disaster-recovery case the design is written for: an operator
-/// freezes a namespace *before* a restore writes into it, so the resolve has to
-/// run against the topic name at produce time and not against a set of names
-/// materialised when the freeze landed. A cached set would let the newest topic
-/// through, which is exactly the topic the restore is about to fill.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {
-    let p = support::start().await;
-    let control = create_topic(&p.broker, &p.client, CONTROL).await;
+#[fixture]
+fn freeze_writes() -> FreezeWrites {
+    // Each scenario owns fresh services and observations.
+    FreezeWrites {
+        broker: None,
+        ..Default::default()
+    }
+}
 
-    freeze_scope(&p.client, PATTERN_TYPE_PREFIXED, "tenant-a.", "pre-restore").await;
+#[given("a broker with unfrozen topics {topics}")]
+async fn unfrozen_topics(freeze_writes: &mut FreezeWrites, topics: String) {
+    freeze_writes.broker = Some(support::start().await);
+    for name in topics.split(',') {
+        freeze_writes.create(name.to_owned()).await;
+    }
+}
 
-    let late = create_topic(&p.broker, &p.client, "tenant-a.late").await;
+#[when("the operator freezes {pattern} scope {scope} because {reason}")]
+async fn freeze_topic_scope(
+    freeze_writes: &mut FreezeWrites,
+    pattern: String,
+    scope: String,
+    reason: String,
+) {
+    let pattern_type = match pattern.as_str() {
+        "literal" => PATTERN_TYPE_LITERAL,
+        "prefixed" => PATTERN_TYPE_PREFIXED,
+        _ => panic!("unsupported freeze pattern {pattern}"),
+    };
+    freeze_scope(
+        &freeze_writes.broker().client,
+        pattern_type,
+        &scope,
+        &reason,
+    )
+    .await;
+    freeze_writes.pattern = pattern;
+    freeze_writes.scope = scope;
+    freeze_writes.reason = reason;
+}
+
+#[when("the client writes one record to {topic}")]
+async fn write_topic(freeze_writes: &mut FreezeWrites, topic: String) {
+    let id = freeze_writes.topics[&topic];
+    let result = produce_outcome(
+        &freeze_writes.broker().broker,
+        &freeze_writes.broker().client,
+        &topic,
+        id,
+    )
+    .await;
+    freeze_writes.writes.insert(topic, result);
+}
+
+#[when("topic {topic} is created after the freeze")]
+async fn late_topic(freeze_writes: &mut FreezeWrites, topic: String) {
+    freeze_writes.create(topic).await;
+}
+
+#[then("the write to {topic} is accepted and its log end is {offset}")]
+fn write_accepted(freeze_writes: &FreezeWrites, topic: String, offset: i64) {
     check!(
-        produce_outcome(&p.broker, &p.client, "tenant-a.late", late).await
-            == refused("prefixed", "tenant-a.", "pre-restore", 0)
+        freeze_writes
+            .writes
+            .get(&topic)
+            .expect("the client wrote to the topic")
+            == &accepted(offset)
     );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+}
 
-    p.broker.shutdown().await;
+#[then("the write to {topic} is refused and its log end stays {offset}")]
+fn write_refused(freeze_writes: &FreezeWrites, topic: String, offset: i64) {
+    check!(
+        freeze_writes
+            .writes
+            .get(&topic)
+            .expect("the client wrote to the topic")
+            == &refused(
+                &freeze_writes.pattern,
+                &freeze_writes.scope,
+                &freeze_writes.reason,
+                offset
+            )
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a literal freeze refuses produce and the control topic still accepts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts(
+    freeze_writes: FreezeWrites,
+) {
+    freeze_writes.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a prefix freeze refuses produce to every topic it covers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers(freeze_writes: FreezeWrites) {
+    freeze_writes.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a topic created after a covering prefix freeze is frozen on arrival"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival(
+    freeze_writes: FreezeWrites,
+) {
+    freeze_writes.shutdown().await;
 }

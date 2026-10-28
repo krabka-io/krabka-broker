@@ -36,13 +36,10 @@ use {
     krabka_client_core::{Connection, ConnectionOptions},
     krabka_metadata::metadata_version,
     krabka_protocol::{
-        ProtocolRequest, UnknownTaggedFields,
+        UnknownTaggedFields,
         owned::{
             allocate_producer_ids_request::AllocateProducerIdsRequest,
             allocate_producer_ids_response::AllocateProducerIdsResponse,
-            alter_client_quotas_request::AlterClientQuotasRequest,
-            alter_configs_request::AlterConfigsRequest,
-            alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
             alter_partition_request::{
                 AlterPartitionRequest, BrokerState, PartitionData as AlterPartitionPartitionData,
                 TopicData as AlterPartitionTopicData,
@@ -65,24 +62,19 @@ use {
                 PartitionData as RespPartitionData, TopicData as RespTopicData,
             },
             broker_heartbeat_request::BrokerHeartbeatRequest,
+            broker_heartbeat_response::BrokerHeartbeatResponse,
             broker_registration_request::{
                 BrokerRegistrationRequest, Feature as RegistrationFeature,
                 Listener as RegistrationListener,
             },
-            create_acls_request::CreateAclsRequest,
             create_delegation_token_request::CreateDelegationTokenRequest,
             create_delegation_token_response::CreateDelegationTokenResponse,
             create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
             create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
-            create_topics_request::CreateTopicsRequest,
             create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
-            delete_acls_request::DeleteAclsRequest,
             delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
             delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
-            describe_acls_request::DescribeAclsRequest,
             describe_client_quotas_request,
-            describe_configs_request::DescribeConfigsRequest,
-            describe_delegation_token_request::DescribeDelegationTokenRequest,
             describe_user_scram_credentials_request::{
                 DescribeUserScramCredentialsRequest, UserName,
             },
@@ -90,19 +82,14 @@ use {
                 CredentialInfo, DescribeUserScramCredentialsResponse,
                 DescribeUserScramCredentialsResult,
             },
-            elect_leaders_request::ElectLeadersRequest,
-            envelope_request::EnvelopeRequest,
             expire_delegation_token_request::ExpireDelegationTokenRequest,
             expire_delegation_token_response::ExpireDelegationTokenResponse,
-            incremental_alter_configs_request::IncrementalAlterConfigsRequest,
-            list_partition_reassignments_request::ListPartitionReassignmentsRequest,
             renew_delegation_token_request::RenewDelegationTokenRequest,
             renew_delegation_token_response::RenewDelegationTokenResponse,
             sasl_authenticate_request::SaslAuthenticateRequest,
             sasl_authenticate_response::SaslAuthenticateResponse,
             sasl_handshake_request::SaslHandshakeRequest,
             sasl_handshake_response::SaslHandshakeResponse,
-            unregister_broker_request::UnregisterBrokerRequest,
             unregister_controller_request::UnregisterControllerRequest,
             update_features_request::UpdateFeaturesRequest,
         },
@@ -131,25 +118,6 @@ const SCRAM_SHA_256: i8 = 1;
 /// registered broker set cannot carry the requested replication factor.
 const INVALID_REPLICATION_FACTOR: i16 = 38;
 
-/// Every api key a Kafka 4.x controller listener accepts, in key order.
-///
-/// Read off a live `mirror.gcr.io/apache/kafka:4.3.1` controller with a raw
-/// `ApiVersions` v0 request, and identical to the set the `listeners` tag on
-/// the request schemas in `kafka-clients-4.3.1.jar` marks `controller`.
-///
-/// Kafka trunk adds `UnregisterController` (94, KIP-1312), tagged `broker` and
-/// `controller`. No released image advertises it, and krabka serves it
-/// because krabka-protocol vendors the trunk schema.
-const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
-    1, 17, 18, 19, 20, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 52,
-    53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82,
-];
-
-/// What Kafka trunk's controller listener adds to 4.3.1's, and krabka's
-/// under `unstable.api.versions.enable`: `UnregisterController` (94,
-/// KIP-1312).
-const KAFKA_TRUNK_CONTROLLER_LISTENER_KEYS: [i16; 1] = [94];
-
 /// A running node and the directory that backs it.
 struct ControllerNode {
     broker: BrokerHandle,
@@ -175,16 +143,6 @@ async fn start_surface(trunk: bool) -> ControllerNode {
     } else {
         start_broker().await
     }
-}
-
-async fn advertised_controller_versions(broker: &BrokerHandle) -> ApiVersionsResponse {
-    let connection = dial_controller(broker).await;
-    let response = connection
-        .send(api_versions_request())
-        .await
-        .expect("ApiVersions over the controller listener");
-    connection.close();
-    response
 }
 
 fn enable_trunk(config: &mut BrokerConfig) {
@@ -226,153 +184,169 @@ struct VersionRange {
     max: i16,
 }
 
-/// The Admin api keys a Kafka 4.x controller listener accepts, paired with the
-/// version range krabka speaks for each.
-///
-/// The keys are the ones a live `mirror.gcr.io/apache/kafka:4.3.1` controller
-/// advertises in `ApiVersions` (the same set 4.0.0's request schemas tag
-/// `controller`), minus the RPCs the controller listener serves without the
-/// Admin bridge.
-/// `DescribeClientQuotas` (48) is tagged `broker` only, so it is absent there,
-/// absent here, and asserted absent below.
-///
-/// Every one of them is at the version range Kafka 4.3.1 serves, which is the
-/// vendored range, so the default and the trunk tables agree on them; trunk
-/// adds `UnregisterController`.
-fn expected_admin_versions(trunk: bool) -> BTreeMap<i16, VersionRange> {
-    let mut versions = BTreeMap::from(
-        [
-            admin_range::<CreateTopicsRequest>(),
-            admin_range::<DeleteTopicsRequest>(),
-            admin_range::<DescribeAclsRequest>(),
-            admin_range::<CreateAclsRequest>(),
-            admin_range::<DeleteAclsRequest>(),
-            admin_range::<DescribeConfigsRequest>(),
-            admin_range::<AlterConfigsRequest>(),
-            admin_range::<CreatePartitionsRequest>(),
-            admin_range::<CreateDelegationTokenRequest>(),
-            admin_range::<RenewDelegationTokenRequest>(),
-            admin_range::<ExpireDelegationTokenRequest>(),
-            admin_range::<DescribeDelegationTokenRequest>(),
-            admin_range::<ElectLeadersRequest>(),
-            admin_range::<IncrementalAlterConfigsRequest>(),
-            admin_range::<AlterPartitionRequest>(),
-            admin_range::<AllocateProducerIdsRequest>(),
-            admin_range::<AlterPartitionReassignmentsRequest>(),
-            admin_range::<ListPartitionReassignmentsRequest>(),
-            admin_range::<AlterClientQuotasRequest>(),
-            admin_range::<DescribeUserScramCredentialsRequest>(),
-            admin_range::<AlterUserScramCredentialsRequest>(),
-            admin_range::<UpdateFeaturesRequest>(),
-            admin_range::<EnvelopeRequest>(),
-            admin_range::<UnregisterBrokerRequest>(),
-            admin_range::<AssignReplicasToDirsRequest>(),
-        ]
-        .map(|entry| (entry.key, entry.range)),
+#[derive(Default)]
+struct ControllerAdminScenario {
+    node: Option<ControllerNode>,
+    connection: Option<Connection>,
+    versions: Option<ApiVersionsResponse>,
+    created: Option<CreateTopicsResponse>,
+    grown: Option<CreatePartitionsResponse>,
+    deleted: Option<DeleteTopicsResponse>,
+    minted: Option<CreateDelegationTokenResponse>,
+    renewed: Option<RenewDelegationTokenResponse>,
+    expired: Option<ExpireDelegationTokenResponse>,
+    scram_altered: Option<AlterUserScramCredentialsResponse>,
+    scram_described: Option<DescribeUserScramCredentialsResponse>,
+    assigned: Option<AssignReplicasToDirsResponse>,
+    unregistered: Vec<UnregisterControllerResponse>,
+    alter_partition: Option<AlterPartitionResponse>,
+    allocated: Option<AllocateProducerIdsResponse>,
+    handshake: Option<SaslHandshakeResponse>,
+    authenticate: Option<SaslAuthenticateResponse>,
+    registration_outcomes: Vec<Outcome>,
+    registration_heartbeats: Vec<BrokerHeartbeatResponse>,
+    epoch_of_7: i64,
+    topic_id: WireUuid,
+}
+#[rstest::fixture]
+fn controller_admin() -> ControllerAdminScenario {
+    let epoch_of_7 = -1;
+    ControllerAdminScenario {
+        epoch_of_7,
+        ..Default::default()
+    }
+}
+impl ControllerAdminScenario {
+    fn broker(&self) -> &BrokerHandle { &self.node.as_ref().expect("controller node").broker }
+
+    fn connection(&self) -> &Connection { self.connection.as_ref().expect("controller connection") }
+
+    async fn shutdown(&mut self) {
+        self.connection
+            .take()
+            .expect("controller connection")
+            .close();
+        let ControllerNode { broker, dir: _dir } = self.node.take().expect("controller node");
+        broker.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::given(
+    "a combined broker has an open plaintext controller connection with trunk APIs enabled {trunk}"
+)]
+async fn combined_controller_admin_connection(
+    controller_admin: &mut ControllerAdminScenario,
+    trunk: bool,
+) {
+    let node = start_surface(trunk).await;
+    controller_admin.connection = Some(dial_controller(&node.broker).await);
+    controller_admin.node = Some(node);
+}
+#[rstest_bdd_macros::given(
+    "a controller-only node has an open plaintext controller connection and no registered data broker"
+)]
+async fn controller_only_admin_connection(controller_admin: &mut ControllerAdminScenario) {
+    let node = start_node(&[NodeRole::Controller], |_| {}).await;
+    controller_admin.connection = Some(dial_controller(&node.broker).await);
+    controller_admin.node = Some(node);
+}
+#[rstest_bdd_macros::when("the client requests ApiVersions from the controller listener")]
+async fn controller_api_versions(controller_admin: &mut ControllerAdminScenario) {
+    controller_admin.versions = Some(
+        controller_admin
+            .connection()
+            .send(api_versions_request())
+            .await
+            .expect("controller ApiVersions"),
     );
-    if trunk {
-        let entry = admin_range::<UnregisterControllerRequest>();
-        versions.insert(entry.key, entry.range);
+}
+#[rstest_bdd_macros::then(
+    "the controller advertises these exact Admin API version ranges and excludes DescribeClientQuotas"
+)]
+async fn controller_admin_version_ranges(
+    controller_admin: &mut ControllerAdminScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let mut selected = BTreeSet::new();
+    let mut expected = BTreeMap::new();
+    for cells in datatable.into_iter().skip(1) {
+        let key = cells[0].parse::<i16>().expect("API key");
+        selected.insert(key);
+        if cells[1] != "absent" {
+            expected.insert(key, VersionRange {
+                min: cells[1].parse().expect("minimum version"),
+                max: cells[2].parse().expect("maximum version"),
+            });
+        }
     }
-    versions
-}
-
-struct AdminVersionEntry {
-    key: i16,
-    range: VersionRange,
-}
-
-fn admin_range<R: ProtocolRequest>() -> AdminVersionEntry {
-    AdminVersionEntry {
-        key: R::API_KEY,
-        range: VersionRange {
-            min: R::MIN_VERSION,
-            max: R::MAX_VERSION,
-        },
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_api_versions_advertises_the_kafka_controller_admin_surface() {
-    for trunk in [false, true] {
-        let ControllerNode { broker, dir: _dir } = start_surface(trunk).await;
-        let response = advertised_controller_versions(&broker).await;
-
-        let expected = expected_admin_versions(true);
-        let advertised: BTreeMap<i16, VersionRange> = response
+    let response = controller_admin
+        .versions
+        .as_ref()
+        .expect("ApiVersions response");
+    let advertised = response
+        .api_keys
+        .iter()
+        .filter(|api| selected.contains(&api.api_key))
+        .map(|api| {
+            (api.api_key, VersionRange {
+                min: api.min_version,
+                max: api.max_version,
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    check!(advertised == expected);
+    check!(
+        !response
             .api_keys
             .iter()
-            .filter(|api| expected.contains_key(&api.api_key))
-            .map(|api| {
-                (api.api_key, VersionRange {
-                    min: api.min_version,
-                    max: api.max_version,
-                })
-            })
-            .collect();
-
-        check!(
-            advertised == expected_admin_versions(trunk),
-            "trunk {trunk}"
-        );
-        // Tagged `broker` only in Kafka, so a Kafka controller does not offer it.
-        check!(
-            !response
-                .api_keys
-                .iter()
-                .any(|api| api.api_key == describe_client_quotas_request::API_KEY),
-            "trunk {trunk}"
-        );
-        broker.shutdown().await;
-    }
+            .any(|api| api.api_key == describe_client_quotas_request::API_KEY)
+    );
+    controller_admin.shutdown().await;
 }
-
-/// The whole key set the controller listener advertises, measured against the
-/// Kafka oracle rather than against krabka's own tables.
-///
-/// [`controller_api_versions_advertises_the_kafka_controller_admin_surface`]
-/// only inspects the keys the Admin bridge routes, so it cannot see a key
-/// krabka offers that no Kafka controller does, or a key of Kafka's that the
-/// listener does not offer. This case pins both directions: the advertised set
-/// is exactly [`KAFKA_CONTROLLER_LISTENER_KEYS`].
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_advertises_no_key_kafka_does_not() {
-    for trunk in [false, true] {
-        let ControllerNode { broker, dir: _dir } = start_surface(trunk).await;
-        let response = advertised_controller_versions(&broker).await;
-
-        let advertised: BTreeSet<i16> = response.api_keys.iter().map(|api| api.api_key).collect();
-        let mut kafka: BTreeSet<i16> = KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
-        if trunk {
-            kafka.extend(KAFKA_TRUNK_CONTROLLER_LISTENER_KEYS);
-        }
-
-        check!(
-            advertised.difference(&kafka).copied().collect::<Vec<_>>() == Vec::<i16>::new(),
-            "trunk {trunk}"
-        );
-        check!(
-            kafka.difference(&advertised).copied().collect::<Vec<_>>() == Vec::<i16>::new(),
-            "trunk {trunk}"
-        );
-        broker.shutdown().await;
-    }
+#[rstest_bdd_macros::then("the complete controller API key set is {keys}")]
+async fn controller_listener_key_set(controller_admin: &mut ControllerAdminScenario, keys: String) {
+    let expected = keys
+        .split(',')
+        .map(|key| key.parse::<i16>().expect("API key"))
+        .collect::<BTreeSet<_>>();
+    let advertised = controller_admin
+        .versions
+        .as_ref()
+        .expect("ApiVersions response")
+        .api_keys
+        .iter()
+        .map(|api| api.api_key)
+        .collect::<BTreeSet<_>>();
+    check!(advertised.difference(&expected).next().is_none());
+    check!(expected.difference(&advertised).next().is_none());
+    controller_admin.shutdown().await;
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_topic_lifecycle() {
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-
-    let created = connection
+#[rstest_bdd_macros::when(
+    "the controller client creates one partition of controller-lifecycle at replication factor one"
+)]
+async fn create_controller_lifecycle_topic(controller_admin: &mut ControllerAdminScenario) {
+    let response = controller_admin
+        .connection()
         .send(create_topic_request(
-            creatable_topic()
-                .name(("controller-lifecycle").into())
-                .call(),
+            creatable_topic().name("controller-lifecycle".into()).call(),
         ))
         .await
-        .expect("CreateTopics over the controller listener");
-
+        .expect("controller CreateTopics");
+    controller_admin.topic_id = response
+        .topics
+        .first()
+        .map(|topic| topic.topic_id)
+        .unwrap_or_default();
+    controller_admin.created = Some(response);
+}
+#[rstest_bdd_macros::then(
+    "the complete create response has a nonzero topic UUID, one partition, replication factor one and nonempty effective configuration"
+)]
+fn controller_lifecycle_created(controller_admin: &ControllerAdminScenario) {
+    let created = controller_admin
+        .created
+        .as_ref()
+        .expect("CreateTopics response")
+        .clone();
     assert!(let [created_topic] = &created.topics[..]);
     // The topic id is minted per create, so the expectation borrows it back;
     // the check below pins it as non-nil, which is what the create promises.
@@ -406,22 +380,37 @@ async fn controller_listener_serves_the_topic_lifecycle() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
     );
-
-    let grown = connection
-        .send(CreatePartitionsRequest {
-            topics: vec![CreatePartitionsTopic {
-                name: "controller-lifecycle".into(),
-                count: 3,
-                // No manual assignment: Kafka's admin client sends null.
-                assignments: None,
+}
+#[rstest_bdd_macros::when(
+    "the controller client grows controller-lifecycle to three partitions with no manual assignments"
+)]
+async fn grow_controller_lifecycle_topic(controller_admin: &mut ControllerAdminScenario) {
+    controller_admin.grown = Some(
+        controller_admin
+            .connection()
+            .send(CreatePartitionsRequest {
+                topics: vec![CreatePartitionsTopic {
+                    name: "controller-lifecycle".into(),
+                    count: 3,
+                    assignments: None,
+                    ..Default::default()
+                }],
+                timeout_ms: 5000,
                 ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreatePartitions over the controller listener");
-
+            })
+            .await
+            .expect("controller CreatePartitions"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete CreatePartitions response contains controller-lifecycle with success code zero"
+)]
+fn controller_lifecycle_grown(controller_admin: &ControllerAdminScenario) {
+    let grown = controller_admin
+        .grown
+        .as_ref()
+        .expect("CreatePartitions response")
+        .clone();
     check!(
         grown
             == CreatePartitionsResponse {
@@ -435,27 +424,40 @@ async fn controller_listener_serves_the_topic_lifecycle() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
     );
-
-    let deleted = connection
-        .send(DeleteTopicsRequest {
-            topics: vec![DeleteTopicState {
-                name: Some("controller-lifecycle".into()),
+}
+#[rstest_bdd_macros::when("the controller client deletes controller-lifecycle by name")]
+async fn delete_controller_lifecycle_topic(controller_admin: &mut ControllerAdminScenario) {
+    controller_admin.deleted = Some(
+        controller_admin
+            .connection()
+            .send(DeleteTopicsRequest {
+                topics: vec![DeleteTopicState {
+                    name: Some("controller-lifecycle".into()),
+                    ..Default::default()
+                }],
+                timeout_ms: 5000,
                 ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("DeleteTopics over the controller listener");
-    connection.close();
-
+            })
+            .await
+            .expect("controller DeleteTopics"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete DeleteTopics response succeeds and carries the UUID minted by CreateTopics"
+)]
+async fn controller_lifecycle_deleted(controller_admin: &mut ControllerAdminScenario) {
+    let deleted = controller_admin
+        .deleted
+        .as_ref()
+        .expect("DeleteTopics response")
+        .clone();
     let expected_delete = DeleteTopicsResponse {
         throttle_time_ms: 0,
         responses: vec![DeletableTopicResult {
             name: Some("controller-lifecycle".into()),
             // A deleted topic's row carries its topic id, as Kafka's
             // `ControllerApis.deleteTopics` answers it (#634).
-            topic_id: created_topic.topic_id,
+            topic_id: controller_admin.topic_id,
             error_code: 0,
             error_message: None,
             unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -463,17 +465,13 @@ async fn controller_listener_serves_the_topic_lifecycle() {
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     check!(deleted == expected_delete);
-    broker.shutdown().await;
+    controller_admin.shutdown().await;
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_writing_delegation_token_apis() {
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-
-    // The controller listener in `for_tests` is PLAINTEXT and the requests are
-    // not forwarded, so Kafka's `ControllerApis.allowTokenRequests` refuses each
-    // RPC before it looks at the token or the secret key.
+#[rstest_bdd_macros::when(
+    "the anonymous plaintext client creates a token with lifetime -1, renews HMAC not-a-token for -1ms and expires it after -1ms"
+)]
+async fn controller_plaintext_token_requests(controller_admin: &mut ControllerAdminScenario) {
+    let connection = controller_admin.connection();
     let created = connection
         .send(CreateDelegationTokenRequest {
             max_lifetime_ms: -1,
@@ -497,8 +495,29 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
         })
         .await
         .expect("ExpireDelegationToken over the controller listener");
-    connection.close();
-
+    controller_admin.minted = Some(created);
+    controller_admin.renewed = Some(renewed);
+    controller_admin.expired = Some(expired);
+}
+#[rstest_bdd_macros::then(
+    "all three complete token responses refuse with code 64, timestamps -1 and anonymous owner and requester"
+)]
+async fn controller_plaintext_token_responses(controller_admin: &mut ControllerAdminScenario) {
+    let created = controller_admin
+        .minted
+        .as_ref()
+        .expect("mint response")
+        .clone();
+    let renewed = controller_admin
+        .renewed
+        .as_ref()
+        .expect("renew response")
+        .clone();
+    let expired = controller_admin
+        .expired
+        .as_ref()
+        .expect("expire response")
+        .clone();
     check!(
         created
             == CreateDelegationTokenResponse {
@@ -529,17 +548,13 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
                 ..Default::default()
             }
     );
-    broker.shutdown().await;
+    controller_admin.shutdown().await;
 }
-
-/// `kafka-configs --bootstrap-controller --entity-type users --alter` is the
-/// KIP-919 flow this covers: the SCRAM write lands through the controller
-/// listener and the matching read on the same connection sees it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_scram_write_path() {
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-
+#[rstest_bdd_macros::when(
+    "the controller client stores alice's SCRAM-SHA-256 credential at 8192 iterations with salt-bytes and salted-password-bytes"
+)]
+async fn controller_scram_upsert(controller_admin: &mut ControllerAdminScenario) {
+    let connection = controller_admin.connection();
     let altered = connection
         .send(AlterUserScramCredentialsRequest {
             upsertions: vec![
@@ -555,6 +570,17 @@ async fn controller_listener_serves_the_scram_write_path() {
         .await
         .expect("AlterUserScramCredentials over the controller listener");
 
+    controller_admin.scram_altered = Some(altered);
+}
+#[rstest_bdd_macros::then(
+    "the complete SCRAM alteration response contains only alice with success code zero"
+)]
+fn controller_scram_upsert_response(controller_admin: &ControllerAdminScenario) {
+    let altered = controller_admin
+        .scram_altered
+        .as_ref()
+        .expect("SCRAM alteration response")
+        .clone();
     check!(
         altered
             == AlterUserScramCredentialsResponse {
@@ -568,7 +594,10 @@ async fn controller_listener_serves_the_scram_write_path() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
     );
-
+}
+#[rstest_bdd_macros::when("the same controller connection describes alice's SCRAM credentials")]
+async fn controller_scram_read(controller_admin: &mut ControllerAdminScenario) {
+    let connection = controller_admin.connection();
     let described = connection
         .send(DescribeUserScramCredentialsRequest {
             users: Some(vec![UserName {
@@ -579,64 +608,52 @@ async fn controller_listener_serves_the_scram_write_path() {
         })
         .await
         .expect("DescribeUserScramCredentials over the controller listener");
-    connection.close();
-
-    check!(described == alice_scram_credentials());
-    broker.shutdown().await;
+    controller_admin.scram_described = Some(described);
 }
-
-/// Independent expected stored SCRAM response, including each empty tag collection.
-fn alice_scram_credentials() -> DescribeUserScramCredentialsResponse {
-    DescribeUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        error_code: 0,
-        error_message: None,
-        results: vec![DescribeUserScramCredentialsResult {
-            user: "alice".into(),
-            error_code: 0,
-            error_message: None,
-            credential_infos: vec![CredentialInfo {
-                mechanism: SCRAM_SHA_256,
-                iterations: 8_192,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+#[rstest_bdd_macros::then(
+    "the complete credential description reports alice with SCRAM-SHA-256 and 8192 iterations"
+)]
+async fn controller_scram_read_response(controller_admin: &mut ControllerAdminScenario) {
+    check!(
+        controller_admin
+            .scram_described
+            .as_ref()
+            .expect("SCRAM description")
+            == &alice_scram_credentials()
+    );
+    controller_admin.shutdown().await;
 }
-
-/// `AssignReplicasToDirs` is a context dispatch, so it also covers the
-/// bridge's `ClusterAction`-authorized inter-broker arm; the default
-/// `AllowAllAuthorizer` admits the connection's `ANONYMOUS` principal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_assign_replicas_to_dirs() {
-    const LOG_DIR_ID: WireUuid = WireUuid([7; 16]);
-
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-    let broker_epoch = broker
-        .controller_image_for_test()
-        .broker(NodeId(1))
-        .expect("registered broker")
-        .broker_epoch;
-
-    let created = connection
+#[rstest_bdd_macros::given(
+    "broker 1 is registered and topic controller-dirs has one partition with its captured topic UUID"
+)]
+async fn controller_directory_assignment_topic(controller_admin: &mut ControllerAdminScenario) {
+    let created = controller_admin
+        .connection()
         .send(create_topic_request(
-            creatable_topic().name(("controller-dirs").into()).call(),
+            creatable_topic().name("controller-dirs".into()).call(),
         ))
         .await
-        .expect("CreateTopics over the controller listener");
-    assert!(let [created_topic] = &created.topics[..]);
-    let topic_id = created_topic.topic_id;
-
-    let req = AssignReplicasToDirsRequest {
+        .expect("create directory assignment topic");
+    assert!(let [topic] = created.topics.as_slice());
+    controller_admin.topic_id = topic.topic_id;
+}
+#[rstest_bdd_macros::when(
+    "broker 1 assigns controller-dirs partition 0 to directory UUID 07070707070707070707070707070707 at its registered epoch"
+)]
+async fn controller_assign_directory(controller_admin: &mut ControllerAdminScenario) {
+    let epoch = controller_admin
+        .broker()
+        .controller_image_for_test()
+        .broker(NodeId(1))
+        .expect("broker 1 registered")
+        .broker_epoch;
+    let request = AssignReplicasToDirsRequest {
         broker_id: 1,
-        broker_epoch,
+        broker_epoch: epoch,
         directories: vec![DirectoryData {
-            id: LOG_DIR_ID,
+            id: WireUuid([7; 16]),
             topics: vec![TopicData {
-                topic_id,
+                topic_id: controller_admin.topic_id,
                 partitions: vec![PartitionData {
                     partition_index: 0,
                     ..Default::default()
@@ -647,12 +664,25 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
         }],
         ..Default::default()
     };
-    let assigned = connection
-        .send(req)
-        .await
-        .expect("AssignReplicasToDirs over the controller listener");
-    connection.close();
-
+    controller_admin.assigned = Some(
+        controller_admin
+            .connection()
+            .send(request)
+            .await
+            .expect("controller directory assignment"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete directory assignment response echoes directory 07070707070707070707070707070707, topic UUID and partition 0 with success at both levels"
+)]
+async fn controller_directory_assignment_response(controller_admin: &mut ControllerAdminScenario) {
+    const LOG_DIR_ID: WireUuid = WireUuid([7; 16]);
+    let topic_id = controller_admin.topic_id;
+    let assigned = controller_admin
+        .assigned
+        .as_ref()
+        .expect("directory assignment response")
+        .clone();
     check!(
         assigned
             == AssignReplicasToDirsResponse {
@@ -674,24 +704,19 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
     );
-    broker.shutdown().await;
+    controller_admin.shutdown().await;
 }
-
-/// Kafka trunk's `UnregisterController` (94) over the controller listener: a
-/// registered controller id is dropped from the image, and an unknown one is
-/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
-/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
-/// same listener. Both are trunk's, so the node runs with Kafka's two
-/// `unstable.*.enable` settings on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_unregister_controller() {
-    let ControllerNode { broker, dir: _dir } = start_trunk_broker().await;
-    broker
+#[rstest_bdd_macros::given(
+    "controller 7 is registered and metadata.version is upgraded to controller unregistration level 33"
+)]
+async fn controller_unregistration_level(controller_admin: &mut ControllerAdminScenario) {
+    controller_admin
+        .broker()
         .submit_metadata_record_for_test(controller_registration(NodeId(7)))
         .await
-        .expect("seed the registration");
-    let connection = dial_controller(&broker).await;
-    let upgraded = connection
+        .expect("controller registration");
+    let upgraded = controller_admin
+        .connection()
         .send(UpdateFeaturesRequest {
             feature_updates: vec![feature_update(
                 "metadata.version",
@@ -701,64 +726,69 @@ async fn controller_listener_serves_unregister_controller() {
             ..Default::default()
         })
         .await
-        .expect("UpdateFeatures over the controller listener");
+        .expect("controller feature upgrade");
     check!(upgraded.error_code == 0, "{upgraded:?}");
-
-    let mut answers = Vec::new();
+}
+#[rstest_bdd_macros::when(
+    "the controller client unregisters controller 7 and then unknown controller 9"
+)]
+async fn controller_unregister_requests(controller_admin: &mut ControllerAdminScenario) {
     for controller_id in [7, 9] {
-        answers.push(
-            connection
-                .send(UnregisterControllerRequest {
-                    controller_id,
-                    ..Default::default()
-                })
-                .await
-                .expect("UnregisterController over the controller listener"),
-        );
+        let answer = controller_admin
+            .connection()
+            .send(UnregisterControllerRequest {
+                controller_id,
+                ..Default::default()
+            })
+            .await
+            .expect("unregister controller");
+        controller_admin.unregistered.push(answer);
     }
-    connection.close();
-
+}
+#[rstest_bdd_macros::then(
+    "the complete unregister responses are success followed by CONTROLLER_ID_NOT_REGISTERED for 9 and controller 7 is absent"
+)]
+async fn controller_unregister_responses(controller_admin: &mut ControllerAdminScenario) {
     check!(
-        answers
+        controller_admin.unregistered
             == admin::unregister_controller_answers()
                 .controller_id(9)
                 .call()
     );
     check!(
-        broker
+        controller_admin
+            .broker()
             .controller_image_for_test()
             .controller(NodeId(7))
             .is_none()
     );
-    broker.shutdown().await;
+    controller_admin.shutdown().await;
 }
-
-/// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
-/// listener, so a controller-only node answers both -- and it hosts no
-/// replicas. `process.roles` without `broker` means `register_broker` skips it,
-/// so its image holds no broker at all, and placement has nowhere to put a
-/// replica.
-///
-/// Kafka answers that with `INVALID_REPLICATION_FACTOR`: its
-/// `StripedReplicaPlacer` finds no unfenced broker before it counts the
-/// registered ones. Substituting the local node instead would create a topic
-/// whose only replica lives on a node that serves no partition, leaving
-/// metadata nothing can ever serve.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_only_node_places_no_replica_on_itself() {
-    let ControllerNode { broker, dir: _dir } = start_node(&[NodeRole::Controller], |_| {}).await;
-    let connection = dial_controller(&broker).await;
-
-    let created = connection
-        .send(create_topic_request(
-            creatable_topic()
-                .name(("controller-only-placement").into())
-                .call(),
-        ))
-        .await
-        .expect("CreateTopics over a controller-only listener");
-    connection.close();
-
+#[rstest_bdd_macros::when(
+    "the controller-only client creates controller-only-placement with one partition and replication factor one"
+)]
+async fn controller_only_topic_creation(controller_admin: &mut ControllerAdminScenario) {
+    controller_admin.created = Some(
+        controller_admin
+            .connection()
+            .send(create_topic_request(
+                creatable_topic()
+                    .name("controller-only-placement".into())
+                    .call(),
+            ))
+            .await
+            .expect("controller-only CreateTopics"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete create response refuses placement with INVALID_REPLICATION_FACTOR code 38, no topic UUID and empty configs"
+)]
+async fn controller_only_placement_response(controller_admin: &mut ControllerAdminScenario) {
+    let created = controller_admin
+        .created
+        .as_ref()
+        .expect("controller-only creation response")
+        .clone();
     check!(
         created
             == CreateTopicsResponse {
@@ -783,45 +813,413 @@ async fn controller_only_node_places_no_replica_on_itself() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
     );
-    broker.shutdown().await;
+    controller_admin.shutdown().await;
+}
+#[rstest_bdd_macros::when(
+    "Kafka brokers send these ordered registrations and heartbeat accepted incarnation a after each registration"
+)]
+async fn controller_broker_registrations(
+    controller_admin: &mut ControllerAdminScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    for cells in datatable.into_iter().skip(1) {
+        let registration = Registration {
+            broker_id: cells[0].parse().expect("broker ID"),
+            incarnation: u128::from_str_radix(&cells[1], 16).expect("incarnation UUID"),
+            port: cells[2].parse().expect("broker port"),
+            log_dirs: cells[3]
+                .split(',')
+                .filter(|id| *id != "none")
+                .map(|id| id.parse().expect("directory UUID"))
+                .collect(),
+            with_metadata_version: cells[4].parse().expect("metadata.version support"),
+        };
+        let wait: u64 = cells[5].parse().expect("delay before registration");
+        if wait > 0 {
+            time::sleep(Duration::from_millis(wait)).await;
+        }
+        let request = {
+            let image = controller_admin.broker().controller_image_for_test();
+            registration.request(&image)
+        };
+        let answer = controller_admin
+            .connection()
+            .send(request)
+            .await
+            .expect("controller BrokerRegistration");
+        let node = NodeId(u64::try_from(registration.broker_id).expect("positive broker ID"));
+        let epoch = match answer.broker_epoch {
+            -1 => EpochAnswer::Refused,
+            epoch if node == NodeId(7) && epoch == controller_admin.epoch_of_7 => EpochAnswer::Kept,
+            _ => EpochAnswer::New,
+        };
+        let registered = if answer.error_code == 0 {
+            controller_admin
+                .broker()
+                .wait_for_image(|image| {
+                    image
+                        .broker(node)
+                        .is_some_and(|registered| registered.broker_epoch == answer.broker_epoch)
+                })
+                .await;
+            controller_admin
+                .broker()
+                .controller_image_for_test()
+                .broker(node)
+                .map(|registered| RegisteredBroker {
+                    port: registered.port,
+                    fenced: registered.fenced,
+                })
+        } else {
+            None
+        };
+        controller_admin.registration_outcomes.push(Outcome {
+            error_code: answer.error_code,
+            epoch,
+            registered,
+        });
+        if answer.error_code != 0 || node != NodeId(7) {
+            continue;
+        }
+        controller_admin.epoch_of_7 = answer.broker_epoch;
+        if registration.incarnation == 0xa {
+            let heartbeat = controller_admin
+                .connection()
+                .send(BrokerHeartbeatRequest {
+                    broker_id: 7,
+                    broker_epoch: answer.broker_epoch,
+                    current_metadata_offset: answer.broker_epoch,
+                    ..Default::default()
+                })
+                .await
+                .expect("controller BrokerHeartbeat");
+            controller_admin.registration_heartbeats.push(heartbeat);
+        }
+    }
+}
+#[rstest_bdd_macros::then(
+    "the complete registration outcomes match these epoch relations and stored broker states, and both incarnation-a heartbeats succeed"
+)]
+async fn controller_broker_registration_outcomes(
+    controller_admin: &mut ControllerAdminScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let expected = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            let code: i16 = cells[0].parse().expect("registration error");
+            if code != 0 {
+                return refused(code);
+            }
+            accepted(
+                match cells[1].as_str() {
+                    "new" => EpochAnswer::New,
+                    "kept" => EpochAnswer::Kept,
+                    other => panic!("unknown epoch relation {other}"),
+                },
+                cells[2].parse().expect("stored broker port"),
+                cells[3].parse().expect("stored fence"),
+            )
+        })
+        .collect::<Vec<_>>();
+    check!(controller_admin.registration_outcomes == expected);
+    assert!(controller_admin.registration_heartbeats.len() == 2);
+    for heartbeat in &controller_admin.registration_heartbeats {
+        assert!(heartbeat.error_code == 0, "{heartbeat:?}");
+    }
+    controller_admin.shutdown().await;
+}
+#[rstest_bdd_macros::when(
+    "broker 1 sends AlterPartition for unknown topic UUID 07070707070707070707070707070707 partition 0, broker 99 allocates producer IDs, and the plaintext connection attempts PLAIN SASL authentication"
+)]
+async fn controller_interbroker_requests(controller_admin: &mut ControllerAdminScenario) {
+    let unknown_topic = WireUuid([7; 16]);
+    controller_admin
+        .broker()
+        .wait_until_brokers_registered(1)
+        .await;
+    let broker_epoch = controller_admin
+        .broker()
+        .controller_image_for_test()
+        .broker_epoch(krabka_metadata::NodeId(1))
+        .expect("broker 1 registered");
+    controller_admin.alter_partition = Some(
+        controller_admin
+            .connection()
+            .send(AlterPartitionRequest {
+                broker_id: 1,
+                broker_epoch,
+                topics: vec![AlterPartitionTopicData {
+                    topic_id: unknown_topic,
+                    partitions: vec![AlterPartitionPartitionData {
+                        partition_index: 0,
+                        leader_epoch: 0,
+                        new_isr_with_epochs: vec![BrokerState {
+                            broker_id: 1,
+                            broker_epoch: -1,
+                            ..Default::default()
+                        }],
+                        partition_epoch: 0,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .expect("controller AlterPartition"),
+    );
+    controller_admin.allocated = Some(
+        controller_admin
+            .connection()
+            .send(AllocateProducerIdsRequest {
+                broker_id: 99,
+                broker_epoch: 0,
+                ..Default::default()
+            })
+            .await
+            .expect("controller AllocateProducerIds"),
+    );
+    controller_admin.handshake = Some(
+        controller_admin
+            .connection()
+            .send(SaslHandshakeRequest {
+                mechanism: "PLAIN".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("controller SaslHandshake"),
+    );
+    controller_admin.authenticate = Some(
+        controller_admin
+            .connection()
+            .send(SaslAuthenticateRequest {
+                auth_bytes: Bytes::from_static(b"\0broker\0secret"),
+                ..Default::default()
+            })
+            .await
+            .expect("controller SaslAuthenticate"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the full inter-broker responses report UNKNOWN_TOPIC_ID 100 and STALE_BROKER_EPOCH 77, and both SASL responses report ILLEGAL_SASL_STATE 34"
+)]
+async fn controller_interbroker_responses(controller_admin: &mut ControllerAdminScenario) {
+    let unknown_topic = WireUuid([7; 16]);
+    let alter_partition = controller_admin
+        .alter_partition
+        .as_ref()
+        .expect("AlterPartition response")
+        .clone();
+    let allocate = controller_admin
+        .allocated
+        .as_ref()
+        .expect("AllocateProducerIds response")
+        .clone();
+    let handshake = controller_admin
+        .handshake
+        .as_ref()
+        .expect("SaslHandshake response")
+        .clone();
+    let authenticate = controller_admin
+        .authenticate
+        .as_ref()
+        .expect("SaslAuthenticate response")
+        .clone();
+    check!(
+        alter_partition
+            == AlterPartitionResponse {
+                topics: vec![AlterPartitionResultTopic {
+                    topic_id: unknown_topic,
+                    partitions: vec![AlterPartitionResultPartition {
+                        partition_index: 0,
+                        error_code: UNKNOWN_TOPIC_ID,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+    check!(
+        allocate
+            == AllocateProducerIdsResponse {
+                error_code: STALE_BROKER_EPOCH,
+                producer_id_start: -1,
+                producer_id_len: 0,
+                ..Default::default()
+            }
+    );
+    check!(
+        handshake
+            == SaslHandshakeResponse {
+                error_code: ILLEGAL_SASL_STATE,
+                ..Default::default()
+            }
+    );
+    check!(
+        authenticate
+            == SaslAuthenticateResponse {
+                error_code: ILLEGAL_SASL_STATE,
+                error_message: Some(
+                    "SaslAuthenticate request received after successful authentication".into()
+                ),
+                ..Default::default()
+            }
+    );
+    controller_admin.shutdown().await;
 }
 
-/// Kafka's `DUPLICATE_BROKER_REGISTRATION`.
-const DUPLICATE_BROKER_REGISTRATION: i16 = 101;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Released controller Admin version ranges match Kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_api_versions_advertises_the_kafka_controller_admin_surface(
+    controller_admin: ControllerAdminScenario,
+) {
+}
 
-/// Kafka's `INVALID_REGISTRATION`.
-const INVALID_REGISTRATION: i16 = 119;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Released controller listener advertises exactly Kafka controller keys"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_advertises_no_key_kafka_does_not(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Trunk controller Admin version ranges match Kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_api_versions_advertises_the_kafka_controller_admin_surface_trunk(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Trunk controller listener advertises exactly Kafka controller keys"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_advertises_no_key_kafka_does_not_trunk(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "The controller listener serves the complete topic lifecycle"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_topic_lifecycle(controller_admin: ControllerAdminScenario) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Anonymous plaintext controller token writes are refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_writing_delegation_token_apis(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "SCRAM credentials written through the controller listener can be described on the same connection"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_scram_write_path(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Replica directory assignment is served by the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_assign_replicas_to_dirs(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Trunk controller unregistration removes registered controllers and names unknown IDs"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_unregister_controller(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Controller-only nodes never host topic replicas"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_only_node_places_no_replica_on_itself(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Broker registration preserves incarnations and validates feature and directory ownership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_registers_a_restarted_broker_as_kafka_does(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/admin_surface.feature",
+    name = "Controller listener serves inter-broker RPCs and refuses SASL after plaintext authentication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_inter_broker_and_sasl_apis(
+    controller_admin: ControllerAdminScenario,
+) {
+}
+
+/// Independent expected stored SCRAM response, including each empty tag collection.
+fn alice_scram_credentials() -> DescribeUserScramCredentialsResponse {
+    DescribeUserScramCredentialsResponse {
+        throttle_time_ms: 0,
+        error_code: 0,
+        error_message: None,
+        results: vec![DescribeUserScramCredentialsResult {
+            user: "alice".into(),
+            error_code: 0,
+            error_message: None,
+            credential_infos: vec![CredentialInfo {
+                mechanism: SCRAM_SHA_256,
+                iterations: 8_192,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    }
+}
 
 /// One `BrokerRegistration` a Kafka broker sends over the controller listener.
 struct Registration {
     broker_id: i32,
     incarnation: u128,
     port: u16,
-    log_dirs: &'static [u128],
+    log_dirs: Vec<u128>,
     with_metadata_version: bool,
 }
 
 impl Registration {
-    const fn broker_7(incarnation: u128, port: u16) -> Self {
-        Self {
-            broker_id: 7,
-            incarnation,
-            port,
-            log_dirs: &[7000],
-            with_metadata_version: true,
-        }
-    }
-
-    const fn broker_8() -> Self {
-        Self {
-            broker_id: 8,
-            incarnation: 0x8a,
-            port: 19_100,
-            log_dirs: &[8000],
-            with_metadata_version: true,
-        }
-    }
-
     fn request(&self, image: &krabka_metadata::MetadataImage) -> BrokerRegistrationRequest {
         BrokerRegistrationRequest {
             broker_id: self.broker_id,
@@ -904,161 +1302,6 @@ const fn accepted(epoch: EpochAnswer, port: u16, fenced: bool) -> Outcome {
     }
 }
 
-/// One registration step of
-/// [`controller_listener_registers_a_restarted_broker_as_kafka_does`]: what it
-/// does, the registration it sends, how long to wait first, and the outcome
-/// Kafka gives it.
-struct Step {
-    what: &'static str,
-    registration: Registration,
-    wait: Option<Duration>,
-    expected: Outcome,
-}
-
-/// krabka-io/krabka-broker#822: a Kafka broker that restarts rejoins over the
-/// controller listener.
-///
-/// A Kafka broker picks a new incarnation id in every process. Kafka's
-/// `ClusterControlManager.registerBroker` refuses that id with
-/// `DUPLICATE_BROKER_REGISTRATION` only while the previous incarnation still
-/// holds a heartbeat session, and registers it with a new broker epoch once
-/// the session expires. A new registration is fenced (`RegisterBrokerRecord`
-/// defaults `Fenced` to true). It rewrites the record for the same incarnation
-/// and keeps the epoch and the fence, and it validates `metadata.version` and
-/// the log directories. Each step runs against the image the steps before it left.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
-    let steps = vec![
-        Step {
-            what: "a first registration",
-            registration: Registration::broker_7(0xa, 19_092),
-            wait: None,
-            expected: accepted(EpochAnswer::New, 19_092, true),
-        },
-        Step {
-            what: "the same incarnation again, on a new port, after it unfenced",
-            registration: Registration::broker_7(0xa, 19_093),
-            wait: None,
-            expected: accepted(EpochAnswer::Kept, 19_093, false),
-        },
-        Step {
-            what: "a new incarnation while the previous one heartbeats",
-            registration: Registration::broker_7(0xb, 19_094),
-            wait: None,
-            expected: refused(DUPLICATE_BROKER_REGISTRATION),
-        },
-        Step {
-            what: "the new incarnation once the session expired",
-            registration: Registration::broker_7(0xb, 19_094),
-            // Longer than the two-second `heartbeat_timeout` of the test
-            // configuration.
-            wait: Some(Duration::from_millis(2_500)),
-            expected: accepted(EpochAnswer::New, 19_094, true),
-        },
-        Step {
-            what: "no metadata.version feature",
-            registration: Registration {
-                with_metadata_version: false,
-                ..Registration::broker_8()
-            },
-            wait: None,
-            expected: refused(INVALID_REGISTRATION),
-        },
-        Step {
-            what: "no log directory",
-            registration: Registration {
-                log_dirs: &[],
-                ..Registration::broker_8()
-            },
-            wait: None,
-            expected: refused(INVALID_REGISTRATION),
-        },
-        Step {
-            what: "a log directory broker 7 registered",
-            registration: Registration {
-                log_dirs: &[8000, 7000],
-                ..Registration::broker_8()
-            },
-            wait: None,
-            expected: refused(INVALID_REGISTRATION),
-        },
-    ];
-
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-    let mut epoch_of_7 = -1;
-    let mut expected = Vec::new();
-    let mut outcomes = Vec::new();
-    for Step {
-        what,
-        registration,
-        wait,
-        expected: outcome,
-    } in steps
-    {
-        expected.push((what, outcome));
-        if let Some(wait) = wait {
-            time::sleep(wait).await;
-        }
-        let image = broker.controller_image_for_test();
-        let answer = connection
-            .send(registration.request(&image))
-            .await
-            .expect("BrokerRegistration over the controller listener");
-        let node = NodeId(u64::try_from(registration.broker_id).expect("a broker id"));
-        let epoch = match answer.broker_epoch {
-            -1 => EpochAnswer::Refused,
-            epoch if node == NodeId(7) && epoch == epoch_of_7 => EpochAnswer::Kept,
-            _ => EpochAnswer::New,
-        };
-        let registered = if answer.error_code == 0 {
-            broker
-                .wait_for_image(|image| {
-                    image
-                        .broker(node)
-                        .is_some_and(|registered| registered.broker_epoch == answer.broker_epoch)
-                })
-                .await;
-            broker
-                .controller_image_for_test()
-                .broker(node)
-                .map(|registered| RegisteredBroker {
-                    port: registered.port,
-                    fenced: registered.fenced,
-                })
-        } else {
-            None
-        };
-        outcomes.push((what, Outcome {
-            error_code: answer.error_code,
-            epoch,
-            registered,
-        }));
-        if answer.error_code != 0 || node != NodeId(7) {
-            continue;
-        }
-        epoch_of_7 = answer.broker_epoch;
-        if registration.incarnation == 0xa {
-            // The first incarnation heartbeats, so it holds a session, and it
-            // has caught up to its registration, so it unfences.
-            let heartbeat = connection
-                .send(BrokerHeartbeatRequest {
-                    broker_id: 7,
-                    broker_epoch: answer.broker_epoch,
-                    current_metadata_offset: answer.broker_epoch,
-                    ..Default::default()
-                })
-                .await
-                .expect("BrokerHeartbeat over the controller listener");
-            assert!(heartbeat.error_code == 0, "{what}: {heartbeat:?}");
-        }
-    }
-    connection.close();
-    broker.shutdown().await;
-
-    check!(outcomes == expected);
-}
-
 /// Kafka's `UNKNOWN_TOPIC_ID`.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
@@ -1069,117 +1312,6 @@ const STALE_BROKER_EPOCH: i16 = 77;
 /// Kafka's `ILLEGAL_SASL_STATE`.
 const ILLEGAL_SASL_STATE: i16 = 34;
 
-/// A Kafka broker sends `AlterPartition` and `AllocateProducerIds` to the
-/// active controller over its controller listener, and `ControllerApis`
-/// answers `SaslHandshake` and `SaslAuthenticate` there with
-/// `ILLEGAL_SASL_STATE`. `Connection::send` negotiates each one off this
-/// listener's `ApiVersions` table, so an unadvertised key fails before it is
-/// sent. The requests go to the highest version both sides speak:
-/// `AlterPartition` v3, `AllocateProducerIds` v0, `SaslHandshake` v1 and
-/// `SaslAuthenticate` v2.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_inter_broker_and_sasl_apis() {
-    let ControllerNode { broker, dir: _dir } = start_broker().await;
-    let connection = dial_controller(&broker).await;
-    let unknown_topic = WireUuid([7; 16]);
-    // The controller checks the sender's broker epoch before any row, as
-    // Kafka's `checkBrokerEpoch` does, so the request carries the real one.
-    broker.wait_until_brokers_registered(1).await;
-    let broker_epoch = broker
-        .controller_image_for_test()
-        .broker_epoch(krabka_metadata::NodeId(1))
-        .expect("broker 1 registered");
+// BDD scenario entry points; acceptance steps are defined above.
 
-    let alter_partition = connection
-        .send(AlterPartitionRequest {
-            broker_id: 1,
-            broker_epoch,
-            topics: vec![AlterPartitionTopicData {
-                topic_id: unknown_topic,
-                partitions: vec![AlterPartitionPartitionData {
-                    partition_index: 0,
-                    leader_epoch: 0,
-                    new_isr_with_epochs: vec![BrokerState {
-                        broker_id: 1,
-                        broker_epoch: -1,
-                        ..Default::default()
-                    }],
-                    partition_epoch: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("AlterPartition over the controller listener");
-    check!(
-        alter_partition
-            == AlterPartitionResponse {
-                topics: vec![AlterPartitionResultTopic {
-                    topic_id: unknown_topic,
-                    partitions: vec![AlterPartitionResultPartition {
-                        partition_index: 0,
-                        error_code: UNKNOWN_TOPIC_ID,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }
-    );
-
-    let allocate = connection
-        .send(AllocateProducerIdsRequest {
-            broker_id: 99,
-            broker_epoch: 0,
-            ..Default::default()
-        })
-        .await
-        .expect("AllocateProducerIds over the controller listener");
-    check!(
-        allocate
-            == AllocateProducerIdsResponse {
-                error_code: STALE_BROKER_EPOCH,
-                producer_id_start: -1,
-                producer_id_len: 0,
-                ..Default::default()
-            }
-    );
-
-    let handshake = connection
-        .send(SaslHandshakeRequest {
-            mechanism: "PLAIN".into(),
-            ..Default::default()
-        })
-        .await
-        .expect("SaslHandshake over the controller listener");
-    check!(
-        handshake
-            == SaslHandshakeResponse {
-                error_code: ILLEGAL_SASL_STATE,
-                ..Default::default()
-            }
-    );
-
-    let authenticate = connection
-        .send(SaslAuthenticateRequest {
-            auth_bytes: Bytes::from_static(b"\0broker\0secret"),
-            ..Default::default()
-        })
-        .await
-        .expect("SaslAuthenticate over the controller listener");
-    check!(
-        authenticate
-            == SaslAuthenticateResponse {
-                error_code: ILLEGAL_SASL_STATE,
-                error_message: Some(
-                    "SaslAuthenticate request received after successful authentication".into()
-                ),
-                ..Default::default()
-            }
-    );
-
-    connection.close();
-    broker.shutdown().await;
-}
+use krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse;

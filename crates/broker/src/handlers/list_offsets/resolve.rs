@@ -1249,45 +1249,57 @@ mod tests {
         assert!(actual == expected);
     }
 
-    #[test]
-    fn a_raised_lagging_high_watermark_error_fences_what_kafka_fences() {
-        const LAST_FETCHABLE: i64 = 3;
-        // (kind, candidate offset, fenced)
-        let cases = [
-            (ListOffsetsKind::Latest, 7, true),
-            (ListOffsetsKind::Latest, 0, true),
-            (ListOffsetsKind::Earliest, 0, false),
-            (ListOffsetsKind::EarliestLocal, 0, false),
-            (ListOffsetsKind::Timestamp, 2, false),
-            (ListOffsetsKind::Timestamp, LAST_FETCHABLE, true),
-            (ListOffsetsKind::Timestamp, 5, true),
-            (ListOffsetsKind::Timestamp, UNKNOWN_OFFSET, true),
-            (ListOffsetsKind::MaxTimestamp, 2, false),
-            (ListOffsetsKind::MaxTimestamp, LAST_FETCHABLE, true),
-            (ListOffsetsKind::MaxTimestamp, UNKNOWN_OFFSET, true),
-            (ListOffsetsKind::LatestTiered, 2, false),
-            (ListOffsetsKind::LatestTiered, LAST_FETCHABLE, true),
-            (ListOffsetsKind::LatestTiered, UNKNOWN_OFFSET, false),
-            (ListOffsetsKind::EarliestPendingUpload, 2, false),
-            (ListOffsetsKind::EarliestPendingUpload, 4, true),
-            (
-                ListOffsetsKind::EarliestPendingUpload,
-                UNKNOWN_OFFSET,
-                false,
-            ),
-        ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (kind, candidate, fenced) in cases {
-            actual.push((
-                kind,
-                candidate,
-                lagging_high_watermark_fences(kind, candidate, LAST_FETCHABLE),
-            ));
-            expected.push((kind, candidate, fenced));
-        }
-        assert!(actual == expected);
+    #[derive(Default)]
+    struct LaggingWatermarkScenario {
+        kind: Option<ListOffsetsKind>,
+        candidate: i64,
+        bound: i64,
+        fenced: Option<bool>,
     }
+    #[rstest::fixture]
+    fn lagging_watermark() -> LaggingWatermarkScenario {
+        let kind = None;
+        LaggingWatermarkScenario {
+            kind,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a lagging high watermark bounds {kind} offset candidate {candidate} before offset 3"
+    )]
+    fn watermark_candidate(
+        lagging_watermark: &mut LaggingWatermarkScenario,
+        kind: String,
+        candidate: i64,
+    ) {
+        lagging_watermark.kind = Some(match kind.as_str() {
+            "latest" => ListOffsetsKind::Latest,
+            "earliest" => ListOffsetsKind::Earliest,
+            "earliest-local" => ListOffsetsKind::EarliestLocal,
+            "timestamp" => ListOffsetsKind::Timestamp,
+            "maximum-timestamp" => ListOffsetsKind::MaxTimestamp,
+            "latest-tiered" => ListOffsetsKind::LatestTiered,
+            "earliest-pending-upload" => ListOffsetsKind::EarliestPendingUpload,
+            _ => panic!("unknown offset lookup: {kind}"),
+        });
+        lagging_watermark.candidate = candidate;
+        lagging_watermark.bound = 3;
+    }
+    #[rstest_bdd_macros::when(
+        "ListOffsets decides whether the lagging high watermark fences the result"
+    )]
+    fn fence_watermark_candidate(lagging_watermark: &mut LaggingWatermarkScenario) {
+        lagging_watermark.fenced = Some(lagging_high_watermark_fences(
+            lagging_watermark.kind.unwrap(),
+            lagging_watermark.candidate,
+            lagging_watermark.bound,
+        ));
+    }
+    #[rstest_bdd_macros::then("the candidate is fenced {expected}")]
+    fn check_watermark_candidate(lagging_watermark: &LaggingWatermarkScenario, expected: bool) {
+        assert!(lagging_watermark.fenced.unwrap() == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_lagging_watermark",fixtures=[lagging_watermark:LaggingWatermarkScenario]);
 
     /// KIP-207 over the wire, one row per request shape, in the two states
     /// `Partition.fetchOffsetForTimestamp` distinguishes: the high watermark

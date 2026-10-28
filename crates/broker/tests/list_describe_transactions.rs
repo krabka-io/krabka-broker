@@ -29,6 +29,8 @@ use {
             ListTransactionsResponse, TransactionState as ListedTransactionState,
         },
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -219,139 +221,292 @@ async fn boot_with_ongoing_txn(tid: &str, topic: &str) -> OngoingTxn {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_returns_ongoing_txn() {
-    let OngoingTxn {
+enum CoordinatorState {
+    Idle {
+        broker: BrokerHandle,
+        bootstrap: String,
+        directory: TempDir,
+    },
+    Active(OngoingTxn),
+}
+
+impl CoordinatorState {
+    fn bootstrap(&self) -> &str {
+        match self {
+            Self::Idle { bootstrap, .. } => bootstrap,
+            Self::Active(transaction) => &transaction.bootstrap,
+        }
+    }
+
+    async fn shutdown(self) {
+        match self {
+            Self::Idle {
+                broker,
+                directory: _directory,
+                ..
+            } => broker.shutdown().await,
+            Self::Active(OngoingTxn {
+                broker,
+                dir: _directory,
+                producer,
+                transaction,
+                ..
+            }) => teardown_test_txn(transaction, producer, broker).await,
+        }
+    }
+}
+
+struct TransactionInspection {
+    coordinator: Option<CoordinatorState>,
+    transactional_id: String,
+    listed: Option<ListTransactionsResponse>,
+    described: Vec<DescribedTransactionState>,
+}
+
+#[fixture]
+fn inspection() -> TransactionInspection {
+    // Start this scenario with fresh inputs and observations.
+
+    TransactionInspection {
+        coordinator: None,
+        transactional_id: String::new(),
+        listed: None,
+        described: Vec::new(),
+    }
+}
+
+#[given("transactional id {tid} has an ongoing transaction on topic {topic}")]
+async fn ongoing_transaction(inspection: &mut TransactionInspection, tid: String, topic: String) {
+    inspection.coordinator = Some(CoordinatorState::Active(
+        boot_with_ongoing_txn(&tid, &topic).await,
+    ));
+    inspection.transactional_id = tid;
+}
+
+#[given("a broker has no initialized transactional ids")]
+async fn empty_coordinator(inspection: &mut TransactionInspection) {
+    let (broker, bootstrap, directory) = boot_single().await;
+    inspection.coordinator = Some(CoordinatorState::Idle {
         broker,
         bootstrap,
-        dir: _dir,
-        producer,
-        transaction,
-    } = boot_with_ongoing_txn("my-tid", "t-list").await;
+        directory,
+    });
+}
 
+async fn list_with_filters(inspection: &mut TransactionInspection, states: Vec<String>) {
+    let bootstrap = inspection
+        .coordinator
+        .as_ref()
+        .expect("a coordinator was started")
+        .bootstrap()
+        .to_owned();
     let client = admin_client(&bootstrap).await;
-    let resp = list_transactions(&client, &ListTransactionsRequest::default()).await;
+    inspection.listed = Some(
+        list_transactions(&client, &ListTransactionsRequest {
+            state_filters: states,
+            ..Default::default()
+        })
+        .await,
+    );
+}
 
-    let row = resp
+#[when("local transactions are listed without state filters")]
+async fn list_all(inspection: &mut TransactionInspection) {
+    list_with_filters(inspection, Vec::new()).await;
+}
+
+#[when("local transactions are listed with states {states}")]
+async fn list_selected_states(inspection: &mut TransactionInspection, states: String) {
+    list_with_filters(
+        inspection,
+        states
+            .split(',')
+            .map(|state| state.trim().to_owned())
+            .collect(),
+    )
+    .await;
+}
+
+#[then("the listing contains exactly the ongoing transactional id with its allocated producer id")]
+fn listed_transaction(inspection: &TransactionInspection) {
+    let response = inspection
+        .listed
+        .as_ref()
+        .expect("ListTransactions completed");
+    let row = response
         .transaction_states
         .iter()
-        .find(|r| r.transactional_id == "my-tid")
-        .expect("my-tid not present");
+        .find(|row| row.transactional_id == inspection.transactional_id)
+        .expect("the ongoing transaction is present");
     check!(row.producer_id >= 0);
-    let expected_state = ListedTransactionState {
-        transactional_id: "my-tid".into(),
+    let expected = ListedTransactionState {
+        transactional_id: inspection.transactional_id.clone(),
         producer_id: row.producer_id,
         transaction_state: "Ongoing".into(),
         ..Default::default()
     };
-    assert!(resp.transaction_states == [expected_state]);
-
-    teardown_test_txn(transaction, producer, broker).await;
+    assert!(response.transaction_states == [expected]);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_state_filter_excludes_non_matching() {
-    let OngoingTxn {
-        broker,
-        bootstrap,
-        dir: _dir,
-        producer,
-        transaction,
-    } = boot_with_ongoing_txn("my-tid", "t-state-filter").await;
-
-    let client = admin_client(&bootstrap).await;
-    // Filter to "Empty" only — our txn is Ongoing, so the row should
-    // be excluded.
-    let r = list_transactions(&client, &ListTransactionsRequest {
-        state_filters: vec!["Empty".into()],
-        ..Default::default()
-    })
-    .await;
+#[then("the successful listing has no matching transactions")]
+fn no_matching_transaction(inspection: &TransactionInspection) {
     assert!(
-        r == ListTransactionsResponse::default(),
-        "Ongoing txn must not match an Empty state filter: {r:?}",
+        inspection
+            .listed
+            .as_ref()
+            .expect("ListTransactions completed")
+            == &ListTransactionsResponse::default(),
+        "an ongoing transaction must not match an Empty state filter"
     );
-
-    teardown_test_txn(transaction, producer, broker).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_reports_unknown_state_filters() {
-    let (broker, bootstrap, _dir) = boot_single().await;
-
-    let client = admin_client(&bootstrap).await;
-    let r = list_transactions(&client, &ListTransactionsRequest {
-        state_filters: vec!["Ongoing".into(), "BogusState".into(), "Empty".into()],
-        ..Default::default()
-    })
-    .await;
+#[then("only state filter {state} is reported as unknown")]
+fn unknown_state_filter(inspection: &TransactionInspection, state: String) {
     assert!(
-        r == ListTransactionsResponse {
-            unknown_state_filters: vec!["BogusState".to_owned()],
-            ..Default::default()
-        }
+        inspection
+            .listed
+            .as_ref()
+            .expect("ListTransactions completed")
+            == &ListTransactionsResponse {
+                unknown_state_filters: vec![state],
+                ..Default::default()
+            }
     );
-
-    broker.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_transactions_returns_full_state_for_known_tid() {
-    let OngoingTxn {
-        broker,
-        bootstrap,
-        dir: _dir,
-        producer,
-        transaction,
-    } = boot_with_ongoing_txn("describe-tid", "t-describe").await;
-
+#[when("details of the ongoing transaction are requested")]
+async fn describe_ongoing(inspection: &mut TransactionInspection) {
+    let bootstrap = inspection
+        .coordinator
+        .as_ref()
+        .expect("a coordinator was started")
+        .bootstrap()
+        .to_owned();
     let client = admin_client(&bootstrap).await;
-    let r = client
+    inspection.described = client
         .send(DescribeTransactionsRequest {
-            transactional_ids: vec!["describe-tid".into()],
+            transactional_ids: vec![inspection.transactional_id.clone()],
             ..Default::default()
         })
         .await
-        .expect("DescribeTransactions");
-    assert!(r.transaction_states.len() == 1);
-    let row = r.transaction_states[0].clone();
+        .expect("DescribeTransactions")
+        .transaction_states;
+}
 
+#[then(
+    "transaction details show {tid} ongoing on {topic} partition {partition} with timeout {timeout}"
+)]
+fn described_transaction(
+    inspection: &TransactionInspection,
+    tid: String,
+    topic: String,
+    partition: i32,
+    timeout: i32,
+) {
+    assert!(inspection.described.len() == 1);
+    let row = &inspection.described[0];
     check!(row.producer_id >= 0);
     check!(row.transaction_start_time_ms > 0);
     assert!(
-        row == DescribedTransactionState {
-            transactional_id: "describe-tid".into(),
+        *row == DescribedTransactionState {
+            transactional_id: tid,
             transaction_state: "Ongoing".into(),
-            transaction_timeout_ms: 60_000,
+            transaction_timeout_ms: timeout,
             transaction_start_time_ms: row.transaction_start_time_ms,
             producer_id: row.producer_id,
             topics: vec![TopicData {
-                topic: "t-describe".into(),
-                partitions: vec![0],
+                topic,
+                partitions: vec![partition],
                 ..Default::default()
             }],
             ..Default::default()
         }
     );
-
-    teardown_test_txn(transaction, producer, broker).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_transactions_returns_not_found_for_unknown_tid() {
-    let (broker, bootstrap, _dir) = boot_single().await;
-
+#[when("an unknown transactional id {tid} is described")]
+async fn describe_unknown(inspection: &mut TransactionInspection, tid: String) {
+    let bootstrap = inspection
+        .coordinator
+        .as_ref()
+        .expect("a coordinator was started")
+        .bootstrap()
+        .to_owned();
     let client = admin_client(&bootstrap).await;
-    let row = describe_transaction(&client, "ghost-tid").await;
-    assert!(
-        row == DescribedTransactionState {
-            error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
-            transactional_id: "ghost-tid".into(),
-            ..Default::default()
-        }
-    );
+    inspection.described = vec![describe_transaction(&client, &tid).await];
+}
 
-    broker.shutdown().await;
+#[then("transactional id {tid} is reported missing")]
+fn missing_transaction(inspection: &TransactionInspection, tid: String) {
+    assert!(
+        inspection.described
+            == vec![DescribedTransactionState {
+                error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
+                transactional_id: tid,
+                ..Default::default()
+            }]
+    );
+}
+
+async fn stop_inspection(inspection: &mut TransactionInspection) {
+    inspection
+        .coordinator
+        .take()
+        .expect("a coordinator was started")
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "A local transaction listing exposes ongoing work"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_transactions_returns_ongoing_txn(inspection: TransactionInspection) {
+    stop_inspection(&mut inspection).await;
+    drop(inspection);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "A state filter excludes an ongoing transaction from Empty results"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_transactions_state_filter_excludes_non_matching(inspection: TransactionInspection) {
+    stop_inspection(&mut inspection).await;
+    drop(inspection);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "Unknown state filters are distinguished from valid filters"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_transactions_reports_unknown_state_filters(inspection: TransactionInspection) {
+    stop_inspection(&mut inspection).await;
+    drop(inspection);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "Transaction details include its producer timing and registered partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_transactions_returns_full_state_for_known_tid(inspection: TransactionInspection) {
+    stop_inspection(&mut inspection).await;
+    drop(inspection);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "Describing an unknown transactional id returns its own not-found row"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_transactions_returns_not_found_for_unknown_tid(
+    inspection: TransactionInspection,
+) {
+    stop_inspection(&mut inspection).await;
+    drop(inspection);
 }
 
 /// Abort before closing, proving the guard released its owning producer reference.

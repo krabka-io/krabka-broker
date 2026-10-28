@@ -685,110 +685,163 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
     }
 }
 
-/// #744: Kafka's `ControllerApis.createPartitions` answers a duplicated name
-/// once with `INVALID_REQUEST` and grows none of its rows, and the
-/// controller's count checks answer with Kafka's messages. Topic `t` has 2
-/// partitions of replication factor 1.
-#[tokio::test]
-async fn rows_follow_kafkas_duplicate_and_count_checks() {
-    fn row(name: &str, error_code: i16, message: Option<&str>) -> CreatePartitionsTopicResult {
-        expected_result(name, error_code, message.map(str::to_owned))
+#[derive(Default)]
+struct PartitionGrowthRows {
+    started: Option<HandlerStartedBroker>,
+    topics: Vec<CreatePartitionsTopic>,
+    response: Option<CreatePartitionsResponse>,
+}
+#[rstest::fixture]
+fn partition_growth_rows() -> PartitionGrowthRows {
+    let started = None;
+    PartitionGrowthRows {
+        started,
+        ..Default::default()
     }
-    let duplicate = || row("t", codes::INVALID_REQUEST, Some("Duplicate topic name."));
-    let four_partition_growth = topic_req().count(4).call();
-    let duplicate_growth = vec![four_partition_growth.clone(), four_partition_growth.clone()];
-    let cases = [
-        (
-            "the same growth twice",
-            duplicate_growth.clone(),
-            PartitionMutation::Apply,
-            vec![duplicate()],
-        ),
-        (
-            "two different growths",
-            vec![four_partition_growth.clone(), topic_req().count(6).call()],
-            PartitionMutation::Apply,
-            vec![duplicate()],
-        ),
-        (
-            "the same growth twice, validate only",
-            duplicate_growth.clone(),
-            PartitionMutation::Validate,
-            vec![duplicate()],
-        ),
-        (
-            "a duplicate answers ahead of the other rows",
-            vec![
-                topic_req().name("u").call(),
-                four_partition_growth.clone(),
-                four_partition_growth.clone(),
-            ],
-            PartitionMutation::Apply,
-            vec![
-                duplicate(),
-                row("u", codes::UNKNOWN_TOPIC_OR_PARTITION, None),
-            ],
-        ),
-        (
-            "a count below the current one",
-            vec![topic_req().count(1).call()],
-            PartitionMutation::Apply,
-            vec![row(
-                "t",
-                codes::INVALID_PARTITIONS,
-                Some("The topic t currently has 2 partition(s); 1 would not be an increase."),
-            )],
-        ),
-        (
-            "fewer assignments than new partitions",
-            vec![
-                topic_req()
-                    .count(4)
-                    .maybe_assignments(Some(vec![assn(&[1])]))
-                    .call(),
-            ],
-            PartitionMutation::Apply,
-            vec![row(
-                "t",
-                codes::INVALID_REPLICA_ASSIGNMENT,
+}
+#[rstest_bdd_macros::given("topic t has two partitions at replication factor one")]
+async fn existing_growth_topic(partition_growth_rows: &mut PartitionGrowthRows) {
+    let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
+    seed_topic().handle(&started.broker).call().await;
+    partition_growth_rows.started = Some(started);
+}
+#[rstest_bdd_macros::given("the partition growth request contains these ordered topics")]
+fn requested_partition_growth(
+    partition_growth_rows: &mut PartitionGrowthRows,
+    datatable: Vec<Vec<String>>,
+) {
+    partition_growth_rows.topics = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            let assignments = if cells[2] == "null" {
+                None
+            } else {
                 Some(
-                    "Attempted to add 2 additional partition(s), but only 1 assignment(s) were \
-                     specified.",
-                ),
-            )],
-        ),
-    ];
-
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (label, topics, mutation, results) in cases {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_topic().handle(&broker_handle).call().await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(p, peer);
-            user ["admin"];
-        };
-
-        let resp = drive(
+                    cells[2]
+                        .split(';')
+                        .map(|brokers| {
+                            let replicas = brokers
+                                .split(',')
+                                .map(|broker| broker.parse().expect("assigned broker"))
+                                .collect::<Vec<_>>();
+                            assn(&replicas)
+                        })
+                        .collect(),
+                )
+            };
+            topic_req()
+                .name(&cells[0])
+                .count(cells[1].parse::<i32>().expect("partition count"))
+                .maybe_assignments(assignments)
+                .call()
+        })
+        .collect();
+}
+#[rstest_bdd_macros::when("CreatePartitions handles the growth with validate only {validate}")]
+async fn handle_growth_rows(partition_growth_rows: &mut PartitionGrowthRows, validate: bool) {
+    let broker = partition_growth_rows
+        .started
+        .as_ref()
+        .expect("started broker")
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    let mutation = if validate {
+        PartitionMutation::Validate
+    } else {
+        PartitionMutation::Apply
+    };
+    partition_growth_rows.response = Some(
+        drive(
             &broker,
-            &request(topics, mutation),
+            &request(partition_growth_rows.topics.clone(), mutation),
             &test_context(&p, &peer),
         )
-        .await;
-        let partitions = broker_handle
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "CreatePartitions returns exactly these rows and t still has two partitions"
+)]
+async fn observed_growth_rows(
+    partition_growth_rows: &mut PartitionGrowthRows,
+    datatable: Vec<Vec<String>>,
+) {
+    let rows = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            expected_result(
+                &cells[0],
+                cells[1].parse().expect("error code"),
+                (cells[2] != "null").then(|| cells[2].clone()),
+            )
+        })
+        .collect();
+    assert!(
+        partition_growth_rows
+            .response
+            .as_ref()
+            .expect("growth response")
+            == &expected_response(rows)
+    );
+    let started = partition_growth_rows
+        .started
+        .take()
+        .expect("started broker");
+    assert!(
+        started
+            .broker
             .controller_image_for_test()
             .partitions_of("t")
-            .count();
-        actual.push((label, resp, partitions));
-        expected.push((label, expected_response(results), 2));
-        broker_handle.shutdown().await;
-    }
-    assert!(actual == expected);
+            .count()
+            == 2
+    );
+    started.broker.shutdown().await;
 }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "the same growth twice"
+)]
+#[tokio::test]
+async fn partition_growth_case_0(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "two different growths"
+)]
+#[tokio::test]
+async fn partition_growth_case_1(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "the same growth twice validate only"
+)]
+#[tokio::test]
+async fn partition_growth_case_2(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "duplicates precede other rows"
+)]
+#[tokio::test]
+async fn partition_growth_case_3(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "a count below the current one"
+)]
+#[tokio::test]
+async fn partition_growth_case_4(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "too few explicit assignments"
+)]
+#[tokio::test]
+async fn partition_growth_case_5(partition_growth_rows: PartitionGrowthRows) {}
 
 /// Both operations initially observe the same count. Only one may create the
 /// new indices; the other must see the committed count on its next attempt.

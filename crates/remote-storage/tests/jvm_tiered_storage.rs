@@ -12,7 +12,7 @@ use {
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     bytes::Bytes,
     krabka_ids::LeaderEpoch,
-    krabka_log::{Log, LogConfig, Offset},
+    krabka_log::{Log, LogConfig, Offset, SegmentExport},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_remote_storage::{
         LocalTieredStorage, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
@@ -23,7 +23,7 @@ use {
     std::{
         fmt::Write as _,
         fs, iter,
-        path::Path,
+        path::{Path, PathBuf},
         process::{Command, Output},
     },
     uuid::Uuid,
@@ -261,9 +261,31 @@ fn ordinary_batch() -> RecordBatch {
     }
 }
 
-#[test]
-#[ignore = "requires Docker, a JDK, and Maven Central"]
-fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
+#[derive(Default)]
+struct JvmExportScenario {
+    local: Option<tempfile::TempDir>,
+    log: Option<Log>,
+    export: Option<SegmentExport>,
+    shared: Option<tempfile::TempDir>,
+    storage_root: PathBuf,
+    leader_epoch_path: PathBuf,
+    work: Option<tempfile::TempDir>,
+    classpath: String,
+    source: PathBuf,
+    output: Option<Output>,
+}
+
+#[rstest::fixture]
+fn jvm_export() -> JvmExportScenario {
+    let local = None;
+    JvmExportScenario {
+        local,
+        ..JvmExportScenario::default()
+    }
+}
+
+#[rstest_bdd_macros::given("a sealed Krabka segment containing an idempotent producer batch")]
+fn sealed_producer_segment(jvm_export: &mut JvmExportScenario) {
     let local = tempfile::tempdir().expect("local log tempdir");
     let mut log = Log::open(local.path(), LogConfig {
         segment_size: bytes(1),
@@ -274,26 +296,40 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
         .expect("append producer batch");
     log.append(&mut ordinary_batch())
         .expect("roll producer segment");
-    log.sync().unwrap();
-    let export = log
-        .tierable_segments()
-        .into_iter()
-        .next()
-        .expect("one sealed segment");
-    check!(export.base_offset == Offset(0));
-    check!(export.last_offset == Offset(1));
-    check!(export.producer_snapshot_path.is_file());
+    log.sync().expect("sync sealed segment");
+    jvm_export.export = Some(
+        log.tierable_segments()
+            .into_iter()
+            .next()
+            .expect("one sealed segment"),
+    );
+    jvm_export.local = Some(local);
+    jvm_export.log = Some(log);
+}
 
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(0xfe);
-    let seg_size = i32::try_from(export.log_path.metadata().unwrap().len()).unwrap();
+#[rstest_bdd_macros::given(
+    "the segment and producer snapshot are copied to Kafka local tiered storage"
+)]
+fn copied_producer_segment(jvm_export: &mut JvmExportScenario) {
+    let local = jvm_export.local.as_ref().expect("local segment given");
+    let export = jvm_export.export.as_ref().expect("sealed segment given");
     let details = RemoteLogSegmentDetails::new(
-        seg_size,
+        i32::try_from(
+            export
+                .log_path
+                .metadata()
+                .expect("sealed log metadata")
+                .len(),
+        )
+        .expect("segment size fits metadata"),
         RemoteLogSegmentState::CopySegmentStarted,
         iter::once((LeaderEpoch(0), export.base_offset.0)).collect(),
     );
     let metadata = RemoteLogSegmentMetadata::new(
-        RemoteLogSegmentId::new(TopicIdPartition::new(topic_id, "orders", 0), segment_id),
+        RemoteLogSegmentId::new(
+            TopicIdPartition::new(Uuid::from_u128(1), "orders", 0),
+            Uuid::from_u128(0xfe),
+        ),
         export.base_offset.0,
         export.last_offset.0,
         export.max_timestamp,
@@ -302,58 +338,86 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
         details,
     )
     .expect("valid remote metadata");
-
     let shared = tempfile::tempdir().expect("shared storage tempdir");
-    let storage_root = shared.path().join("kafka-tiered-storage");
-    let storage = LocalTieredStorage::new(&storage_root);
-    let leader_epoch_path = local.path().join("remote-leader-epoch-checkpoint");
-    fs::write(&leader_epoch_path, b"0\n1\n0 0\n").unwrap();
+    jvm_export.storage_root = shared.path().join("kafka-tiered-storage");
+    let storage = LocalTieredStorage::new(&jvm_export.storage_root);
+    jvm_export.leader_epoch_path = local.path().join("remote-leader-epoch-checkpoint");
+    fs::write(&jvm_export.leader_epoch_path, b"0\n1\n0 0\n").expect("leader epoch checkpoint");
     storage
         .copy_log_segment_data(
             &metadata,
-            &export_segment_data(&export, ProducerSnapshotExport::Include, || {
+            &export_segment_data(export, ProducerSnapshotExport::Include, || {
                 Bytes::from_static(b"0\n1\n0 0\n")
             }),
         )
         .expect("Krabka local-tier copy");
+    jvm_export.shared = Some(shared);
+}
 
+#[rstest_bdd_macros::given("Kafka 4.0 tiered-storage JVM tools")]
+fn kafka_tiered_tools(jvm_export: &mut JvmExportScenario) {
     let work = tempfile::tempdir().expect("JVM work tempdir");
     let libs = work.path().join("libs");
-    fs::create_dir(&libs).unwrap();
+    fs::create_dir(&libs).expect("Kafka library directory");
     kafka_libs(&libs);
     let test_jar = work.path().join("kafka-storage-4.0.0-test.jar");
     download_test_jar(&test_jar);
-    let source = work.path().join("JvmTieredStorageProbe.java");
-    fs::write(&source, JAVA_PROBE).unwrap();
-    let classpath = format!("{}/*:{}", libs.display(), test_jar.display());
-    let segment_size = fs::metadata(&export.log_path).unwrap().len().to_string();
-    let output = run(
+    jvm_export.source = work.path().join("JvmTieredStorageProbe.java");
+    fs::write(&jvm_export.source, JAVA_PROBE).expect("JVM compatibility probe source");
+    jvm_export.classpath = format!("{}/*:{}", libs.display(), test_jar.display());
+    jvm_export.work = Some(work);
+}
+
+#[rstest_bdd_macros::when("Kafka reads the offloaded segment and restores its producer state")]
+fn kafka_reads_export(jvm_export: &mut JvmExportScenario) {
+    let export = jvm_export.export.as_ref().expect("sealed segment given");
+    let work = jvm_export.work.as_ref().expect("Kafka JVM tools given");
+    let shared = jvm_export.shared.as_ref().expect("local tier copy given");
+    let segment_size = fs::metadata(&export.log_path)
+        .expect("sealed log metadata")
+        .len()
+        .to_string();
+    jvm_export.output = Some(
         Command::new("java")
             .current_dir(work.path())
             .arg("--class-path")
-            .arg(classpath)
-            .arg(&source)
+            .arg(&jvm_export.classpath)
+            .arg(&jvm_export.source)
             .arg(shared.path())
-            .arg(URL_SAFE_NO_PAD.encode(topic_id.as_bytes()))
-            .arg(URL_SAFE_NO_PAD.encode(segment_id.as_bytes()))
+            .arg(URL_SAFE_NO_PAD.encode(Uuid::from_u128(1).as_bytes()))
+            .arg(URL_SAFE_NO_PAD.encode(Uuid::from_u128(0xfe).as_bytes()))
             .arg(segment_size)
             .arg(&export.log_path)
             .arg(&export.offset_index_path)
             .arg(&export.time_index_path)
             .arg(&export.producer_snapshot_path)
-            .arg(&leader_epoch_path),
-        "Kafka JVM tiered-storage probe",
+            .arg(&jvm_export.leader_epoch_path)
+            .output()
+            .expect("launch Kafka JVM tiered-storage probe"),
+    );
+}
+
+#[rstest_bdd_macros::then("Kafka accepts the segment bytes indexes and producer snapshot")]
+fn kafka_accepted_export(jvm_export: &JvmExportScenario) {
+    let export = jvm_export.export.as_ref().expect("sealed segment given");
+    check!(export.base_offset == Offset(0));
+    check!(export.last_offset == Offset(1));
+    check!(export.producer_snapshot_path.is_file());
+    let output = jvm_export.output.as_ref().expect("JVM probe ran");
+    check!(
+        output.status.success(),
+        "Kafka JVM tiered-storage probe failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     check!(
         stdout.contains("LocalTieredStorage and ProducerStateManager accepted"),
         "unexpected JVM output: {stdout}"
     );
-
-    // The actual Java fetch above proves the names are consumable, while this
-    // assertion leaves the exact shared path visible in a Rust failure.
     check!(
-        storage_root
+        jvm_export
+            .storage_root
             .join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ")
             .join(concat!(
                 "00000000000000000000-AAAAAAAAAAAAAAAAAAAA_g",
@@ -362,3 +426,10 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
             .is_file()
     );
 }
+
+#[ignore = "requires Docker, a JDK, and Maven Central"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/jvm_tiered_compatibility/jvm_tiered_compatibility.feature",
+    name = "Kafka reads Krabka's offloaded producer segment"
+)]
+fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot(jvm_export: JvmExportScenario) {}

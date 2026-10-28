@@ -70,3 +70,92 @@ pub async fn join_and_converge(
 ) -> (String, StreamsGroupHeartbeatResponse) {
     streams_join_and_converge(client, group, topo, want_active, tries, true).await
 }
+
+use {
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
+    std::sync::Arc,
+    tempfile::TempDir,
+};
+
+/// Live streams membership and its independently captured admin observations.
+#[derive(Default)]
+pub struct StreamsGroupScenario {
+    pub broker: Option<BrokerHandle>,
+    pub directory: Option<TempDir>,
+    pub client: Option<Arc<Client>>,
+    pub group: String,
+    pub topic: String,
+    pub member: String,
+    pub heartbeat: Option<StreamsGroupHeartbeatResponse>,
+    pub topology: Option<Topology>,
+    pub described: Option<StreamsGroupDescribeResponse>,
+}
+
+#[fixture]
+pub fn streams_group() -> StreamsGroupScenario {
+    // Every scenario owns a fresh broker and the member identity returned by its coordinator.
+    StreamsGroupScenario::default()
+}
+
+impl StreamsGroupScenario {
+    pub fn client(&self) -> &Client { self.client.as_ref().expect("streams client") }
+
+    pub async fn shutdown(&mut self) {
+        self.broker.take().expect("streams broker").shutdown().await;
+        self.client.take();
+        self.directory.take();
+    }
+}
+
+#[given(
+    "a streams-enabled broker holds topic {topic} with {partitions} partitions for group {group}"
+)]
+async fn streams_group_topic(
+    streams_group: &mut StreamsGroupScenario,
+    topic: String,
+    partitions: i32,
+    group: String,
+) {
+    let (broker, bootstrap, directory) = boot().await;
+    let client = connect(&bootstrap).await;
+    finalize_streams_version(&client).await;
+    create_topic(&client, &topic, partitions).await;
+    streams_group.broker = Some(broker);
+    streams_group.directory = Some(directory);
+    streams_group.client = Some(client);
+    streams_group.group = group;
+    streams_group.topic = topic;
+}
+
+#[when("a stateless streams member joins and converges on two active tasks")]
+async fn join_stateless_streams_group(streams_group: &mut StreamsGroupScenario) {
+    let (member, response) = join_and_converge(
+        streams_group.client(),
+        &streams_group.group,
+        topology(&streams_group.topic, vec![]),
+        2,
+        10,
+    )
+    .await;
+    streams_group.member = member;
+    streams_group.heartbeat = Some(response);
+}
+
+#[then("the streams join succeeds with a nonempty member identity and positive epoch")]
+fn joined_streams_group(streams_group: &StreamsGroupScenario) {
+    let response = streams_group
+        .heartbeat
+        .as_ref()
+        .expect("streams join answered");
+    assert!(response.error_code == 0, "{response:?}");
+    assert!(!streams_group.member.is_empty());
+    assert!(response.member_epoch >= 1);
+}
+
+#[when("an administrator describes the streams group")]
+async fn describe_streams_group(streams_group: &mut StreamsGroupScenario) {
+    streams_group.described = Some(describe(streams_group.client(), &streams_group.group).await);
+}

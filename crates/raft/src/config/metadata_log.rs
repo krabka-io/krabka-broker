@@ -91,35 +91,105 @@ mod tests {
         super::*,
         assert2::check,
         krabka_units::prelude::{ByteSizeExt, TimeExt},
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        std::collections::BTreeMap,
     };
 
-    /// The defaults are the numbers Kafka's `MetadataLogConfig` documents.
-    #[test]
-    fn defaults_are_kafkas() {
-        let config = MetadataLogConfig::default();
-        check!(
-            (
-                config.segment_size.bytes_u64(),
-                config.segment_roll_interval.millis_i64(),
-                config.max_retention_size.map(ByteSizeExt::bytes_u64),
-                config.max_retention.map(TimeExt::millis_i64),
-                config.max_idle_interval.millis_i64(),
-            ) == (
-                1024 * 1024 * 1024,
-                7 * 24 * 60 * 60 * 1000,
-                Some(100 * 1024 * 1024),
-                Some(7 * 24 * 60 * 60 * 1000),
-                500,
-            )
-        );
-        check!(MIN_METADATA_LOG_SEGMENT_SIZE.bytes_u64() == 8 * 1024 * 1024);
+    struct MetadataStorage {
+        root: Option<PathBuf>,
+        config: Option<MetadataLogConfig>,
+        partition: Option<PathBuf>,
+        minimum_segment_bytes: Option<u64>,
     }
 
-    #[test]
-    fn the_partition_directory_is_kafkas() {
-        check!(
-            metadata_partition_dir(Path::new("/mnt/kafka/kafka-metadata-logs"))
-                == PathBuf::from("/mnt/kafka/kafka-metadata-logs/__cluster_metadata-0")
-        );
+    #[fixture]
+    fn storage() -> MetadataStorage {
+        // Start this scenario with fresh inputs and observations.
+
+        MetadataStorage {
+            root: None,
+            config: None,
+            partition: None,
+            minimum_segment_bytes: None,
+        }
     }
+
+    #[given("the metadata log root directory is {root}")]
+    fn metadata_root(storage: &mut MetadataStorage, root: String) {
+        storage.root = Some(PathBuf::from(root));
+    }
+
+    #[when("default metadata log storage is resolved")]
+    fn resolve_metadata_storage(storage: &mut MetadataStorage) {
+        let root = storage
+            .root
+            .as_ref()
+            .expect("a metadata root directory was given");
+        storage.config = Some(MetadataLogConfig::default());
+        storage.partition = Some(metadata_partition_dir(root));
+        storage.minimum_segment_bytes = Some(MIN_METADATA_LOG_SEGMENT_SIZE.bytes_u64());
+    }
+
+    #[derive(DataTableRow)]
+    struct StorageLimit {
+        setting: String,
+        value: i128,
+    }
+
+    #[then("metadata storage uses these Kafka limits:")]
+    fn default_limits(storage: &MetadataStorage, #[datatable] rows: Rows<StorageLimit>) {
+        let config = storage
+            .config
+            .as_ref()
+            .expect("default metadata storage was resolved");
+        let actual: BTreeMap<String, Option<i128>> = [
+            (
+                "segment_bytes",
+                Some(i128::from(config.segment_size.bytes_u64())),
+            ),
+            (
+                "segment_roll_ms",
+                Some(i128::from(config.segment_roll_interval.millis_i64())),
+            ),
+            (
+                "retention_bytes",
+                config
+                    .max_retention_size
+                    .map(ByteSizeExt::bytes_u64)
+                    .map(i128::from),
+            ),
+            (
+                "retention_ms",
+                config
+                    .max_retention
+                    .map(TimeExt::millis_i64)
+                    .map(i128::from),
+            ),
+            (
+                "idle_ms",
+                Some(i128::from(config.max_idle_interval.millis_i64())),
+            ),
+            (
+                "minimum_segment_bytes",
+                storage.minimum_segment_bytes.map(i128::from),
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        let expected: BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| (row.setting, Some(row.value)))
+            .collect();
+        check!(actual == expected);
+    }
+
+    #[then("the metadata partition directory is {partition}")]
+    fn partition_directory(storage: &MetadataStorage, partition: String) {
+        check!(storage.partition == Some(PathBuf::from(partition)));
+    }
+
+    scenarios!("tests/features/migrated/src/config/metadata_log.feature", fixtures = [storage: MetadataStorage]);
 }

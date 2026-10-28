@@ -46,3 +46,20 @@ pub(super) fn check_persisted(
     let reopened = LeaderEpochCheckpoint::open(checkpoint.path.clone()).unwrap();
     assert2::check!(reopened.entries() == expected, "{name} (reopened)");
 }
+
+/// Explicit epoch:start-offset pairs used by the executable checkpoint contract.
+pub(super) fn history_entries(history: &str) -> Vec<EpochEntry> {
+    if history == "empty" {
+        return Vec::new();
+    }
+    history
+        .split(',')
+        .map(|pair| {
+            let (epoch, offset) = pair.split_once(':').expect("epoch:start-offset fixture");
+            entry(
+                epoch.parse().expect("leader epoch"),
+                offset.parse().expect("epoch start offset"),
+            )
+        })
+        .collect()
+}

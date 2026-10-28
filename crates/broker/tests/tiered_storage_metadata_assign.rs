@@ -90,162 +90,299 @@ async fn start_three_partition_log() -> (BareBroker, Arc<KafkaMetadataEventLog>)
     (bare, log)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
-    let (
-        BareBroker {
-            broker,
-            log_dir: _log_dir,
-        },
-        log,
-    ) = start_three_partition_log().await;
-    let pc = log.partition_count();
-    assert!(pc >= 3);
+use {
+    krabka_remote_storage_topic::log::{AssignmentHandle, MetadataEventStream},
+    rstest::fixture,
+    rstest_bdd::{Slot, datatable::Rows},
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
+};
 
-    // Publish: partition 0 -> a,b,c ; partition 1 -> x,y ; partition 2 -> z
-    for v in [b"a".as_slice(), b"b", b"c"] {
-        log.publish(0, Bytes::copy_from_slice(v)).await.unwrap();
-    }
-    for v in [b"x".as_slice(), b"y"] {
-        log.publish(1, Bytes::copy_from_slice(v)).await.unwrap();
-    }
-    log.publish(2, Bytes::from_static(b"z")).await.unwrap();
-
-    // Subscribe to partitions {0 from offset 1, 1 from offset 0}; not 2.
-    let starts = [PartitionStart::new(0, 1), PartitionStart::new(1, 0)];
-    let (mut stream, _handle) = log.subscribe(starts.to_vec());
-
-    // Expect exactly: (0,1,b), (0,2,c), (1,0,x), (1,1,y). Collect with a
-    // deadline; assert no partition-2 record ever arrives.
-    let mut got: Vec<Received> = Vec::with_capacity(4);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while got.len() < 4 {
-        let next = time::timeout(Duration::from_millis(500), stream.next()).await;
-        match next {
-            Ok(Some(r)) => {
-                assert!(r.partition != 2, "partition 2 was not assigned");
-                got.push(Received {
-                    partition: r.partition,
-                    offset: r.offset,
-                    payload: r.payload.to_vec(),
-                });
-            }
-            Ok(None) => break,
-            Err(_) => {} // timeout tick; keep waiting until deadline
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "did not receive 4 records in 15s: {got:?}"
-        );
-    }
-    got.sort_unstable();
-    let expected = [
-        Received {
-            partition: 0,
-            offset: 1,
-            payload: b"b".to_vec(),
-        },
-        Received {
-            partition: 0,
-            offset: 2,
-            payload: b"c".to_vec(),
-        },
-        Received {
-            partition: 1,
-            offset: 0,
-            payload: b"x".to_vec(),
-        },
-        Received {
-            partition: 1,
-            offset: 1,
-            payload: b"y".to_vec(),
-        },
-    ];
-    assert!(got == expected);
-
-    // Brief grace: ensure no stray partition-2 record sneaks in.
-    if let Ok(Some(extra)) = time::timeout(Duration::from_millis(500), stream.next()).await {
-        assert!(extra.partition != 2, "partition 2 leaked: {extra:?}");
-    }
-
-    log.shutdown().await;
-    broker.shutdown().await;
+#[derive(Default)]
+struct MetadataAssignment {
+    bare: Option<BareBroker>,
+    log: Option<Arc<KafkaMetadataEventLog>>,
+    stream: Option<MetadataEventStream>,
+    assignment: Option<Arc<dyn AssignmentHandle>>,
+    records: Vec<KeyedReceived>,
+    offsets: Option<Vec<i64>>,
+    extra_partition: Slot<Option<i32>>,
 }
 
-/// `publish_keyed_group` enqueues the whole group before it waits. Each
-/// partition still assigns offsets in the order the group lists its records,
-/// and every key, value and tombstone lands as given.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keyed_group_lands_each_partition_in_order() {
-    let (
-        BareBroker {
-            broker,
-            log_dir: _log_dir,
-        },
-        log,
-    ) = start_three_partition_log().await;
+#[fixture]
+fn metadata_assignment() -> MetadataAssignment {
+    // Keep the real subscription handle alive while its assigned records are observed.
+    MetadataAssignment::default()
+}
+
+impl MetadataAssignment {
+    fn log(&self) -> &KafkaMetadataEventLog { self.log.as_ref().expect("metadata log running") }
+
+    async fn shutdown(&mut self) {
+        self.log().shutdown().await;
+        let BareBroker { broker, log_dir } = self.bare.take().expect("bare broker");
+        broker.shutdown().await;
+        self.stream.take();
+        self.assignment.take();
+        self.log.take();
+        drop(log_dir);
+    }
+}
+
+#[derive(DataTableRow)]
+struct PublishedValue {
+    partition: i32,
+    payload: String,
+}
+#[derive(DataTableRow)]
+struct PublishedKey {
+    partition: i32,
+    key: String,
+    value: String,
+}
+#[derive(DataTableRow)]
+struct AssignedStart {
+    partition: i32,
+    offset: i64,
+}
+#[derive(DataTableRow)]
+struct ExpectedValue {
+    partition: i32,
+    offset: i64,
+    payload: String,
+}
+#[derive(DataTableRow)]
+struct ExpectedKey {
+    partition: i32,
+    offset: i64,
+    key: String,
+    payload: String,
+    tombstone: bool,
+}
+
+#[given("a bare broker hosts a metadata event log with at least three partitions")]
+async fn metadata_assignment_log(metadata_assignment: &mut MetadataAssignment) {
+    let (bare, log) = start_three_partition_log().await;
     assert!(log.partition_count() >= 3);
+    metadata_assignment.bare = Some(bare);
+    metadata_assignment.log = Some(log);
+}
 
-    assert!(log.publish_keyed_group(Vec::new()).await.unwrap() == Vec::<i64>::new());
+#[when("these unkeyed metadata records are published in order")]
+async fn publish_assigned_metadata(
+    metadata_assignment: &MetadataAssignment,
+    #[datatable] rows: Rows<PublishedValue>,
+) {
+    for row in rows {
+        metadata_assignment
+            .log()
+            .publish(row.partition, Bytes::from(row.payload))
+            .await
+            .unwrap();
+    }
+}
 
-    let group = [
-        (0, "k-a", Some("a")),
-        (1, "k-x", Some("x")),
-        (0, "k-b", Some("b")),
-        (2, "k-z", Some("z")),
-        (1, "k-y", Some("y")),
-        (0, "k-a", None),
-    ];
-    let offsets = log
-        .publish_keyed_group(
-            group
-                .iter()
-                .map(|&(partition, key, value)| KeyedEvent {
-                    partition,
-                    key: Bytes::from_static(key.as_bytes()),
-                    event: value.map(|value| Bytes::from_static(value.as_bytes())),
-                })
-                .collect(),
-        )
-        .await
-        .unwrap();
-    assert!(offsets == [0, 0, 1, 0, 1, 2]);
+#[when("an empty keyed metadata group is published")]
+async fn publish_empty_metadata_group(metadata_assignment: &mut MetadataAssignment) {
+    metadata_assignment.offsets = Some(
+        metadata_assignment
+            .log()
+            .publish_keyed_group(Vec::new())
+            .await
+            .unwrap(),
+    );
+}
 
-    let starts = (0..3).map(|partition| PartitionStart::new(partition, 0));
-    let (mut stream, _handle) = log.subscribe(starts.collect());
-    let mut got = Vec::with_capacity(group.len());
+#[then("the empty metadata group receives no offsets")]
+fn empty_metadata_group_offsets(metadata_assignment: &MetadataAssignment) {
+    assert!(
+        metadata_assignment
+            .offsets
+            .as_ref()
+            .expect("group published")
+            .is_empty()
+    );
+}
+
+#[when("this interleaved keyed metadata group is published")]
+async fn publish_keyed_metadata_group(
+    metadata_assignment: &mut MetadataAssignment,
+    #[datatable] rows: Rows<PublishedKey>,
+) {
+    let group = rows
+        .into_iter()
+        .map(|row| KeyedEvent {
+            partition: row.partition,
+            key: Bytes::from(row.key),
+            event: (row.value != "tombstone").then(|| Bytes::from(row.value)),
+        })
+        .collect();
+    metadata_assignment.offsets = Some(
+        metadata_assignment
+            .log()
+            .publish_keyed_group(group)
+            .await
+            .unwrap(),
+    );
+}
+
+#[then("the metadata group offsets are {offsets}")]
+fn assigned_metadata_offsets(metadata_assignment: &MetadataAssignment, offsets: String) {
+    let expected: Vec<i64> = offsets
+        .split(',')
+        .map(|offset| offset.parse().unwrap())
+        .collect();
+    assert!(
+        metadata_assignment
+            .offsets
+            .as_ref()
+            .expect("group published")
+            == &expected
+    );
+}
+
+#[when("a metadata consumer subscribes at these partition offsets")]
+fn subscribe_assigned_metadata(
+    metadata_assignment: &mut MetadataAssignment,
+    #[datatable] rows: Rows<AssignedStart>,
+) {
+    let (stream, assignment) = metadata_assignment.log().subscribe(
+        rows.into_iter()
+            .map(|row| PartitionStart::new(row.partition, row.offset))
+            .collect(),
+    );
+    metadata_assignment.stream = Some(stream);
+    metadata_assignment.assignment = Some(assignment);
+}
+
+#[when("the metadata consumer reads {records} records within fifteen seconds")]
+async fn read_assigned_metadata(metadata_assignment: &mut MetadataAssignment, records: usize) {
     let deadline = Instant::now() + Duration::from_secs(15);
-    while got.len() < group.len() {
-        if let Ok(Some(r)) = time::timeout(Duration::from_millis(500), stream.next()).await {
-            got.push(KeyedReceived {
-                partition: r.partition,
-                offset: r.offset,
-                key: r.key.map(|key| key.to_vec()).unwrap_or_default(),
-                payload: r.payload.to_vec(),
-                tombstone: r.tombstone,
-            });
+    while metadata_assignment.records.len() < records {
+        let next = time::timeout(
+            Duration::from_millis(500),
+            metadata_assignment
+                .stream
+                .as_mut()
+                .expect("metadata subscription")
+                .next(),
+        )
+        .await;
+        match next {
+            Ok(Some(record)) => metadata_assignment.records.push(KeyedReceived {
+                partition: record.partition,
+                offset: record.offset,
+                key: record.key.map(|key| key.to_vec()).unwrap_or_default(),
+                payload: record.payload.to_vec(),
+                tombstone: record.tombstone,
+            }),
+            Ok(None) => break,
+            Err(_) => {}
         }
         assert!(
             Instant::now() <= deadline,
-            "did not receive {} records in 15s: {got:?}",
-            group.len()
+            "metadata records did not arrive: {:?}",
+            metadata_assignment.records
         );
     }
-    got.sort_unstable();
-    let mut expected: Vec<_> = group
+    metadata_assignment.records.sort_unstable();
+}
+
+#[then("the assigned metadata values are exactly")]
+fn assigned_metadata_values(
+    metadata_assignment: &MetadataAssignment,
+    #[datatable] rows: Rows<ExpectedValue>,
+) {
+    let actual: Vec<_> = metadata_assignment
+        .records
         .iter()
-        .zip(offsets)
-        .map(|(&(partition, key, value), offset)| KeyedReceived {
-            partition,
-            offset,
-            key: key.as_bytes().to_vec(),
-            payload: value.unwrap_or_default().as_bytes().to_vec(),
-            tombstone: value.is_none(),
+        .map(|record| Received {
+            partition: record.partition,
+            offset: record.offset,
+            payload: record.payload.clone(),
+        })
+        .collect();
+    let mut expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| Received {
+            partition: row.partition,
+            offset: row.offset,
+            payload: row.payload.into_bytes(),
         })
         .collect();
     expected.sort_unstable();
-    assert!(got == expected);
+    assert!(actual == expected);
+}
 
-    log.shutdown().await;
-    broker.shutdown().await;
+#[then("the assigned keyed metadata records are exactly")]
+fn assigned_keyed_metadata_values(
+    metadata_assignment: &MetadataAssignment,
+    #[datatable] rows: Rows<ExpectedKey>,
+) {
+    let mut expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| KeyedReceived {
+            partition: row.partition,
+            offset: row.offset,
+            key: row.key.into_bytes(),
+            payload: if row.tombstone {
+                vec![]
+            } else {
+                row.payload.into_bytes()
+            },
+            tombstone: row.tombstone,
+        })
+        .collect();
+    expected.sort_unstable();
+    assert!(metadata_assignment.records == expected);
+}
+
+#[when("the metadata consumer observes another 500-millisecond grace window")]
+async fn assigned_metadata_grace(metadata_assignment: &mut MetadataAssignment) {
+    let extra = match time::timeout(
+        Duration::from_millis(500),
+        metadata_assignment
+            .stream
+            .as_mut()
+            .expect("metadata subscription")
+            .next(),
+    )
+    .await
+    {
+        Ok(Some(record)) => Some(record.partition),
+        _ => None,
+    };
+    metadata_assignment.extra_partition.set(extra);
+}
+
+#[then("no unassigned partition-two record arrived in the grace window")]
+fn unassigned_metadata_absent(metadata_assignment: &MetadataAssignment) {
+    assert!(
+        metadata_assignment
+            .extra_partition
+            .get()
+            .expect("grace window observed")
+            != Some(2)
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/tiered_storage_metadata_assign.feature",
+    name = "subscribe subset from nonzero offset yields exact records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_subset_from_nonzero_offset_yields_exact_records(
+    metadata_assignment: MetadataAssignment,
+) {
+    metadata_assignment.shutdown().await;
+    drop(metadata_assignment);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/tiered_storage_metadata_assign.feature",
+    name = "keyed group lands each partition in order"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keyed_group_lands_each_partition_in_order(metadata_assignment: MetadataAssignment) {
+    metadata_assignment.shutdown().await;
+    drop(metadata_assignment);
 }

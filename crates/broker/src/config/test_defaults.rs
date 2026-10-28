@@ -298,50 +298,51 @@ mod tests {
         );
     }
 
-    #[test]
-    fn with_internal_topics_for_caps_at_kafka_defaults() {
-        let cases = [
-            (1, InternalTopicSizes {
-                offsets_replication_factor: 1,
-                transaction_replication_factor: 1,
-                transaction_min_isr: 1,
-                barrier_replication_factor: 1,
-                share_state_replication_factor: 1,
-                share_state_min_isr: 1,
-            }),
-            (2, InternalTopicSizes {
-                offsets_replication_factor: 2,
-                transaction_replication_factor: 2,
-                transaction_min_isr: 1,
-                barrier_replication_factor: 2,
-                share_state_replication_factor: 2,
-                share_state_min_isr: 1,
-            }),
-            (3, InternalTopicSizes {
-                offsets_replication_factor: 3,
-                transaction_replication_factor: 3,
-                transaction_min_isr: 2,
-                barrier_replication_factor: 3,
-                share_state_replication_factor: 3,
-                share_state_min_isr: 2,
-            }),
-            (5, InternalTopicSizes {
-                offsets_replication_factor: 3,
-                transaction_replication_factor: 3,
-                transaction_min_isr: 2,
-                barrier_replication_factor: 3,
-                share_state_replication_factor: 3,
-                share_state_min_isr: 2,
-            }),
-        ];
-        for (brokers, expected) in cases {
-            let config =
-                BrokerConfig::for_tests(PathBuf::from("/tmp")).with_internal_topics_for(brokers);
-            assert!(
-                internal_topic_sizes(&config) == expected,
-                "brokers = {brokers}"
-            );
-        }
+    #[derive(Default)]
+    struct InternalTopicScenario {
+        brokers: usize,
+        actual: Option<InternalTopicSizes>,
+    }
+
+    #[rstest::fixture]
+    fn internal_topics() -> InternalTopicScenario {
+        // Keep internal topics inputs and observations fresh for each scenario.
+        InternalTopicScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("the test cluster has {brokers} brokers")]
+    fn internal_topic_brokers(internal_topics: &mut InternalTopicScenario, brokers: usize) {
+        internal_topics.brokers = brokers;
+    }
+
+    #[rstest_bdd_macros::when("internal topic durability is sized for the cluster")]
+    fn size_internal_topics(internal_topics: &mut InternalTopicScenario) {
+        let config = BrokerConfig::for_tests(PathBuf::from("/tmp"))
+            .with_internal_topics_for(internal_topics.brokers);
+        internal_topics.actual = Some(internal_topic_sizes(&config));
+    }
+
+    #[rstest_bdd_macros::then(
+        "offsets, transactions, barriers, and share state replicate {replication} times with transaction and share minimum ISR {minimum}"
+    )]
+    fn internal_topic_durability(
+        internal_topics: &InternalTopicScenario,
+        replication: i16,
+        minimum: i32,
+    ) {
+        let expected = InternalTopicSizes {
+            offsets_replication_factor: replication,
+            transaction_replication_factor: replication,
+            transaction_min_isr: minimum,
+            barrier_replication_factor: replication,
+            share_state_replication_factor: replication,
+            share_state_min_isr: minimum,
+        };
+        assert!(
+            internal_topics.actual.as_ref() == Some(&expected),
+            "brokers = {}",
+            internal_topics.brokers
+        );
     }
 
     #[test]
@@ -349,4 +350,6 @@ mod tests {
         let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(c.bootstrap_mode == BootstrapMode::Bootstrap);
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config/test_defaults.feature", fixtures = [internal_topics: InternalTopicScenario]);
 }

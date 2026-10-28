@@ -43,80 +43,128 @@ fn unknown_row(member_id: &str, group_instance_id: Option<&str>) -> MemberRespon
     }
 }
 
-/// (label, version, request, whole expected response) against a broker that
-/// holds no group. Kafka's `GroupCoordinatorService.leaveGroup` answers an
-/// empty group id `INVALID_GROUP_ID`, and a missing group with one
-/// `UNKNOWN_MEMBER_ID` row per identity under a top-level `NONE`, which
-/// `LeaveGroupResponse` folds into the top-level code at v0-v2.
-#[tokio::test]
-async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
-    let HandlerStartedBroker {
-        broker: broker_handle,
-        dir: _dir,
-    } = start_broker_no_audit_with(|config| config.offsets_topic_replication_factor = 1).await;
-    broker_handle.wait_until_group_coordinator_ready().await;
-    let broker = broker_handle.broker_arc_for_test();
-    let rows = [
-        (
-            "v2 missing group",
-            2,
-            LeaveGroupRequest {
-                group_id: "ghost".into(),
-                member_id: "m".into(),
-                ..Default::default()
-            },
-            LeaveGroupResponse {
-                error_code: codes::UNKNOWN_MEMBER_ID,
-                ..Default::default()
-            },
-        ),
-        (
-            "v5 missing group",
-            5,
-            LeaveGroupRequest {
-                group_id: "ghost".into(),
-                members: vec![identity("m-a", None), identity("", Some("inst-b"))],
-                ..Default::default()
-            },
-            LeaveGroupResponse {
-                error_code: codes::NONE,
-                members: vec![unknown_row("m-a", None), unknown_row("", Some("inst-b"))],
-                ..Default::default()
-            },
-        ),
-        (
-            "v5 empty group id",
-            5,
-            LeaveGroupRequest {
-                group_id: String::new(),
-                members: vec![identity("m-a", None)],
-                ..Default::default()
-            },
-            LeaveGroupResponse {
-                error_code: codes::INVALID_GROUP_ID,
-                ..Default::default()
-            },
-        ),
-        (
-            "v0 empty group id",
-            0,
-            LeaveGroupRequest {
-                group_id: String::new(),
-                member_id: "m".into(),
-                ..Default::default()
-            },
-            LeaveGroupResponse {
-                error_code: codes::INVALID_GROUP_ID,
-                ..Default::default()
-            },
-        ),
-    ];
-    for (label, version, request, expected) in rows {
-        let response = leave(&broker, &request, version).await;
-        assert!(response == expected, "{label}");
+struct LeaveGroupScenario {
+    started: Option<HandlerStartedBroker>,
+    request: Option<LeaveGroupRequest>,
+    version: i16,
+    response: Option<LeaveGroupResponse>,
+}
+#[rstest::fixture]
+fn leave_group() -> LeaveGroupScenario {
+    let started = None;
+    LeaveGroupScenario {
+        started,
+        request: None,
+        version: 0,
+        response: None,
     }
-    assert!(broker.group_coordinator.find("ghost").is_none());
-    broker_handle.shutdown().await;
+}
+#[rstest_bdd_macros::given("a ready group coordinator with no group ghost")]
+async fn empty_leave_group_coordinator(leave_group: &mut LeaveGroupScenario) {
+    let started =
+        start_broker_no_audit_with(|config| config.offsets_topic_replication_factor = 1).await;
+    started.broker.wait_until_group_coordinator_ready().await;
+    leave_group.started = Some(started);
+}
+#[rstest_bdd_macros::given(
+    "a LeaveGroup version {version} request for group {group} with identities {identities}"
+)]
+fn leave_group_request(
+    leave_group: &mut LeaveGroupScenario,
+    version: i16,
+    group: String,
+    identities: String,
+) {
+    leave_group.version = version;
+    let group_id = if group == "empty" {
+        String::new()
+    } else {
+        group
+    };
+    leave_group.request = Some(match identities.as_str() {
+        "legacy member m" => LeaveGroupRequest {
+            group_id,
+            member_id: "m".into(),
+            ..Default::default()
+        },
+        "member m-a and static instance inst-b" => LeaveGroupRequest {
+            group_id,
+            members: vec![identity("m-a", None), identity("", Some("inst-b"))],
+            ..Default::default()
+        },
+        "member m-a" => LeaveGroupRequest {
+            group_id,
+            members: vec![identity("m-a", None)],
+            ..Default::default()
+        },
+        _ => panic!("unknown leave identities: {identities}"),
+    });
+}
+#[rstest_bdd_macros::when("the group coordinator handles the LeaveGroup request")]
+async fn handle_leave_group(leave_group: &mut LeaveGroupScenario) {
+    let broker = leave_group
+        .started
+        .as_ref()
+        .unwrap()
+        .broker
+        .broker_arc_for_test();
+    leave_group.response = Some(
+        leave(
+            &broker,
+            leave_group.request.as_ref().unwrap(),
+            leave_group.version,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "LeaveGroup returns top-level error {code} with {members} and does not create the missing group"
+)]
+async fn check_leave_group_response(
+    leave_group: &mut LeaveGroupScenario,
+    code: i16,
+    members: String,
+) {
+    let members = match members.as_str() {
+        "no member rows" => Vec::new(),
+        "unknown-member rows for both identities" => {
+            vec![unknown_row("m-a", None), unknown_row("", Some("inst-b"))]
+        }
+        _ => panic!("unknown expected member rows: {members}"),
+    };
+    assert!(
+        leave_group.response.as_ref().unwrap()
+            == &LeaveGroupResponse {
+                error_code: code,
+                members,
+                ..Default::default()
+            }
+    );
+    let started = leave_group.started.take().unwrap();
+    assert!(
+        started
+            .broker
+            .broker_arc_for_test()
+            .group_coordinator
+            .find("ghost")
+            .is_none()
+    );
+    started.broker.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_leave_group/leave.feature",
+    name = "Missing and invalid groups use Kafka version-specific member errors"
+)]
+#[tokio::test]
+async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups(
+    leave_group: LeaveGroupScenario,
+    version: i16,
+    group: String,
+    identities: String,
+    code: i16,
+    members: String,
+) {
+    let _ = (leave_group, version, group, identities, code, members);
 }
 
 /// The `Read` check on the group runs first, so a denied principal gets

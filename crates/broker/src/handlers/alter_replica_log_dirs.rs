@@ -340,110 +340,153 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka matches the destination against the configured absolute paths by
-    /// string equality (`LogManager.isLogDirOnline`) and refuses a partition
-    /// whose future directory name passes 255 characters before it reads the
-    /// destination (`ReplicaManager.alterReplicaLogDirs`). A destination that
-    /// names a configured directory reaches the hosted-replica check, which
-    /// answers `REPLICA_NOT_AVAILABLE` for a partition this broker does not
-    /// host.
-    // The cases spell POSIX paths and one is a symbolic link.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn destination_and_topic_name_validation_matches_kafka() {
-        let version = 2;
-        let extra = tempfile::tempdir().expect("extra log dir");
-        let extra_dir = fs::canonicalize(extra.path()).expect("canonical extra dir");
-        let links = tempfile::tempdir().expect("link dir");
-        let link = links.path().join("link");
-        symlink(&extra_dir, &link).expect("symlink to the extra dir");
-        let extra_str = extra_dir.display().to_string();
-        let name = extra_dir
-            .file_name()
-            .expect("tempdir has a name")
-            .to_string_lossy()
-            .to_string();
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [handler_fixture_support::start_with_extra_log_dir(&extra_dir)];
+    #[derive(Default)]
+    struct ReplicaDestinationScenario {
+        started: Option<handler_fixture_support::StartedBroker>,
+        extra: Option<tempfile::TempDir>,
+        links: Option<tempfile::TempDir>,
+        request: Option<AlterReplicaLogDirsRequest>,
+        response: Option<AlterReplicaLogDirsResponse>,
+        topic: String,
+    }
+    #[cfg(unix)]
+    #[rstest::fixture]
+    fn replica_destination() -> ReplicaDestinationScenario {
+        let started = None;
+        ReplicaDestinationScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[cfg(unix)]
+    #[rstest_bdd_macros::given(
+        "an online configured log directory with a symbolic link and no hosted orders partition"
+    )]
+    async fn configured_replica_destination(replica_destination: &mut ReplicaDestinationScenario) {
+        let extra = tempfile::tempdir().expect("extra log directory");
+        let path = fs::canonicalize(extra.path()).expect("canonical configured directory");
+        let links = tempfile::tempdir().expect("link directory");
+        symlink(&path, links.path().join("link")).expect("directory symlink");
+        replica_destination.started =
+            Some(handler_fixture_support::start_with_extra_log_dir(&path).await);
+        replica_destination.extra = Some(extra);
+        replica_destination.links = Some(links);
+    }
+    #[cfg(unix)]
+    #[rstest_bdd_macros::given(
+        "the replica move names destination {destination} and topic {topic}"
+    )]
+    fn replica_destination_request(
+        replica_destination: &mut ReplicaDestinationScenario,
+        destination: String,
+        topic: String,
+    ) {
+        let configured = fs::canonicalize(
+            replica_destination
+                .extra
+                .as_ref()
+                .expect("configured directory")
+                .path(),
+        )
+        .expect("canonical path");
+        let configured_text = configured.display().to_string();
+        let path = match destination.as_str() {
+            "configured" => configured_text,
+            "configured/" => format!("{configured_text}/"),
+            "configured/." => format!("{configured_text}/."),
+            "configured/../basename" => format!(
+                "{configured_text}/../{}",
+                configured
+                    .file_name()
+                    .expect("directory basename")
+                    .to_string_lossy()
+            ),
+            "relative-configured" => configured_text.trim_start_matches('/').to_owned(),
+            "symlink" => replica_destination
+                .links
+                .as_ref()
+                .expect("link directory")
+                .path()
+                .join("link")
+                .display()
+                .to_string(),
+            other => panic!("unknown destination spelling {other}"),
         };
-
-        // A topic of 213 characters gives Kafka's future directory name,
-        // `<topic>-0.<32 hex>-future`, exactly 255 characters.
-        let longest = "t".repeat(213);
-        let too_long = "t".repeat(214);
-        let cases = [
-            (
-                "the configured path",
-                extra_str.clone(),
-                "orders",
-                codes::REPLICA_NOT_AVAILABLE,
-            ),
-            (
-                "a trailing slash",
-                format!("{extra_str}/"),
-                "orders",
-                codes::LOG_DIR_NOT_FOUND,
-            ),
-            (
-                "a trailing dot",
-                format!("{extra_str}/."),
-                "orders",
-                codes::LOG_DIR_NOT_FOUND,
-            ),
-            (
-                "a parent hop",
-                format!("{extra_str}/../{name}"),
-                "orders",
-                codes::LOG_DIR_NOT_FOUND,
-            ),
-            (
-                "a relative path",
-                extra_str.trim_start_matches('/').to_owned(),
-                "orders",
-                codes::LOG_DIR_NOT_FOUND,
-            ),
-            (
-                "a symbolic link",
-                link.display().to_string(),
-                "orders",
-                codes::LOG_DIR_NOT_FOUND,
-            ),
-            (
-                "the longest topic name",
-                extra_str.clone(),
-                longest.as_str(),
-                codes::REPLICA_NOT_AVAILABLE,
-            ),
-            (
-                "a topic name one too long",
-                extra_str.clone(),
-                too_long.as_str(),
-                codes::INVALID_TOPIC_EXCEPTION,
-            ),
-            (
-                "a too-long name before an unknown path",
-                format!("{extra_str}/"),
-                too_long.as_str(),
-                codes::INVALID_TOPIC_EXCEPTION,
-            ),
-        ];
-        for (label, path, topic, error_code) in cases {
-            let req = AlterReplicaLogDirsRequest {
-                dirs: vec![AlterReplicaLogDir {
-                    path,
-                    topics: vec![AlterReplicaLogDirTopic {
-                        name: topic.into(),
-                        partitions: vec![0],
-                        ..Default::default()
-                    }],
+        replica_destination.topic = match topic.as_str() {
+            "213-times-t" => "t".repeat(213),
+            "214-times-t" => "t".repeat(214),
+            _ => topic,
+        };
+        replica_destination.request = Some(AlterReplicaLogDirsRequest {
+            dirs: vec![AlterReplicaLogDir {
+                path,
+                topics: vec![AlterReplicaLogDirTopic {
+                    name: replica_destination.topic.clone(),
+                    partitions: vec![0],
                     ..Default::default()
                 }],
                 ..Default::default()
-            };
-            assert_partition_response(&broker, version, req, topic, error_code, label).await;
-        }
-        broker_handle.shutdown().await;
+            }],
+            ..Default::default()
+        });
+    }
+    #[cfg(unix)]
+    #[rstest_bdd_macros::when("AlterReplicaLogDirs version 2 processes the destination")]
+    async fn alter_replica_destination(replica_destination: &mut ReplicaDestinationScenario) {
+        let broker = replica_destination
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
+        let request = replica_destination.request.as_ref().expect("move request");
+        let bytes = handle(
+            &broker,
+            2,
+            1,
+            &encode_request(request, 2),
+            &authed("alice"),
+            &peer(),
+        )
+        .await
+        .expect("handle");
+        replica_destination.response = Some(decode_response(&bytes, 2));
+    }
+    #[cfg(unix)]
+    #[rstest_bdd_macros::then("the complete replica move response has partition error {error}")]
+    async fn replica_destination_error(
+        replica_destination: &mut ReplicaDestinationScenario,
+        error: i16,
+    ) {
+        let expected = expected_partition_response(&replica_destination.topic, 0, error);
+        assert!(
+            replica_destination
+                .response
+                .as_ref()
+                .expect("move response")
+                == &expected
+        );
+        replica_destination
+            .started
+            .take()
+            .expect("started broker")
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[cfg(unix)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_replica_log_destination.feature",
+        name = "Exact path spelling and future directory length determine refusal"
+    )]
+    #[tokio::test]
+    async fn destination_and_topic_name_validation_matches_kafka(
+        replica_destination: ReplicaDestinationScenario,
+        destination: String,
+        topic: String,
+        error: i16,
+    ) {
     }
 
     fn host_orders(broker: &Broker) -> Arc<Partition> {

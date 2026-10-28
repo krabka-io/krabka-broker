@@ -18,6 +18,7 @@ crate_binary(
 )
 
 crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
     # `cli_surface` runs the binary to check the flags it accepts.
     data = [":krabka-restore"],
     # `minio_roundtrip` archives through the production S3 backend into a real

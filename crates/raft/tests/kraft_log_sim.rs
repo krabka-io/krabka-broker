@@ -179,11 +179,9 @@ struct StableSim {
     leader: NodeId,
 }
 
-fn stable_three_voter_sim(appends: usize) -> StableSim {
+fn stable_three_voter_sim() -> StableSim {
     let mut sim = new_with_kraft_log(&[NodeId(1), NodeId(2), NodeId(3)]);
     let leader = sim.stabilize_one_leader(10_000);
-    sim.leader_append(leader, appends);
-    sim.run_until_stable(10_000);
     StableSim { sim, leader }
 }
 
@@ -212,35 +210,81 @@ fn committed_batches(sim: &Sim<KraftBackedLog>, node: NodeId, hwm: i64) -> Vec<R
         .collect()
 }
 
-use assert2::check;
+use {
+    assert2::check,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
 
-#[test]
-fn voters_logs_byte_identical_up_to_hwm_over_real_log() {
-    let StableSim { sim, leader } = stable_three_voter_sim(5);
+struct DiskScenario {
+    stable: Option<StableSim>,
+    follower: Option<NodeId>,
+}
+
+#[fixture]
+fn disk() -> DiskScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    DiskScenario {
+        stable: None,
+        follower: None,
+    }
+}
+
+#[given("three disk-backed voters with an elected leader")]
+fn disk_cluster(disk: &mut DiskScenario) { disk.stable = Some(stable_three_voter_sim()); }
+
+#[when("the disk-backed leader appends {records} records and replication settles")]
+fn replicate_disk_records(disk: &mut DiskScenario, records: usize) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_mut()
+        .expect("a disk-backed cluster was given");
+    sim.leader_append(*leader, records);
+    sim.run_until_stable(10_000);
+}
+
+#[given("three disk-backed voters have replicated {records} records")]
+fn replicated_disk_cluster(disk: &mut DiskScenario, records: usize) {
+    disk_cluster(disk);
+    replicate_disk_records(disk, records);
+}
+
+#[then("the committed batches and raw bytes agree on every voter")]
+fn committed_logs_agree(disk: &DiskScenario) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_ref()
+        .expect("a disk-backed cluster was given");
+    let leader = *leader;
 
     let hwm = sim.leader_high_watermark(leader);
     assert2::assert!(hwm >= 5);
 
     // Every voter's committed batches are byte-identical to the leader's.
-    let leader_committed = committed_batches(&sim, leader, hwm);
+    let leader_committed = committed_batches(sim, leader, hwm);
     assert2::assert!(!leader_committed.is_empty());
     for v in sim.voters() {
-        let voter_committed = committed_batches(&sim, v, hwm);
+        let voter_committed = committed_batches(sim, v, hwm);
         assert2::assert!(voter_committed == leader_committed);
     }
 
     // The raw committed bytes also agree across all voters (true byte-exactness:
     // same encoded v2 batches, same offsets, same epochs).
-    let leader_bytes = committed_bytes(&sim, leader);
+    let leader_bytes = committed_bytes(sim, leader);
     assert2::assert!(!leader_bytes.is_empty());
     for v in sim.voters() {
-        assert2::assert!(committed_bytes(&sim, v) == leader_bytes);
+        assert2::assert!(committed_bytes(sim, v) == leader_bytes);
     }
 }
 
-#[test]
-fn follower_truncates_real_log_on_divergence_then_reconverges() {
-    let StableSim { mut sim, leader } = stable_three_voter_sim(3);
+#[when("a follower receives a conflicting epoch seven tail")]
+fn inject_divergence(disk: &mut DiskScenario) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_mut()
+        .expect("a disk-backed cluster was given");
+    let leader = *leader;
     let leader_end = sim.log_end_offset(leader);
 
     // Give a follower a conflicting-epoch tail the leader does not have: two
@@ -256,6 +300,17 @@ fn follower_truncates_real_log_on_divergence_then_reconverges() {
     // The conflicting tail bumped the follower's last epoch above the leader's.
     assert2::assert!(LogView::last_epoch(sim.node_log(f)) == 7);
 
+    disk.follower = Some(f);
+}
+
+#[when("the leader writes authoritative records and the follower reconnects")]
+fn reconnect_follower(disk: &mut DiskScenario) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_mut()
+        .expect("a disk-backed cluster was given");
+    let leader = *leader;
+    let f = disk.follower.expect("a conflicting follower was given");
     // The leader produces more authoritative data. When the divergent follower
     // pulls it on its next fetch, it must first truncate its conflicting tail
     // (real on-disk truncation) before it can append the leader's batches —
@@ -269,18 +324,27 @@ fn follower_truncates_real_log_on_divergence_then_reconverges() {
     sim.run_until_stable(10_000);
     sim.heal(f);
     sim.run_until_stable(10_000);
+}
 
+#[then("the follower's log and epoch match the leader after truncation")]
+fn follower_reconverges(disk: &mut DiskScenario) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_mut()
+        .expect("a disk-backed cluster was given");
+    let leader = *leader;
+    let f = disk.follower.expect("a conflicting follower was given");
     // The follower's KraftLog was truncated on disk (its end offset dropped back
     // to the leader's authoritative length) and re-replicated to match exactly:
     // same record bytes at the same offsets, byte-identical committed log.
     assert2::assert!(sim.log_end_offset(f) == sim.log_end_offset(leader));
     let hwm = sim.leader_high_watermark(leader);
     check!(
-        committed_batches(&sim, f, hwm) == committed_batches(&sim, leader, hwm),
+        committed_batches(sim, f, hwm) == committed_batches(sim, leader, hwm),
         "follower {f} did not re-converge to the leader after truncation"
     );
     check!(
-        committed_bytes(&sim, f) == committed_bytes(&sim, leader),
+        committed_bytes(sim, f) == committed_bytes(sim, leader),
         "follower {f} committed bytes did not re-converge to the leader"
     );
 
@@ -295,13 +359,19 @@ fn follower_truncates_real_log_on_divergence_then_reconverges() {
     );
 }
 
-#[test]
-fn hwm_agrees_and_never_exceeds_any_voter_log_end() {
-    let StableSim { sim, leader } = stable_three_voter_sim(3);
+#[then("the committed high watermark is at least {minimum} and within every log")]
+fn safe_watermark(disk: &DiskScenario, minimum: i64) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_ref()
+        .expect("a disk-backed cluster was given");
+    let leader = *leader;
 
     let hwm = sim.leader_high_watermark(leader);
-    assert2::assert!(hwm >= 3);
+    assert2::assert!(hwm >= minimum);
     for v in sim.voters() {
         assert2::assert!(hwm <= sim.log_end_offset(v));
     }
 }
+
+scenarios!("tests/features/kraft_log_sim.feature", fixtures = [disk: DiskScenario]);

@@ -246,7 +246,7 @@ mod tests {
     use {
         super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level},
         crate::{
-            authorizer::AuthorizationResult,
+            authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
@@ -259,15 +259,16 @@ mod tests {
             handlers::{
                 RequestContext,
                 create_topics::handle as create_topics_handle,
-                test_support::{
-                    self as handler_fixture_support, ShareRefusalCase, ShareRefusalPolicy,
-                },
+                test_support::{self as handler_fixture_support},
             },
             share_coordinator::{
                 handlers::test_support::lead_share_state_partitions,
                 persister_client::SharePersister,
             },
-            test_support::{StartedBroker as HandlerStartedBroker, start_share_broker},
+            test_support::{
+                ControllerPeerAllowed, DenyAll, ShareApiSupport,
+                StartedBroker as HandlerStartedBroker, start_share_broker,
+            },
         },
         assert2::assert,
         krabka_metadata::{AclOperation, ResourceType},
@@ -419,68 +420,66 @@ mod tests {
             .expect("share persister")
     }
 
-    #[tokio::test]
-    async fn handle_error_scenarios_preserve_expected_rows() {
-        let version = delete_share_group_offsets_response::MAX_VERSION;
-        let cases: Vec<ShareRefusalCase<Vec<&str>, DeleteShareGroupOffsetsResponse>> = vec![
-            ShareRefusalPolicy::unsupported(
-                "disabled feature returns top-level unsupported version",
-            )
-            .with_input(
-                vec!["missing"],
-                empty_share_offsets_response!(
-                    DeleteShareGroupOffsetsResponse,
-                    codes::UNSUPPORTED_VERSION,
-                    Some("The version of API is not supported.".into())
-                ),
-            ),
-            ShareRefusalPolicy::group_denied(
-                "denied group returns top-level authorization failure",
-            )
-            .with_input(
-                vec!["missing"],
-                empty_share_offsets_response!(
-                    DeleteShareGroupOffsetsResponse,
-                    codes::GROUP_AUTHORIZATION_FAILED,
-                    Some("Group authorization failed.".into())
-                ),
-            ),
-        ];
-        krabka_macros::share_refusal_matrix! {
-            case(row) [cases];
-            bind(broker_handle, _dir, broker, ctx, resp);
-            invoke [handle(&broker, request("g1", &row.input), version, &ctx)];
-        };
+    #[derive(Default)]
+    struct ShareOffsetsDeletion {
+        started: Option<HandlerStartedBroker>,
+        response: Option<DeleteShareGroupOffsetsResponse>,
+        groups_before: Vec<String>,
     }
-
-    /// Kafka's `deleteShareGroupOffsets` and `initiateDeleteShareGroupOffsets`:
-    /// an empty id is invalid, a missing group or one of another type is not
-    /// found (and no share group is created), a group with no share-state
-    /// partition metadata answers no row at all, and in a group with some, a
-    /// topic the image lacks or the group holds no state for answers
-    /// `UNKNOWN_TOPIC_OR_PARTITION` with Kafka's message, in request order.
-    #[tokio::test]
-    async fn handle_refuses_what_kafka_refuses() {
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [handler_fixture_support::start_share_allow_all()];
-            user ["alice"];
+    #[rstest::fixture]
+    fn share_offsets_deletion() -> ShareOffsetsDeletion {
+        let started = None;
+        ShareOffsetsDeletion {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a share deletion broker with API enabled {enabled} and group access allowed {allowed}"
+    )]
+    async fn share_deletion_policy(
+        share_offsets_deletion: &mut ShareOffsetsDeletion,
+        enabled: bool,
+        allowed: bool,
+    ) {
+        let authorizer: Arc<dyn Authorizer> = if allowed {
+            Arc::new(AllowAllAuthorizer)
+        } else {
+            Arc::new(ControllerPeerAllowed(DenyAll))
         };
+        share_offsets_deletion.started = Some(
+            start_share_broker()
+                .authorizer(authorizer)
+                .support(if enabled {
+                    ShareApiSupport::Enabled
+                } else {
+                    ShareApiSupport::Disabled
+                })
+                .call()
+                .await,
+        );
+    }
+    #[rstest_bdd_macros::given(
+        "topics t and elsewhere exist, classic is classic, share-empty has no state and share-held holds elsewhere partition 0"
+    )]
+    async fn existing_share_deletion_groups(share_offsets_deletion: &mut ShareOffsetsDeletion) {
+        let started = share_offsets_deletion
+            .started
+            .as_ref()
+            .expect("started broker");
+        let broker = started.broker.broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
         create_topics()
-            .broker_handle(&broker_handle)
+            .broker_handle(&started.broker)
             .ctx(&ctx)
             .names(&["t", "elsewhere"])
             .call()
             .await;
-        // `share-held` holds state for a topic the image has. The actor's
-        // session tick drops the state of every topic the image lacks, as
-        // Kafka's `maybeCleanupShareGroupState` does, and that tick can run
-        // between the seed and the request.
         let elsewhere_id = broker
             .controller
             .current_image()
             .topic("elsewhere")
-            .expect("elsewhere topic metadata")
+            .expect("elsewhere metadata")
             .topic_id;
         let coordinator = &broker.group_coordinator;
         let _classic = coordinator.get_or_create_classic("classic");
@@ -495,73 +494,137 @@ mod tests {
             },
         ])
         .await;
-        let top_level = |error_code, message: &str| DeleteShareGroupOffsetsResponse {
-            error_code,
-            error_message: Some(message.into()),
-            ..Default::default()
+        share_offsets_deletion.groups_before = vec!["share-empty".into(), "share-held".into()];
+    }
+    #[rstest_bdd_macros::when(
+        "DeleteShareGroupOffsets targets group \"{group}\" and topics {topics}"
+    )]
+    async fn delete_share_offsets_request(
+        share_offsets_deletion: &mut ShareOffsetsDeletion,
+        group: String,
+        topics: String,
+    ) {
+        let group = if group == "<empty>" {
+            String::new()
+        } else {
+            group
         };
-        let row = |topic_name: &str, message: &str| DeleteShareGroupOffsetsResponseTopic {
-            topic_name: topic_name.into(),
-            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            error_message: Some(message.into()),
-            ..Default::default()
-        };
-        // (group id, topics, expected response)
-        let rows = [
-            (
-                "",
-                vec!["t"],
-                top_level(codes::INVALID_GROUP_ID, "The group id is invalid."),
-            ),
-            (
-                "absent",
-                vec!["t"],
-                top_level(codes::GROUP_ID_NOT_FOUND, "Group absent not found."),
-            ),
-            (
-                "classic",
-                vec!["t"],
-                top_level(
-                    codes::GROUP_ID_NOT_FOUND,
-                    "Group classic is not a share group.",
-                ),
-            ),
-            (
-                "share-empty",
-                vec!["t", "missing-topic"],
-                DeleteShareGroupOffsetsResponse::default(),
-            ),
-            (
-                "share-held",
-                vec!["t", "missing-topic"],
-                DeleteShareGroupOffsetsResponse {
-                    responses: vec![
-                        row("t", "There is no offset information to delete."),
-                        row(
-                            "missing-topic",
-                            "This server does not host this topic-partition.",
-                        ),
-                    ],
-                    ..Default::default()
-                },
-            ),
-        ];
-        for (group_id, topics, expected) in rows {
-            let response = handle(
+        let broker = share_offsets_deletion
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
+        let topics = topics.split(',').collect::<Vec<_>>();
+        share_offsets_deletion.response = Some(
+            handle(
                 &broker,
-                request(group_id, &topics),
+                request(&group, &topics),
                 delete_share_group_offsets_response::MAX_VERSION,
                 &ctx,
             )
             .await
-            .expect("handle delete");
-            assert!(response == expected, "group {group_id:?}");
-        }
-        let mut share_groups = coordinator.share_group_ids();
-        share_groups.sort_unstable();
-        assert!(share_groups == vec!["share-empty".to_owned(), "share-held".to_owned()]);
-        broker_handle.shutdown().await;
+            .expect("handle delete"),
+        );
     }
+    #[rstest_bdd_macros::then(
+        "the complete share deletion response has code {code}, message \"{message}\" and these topic rows"
+    )]
+    fn share_deletion_rows(
+        share_offsets_deletion: &ShareOffsetsDeletion,
+        code: i16,
+        message: String,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let responses = datatable
+            .into_iter()
+            .skip(1)
+            .map(|cells| DeleteShareGroupOffsetsResponseTopic {
+                topic_name: cells[0].clone(),
+                error_code: cells[1].parse().expect("topic error"),
+                error_message: Some(cells[2].clone()),
+                ..Default::default()
+            })
+            .collect();
+        let expected = DeleteShareGroupOffsetsResponse {
+            error_code: code,
+            error_message: (message != "null").then_some(message),
+            responses,
+            ..Default::default()
+        };
+        assert!(
+            share_offsets_deletion
+                .response
+                .as_ref()
+                .expect("delete response")
+                == &expected
+        );
+    }
+    #[rstest_bdd_macros::then("share offset deletion creates no new share group")]
+    async fn share_deletion_group_inventory(share_offsets_deletion: &mut ShareOffsetsDeletion) {
+        let started = share_offsets_deletion
+            .started
+            .take()
+            .expect("started broker");
+        let mut groups = started
+            .broker
+            .broker_arc_for_test()
+            .group_coordinator
+            .share_group_ids();
+        groups.sort_unstable();
+        assert!(groups == share_offsets_deletion.groups_before);
+        started.broker.shutdown().await;
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "Disabled API returns top-level unsupported version"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_0(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "Denied group returns top-level authorization failure"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_1(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "An empty group ID is invalid"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_2(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "An absent group is not created"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_3(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "A classic group cannot be deleted as share offsets"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_4(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "A share group without partition metadata returns no rows"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_5(share_offsets_deletion: ShareOffsetsDeletion) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_delete_share_offsets.feature",
+        name = "Existing share metadata distinguishes unstored and unknown topics"
+    )]
+    #[tokio::test]
+    async fn share_offset_deletion_case_6(share_offsets_deletion: ShareOffsetsDeletion) {}
 
     #[tokio::test]
     async fn delete_removes_only_requested_state_and_a_retry_finds_none() {

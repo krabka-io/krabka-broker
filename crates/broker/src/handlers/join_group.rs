@@ -215,72 +215,115 @@ mod tests {
         krabka_protocol::{Decode, owned::join_group_response},
     };
 
-    /// #791: Kafka's `GroupCoordinatorService.joinGroup` request checks with
-    /// the default `group.min.session.timeout.ms` and
-    /// `group.max.session.timeout.ms`.
-    #[yare::parameterized(
-        empty_group = { "", 10_000, Some(codes::INVALID_GROUP_ID) },
-        negative_timeout = { "g", -1, Some(codes::INVALID_SESSION_TIMEOUT) },
-        below_minimum = { "g", 5_999, Some(codes::INVALID_SESSION_TIMEOUT) },
-        at_minimum = { "g", 6_000, None },
-        at_maximum = { "g", 1_800_000, None },
-        above_maximum = { "g", 1_800_001, Some(codes::INVALID_SESSION_TIMEOUT) },
-    )]
-    fn request_checks_match_kafka_defaults(
-        group_id: &str,
-        session_timeout_ms: i32,
-        want: Option<i16>,
-    ) {
-        let config = NextGenConfig::default();
-        let req = JoinGroupRequest {
-            group_id: group_id.into(),
-            session_timeout_ms,
-            ..Default::default()
-        };
-        assert2::check!(
-            request_error(&req, &config) == want,
-            "{group_id:?} {session_timeout_ms}"
-        );
+    #[derive(Default)]
+    struct JoinGroupScenario {
+        request: Option<JoinGroupRequest>,
+        request_errors: Vec<Option<i16>>,
+        protocol_name: Option<String>,
+        responses: Vec<(i16, JoinGroupResponse)>,
     }
-
-    /// Kafka's `JoinGroupResponse` constructor sends an empty `ProtocolName`
-    /// as null from v7 and as `""` below it; a chosen protocol passes through.
-    #[test]
-    fn protocol_name_normalised_like_kafka() {
-        for version in join_group_response::MIN_VERSION..=join_group_response::MAX_VERSION {
-            let empty = (version < 7).then(String::new);
-            for (sent, want) in [
-                (Some(String::new()), empty.clone()),
-                (None, empty.clone()),
-                (Some("range".to_owned()), Some("range".to_owned())),
-            ] {
-                let bytes = encode_response(
-                    &respond(version, JoinGroupResponse {
-                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                        protocol_name: sent.clone(),
-                        ..Default::default()
-                    }),
-                    version,
-                )
-                .expect("encode");
-                let mut cur: &[u8] = &bytes;
-                let got = JoinGroupResponse::decode(&mut cur, version).expect("decode");
-                assert2::check!(
-                    got == krabka_macros::unthrottled_wire!(JoinGroupResponse {
-                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                        generation_id: -1,
-                        protocol_type: None,
-                        protocol_name: want,
-                        leader: String::new(),
-                        skip_assignment: false,
-                        member_id: String::new(),
-                        members: vec![],
-                    }),
-                    "v{version} {sent:?}"
-                );
-            }
+    #[rstest::fixture]
+    fn join_group() -> JoinGroupScenario {
+        let request = None;
+        JoinGroupScenario {
+            request,
+            ..Default::default()
         }
     }
+    #[rstest_bdd_macros::given(
+        "a join request for group {group} with session timeout {timeout} milliseconds"
+    )]
+    fn join_request(join_group: &mut JoinGroupScenario, group: String, timeout: i32) {
+        join_group.request = Some(JoinGroupRequest {
+            group_id: if group == "empty" {
+                String::new()
+            } else {
+                group
+            },
+            session_timeout_ms: timeout,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when("the join request is validated against the default session bounds")]
+    fn validate_join_request(join_group: &mut JoinGroupScenario) {
+        join_group.request_errors.push(request_error(
+            join_group.request.as_ref().unwrap(),
+            &NextGenConfig::default(),
+        ));
+    }
+    #[rstest_bdd_macros::then("join validation returns {expected}")]
+    fn check_join_request(join_group: &JoinGroupScenario, expected: String) {
+        let expected = if expected == "accepted" {
+            None
+        } else {
+            Some(expected.parse::<i16>().unwrap())
+        };
+        assert2::check!(join_group.request_errors == vec![expected]);
+    }
+    #[rstest_bdd_macros::given(
+        "an authorization failure join response has protocol name {protocol}"
+    )]
+    fn join_response_protocol(join_group: &mut JoinGroupScenario, protocol: String) {
+        join_group.protocol_name = match protocol.as_str() {
+            "null" => None,
+            "empty" => Some(String::new()),
+            _ => Some(protocol),
+        };
+    }
+    #[rstest_bdd_macros::when(
+        "the join response is encoded and decoded at every supported API version"
+    )]
+    fn encode_join_response_versions(join_group: &mut JoinGroupScenario) {
+        for version in join_group_response::MIN_VERSION..=join_group_response::MAX_VERSION {
+            let bytes = encode_response(
+                &respond(version, JoinGroupResponse {
+                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    protocol_name: join_group.protocol_name.clone(),
+                    ..Default::default()
+                }),
+                version,
+            )
+            .expect("encode");
+            let mut cur: &[u8] = &bytes;
+            join_group.responses.push((
+                version,
+                JoinGroupResponse::decode(&mut cur, version).expect("decode"),
+            ));
+        }
+    }
+    #[rstest_bdd_macros::then(
+        "the join response preserves its error fields and uses Kafka version-specific null protocol semantics"
+    )]
+    fn check_join_response_versions(join_group: &JoinGroupScenario) {
+        assert2::check!(
+            join_group.responses.len()
+                == usize::try_from(
+                    join_group_response::MAX_VERSION - join_group_response::MIN_VERSION + 1
+                )
+                .unwrap()
+        );
+        for (version, got) in &join_group.responses {
+            let want = match join_group.protocol_name.as_deref() {
+                Some(name) if !name.is_empty() => Some(name.to_owned()),
+                _ => (*version < 7).then(String::new),
+            };
+            assert2::check!(
+                got == &krabka_macros::unthrottled_wire!(JoinGroupResponse {
+                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    generation_id: -1,
+                    protocol_type: None,
+                    protocol_name: want,
+                    leader: String::new(),
+                    skip_assignment: false,
+                    member_id: String::new(),
+                    members: vec![]
+                }),
+                "v{version} {:?}",
+                join_group.protocol_name
+            );
+        }
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_join_group",fixtures=[join_group:JoinGroupScenario]);
 
     /// A response that names its protocol leaves `respond` unchanged.
     #[test]

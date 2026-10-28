@@ -338,62 +338,77 @@ mod tests {
         fs::write(path, raw.as_bytes()).unwrap();
     }
 
-    /// The exact 34-byte wire layout of one aborted-transaction record:
-    /// a big-endian i16 version of 0, then `producer_id`, `first_offset`,
-    /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
-    #[test]
-    fn append_writes_the_exact_kafka_wire_layout() {
-        let entry = aborted_txn()
-            .bounds(Offset(5)..=Offset(9))
-            .stable(10)
-            .call();
-        let IndexFixture {
-            dir: _dir,
-            path,
-            index: _index,
-        } = populated_index("00.txnindex", &[entry]);
-
-        let bytes = fs::read(&path).unwrap();
-        let mut expected = Vec::new();
-        expected.extend_from_slice(&0_i16.to_be_bytes()); // version
-        expected.extend_from_slice(&1000_i64.to_be_bytes()); // producer_id
-        expected.extend_from_slice(&5_i64.to_be_bytes()); // first_offset
-        expected.extend_from_slice(&9_i64.to_be_bytes()); // last_offset
-        expected.extend_from_slice(&10_i64.to_be_bytes()); // last_stable_offset
-        assert2::assert!(bytes.len() == ENTRY_BYTES);
-        assert2::assert!(bytes == expected);
+    struct TransactionIndexScenario {
+        directory: TempDir,
+        entries: Vec<AbortedTxn>,
+        bytes: Vec<u8>,
+        reopened: Option<Vec<AbortedTxn>>,
     }
-
-    /// Three aborted transactions produce a file whose length is exactly
-    /// `3 * 34` and whose decoded entries round-trip exactly.
-    #[test]
-    fn three_entries_round_trip_at_the_exact_kafka_entry_size() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.txnindex");
-        let entries = [
-            aborted_txn().call(),
-            aborted_txn()
-                .producer(2000)
-                .bounds(Offset(4)..=Offset(6))
-                .stable(7)
-                .call(),
-            aborted_txn()
-                .producer(3000)
-                .bounds(Offset(8)..=Offset(10))
-                .stable(11)
-                .call(),
-        ];
-        let mut index = TxnIndex::open(path.clone()).unwrap();
-        for entry in entries {
-            index.append(entry).unwrap();
+    #[rstest::fixture]
+    fn transaction_index() -> TransactionIndexScenario {
+        let directory = TempDir::new().expect("transaction index directory");
+        TransactionIndexScenario {
+            directory,
+            entries: Vec::new(),
+            bytes: Vec::new(),
+            reopened: None,
         }
-
-        let bytes = fs::read(&path).unwrap();
-        assert2::assert!(bytes.len() == 3 * ENTRY_BYTES);
-
-        let reopened = TxnIndex::open(path).unwrap();
-        assert2::assert!(reopened.entries() == entries);
     }
+    #[rstest_bdd_macros::given("aborted transaction index entries")]
+    fn aborted_index_entries(
+        transaction_index: &mut TransactionIndexScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        transaction_index.entries = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [producer, start, last, stable] = row.as_slice() else {
+                    panic!("producer start last and stable columns required")
+                };
+                AbortedTxn {
+                    producer_id: ProducerId(producer.parse().expect("producer ID")),
+                    start_offset: Offset(start.parse().expect("start offset")),
+                    last_offset: Offset(last.parse().expect("last offset")),
+                    last_stable_offset: Offset(stable.parse().expect("stable offset")),
+                }
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when(
+        "the transaction index entries are appended and the index is reopened"
+    )]
+    fn append_and_reopen_txn_index(transaction_index: &mut TransactionIndexScenario) {
+        let path = transaction_index.directory.path().join("00.txnindex");
+        let mut index = TxnIndex::open(path.clone()).expect("open transaction index");
+        for entry in &transaction_index.entries {
+            index.append(*entry).expect("append aborted transaction");
+        }
+        transaction_index.bytes = fs::read(&path).expect("transaction index bytes");
+        transaction_index.reopened = Some(
+            TxnIndex::open(path)
+                .expect("reopen transaction index")
+                .entries()
+                .to_vec(),
+        );
+    }
+    #[rstest_bdd_macros::then("one transaction record has Kafka's exact 34-byte big-endian layout")]
+    fn kafka_transaction_index_bytes(transaction_index: &TransactionIndexScenario) {
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&0_i16.to_be_bytes());
+        expected.extend_from_slice(&1000_i64.to_be_bytes());
+        expected.extend_from_slice(&5_i64.to_be_bytes());
+        expected.extend_from_slice(&9_i64.to_be_bytes());
+        expected.extend_from_slice(&10_i64.to_be_bytes());
+        assert2::assert!(transaction_index.bytes.len() == ENTRY_BYTES);
+        assert2::assert!(transaction_index.bytes == expected);
+    }
+    #[rstest_bdd_macros::then("three 34-byte transaction records retain their complete entries")]
+    fn kafka_transaction_index_round_trip(transaction_index: &TransactionIndexScenario) {
+        assert2::assert!(transaction_index.bytes.len() == 3 * ENTRY_BYTES);
+        assert2::assert!(transaction_index.reopened.as_ref() == Some(&transaction_index.entries));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/transaction_index_wire", fixtures = [transaction_index: TransactionIndexScenario]);
 
     /// A record whose version prefix is not 0 is refused on open.
     #[test]

@@ -13,57 +13,17 @@
 
 use {
     crate::{
-        RECORDS, TOPIC,
+        TOPIC,
         topic::{flushing_workload, seeded_leader},
         wire::{
-            OFFSET_OUT_OF_RANGE, assert_matches_produced, delete_records_below, earliest_offset,
-            fetch_error_code, fetch_log,
+            assert_matches_produced, delete_records_below, earliest_offset, fetch_error_code,
+            fetch_log,
         },
     },
     assert2::assert,
     std::time::{Duration, Instant},
     tokio::time,
 };
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn trimmed_diskless_offsets_are_served_from_the_object_store() {
-    // Flush often, and keep no safety lag behind the committed index frontier,
-    // so the trim reaches every offset the flush covered.
-    let (cluster, admin, topic_id, leader, _values, producer) =
-        flushing_workload(krabka_units::millis(100)).await;
-
-    // Wait for the flusher to publish an index record covering the whole
-    // committed prefix and for the trim behind it to move the log start off
-    // zero.
-    let (leader_broker, committed) = seeded_leader(&cluster, leader);
-    let TrimmedFlush {
-        log_start,
-        high_watermark,
-        frontier,
-    } = await_trimmed_flush(leader_broker, committed).await;
-    assert!(frontier == Some(committed));
-    assert!(high_watermark == committed);
-    assert!(
-        log_start > 0,
-        "offset 0 is still on local disk, so a fetch of it would not be a cold read"
-    );
-
-    // Offset 0 is now below the partition's log start. Only the flushed object
-    // can answer for it.
-    let cold = fetch_log(
-        &cluster.bootstrap_for_node(leader),
-        topic_id,
-        0,
-        RECORDS,
-        Duration::from_secs(90),
-    )
-    .await;
-    assert_matches_produced(&cold, 0, RECORDS);
-
-    drop(producer);
-    drop(admin);
-    cluster.shutdown().await;
-}
 
 /// The leader's log start, high watermark and projected flush frontier.
 struct TrimmedFlush {
@@ -106,56 +66,160 @@ async fn await_trimmed_flush(leader: &krabka_broker::BrokerHandle, committed: i6
     }
 }
 
-/// `DeleteRecords` on a diskless topic has to reach the object tier, not just
-/// the local WAL.
-///
-/// The trim frontier is no help here. By the time this runs the flusher has
-/// already trimmed the local log past every offset the case deletes, so a
-/// broker that measured the delete against `log_start_offset` would call the
-/// request a no-op and go on serving the deleted records out of the bucket for
-/// as long as the topic lived. The two assertions below are what an operator
-/// checks after running `kafka-delete-records`: the deleted offsets are gone,
-/// and the ones above the floor are not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleted_diskless_records_leave_the_object_store_unreadable() {
-    let (cluster, admin, topic_id, leader, _values, producer) =
-        flushing_workload(krabka_units::millis(100)).await;
-    let bootstrap = cluster.bootstrap_for_node(leader);
-
-    let (leader_broker, committed) = seeded_leader(&cluster, leader);
-    let TrimmedFlush { log_start, .. } = await_trimmed_flush(leader_broker, committed).await;
-    // Everything the case deletes is already below the local log start, so the
-    // delete can only be answered by the index.
-    let floor = 4;
-    assert!(
-        log_start > floor,
-        "the flusher has to have trimmed past the delete point for this case to \
-         mean anything; log start was {log_start}"
+use {
+    crate::{cluster::DisklessCluster, wire::FetchedLog},
+    krabka_broker::NodeId,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid as WireUuid,
+};
+#[derive(Default)]
+struct DisklessColdRead {
+    cluster: Option<DisklessCluster>,
+    admin: Option<Client>,
+    producer: Option<Client>,
+    topic: Option<WireUuid>,
+    leader: Option<NodeId>,
+    trimmed: Option<TrimmedFlush>,
+    fetched: Option<FetchedLog>,
+    earliest: Option<i64>,
+    deleted: Option<i64>,
+    deleted_errors: Option<Vec<i16>>,
+}
+#[rstest::fixture]
+fn diskless_cold_read() -> DisklessColdRead {
+    // Each cold-read contract owns its cluster, WAL and shared object tier.
+    DisklessColdRead::default()
+}
+#[rstest_bdd_macros::given(
+    "a diskless quorum with 24 acknowledged diskless-e2e-record payloads and flush interval {millis} milliseconds"
+)]
+async fn cold_diskless_prefix(diskless_cold_read: &mut DisklessColdRead, millis: u32) {
+    let (cluster, admin, topic, leader, _values, producer) =
+        flushing_workload(krabka_units::millis(millis)).await;
+    diskless_cold_read.cluster = Some(cluster);
+    diskless_cold_read.admin = Some(admin);
+    diskless_cold_read.producer = Some(producer);
+    diskless_cold_read.topic = Some(topic);
+    diskless_cold_read.leader = Some(leader);
+}
+#[rstest_bdd_macros::when("the published flush frontier trims the leader's local committed prefix")]
+async fn flush_and_trim_diskless(diskless_cold_read: &mut DisklessColdRead) {
+    let (leader, committed) = seeded_leader(
+        diskless_cold_read.cluster.as_ref().expect("cluster"),
+        diskless_cold_read.leader.expect("leader"),
     );
-    // The whole range still reads back from the object store first, so a later
-    // OFFSET_OUT_OF_RANGE cannot be a cold read that never worked.
-    let before = fetch_log(&bootstrap, topic_id, 0, RECORDS, Duration::from_secs(90)).await;
-    assert_matches_produced(&before, 0, RECORDS);
-    assert!(earliest_offset(&bootstrap).await == 0);
+    diskless_cold_read.trimmed = Some(await_trimmed_flush(leader, committed).await);
+}
+#[rstest_bdd_macros::then(
+    "the flush frontier and high watermark are {committed} and the local log start exceeds {floor}"
+)]
+fn cold_trim_boundaries(diskless_cold_read: &DisklessColdRead, committed: i64, floor: i64) {
+    let trimmed = diskless_cold_read.trimmed.as_ref().expect("trim observed");
+    assert!(trimmed.frontier == Some(committed));
+    assert!(trimmed.high_watermark == committed);
+    assert!(trimmed.log_start > floor);
+}
+#[rstest_bdd_macros::when(
+    "the diskless leader fetches {count} records from offset {offset} with a 90 second deadline"
+)]
+async fn fetch_cold_records(diskless_cold_read: &mut DisklessColdRead, count: usize, offset: i64) {
+    let cluster = diskless_cold_read.cluster.as_ref().expect("cluster");
+    let bootstrap = cluster.bootstrap_for_node(diskless_cold_read.leader.expect("leader"));
+    let topic = diskless_cold_read.topic.expect("topic");
+    diskless_cold_read.fetched =
+        Some(fetch_log(&bootstrap, topic, offset, count, Duration::from_secs(90)).await);
+    diskless_cold_read.earliest = Some(earliest_offset(&bootstrap).await);
+}
+#[rstest_bdd_macros::then(
+    "the cold read contains exactly the produced {count} payloads at contiguous offsets from {offset}"
+)]
+fn cold_payloads(diskless_cold_read: &DisklessColdRead, count: usize, offset: i64) {
+    assert_matches_produced(
+        diskless_cold_read
+            .fetched
+            .as_ref()
+            .expect("cold fetch executed"),
+        offset,
+        count,
+    );
+}
+#[rstest_bdd_macros::then("the earliest diskless offset is {offset}")]
+fn cold_earliest_offset(diskless_cold_read: &DisklessColdRead, offset: i64) {
+    assert!(
+        diskless_cold_read
+            .earliest
+            .expect("earliest offset queried")
+            == offset
+    );
+}
+#[rstest_bdd_macros::when("DeleteRecords removes diskless offsets below {floor}")]
+async fn delete_cold_prefix(diskless_cold_read: &mut DisklessColdRead, floor: i64) {
+    let cluster = diskless_cold_read.cluster.as_ref().expect("cluster");
+    let bootstrap = cluster.bootstrap_for_node(diskless_cold_read.leader.expect("leader"));
+    let topic = diskless_cold_read.topic.expect("topic");
+    diskless_cold_read.deleted = Some(delete_records_below(&bootstrap, floor).await);
+    diskless_cold_read.earliest = Some(earliest_offset(&bootstrap).await);
+    diskless_cold_read.deleted_errors = Some(vec![
+        fetch_error_code(&bootstrap, topic, 0).await,
+        fetch_error_code(&bootstrap, topic, floor - 1).await,
+    ]);
+}
+#[rstest_bdd_macros::then(
+    "the delete low watermark is {floor} and deleted fetch errors are {errors}"
+)]
+fn cold_delete_result(diskless_cold_read: &DisklessColdRead, floor: i64, errors: String) {
+    let errors: Vec<i16> = serde_json::from_str(&errors).expect("expected deleted-offset errors");
+    assert!(diskless_cold_read.deleted.expect("delete executed") == floor);
+    assert!(
+        diskless_cold_read
+            .deleted_errors
+            .as_ref()
+            .expect("deleted offsets queried")
+            == &errors
+    );
+}
+#[rstest_bdd_macros::then("the retained cold read starts exactly at offset {offset}")]
+fn retained_cold_offset(diskless_cold_read: &DisklessColdRead, offset: i64) {
+    assert!(
+        diskless_cold_read
+            .fetched
+            .as_ref()
+            .expect("retained fetch executed")
+            .records[0]
+            .offset
+            == offset
+    );
+}
+#[rstest_bdd_macros::then("the cold-read clients and cluster are shut down")]
+async fn finish_cold_reads(diskless_cold_read: &mut DisklessColdRead) {
+    drop(diskless_cold_read.producer.take());
+    drop(diskless_cold_read.admin.take());
+    diskless_cold_read
+        .cluster
+        .take()
+        .expect("cluster")
+        .shutdown()
+        .await;
+}
 
-    let low_watermark = delete_records_below(&bootstrap, floor).await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/cold_read.feature",
+    name = "trimmed diskless offsets are served from the object store"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trimmed_diskless_offsets_are_served_from_the_object_store(
+    diskless_cold_read: DisklessColdRead,
+) {
+    let _ = diskless_cold_read;
+}
 
-    assert!(low_watermark == floor);
-    assert!(earliest_offset(&bootstrap).await == floor);
-    assert!(fetch_error_code(&bootstrap, topic_id, 0).await == OFFSET_OUT_OF_RANGE);
-    assert!(fetch_error_code(&bootstrap, topic_id, floor - 1).await == OFFSET_OUT_OF_RANGE);
-    // Above the floor the object store still answers.
-    let kept = fetch_log(
-        &bootstrap,
-        topic_id,
-        floor,
-        RECORDS - usize::try_from(floor).expect("small floor"),
-        Duration::from_secs(90),
-    )
-    .await;
-    assert!(kept.records[0].offset == floor);
-
-    drop(producer);
-    drop(admin);
-    cluster.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/cold_read.feature",
+    name = "deleted diskless records leave the object store unreadable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleted_diskless_records_leave_the_object_store_unreadable(
+    diskless_cold_read: DisklessColdRead,
+) {
+    let _ = diskless_cold_read;
 }

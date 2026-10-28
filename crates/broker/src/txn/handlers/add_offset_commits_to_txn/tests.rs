@@ -50,86 +50,6 @@ fn the_response_carries_the_error_code() {
     }
 }
 
-/// Kafka `TransactionCoordinator.handleAddPartitionsToTransaction`.
-#[test]
-fn the_decision_follows_kafka_order() {
-    let mut staged = entry(TxnState::Ongoing, &[]);
-    staged.next_producer_id = ProducerId(8);
-    staged.next_producer_epoch = 0;
-    let cases = [
-        (
-            "a pending transition comes first",
-            {
-                let mut pending = staged;
-                pending.producer_id = ProducerId(99);
-                pending
-            },
-            producer(7, 3),
-            AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS),
-        ),
-        (
-            "another producer id",
-            entry(TxnState::Ongoing, &[]),
-            producer(8, 3),
-            AddOffsetsDecision::Answer(codes::INVALID_PRODUCER_ID_MAPPING),
-        ),
-        (
-            "another epoch",
-            entry(TxnState::Ongoing, &[]),
-            producer(7, 2),
-            AddOffsetsDecision::Answer(codes::PRODUCER_FENCED),
-        ),
-        (
-            "prepare commit",
-            entry(TxnState::PrepareCommit, &[]),
-            producer(7, 3),
-            AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS),
-        ),
-        (
-            "prepare abort",
-            entry(TxnState::PrepareAbort, &[]),
-            producer(7, 3),
-            AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS),
-        ),
-        (
-            "the ongoing transaction holds the partition",
-            entry(TxnState::Ongoing, &[offsets_partition(4)]),
-            producer(7, 3),
-            AddOffsetsDecision::Answer(codes::NONE),
-        ),
-        (
-            "the ongoing transaction lacks the partition",
-            entry(TxnState::Ongoing, &[offsets_partition(5)]),
-            producer(7, 3),
-            AddOffsetsDecision::Append,
-        ),
-        (
-            "an empty transaction",
-            entry(TxnState::Empty, &[]),
-            producer(7, 3),
-            AddOffsetsDecision::Append,
-        ),
-        (
-            "a completed transaction that held the partition",
-            entry(TxnState::CompleteCommit, &[offsets_partition(4)]),
-            producer(7, 3),
-            AddOffsetsDecision::Append,
-        ),
-        (
-            "a completed abort",
-            entry(TxnState::CompleteAbort, &[]),
-            producer(7, 3),
-            AddOffsetsDecision::Append,
-        ),
-    ];
-    for (name, entry, producer, expected) in cases {
-        check!(
-            decide(&entry, producer, &offsets_partition(4)) == expected,
-            "{name}"
-        );
-    }
-}
-
 /// Kafka `TransactionMetadata.prepareAddPartitions` sets the start time only
 /// when a transaction starts (#850).
 #[test]
@@ -210,118 +130,6 @@ fn coordinator_with_log(directory: &Path) -> LoggedCoordinator {
     }
 }
 
-/// The coordinator answers each case with Kafka's code, and appends only when
-/// the partition set or the state changes (#889).
-#[tokio::test]
-async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {
-    struct Case {
-        name: &'static str,
-        transactional_id: &'static str,
-        seeded: TxnEntry,
-        producer: ProducerIdentity,
-        code: i16,
-        appends: bool,
-    }
-    let cases = [
-        Case {
-            name: "an empty transaction starts",
-            transactional_id: TID,
-            seeded: entry(TxnState::Empty, &[]),
-            producer: producer(7, 3),
-            code: codes::NONE,
-            appends: true,
-        },
-        Case {
-            name: "the partition is already in the ongoing transaction",
-            transactional_id: TID,
-            seeded: entry(TxnState::Ongoing, &[offsets_partition(4)]),
-            producer: producer(7, 3),
-            code: codes::NONE,
-            appends: false,
-        },
-        Case {
-            name: "prepare commit",
-            transactional_id: TID,
-            seeded: entry(TxnState::PrepareCommit, &[]),
-            producer: producer(7, 3),
-            code: codes::CONCURRENT_TRANSACTIONS,
-            appends: false,
-        },
-        Case {
-            name: "another producer id",
-            transactional_id: TID,
-            seeded: entry(TxnState::Ongoing, &[]),
-            producer: producer(8, 3),
-            code: codes::INVALID_PRODUCER_ID_MAPPING,
-            appends: false,
-        },
-        Case {
-            name: "another epoch",
-            transactional_id: TID,
-            seeded: entry(TxnState::Ongoing, &[]),
-            producer: producer(7, 2),
-            code: codes::PRODUCER_FENCED,
-            appends: false,
-        },
-        Case {
-            name: "an empty transactional id",
-            transactional_id: "",
-            seeded: entry(TxnState::Ongoing, &[]),
-            producer: producer(7, 3),
-            code: codes::INVALID_REQUEST,
-            appends: false,
-        },
-    ];
-    let mut expected = Vec::new();
-    let mut actual = Vec::new();
-    for case in cases {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let LoggedCoordinator {
-            coordinator,
-            partition,
-        } = coordinator_with_log(directory.path());
-        coordinator
-            .lead_state_partition_for_test(PartitionIndex(0))
-            .await;
-        coordinator
-            .put(case.seeded.clone(), TxnVersion::Verified)
-            .await
-            .expect("seed the transaction");
-        let before = partition.log_end_offset().0;
-
-        let code = add_offsets_partition(
-            &coordinator,
-            case.transactional_id,
-            case.producer,
-            offsets_partition(4),
-            TxnVersion::Verified,
-        )
-        .await;
-
-        let stored = coordinator.get(TID).expect("entry").lock().await.clone();
-        let after = if case.appends {
-            Outcome::Appended {
-                state: TxnState::Ongoing,
-                started: true,
-            }
-        } else {
-            Outcome::Unchanged(case.seeded.clone())
-        };
-        expected.push((case.name, case.code, after));
-        let appended = partition.log_end_offset().0 > before;
-        let observed = if appended {
-            Outcome::Appended {
-                state: stored.state,
-                started: stored.start_ms >= 0,
-            }
-        } else {
-            Outcome::Unchanged(stored)
-        };
-        actual.push((case.name, code, observed));
-    }
-    assert!(actual == expected);
-}
-
 /// Regression: a caller that already holds the entry handle from before this
 /// append, such as `AddPartitionsToTxn`'s `register_partitions` queued on the
 /// same mutex, must see the durable post-append state once it gets the lock,
@@ -356,16 +164,6 @@ async fn a_caller_already_holding_the_handle_sees_the_durable_state() {
     assert!(via_old_handle.state == TxnState::Ongoing);
 }
 
-/// What one `AddOffsetsToTxn` call left behind.
-#[derive(Debug, PartialEq, Eq)]
-enum Outcome {
-    /// A record was appended. The entry has this state, and a start time when
-    /// `started` is true.
-    Appended { state: TxnState, started: bool },
-    /// Nothing was appended, and the entry is this one.
-    Unchanged(TxnEntry),
-}
-
 /// A transaction that `AddOffsetsToTxn` opens after a long idle period is not
 /// reapable at once (#850).
 #[tokio::test]
@@ -398,4 +196,183 @@ async fn the_reaper_does_not_abort_a_transaction_that_add_offsets_just_opened() 
         "start_ms={} now={now}",
         stored.start_ms
     );
+}
+
+#[derive(serde::Deserialize)]
+struct OffsetsInput {
+    state: String,
+    partitions: Vec<i32>,
+    held_id: i64,
+    next_id: i64,
+    requested_id: i64,
+    requested_epoch: i16,
+    transactional_id: String,
+}
+
+fn offsets_state(value: &str) -> TxnState {
+    match value {
+        "Empty" => TxnState::Empty,
+        "Ongoing" => TxnState::Ongoing,
+        "PrepareCommit" => TxnState::PrepareCommit,
+        "PrepareAbort" => TxnState::PrepareAbort,
+        "CompleteCommit" => TxnState::CompleteCommit,
+        "CompleteAbort" => TxnState::CompleteAbort,
+        _ => panic!("unknown transaction state {value}"),
+    }
+}
+
+impl OffsetsInput {
+    fn seeded(&self) -> TxnEntry {
+        let partitions = self
+            .partitions
+            .iter()
+            .copied()
+            .map(offsets_partition)
+            .collect::<Vec<_>>();
+        let mut seeded = entry(offsets_state(&self.state), &partitions);
+        seeded.producer_id = ProducerId(self.held_id);
+        if self.next_id >= 0 {
+            seeded.next_producer_id = ProducerId(self.next_id);
+            seeded.next_producer_epoch = 0;
+        }
+        seeded
+    }
+
+    fn requested(&self) -> ProducerIdentity { producer(self.requested_id, self.requested_epoch) }
+}
+
+#[derive(Default)]
+struct OffsetsPolicy {
+    input: Option<OffsetsInput>,
+    decision: Option<AddOffsetsDecision>,
+}
+
+#[rstest::fixture]
+fn offsets_policy() -> OffsetsPolicy {
+    // Each decision starts with independent transaction metadata.
+    OffsetsPolicy::default()
+}
+
+#[rstest_bdd_macros::given("transaction metadata and AddOffsets request {input}")]
+fn offsets_policy_input(offsets_policy: &mut OffsetsPolicy, input: String) {
+    offsets_policy.input = Some(serde_json::from_str(&input).expect("AddOffsets input"));
+}
+
+#[rstest_bdd_macros::when("the AddOffsets policy checks offsets partition 4")]
+fn decide_offsets(offsets_policy: &mut OffsetsPolicy) {
+    let input = offsets_policy.input.as_ref().expect("transaction metadata");
+    offsets_policy.decision = Some(decide(
+        &input.seeded(),
+        input.requested(),
+        &offsets_partition(4),
+    ));
+}
+
+#[rstest_bdd_macros::then("the AddOffsets decision is {expected}")]
+fn offsets_decision(offsets_policy: &OffsetsPolicy, expected: String) {
+    let expected = if expected == "append" {
+        AddOffsetsDecision::Append
+    } else {
+        AddOffsetsDecision::Answer(expected.parse().expect("Kafka error code"))
+    };
+    assert!(offsets_policy.decision.as_ref().expect("policy evaluated") == &expected);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/txn/handlers/add_offset_commits_to_txn/tests/policy.feature",
+    fixtures = [offsets_policy: OffsetsPolicy],
+);
+
+#[derive(Default)]
+struct LoggedOffsets {
+    input: Option<OffsetsInput>,
+    seeded: Option<TxnEntry>,
+    log: Option<LoggedCoordinator>,
+    before: i64,
+    code: Option<i16>,
+    // The log must close before its temporary directory is removed.
+    directory_guard: Option<tempfile::TempDir>,
+}
+
+#[rstest::fixture]
+fn logged_offsets() -> LoggedOffsets {
+    // Each request gets a fresh coordinator and a real transaction-state log.
+    LoggedOffsets::default()
+}
+
+#[rstest_bdd_macros::given("a leading transaction log seeded for AddOffsets {input}")]
+async fn seed_offsets_log(logged_offsets: &mut LoggedOffsets, input: String) {
+    let input: OffsetsInput = serde_json::from_str(&input).expect("AddOffsets request");
+    let seeded = input.seeded();
+    let directory = tempfile::tempdir().expect("transaction directory");
+    let log = coordinator_with_log(directory.path());
+    log.coordinator
+        .lead_state_partition_for_test(PartitionIndex(0))
+        .await;
+    log.coordinator
+        .put(seeded.clone(), TxnVersion::Verified)
+        .await
+        .expect("seed transaction");
+    logged_offsets.before = log.partition.log_end_offset().0;
+    logged_offsets.seeded = Some(seeded);
+    logged_offsets.input = Some(input);
+    logged_offsets.log = Some(log);
+    logged_offsets.directory_guard = Some(directory);
+}
+
+#[rstest_bdd_macros::when("AddOffsets registers offsets partition 4 through the coordinator")]
+async fn append_offsets(logged_offsets: &mut LoggedOffsets) {
+    let input = logged_offsets.input.as_ref().expect("request");
+    let log = logged_offsets.log.as_ref().expect("leading coordinator");
+    logged_offsets.code = Some(
+        add_offsets_partition(
+            &log.coordinator,
+            &input.transactional_id,
+            input.requested(),
+            offsets_partition(4),
+            TxnVersion::Verified,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("AddOffsets returns code {code} and log mutation {mutation}")]
+async fn offsets_log_result(logged_offsets: &LoggedOffsets, code: i16, mutation: String) {
+    assert!(logged_offsets.code.expect("AddOffsets executed") == code);
+    let log = logged_offsets.log.as_ref().expect("leading coordinator");
+    let stored = log
+        .coordinator
+        .get(TID)
+        .expect("transaction entry")
+        .lock()
+        .await
+        .clone();
+    let appended = log.partition.log_end_offset().0 > logged_offsets.before;
+    match mutation.as_str() {
+        "Ongoing-with-start-time" => {
+            assert!(appended);
+            assert!(stored.state == TxnState::Ongoing);
+            assert!(stored.start_ms >= 0);
+        }
+        "unchanged-entry" => {
+            assert!(!appended);
+            assert!(&stored == logged_offsets.seeded.as_ref().expect("seeded entry"));
+        }
+        _ => panic!("unknown log mutation {mutation}"),
+    }
+}
+
+/// The coordinator answers with Kafka's code and appends only a state change.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/handlers/add_offset_commits_to_txn/tests/log.feature",
+    name = "Durable AddOffsets decisions"
+)]
+#[tokio::test]
+async fn add_offsets_answers_kafka_codes_and_appends_only_a_change(
+    logged_offsets: LoggedOffsets,
+    input: String,
+    code: i16,
+    mutation: String,
+) {
+    let _ = (logged_offsets, input, code, mutation);
 }

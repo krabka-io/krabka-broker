@@ -225,64 +225,119 @@ fn write_all_encoded(segment: &mut Segment, interval: ByteSize) {
     }
 }
 
-fn write_all_verbatim(segment: &mut Segment, interval: ByteSize) {
-    for BatchSpec {
-        base_offset: base,
-        records,
-        timestamp,
-    } in BATCHES
-    {
-        let EncodedBatch { batch, wire } = encoded(base, records, timestamp);
-        segment
-            .append_verbatim(
-                &wire,
-                Offset(base),
-                batch.last_offset_delta,
-                batch.max_timestamp,
-                LeaderEpoch(0),
-                interval,
-            )
-            .unwrap();
+struct DumpIndexScenario {
+    fixture: Option<TempSegment>,
+    batches: Vec<BatchSpec>,
+}
+#[rstest::fixture]
+fn dump_indexes() -> DumpIndexScenario {
+    let batches = Vec::new();
+    DumpIndexScenario {
+        fixture: None,
+        batches,
     }
 }
-
-/// `.index` entries are `(last offset of the batch, position of the batch)`,
-/// and `.timeindex` entries are `(running maximum, last offset of the batch
-/// that set it)` that strictly increase in timestamp. The last offsets are 2,
-/// 3, 5, 6 and 7, and the maximum is set by the batches ending at 2, 5 and 7.
-///
-/// The first batch takes no `.index` entry: Kafka's `LogSegment.append`
-/// indexes a batch once more than `index.interval.bytes` were written since
-/// the last entry, and nothing was written before the first. The second
-/// batch's entry carries the maximum the first one set, so the time index
-/// still names the batch ending at 2.
-#[yare::parameterized(
-    encoding_append = { "encoding append", false },
-    verbatim_append = { "verbatim append", true },
-)]
-fn the_append_paths_write_the_indexes_kafka_dump_log_verifies(label: &'static str, verbatim: bool) {
-    let expected_time_entries = vec![time_entry(102, 2), time_entry(201, 5), time_entry(300, 7)];
-    let TempSegment { dir, mut segment } = test_segment();
-    if verbatim {
-        write_all_verbatim(&mut segment, DENSE_INDEX);
-    } else {
-        write_all_encoded(&mut segment, DENSE_INDEX);
+#[rstest_bdd_macros::given("log batches for Kafka index verification")]
+fn dump_index_batches(dump_indexes: &mut DumpIndexScenario, datatable: Vec<Vec<String>>) {
+    dump_indexes.fixture = Some(test_segment());
+    dump_indexes.batches = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [base, records, timestamp] = row.as_slice() else {
+                panic!("base offset record count and timestamp columns required")
+            };
+            BatchSpec {
+                base_offset: base.parse().expect("base offset"),
+                records: records.parse().expect("record count"),
+                timestamp: timestamp.parse().expect("base timestamp"),
+            }
+        })
+        .collect();
+}
+#[rstest_bdd_macros::when("the batches are appended through the {path} append path")]
+fn append_dump_index_batches(dump_indexes: &mut DumpIndexScenario, path: String) {
+    let segment = &mut dump_indexes
+        .fixture
+        .as_mut()
+        .expect("log batches given")
+        .segment;
+    for spec in &dump_indexes.batches {
+        match path.as_str() {
+            "encoding" => {
+                let batch = sample_batch()
+                    .offset(spec.base_offset)
+                    .records(spec.records)
+                    .timestamp(spec.timestamp)
+                    .call();
+                segment
+                    .append(&batch, DENSE_INDEX)
+                    .expect("encoding append");
+            }
+            "verbatim" => {
+                let EncodedBatch { batch, wire } =
+                    encoded(spec.base_offset, spec.records, spec.timestamp);
+                segment
+                    .append_verbatim(
+                        &wire,
+                        Offset(spec.base_offset),
+                        batch.last_offset_delta,
+                        batch.max_timestamp,
+                        LeaderEpoch(0),
+                        DENSE_INDEX,
+                    )
+                    .expect("verbatim append");
+            }
+            _ => panic!("unknown append path {path}"),
+        }
     }
-
-    let offsets: Vec<u32> = offset_entries(dir.path(), 0)
+}
+#[rstest_bdd_macros::then("the offset index names batch ends {offsets}")]
+fn dump_offset_index(dump_indexes: &DumpIndexScenario, offsets: String) {
+    let fixture = dump_indexes.fixture.as_ref().expect("log batches given");
+    let expected: Vec<u32> = offsets
+        .split(',')
+        .map(|offset| offset.parse().expect("relative offset"))
+        .collect();
+    let actual: Vec<u32> = offset_entries(fixture.dir.path(), 0)
         .iter()
         .map(|entry| entry.relative_offset)
         .collect();
-    assert2::assert!(offsets == vec![3, 5, 6, 7], "{label}");
+    assert2::assert!(actual == expected);
+}
+#[rstest_bdd_macros::then("the time index names these running maxima and batch ends")]
+fn dump_timestamp_index(dump_indexes: &DumpIndexScenario, datatable: Vec<Vec<String>>) {
+    let fixture = dump_indexes.fixture.as_ref().expect("log batches given");
+    let expected: Vec<TimeIndexEntry> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [timestamp, offset] = row.as_slice() else {
+                panic!("timestamp and relative offset columns required")
+            };
+            time_entry(
+                timestamp.parse().expect("maximum timestamp"),
+                offset.parse().expect("relative offset"),
+            )
+        })
+        .collect();
+    assert2::assert!(time_entries(fixture.dir.path(), 0) == expected);
+}
+#[rstest_bdd_macros::then("Kafka dump-log index validation finds no problems")]
+fn valid_dump_log_indexes(dump_indexes: &DumpIndexScenario) {
     assert2::assert!(
-        time_entries(dir.path(), 0) == expected_time_entries,
-        "{label}"
-    );
-    assert2::assert!(
-        dump_log_problems(dir.path(), 0) == Vec::<String>::new(),
-        "{label}"
+        dump_log_problems(
+            dump_indexes
+                .fixture
+                .as_ref()
+                .expect("log batches given")
+                .dir
+                .path(),
+            0
+        ) == Vec::<String>::new()
     );
 }
+rstest_bdd_macros::scenarios!("tests/features/append_index_contract", fixtures = [dump_indexes: DumpIndexScenario]);
 
 /// A sparse index takes an entry only once the batches since the last entry
 /// add up to the interval, and what it takes still verifies.

@@ -71,18 +71,6 @@ mod tests {
     }
 
     #[test]
-    fn bytes_match_kafka_schema() {
-        let want = wire_bytes(&[
-            "0000",             // value version 0
-            "030261036263",     // Topics, compact array of compact strings
-            "0000000000000007", // Version
-            "0000018bcfe56800", // Timestamp
-            "00",               // no tagged fields
-        ]);
-        assert!(&value().encode()[..] == &want[..]);
-    }
-
-    #[test]
     fn roundtrip() {
         let v = value();
         assert!(RegularExpressionValue::decode(&v.encode()).unwrap() == v);
@@ -97,5 +85,54 @@ mod tests {
     fn a_truncated_record_is_refused() {
         let full = value().encode();
         assert!(RegularExpressionValue::decode(&full[..full.len() - 1]).is_err());
+    }
+    mod bdd_regex_value {
+        use {
+            super::*,
+            crate::coordinator::unified::codec_observations::EncodedRecord,
+            assert2::assert,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type EncodedValue = EncodedRecord<RegularExpressionValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a resolved expression contains topics a and bc at version 7 and timestamp 1700000000000"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = value();
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator persists the resolved consumer subscription in the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted resolved consumer subscription matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000",             // value version 0
+                "030261036263",     // Topics, compact array of compact strings
+                "0000000000000007", // Version
+                "0000018bcfe56800", // Timestamp
+                "00",               // no tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/regex.feature",tags="@regex_value",fixtures=[stored_value: EncodedValue]);
     }
 }

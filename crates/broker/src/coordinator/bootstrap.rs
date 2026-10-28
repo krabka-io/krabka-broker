@@ -39,7 +39,7 @@ mod partition_metadata_replay_tests;
 #[cfg(test)]
 mod share_streams_replay_tests;
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
 #[cfg(test)]
 mod topic_bootstrap_tests;
 #[cfg(test)]

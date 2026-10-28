@@ -7,58 +7,110 @@
 use {
     crate::{
         cluster::{
-            RegisteredCluster, admin_text_cluster, assert_reassigned, assignment, execute_plan,
+            OfflineReplicaCommand, RegisteredCluster, assert_reassigned, assignment, execute_plan,
             offline_for_partition, reassignment_cluster, removed_replica,
         },
-        jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
+        jvm_acceptance::{
+            ClientPropsFile, KAFKA_IMAGE_TXN, TempFileMount, broker0_advertised,
+            verify_console_reassignment,
+        },
         oracle::{AssignedTopicCommandSetup, CliRun, OracleComparison},
         support::{ContainerInput, jvm_docker_command},
     },
     assert2::assert,
     krabka_metadata::NodeId,
-    std::{io::Write as _, process::Stdio, time::Duration},
+    std::{
+        io::Write as _,
+        process::{Output, Stdio},
+        time::Duration,
+    },
     tokio::time,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_reassign_partitions_end_to_end() {
-    const TOPIC: &str = "krabka-reassign-itest";
+struct MovingReplica {
+    cluster: Option<RegisteredCluster>,
+    props: Option<ClientPropsFile>,
+    plan: Option<TempFileMount>,
+    admin_mount: String,
+    json_mount: String,
+    topic: String,
+    staying: u64,
+    added: u64,
+    removing: Option<NodeId>,
+    verify: Option<Output>,
+}
+#[rstest::fixture]
+fn moving() -> MovingReplica {
+    // Start this scenario with fresh inputs and observations.
 
-    let (cluster, _admin_props, admin_mount) = Box::pin(reassignment_cluster(TOPIC)).await;
-
-    produce_one_record(&admin_mount, TOPIC);
-
-    let (initial, new_node, staying) = assignment(&cluster.h1, TOPIC, true);
-    let (_json_file, json_mount) = execute_plan(&admin_mount, TOPIC, staying, new_node, false);
-
-    let pr_after = cluster
+    MovingReplica {
+        cluster: None,
+        props: None,
+        plan: None,
+        admin_mount: String::new(),
+        json_mount: String::new(),
+        topic: String::new(),
+        staying: 0,
+        added: 0,
+        removing: None,
+        verify: None,
+    }
+}
+#[rstest_bdd_macros::given("a replicated SASL topic {topic} contains record before-reassignment")]
+async fn replicated_record(moving: &mut MovingReplica, topic: String) {
+    let (cluster, props, mount) = Box::pin(reassignment_cluster(&topic)).await;
+    produce_one_record(&mount, &topic);
+    moving.cluster = Some(cluster);
+    moving.props = Some(props);
+    moving.admin_mount = mount;
+    moving.topic = topic;
+}
+#[rstest_bdd_macros::when(
+    "the JVM executes a replica move retaining the leader and adding the unassigned broker"
+)]
+fn move_replica(moving: &mut MovingReplica) {
+    let cluster = moving.cluster.as_ref().expect("cluster");
+    let (initial, added, staying) = assignment(&cluster.h1, &moving.topic, true);
+    let (file, mount) = execute_plan(&moving.admin_mount, &moving.topic, staying, added, false);
+    let record = cluster
         .h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after alter");
-    let removing_replica = removed_replica(&pr_after, &initial);
-    wait_for_catch_up(&cluster, TOPIC, staying, new_node).await;
-
-    wait_for_drained_reassignment(&cluster, TOPIC).await;
-    // After completion the replica set must match [staying, new_node].
-    assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
-    wait_for_pruned_replica(&cluster, TOPIC, removing_replica).await;
-    eprintln!("KRABKA[test] reassignment completed; running --verify");
-
-    // --verify should report completion.
-    let verify_out = verify_console_reassignment(&admin_mount, &json_mount);
-
+        .partition_record_for_test(&moving.topic, 0)
+        .expect("record after alter");
+    moving.removing = Some(removed_replica(&record, &initial));
+    moving.added = added;
+    moving.staying = staying;
+    moving.plan = Some(file);
+    moving.json_mount = mount;
+}
+#[rstest_bdd_macros::then(
+    "the added replica catches up with real records, the target assignment completes, and the removed replica directory is pruned"
+)]
+async fn replicas_moved(moving: &MovingReplica) {
+    let cluster = moving.cluster.as_ref().expect("cluster");
+    wait_for_catch_up(cluster, &moving.topic, moving.staying, moving.added).await;
+    wait_for_drained_reassignment(cluster, &moving.topic).await;
+    assert_reassigned(&cluster.h1, &moving.topic, moving.staying, moving.added);
+    wait_for_pruned_replica(
+        cluster,
+        &moving.topic,
+        moving.removing.expect("removed replica"),
+    )
+    .await;
+}
+#[rstest_bdd_macros::when("the JVM verifies the executed reassignment plan")]
+fn verify_move(moving: &mut MovingReplica) {
+    moving.verify = Some(verify_console_reassignment(
+        &moving.admin_mount,
+        &moving.json_mount,
+    ));
+}
+#[rstest_bdd_macros::then("the verification output reports complete")]
+fn complete_move(moving: &MovingReplica) {
     assert!(
-        String::from_utf8_lossy(&verify_out.stdout)
+        String::from_utf8_lossy(&moving.verify.as_ref().expect("verified").stdout)
             .to_ascii_lowercase()
-            .contains("complete"),
-        "verify did not report completion: {}",
-        String::from_utf8_lossy(&verify_out.stdout)
+            .contains("complete")
     );
-
-    cluster.h1.shutdown().await;
-    cluster.h2.shutdown().await;
-    cluster.h3.shutdown().await;
 }
 
 /// Write one record into `topic` with `kafka-console-producer`.
@@ -232,41 +284,54 @@ fn assert_generated_plan_is_usable(
     }
 }
 
-/// `--generate` produces a usable plan on krabka and on Apache Kafka.
-///
-/// The tool builds the proposal itself, out of `DescribeTopics` and
-/// `DescribeCluster`; what a broker contributes is the current assignment and
-/// the broker set. So the rule the two sides share is that the plan is
-/// *usable* -- it covers the topic's partitions, and every replica in it is a
-/// broker the operator named -- and a broker that mis-reported either would
-/// hand the operator a document that `--execute` then refuses.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
-    const TOPIC: &str = "krabka-generate-itest";
-    const PARTITIONS: i32 = 3;
+struct GeneratedPlans {
+    comparison: Option<OracleComparison>,
+    topic: String,
+    partitions: i32,
+    outputs: Vec<CliRun>,
+}
+#[rstest::fixture]
+fn generated() -> GeneratedPlans {
+    // Start this scenario with fresh inputs and observations.
 
-    let comparison = OracleComparison::start("reassign-generate").await;
-    let [oracle_side, krabka_side] = comparison.sides();
-
-    let document = topics_to_move_json(&[TOPIC]);
-    for side in [&oracle_side, &krabka_side] {
+    GeneratedPlans {
+        comparison: None,
+        topic: String::new(),
+        partitions: 0,
+        outputs: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "Kafka and Krabka each have single-replica topic {topic} with {partitions} partitions"
+)]
+async fn plan_topics(generated: &mut GeneratedPlans, topic: String, partitions: i32) {
+    generated.comparison = Some(OracleComparison::start("reassign-generate").await);
+    for side in generated.comparison.as_ref().expect("comparison").sides() {
         side.run("kafka-topics", &[
             "--bootstrap-server",
             side.bootstrap(),
             "--create",
             "--if-not-exists",
             "--topic",
-            TOPIC,
+            &topic,
             "--partitions",
-            &PARTITIONS.to_string(),
+            &partitions.to_string(),
             "--replication-factor",
             "1",
         ])
         .expect_success();
-
-        let generated = reassign(
-            side,
+    }
+    generated.topic = topic;
+    generated.partitions = partitions;
+}
+#[rstest_bdd_macros::when(
+    "the JVM generates reassignment plans using broker list 1 on both brokers"
+)]
+fn generate_plans(generated: &mut GeneratedPlans) {
+    let document = topics_to_move_json(&[&generated.topic]);
+    for side in generated.comparison.as_ref().expect("comparison").sides() {
+        generated.outputs.push(reassign(
+            &side,
             None,
             &[
                 "--generate",
@@ -276,33 +341,178 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
                 "1",
             ],
             vec![ToolFile::new(TOPICS_JSON, &document)],
-        );
-        assert!(
-            generated.succeeded(),
-            "{}: --generate failed:\n{}",
-            side.label(),
-            generated.text(),
-        );
-        let plans = parse_generate(&generated.stdout);
-        let Some((current, proposed)) = plans else {
-            panic!(
-                "{}: --generate printed neither plan:\n{}",
-                side.label(),
-                generated.stdout,
-            );
-        };
+        ));
+    }
+}
+#[rstest_bdd_macros::then(
+    "both current and proposed plans cover every topic partition exactly with one distinct replica from broker 1"
+)]
+fn usable_plans(generated: &GeneratedPlans) {
+    assert!(generated.outputs.len() == 2);
+    for (index, output) in generated.outputs.iter().enumerate() {
+        assert!(output.succeeded(), "{}", output.text());
+        let (current, proposed) =
+            parse_generate(&output.stdout).expect("current and proposed plans");
         assert_generated_plan_is_usable(
-            side.label(),
-            TOPIC,
-            PARTITIONS,
+            &index.to_string(),
+            &generated.topic,
+            generated.partitions,
             1,
             &BTreeSet::from([1]),
             &current,
             &proposed,
         );
     }
+}
 
-    comparison.broker.shutdown().await;
+#[rstest::fixture]
+fn additional() -> OfflineReplicaCommand {
+    // Each scenario owns a fresh replica topology and its pending command output.
+    OfflineReplicaCommand::default()
+}
+#[rstest_bdd_macros::given(
+    "topic {topic} has two partitions on broker 1 and partition 0 is moving to an offline registered target"
+)]
+async fn pending_first_move(additional: &mut OfflineReplicaCommand, topic: String) {
+    let brokers = additional.start(topic).await;
+    let side = additional.side();
+    let topic = additional.topic.as_str();
+    let props = &additional.props;
+
+    side.create_assigned_topic(AssignedTopicCommandSetup {
+        topic,
+        assignment: "1,1",
+        props_path: CLIENT_PROPS,
+        files: &[ToolFile::new(CLIENT_PROPS, props)],
+    });
+    for partition in 0..2 {
+        brokers
+            .h1
+            .wait_until_partition_present(topic, partition)
+            .await;
+    }
+
+    // Stop a registered, non-bootstrap target so the first move cannot race
+    // replica catch-up and complete before the second command runs.
+    let (offline_node, handles, first) = offline_for_partition(
+        [brokers.h1, brokers.h2, brokers.h3],
+        topic,
+        "partition record",
+    )
+    .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
+
+    let staying = i32::try_from(first.replicas[0].0).expect("a node id fits");
+    let first_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(topic, 0),
+        replicas: vec![
+            staying,
+            i32::try_from(offline_node).expect("a node id fits"),
+        ],
+    }]);
+    reassign(
+        &side,
+        Some(props),
+        &["--execute", "--reassignment-json-file", PLAN_JSON],
+        vec![ToolFile::new(PLAN_JSON, &first_plan)],
+    )
+    .expect_success();
+    h1.wait_for_image(|image| {
+        image
+            .partition(topic, 0)
+            .is_some_and(|record| !record.adding_replicas.is_empty())
+    })
+    .await;
+
+    additional.handles = handles;
+    additional.dirs = Some([brokers.d1, brokers.d2, brokers.d3]);
+}
+#[rstest_bdd_macros::when("the JVM executes a no-op assignment for partition 1 with additional")]
+fn add_move(additional: &mut OfflineReplicaCommand) {
+    let h1 = additional.handles[0].as_ref().expect("bootstrap broker");
+    let props = &additional.props;
+    let side = Side::Krabka {
+        bootstrap: &additional.advertised,
+    };
+    // A no-op assignment is enough to exercise the client's `--additional`
+    // path. Its contract here is that it must not cancel partition 0.
+    let second = h1
+        .partition_record_for_test(&additional.topic, 1)
+        .expect("second partition record");
+    let second_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(&additional.topic, 1),
+        replicas: second
+            .replicas
+            .iter()
+            .map(|node| i32::try_from(node.0).expect("a node id fits"))
+            .collect(),
+    }]);
+    additional.output = Some(reassign(
+        &side,
+        Some(props),
+        &[
+            "--execute",
+            "--reassignment-json-file",
+            PLAN_JSON,
+            "--additional",
+        ],
+        vec![ToolFile::new(PLAN_JSON, &second_plan)],
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the additional command succeeds and partition 0 still has adding replicas"
+)]
+fn first_move_preserved(additional: &OfflineReplicaCommand) {
+    let output = additional.output.as_ref().expect("additional command ran");
+    assert!(output.succeeded(), "{}", output.text());
+    let record = additional.handles[0]
+        .as_ref()
+        .expect("bootstrap broker")
+        .partition_record_for_test(&additional.topic, 0)
+        .expect("partition");
+    assert!(!record.adding_replicas.is_empty());
+}
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "jvm kafka reassign partitions end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_reassign_partitions_end_to_end(moving: MovingReplica) {
+    let cluster = moving.cluster.take().expect("cluster");
+    cluster.h1.shutdown().await;
+    cluster.h2.shutdown().await;
+    cluster.h3.shutdown().await;
+    drop(moving);
+}
+
+/// `--generate` produces a usable plan on krabka and on Apache Kafka.
+///
+/// The tool builds the proposal itself, out of `DescribeTopics` and
+/// `DescribeCluster`; what a broker contributes is the current assignment and
+/// the broker set. So the rule the two sides share is that the plan is
+/// *usable* -- it covers the topic's partitions, and every replica in it is a
+/// broker the operator named -- and a broker that mis-reported either would
+/// hand the operator a document that `--execute` then refuses.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "reassign partitions generate produces a usable plan on both"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_generate_produces_a_usable_plan_on_both(generated: GeneratedPlans) {
+    generated
+        .comparison
+        .take()
+        .expect("comparison")
+        .broker
+        .shutdown()
+        .await;
+    drop(generated);
 }
 
 /// A second `--execute --additional` leaves the first reassignment running.
@@ -318,96 +528,15 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
 /// A reassignment that is still running is one whose new replica has not
 /// caught up, and on a single stock node there is no second broker to move a
 /// replica to. The oracle in this file cannot host the premise.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn reassign_partitions_additional_keeps_the_reassignment_already_running() {
-    const TOPIC: &str = "krabka-additional-itest";
-
-    let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
-    let side = Side::Krabka {
-        bootstrap: &advertised,
-    };
-
-    side.create_assigned_topic(AssignedTopicCommandSetup {
-        topic: TOPIC,
-        assignment: "1,1",
-        props_path: CLIENT_PROPS,
-        files: &[ToolFile::new(CLIENT_PROPS, &props)],
-    });
-    for partition in 0..2 {
-        brokers
-            .h1
-            .wait_until_partition_present(TOPIC, partition)
-            .await;
-    }
-
-    // Stop a registered, non-bootstrap target so the first move cannot race
-    // replica catch-up and complete before the second command runs.
-    let (offline_node, handles, first) = offline_for_partition(
-        [brokers.h1, brokers.h2, brokers.h3],
-        TOPIC,
-        "partition record",
-    )
-    .await;
-    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
-
-    let staying = i32::try_from(first.replicas[0].0).expect("a node id fits");
-    let first_plan = reassignment_json(&[Assignment {
-        partition: TopicPartition::new(TOPIC, 0),
-        replicas: vec![
-            staying,
-            i32::try_from(offline_node).expect("a node id fits"),
-        ],
-    }]);
-    reassign(
-        &side,
-        Some(&props),
-        &["--execute", "--reassignment-json-file", PLAN_JSON],
-        vec![ToolFile::new(PLAN_JSON, &first_plan)],
-    )
-    .expect_success();
-    h1.wait_for_image(|image| {
-        image
-            .partition(TOPIC, 0)
-            .is_some_and(|record| !record.adding_replicas.is_empty())
-    })
-    .await;
-
-    // A no-op assignment is enough to exercise the client's `--additional`
-    // path. Its contract here is that it must not cancel partition 0.
-    let second = h1
-        .partition_record_for_test(TOPIC, 1)
-        .expect("second partition record");
-    let second_plan = reassignment_json(&[Assignment {
-        partition: TopicPartition::new(TOPIC, 1),
-        replicas: second
-            .replicas
-            .iter()
-            .map(|node| i32::try_from(node.0).expect("a node id fits"))
-            .collect(),
-    }]);
-    reassign(
-        &side,
-        Some(&props),
-        &[
-            "--execute",
-            "--reassignment-json-file",
-            PLAN_JSON,
-            "--additional",
-        ],
-        vec![ToolFile::new(PLAN_JSON, &second_plan)],
-    )
-    .expect_success();
-
-    let record = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after the second execute");
-    assert!(
-        !record.adding_replicas.is_empty(),
-        "partition 0 must still be reassigning after --additional: {record:?}",
-    );
-
-    for handle in handles.into_iter().flatten() {
-        handle.shutdown().await;
-    }
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "reassign partitions additional keeps the reassignment already running"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_additional_keeps_the_reassignment_already_running(
+    additional: OfflineReplicaCommand,
+) {
+    additional.shutdown().await;
 }

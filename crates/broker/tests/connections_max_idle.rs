@@ -193,17 +193,40 @@ async fn assert_connection_closed(stream: &mut TcpStream) {
     assert!(is_closed(stream).await);
 }
 
-/// A connection that sends nothing closes once either the broker-wide window
-/// or the named listener override passes, and the close is counted as idle.
-#[yare::parameterized(
-    broker_wide = { 60, false },
-    listener_override = { 20, true },
+struct IdleConnections {
+    fixture: Option<Fixture>,
+    pem_directory: Option<TempDir>,
+    stream: Option<TcpStream>,
+    wire: Vec<u8>,
+    responses: Vec<ApiVersionsResponse>,
+    correlation: Option<i32>,
+}
+#[rstest::fixture]
+fn idle_connections() -> IdleConnections {
+    // Start this scenario with fresh inputs and observations.
+
+    IdleConnections {
+        fixture: None,
+        pem_directory: None,
+        stream: None,
+        wire: Vec::new(),
+        responses: Vec::new(),
+        correlation: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a {scope} idle timeout of {window_secs} seconds on a plaintext listener"
 )]
-#[test_macro(tokio::test(flavor = "current_thread"))]
-async fn silent_plaintext_connection_closes_past_its_idle_window(
+async fn plaintext_idle_window(
+    idle_connections: &mut IdleConnections,
+    scope: String,
     window_secs: u32,
-    per_listener: bool,
 ) {
+    let per_listener = match scope.as_str() {
+        "broker-wide" => false,
+        "listener-override" => true,
+        other => panic!("unknown idle window source {other}"),
+    };
     let IdleWindowConfig { mut cfg, log_dir } = if per_listener {
         let log_dir = tempfile::tempdir().expect("tempdir");
         IdleWindowConfig {
@@ -222,50 +245,58 @@ async fn silent_plaintext_connection_closes_past_its_idle_window(
     } else {
         "PLAINTEXT"
     };
-    let fixture = Box::pin(Fixture::start(cfg, log_dir, listener)).await;
-
-    let mut stream = fixture.connect().await;
-    assert2::assert!(fixture.idle_closes() == 0);
-
-    advance(Duration::from_secs(u64::from(window_secs) + 1)).await;
-
-    assert_connection_closed(&mut stream).await;
-    assert2::assert!(fixture.idle_closes() == 1);
-
-    fixture.handle.shutdown().await;
+    idle_connections.fixture = Some(Box::pin(Fixture::start(cfg, log_dir, listener)).await);
 }
-
-/// Scenario 2: a connection that speaks every half-window is never closed.
-/// Four half-windows put twice the idle window behind the connection, so a
-/// deadline that did not reset on each frame read would have fired.
-#[tokio::test(flavor = "current_thread")]
-async fn a_connection_speaking_each_half_window_is_never_closed() {
-    let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
-    let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
-
-    let mut stream = fixture.connect().await;
+#[rstest_bdd_macros::when("a peer connects and the plaintext listener arms its idle timer")]
+async fn connect_idle_plaintext(idle_connections: &mut IdleConnections) {
+    idle_connections.stream = Some(
+        idle_connections
+            .fixture
+            .as_ref()
+            .expect("listener configured")
+            .connect()
+            .await,
+    );
+}
+#[rstest_bdd_macros::when("the clock advances {seconds} seconds without client traffic")]
+async fn advance_idle_window(seconds: u64) { advance(Duration::from_secs(seconds)).await; }
+#[rstest_bdd_macros::then("the silent connection closes without a response")]
+async fn silent_idle_connection_closed(idle_connections: &mut IdleConnections) {
+    assert_connection_closed(idle_connections.stream.as_mut().expect("peer connected")).await;
+}
+#[rstest_bdd_macros::then("exactly {count} connections have been counted as idle closes")]
+fn idle_connection_close_count(idle_connections: &IdleConnections, count: u64) {
+    assert!(
+        idle_connections
+            .fixture
+            .as_ref()
+            .expect("listener configured")
+            .idle_closes()
+            == count
+    );
+}
+#[rstest_bdd_macros::when(
+    "the client sends API versions requests every 30 seconds for four half-windows"
+)]
+async fn request_half_windows(idle_connections: &mut IdleConnections) {
+    let stream = idle_connections.stream.as_mut().expect("peer connected");
     for corr_id in 0..4 {
         advance(Duration::from_secs(30)).await;
-        let response = api_versions(&mut stream, corr_id)
+        let response = api_versions(stream, corr_id)
             .await
             .expect("connection must still serve requests");
-        assert!(response.error_code == 0, "round trip {corr_id}");
+        idle_connections.responses.push(response);
     }
-
-    assert!(fixture.idle_closes() == 0);
-    fixture.handle.shutdown().await;
 }
-
-/// Scenario 5: the window measures silence, not how long a frame takes.
-///
-/// Kafka's `Selector` refreshes a channel's idle clock on every read it
-/// serves, so a peer that trickles one request across two idle windows, a
-/// chunk each half-window, is served rather than closed part-way through.
-#[tokio::test(flavor = "current_thread")]
-async fn a_request_trickled_across_two_windows_is_served() {
-    let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
-    let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
-
+#[rstest_bdd_macros::then("all four API versions requests are served successfully")]
+fn active_idle_connection_served(idle_connections: &IdleConnections) {
+    assert!(idle_connections.responses.len() == 4);
+    for response in &idle_connections.responses {
+        assert!(response.error_code == 0);
+    }
+}
+#[rstest_bdd_macros::given("an API versions v0 frame with correlation id 7")]
+fn trickled_frame_input(idle_connections: &mut IdleConnections) {
     let mut body = BytesMut::new();
     ApiVersionsRequest::default()
         .encode(&mut body, 0)
@@ -282,17 +313,29 @@ async fn a_request_trickled_across_two_windows_is_served() {
         .to_vec();
     wire.extend_from_slice(&frame);
 
-    let mut stream = fixture.connect().await;
+    idle_connections.wire = wire;
+}
+#[rstest_bdd_macros::when("the client trickles the frame in four chunks separated by 30 seconds")]
+async fn send_trickled_frame(idle_connections: &mut IdleConnections) {
+    let stream = idle_connections.stream.as_mut().expect("peer connected");
     // The size prefix, then the 10-byte header in three pieces: four
     // half-windows between the first byte and the last.
-    for chunk in [&wire[..4], &wire[4..7], &wire[7..10], &wire[10..]] {
+    for chunk in [
+        &idle_connections.wire[..4],
+        &idle_connections.wire[4..7],
+        &idle_connections.wire[7..10],
+        &idle_connections.wire[10..],
+    ] {
         stream.write_all(chunk).await.expect("write a chunk");
         stream.flush().await.expect("flush a chunk");
         // Lets the serve loop take the chunk before the clock moves on.
         time::sleep(Duration::from_millis(20)).await;
         advance(Duration::from_secs(30)).await;
     }
-
+}
+#[rstest_bdd_macros::when("the client reads the trickled request response")]
+async fn read_trickled_frame(idle_connections: &mut IdleConnections) {
+    let stream = idle_connections.stream.as_mut().expect("peer connected");
     let len = stream
         .read_u32()
         .await
@@ -303,23 +346,20 @@ async fn a_request_trickled_across_two_windows_is_served() {
         .await
         .expect("response body");
     let mut cur: &[u8] = &response;
-    assert!(cur.get_i32() == 7);
+    idle_connections.correlation = Some(cur.get_i32());
     let response = ApiVersionsResponse::decode(&mut cur, 0).expect("ApiVersions decode");
-    assert!(response.error_code == 0);
-    assert!(fixture.idle_closes() == 0);
-    fixture.handle.shutdown().await;
+    idle_connections.responses.push(response);
 }
-
-/// Scenario 4: a TLS listener holds the handshake to the same window.
-///
-/// `apache/kafka:4.3.1` run with `connections.max.idle.ms=20000` and an SSL
-/// listener closes a socket that sends no `ClientHello` after 20 seconds:
-/// Kafka registers the channel with its `Selector` at accept time, so idle
-/// expiry covers a connection that has not finished, or even begun,
-/// negotiating. Without the same bound the broker would park a task and an fd
-/// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
+#[rstest_bdd_macros::then("the trickled request succeeds with correlation id 7")]
+fn trickled_frame_served(idle_connections: &IdleConnections) {
+    assert!(idle_connections.correlation == Some(7));
+    let [response] = &idle_connections.responses[..] else {
+        panic!("one trickled response expected")
+    };
+    assert!(response.error_code == 0);
+}
+#[rstest_bdd_macros::given("a TLS listener with an idle timeout of 250 milliseconds")]
+async fn tls_idle_window(idle_connections: &mut IdleConnections) {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let log_dir = tempfile::tempdir().expect("tempdir");
@@ -340,22 +380,84 @@ async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
     });
 
     let handle = Broker::start(cfg).await.expect("broker must start");
-    let mut stream = TcpStream::connect(handle.listen_addr())
-        .await
-        .expect("connect");
+    let addr = handle.listen_addr();
+    idle_connections.fixture = Some(Fixture {
+        handle,
+        addr,
+        _log_dir: log_dir,
+    });
+    idle_connections.pem_directory = Some(pem_dir);
+}
+#[rstest_bdd_macros::when("a peer opens a TCP connection without starting TLS")]
+async fn connect_silent_tls(idle_connections: &mut IdleConnections) {
+    let addr = idle_connections
+        .fixture
+        .as_ref()
+        .expect("TLS listener configured")
+        .addr;
+    idle_connections.stream = Some(TcpStream::connect(addr).await.expect("connect"));
+}
 
-    // No `ClientHello`, ever. `is_closed` waits five seconds, twenty windows.
-    assert_connection_closed(&mut stream).await;
-    assert!(
-        handle
-            .metrics()
-            .connection_closes
-            .get_or_create(&ConnectionCloseReasonLabel {
-                reason: ConnectionCloseReason::Idle,
-            })
-            .get()
-            == 1
-    );
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "silent plaintext connection closes past its idle window"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn silent_plaintext_connection_closes_past_its_idle_window(
+    idle_connections: IdleConnections,
+    scope: String,
+    window_secs: u32,
+    advance_secs: u64,
+) {
+    let _ = (scope, window_secs, advance_secs);
+    idle_connections
+        .fixture
+        .expect("listener configured")
+        .handle
+        .shutdown()
+        .await;
+}
 
-    handle.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a connection speaking each half window is never closed"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn a_connection_speaking_each_half_window_is_never_closed(idle_connections: IdleConnections) {
+    idle_connections
+        .fixture
+        .expect("listener configured")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a request trickled across two windows is served"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_trickled_across_two_windows_is_served(idle_connections: IdleConnections) {
+    idle_connections
+        .fixture
+        .expect("listener configured")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a tls listener closes a socket that never starts its handshake"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake(
+    idle_connections: IdleConnections,
+) {
+    idle_connections
+        .fixture
+        .expect("listener configured")
+        .handle
+        .shutdown()
+        .await;
 }

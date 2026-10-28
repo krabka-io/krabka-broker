@@ -157,7 +157,13 @@ fn parse_version(text: &str, line: &str) -> Result<i16, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
 
     /// A block shaped exactly like `mirror.gcr.io/apache/kafka:4.3.1`'s tool
     /// writes one, carrying every row kind at once: a two-bound range, a
@@ -187,86 +193,107 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         }
     }
 
-    #[test]
-    fn reads_every_row_kind_of_a_single_broker_block() {
-        let parsed = parse_single_broker(BLOCK).expect("block parses");
-        assert!(
-            parsed
-                == vec![
-                    row(Some("Produce"), 0, 3, 13),
-                    row(Some("ApiVersions"), 18, 0, 4),
-                    row(Some("ListPartitionReassignments"), 46, 0, 0),
-                    row(Some("ShareFetch"), 78, 1, 2),
-                    row(None, 1010, 0, 0),
-                ]
-        );
+    struct ToolOutput {
+        output: String,
+        parsed: Option<Result<Vec<ParsedRow>, ParseError>>,
+        ranges: Option<Vec<ApiVersion>>,
     }
 
-    #[test]
-    fn advertised_keeps_the_version_ranges() {
-        let parsed = parse_single_broker(BLOCK).expect("block parses");
-        assert!(
-            advertised(&parsed)
-                == vec![
-                    ApiVersion {
-                        api_key: 0,
-                        min_version: 3,
-                        max_version: 13,
-                        ..Default::default()
-                    },
-                    ApiVersion {
-                        api_key: 18,
-                        min_version: 0,
-                        max_version: 4,
-                        ..Default::default()
-                    },
-                    ApiVersion {
-                        api_key: 46,
-                        min_version: 0,
-                        max_version: 0,
-                        ..Default::default()
-                    },
-                    ApiVersion {
-                        api_key: 78,
-                        min_version: 1,
-                        max_version: 2,
-                        ..Default::default()
-                    },
-                    ApiVersion {
-                        api_key: 1010,
-                        min_version: 0,
-                        max_version: 0,
-                        ..Default::default()
-                    },
-                ]
-        );
+    #[fixture]
+    fn output() -> ToolOutput {
+        // Start this scenario with fresh inputs and observations.
+
+        ToolOutput {
+            output: String::new(),
+            parsed: None,
+            ranges: None,
+        }
     }
 
-    #[test]
-    fn rows_come_back_sorted_by_api_key() {
-        let out =
-            "n:1 (id: 1) -> (\n\tFetch(1): 0 to 1 [usable: 1],\n\tProduce(0): 0 [usable: 0]\n)\n";
-        let parsed = parse_single_broker(out).expect("block parses");
-        assert!(parsed == vec![row(Some("Produce"), 0, 0, 0), row(Some("Fetch"), 1, 0, 1)]);
+    #[given("the JVM API versions tool prints:")]
+    fn tool_output(output: &mut ToolOutput, docstring: String) { output.output = docstring; }
+
+    #[given("the JVM tool prints {count} broker blocks")]
+    fn repeated_blocks(output: &mut ToolOutput, count: usize) {
+        output.output = BLOCK.repeat(count);
     }
 
-    #[test]
-    fn rejects_outputs_that_are_not_one_broker() {
-        let no_block = "Error while executing broker api versions command\n";
-        assert!(parse_single_broker(no_block) == Err(ParseError::NoBrokerBlock));
-
-        let two_blocks = format!("{BLOCK}{BLOCK}");
-        assert!(parse_single_broker(&two_blocks) == Err(ParseError::ManyBrokerBlocks(2)));
+    #[when("the output is read as a single broker response")]
+    fn read_output(output: &mut ToolOutput) {
+        output.parsed = Some(parse_single_broker(&output.output));
     }
 
-    #[test]
-    fn rejects_a_row_whose_range_does_not_parse() {
-        let out = "n:1 (id: 1) -> (\n\tProduce(0): 3 to twelve [usable: 12]\n)\n";
-        assert!(
-            parse_single_broker(out)
-                == Err(ParseError::MalformedRange(
-                    "Produce(0): 3 to twelve [usable: 12]".into()
-                ))
-        );
+    #[when("the parsed rows are projected into advertised wire ranges")]
+    fn wire_ranges(output: &mut ToolOutput) {
+        output.ranges = Some(advertised(
+            output
+                .parsed
+                .as_ref()
+                .expect("the output was read")
+                .as_ref()
+                .expect("a valid broker block"),
+        ));
     }
+
+    #[derive(DataTableRow)]
+    struct ExpectedRow {
+        name: String,
+        key: i16,
+        minimum: i16,
+        maximum: i16,
+    }
+
+    #[derive(DataTableRow)]
+    struct ExpectedRange {
+        key: i16,
+        minimum: i16,
+        maximum: i16,
+    }
+
+    #[then("the advertised rows in API key order are:")]
+    fn advertised_rows(output: &ToolOutput, #[datatable] expected: Rows<ExpectedRow>) {
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|expected| {
+                row(
+                    (expected.name != "UNKNOWN").then_some(expected.name.as_str()),
+                    expected.key,
+                    expected.minimum,
+                    expected.maximum,
+                )
+            })
+            .collect();
+        assert!(output.parsed.as_ref() == Some(&Ok(expected)));
+    }
+
+    #[then("the advertised wire ranges are:")]
+    fn projected_ranges(output: &ToolOutput, #[datatable] expected: Rows<ExpectedRange>) {
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|expected| ApiVersion {
+                api_key: expected.key,
+                min_version: expected.minimum,
+                max_version: expected.maximum,
+                ..Default::default()
+            })
+            .collect();
+        assert!(output.ranges.as_ref() == Some(&expected));
+    }
+
+    #[then("parsing fails because no broker block was printed")]
+    fn absent_block(output: &ToolOutput) {
+        assert!(output.parsed.as_ref() == Some(&Err(ParseError::NoBrokerBlock)));
+    }
+
+    #[then("parsing fails because {count} broker blocks were printed")]
+    fn multiple_blocks(output: &ToolOutput, count: usize) {
+        assert!(output.parsed.as_ref() == Some(&Err(ParseError::ManyBrokerBlocks(count))));
+    }
+
+    #[then("parsing rejects the malformed row {line}")]
+    fn malformed_range(output: &ToolOutput, line: String) {
+        assert!(output.parsed.as_ref() == Some(&Err(ParseError::MalformedRange(line))));
+    }
+
+    scenarios!("tests/features/migrated/tests/api_versions_differential/parse.feature", fixtures = [output: ToolOutput]);
 }

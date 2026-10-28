@@ -659,7 +659,10 @@ pub fn pick_endpoint_host_port(
 mod tests {
     use {
         super::*,
-        crate::{test_support as broker_fixture_support, test_support::broker_registration},
+        crate::{
+            test_support as broker_fixture_support,
+            test_support::{StartedBroker, broker_registration},
+        },
         assert2::assert,
     };
 
@@ -742,24 +745,75 @@ mod tests {
         }
     }
 
-    /// `MetadataResponse.ClusterId` reports Kafka's base64 `Uuid` form, not
-    /// `java.util.UUID`'s hyphenated form (#1042). The expected string is what
-    /// `org.apache.kafka.common.Uuid(0x0102030405060708L, 0x090a0b0c0d0e0f10L)
-    /// .toString()` produces for the same 16 bytes.
-    #[tokio::test]
-    async fn reports_cluster_id_in_kafka_base64_form() {
+    #[derive(Default)]
+    struct MetadataClusterIdScenario {
+        started: Option<StartedBroker>,
+        response: Option<MetadataResponse>,
+    }
+    #[rstest::fixture]
+    fn metadata_cluster_id() -> MetadataClusterIdScenario {
+        let started = None;
+        MetadataClusterIdScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the metadata broker cluster UUID contains consecutive bytes 1 through 16"
+    )]
+    async fn metadata_known_cluster(metadata_cluster_id: &mut MetadataClusterIdScenario) {
         let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, p, peer, ctx);
-            boot [broker_fixture_support::start_broker_with(|config| config.cluster_id = Some(known_cluster_id))];
-            user ["describer"];
-            client ["metadata-client"];
-        };
-        let resp = handle(&broker, MetadataRequest::default(), 9, &ctx)
-            .await
-            .expect("handle");
-
-        assert!(resp.cluster_id.as_deref() == Some("AQIDBAUGBwgJCgsMDQ4PEA"));
-        broker_handle.shutdown().await;
+        metadata_cluster_id.started = Some(
+            broker_fixture_support::start_broker_with(|config| {
+                config.cluster_id = Some(known_cluster_id);
+            })
+            .await,
+        );
+    }
+    #[rstest_bdd_macros::when("a describer requests version 9 cluster metadata")]
+    async fn request_known_cluster_metadata(metadata_cluster_id: &mut MetadataClusterIdScenario) {
+        let broker = metadata_cluster_id
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(p,peer,ctx);user ["describer"];client ["metadata-client"];};
+        metadata_cluster_id.response = Some(
+            handle(&broker, MetadataRequest::default(), 9, &ctx)
+                .await
+                .expect("handle"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the metadata cluster ID is the Kafka UUID string AQIDBAUGBwgJCgsMDQ4PEA"
+    )]
+    async fn check_metadata_known_cluster(metadata_cluster_id: &mut MetadataClusterIdScenario) {
+        assert!(
+            metadata_cluster_id
+                .response
+                .as_ref()
+                .unwrap()
+                .cluster_id
+                .as_deref()
+                == Some("AQIDBAUGBwgJCgsMDQ4PEA")
+        );
+        metadata_cluster_id
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_metadata_cluster_id/metadata.feature",
+        name = "Metadata reports the cluster UUID in Kafka representation"
+    )]
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form(
+        metadata_cluster_id: MetadataClusterIdScenario,
+    ) {
+        let _ = metadata_cluster_id;
     }
 }

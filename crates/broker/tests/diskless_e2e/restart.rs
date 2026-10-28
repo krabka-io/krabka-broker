@@ -28,25 +28,58 @@
 use {
     crate::{
         RECORDS, TOPIC, VOTERS,
-        cluster::wait_for,
+        cluster::{DisklessCluster, wait_for},
         topic::{flushing_workload, seeded_leader},
-        wire::{assert_matches_produced, fetch_log, produce_until_stopped},
+        wire::{FetchedLog, assert_matches_produced, fetch_log, produce_until_stopped},
     },
     assert2::assert,
+    krabka_broker::NodeId,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::Duration,
     tokio_util::sync::CancellationToken,
 };
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
-    // Flush on a tight cadence so the crash below lands inside a flush cycle
-    // rather than between two idle ticks.
-    let (mut cluster, admin, topic_id, leader, _values, producer) =
+#[derive(Default)]
+struct CyclingFlushRecovery {
+    cluster: Option<DisklessCluster>,
+    admin: Option<Client>,
+    producer: Option<Client>,
+    topic: Option<WireUuid>,
+    leader: Option<NodeId>,
+    survivor: Option<NodeId>,
+    after_crash: Option<FetchedLog>,
+    after_restart: Option<FetchedLog>,
+}
+#[rstest::fixture]
+fn cycling_flush_recovery() -> CyclingFlushRecovery {
+    // A real object flusher, WAL quorum and crash recovery belong to one scenario.
+    CyclingFlushRecovery::default()
+}
+#[rstest_bdd_macros::given(
+    "a diskless quorum with 24 acknowledged records and a 50 millisecond flush cadence"
+)]
+async fn cycling_flush_prefix(cycling_flush_recovery: &mut CyclingFlushRecovery) {
+    let (cluster, admin, topic, leader, _values, producer) =
         flushing_workload(krabka_units::millis(50)).await;
-
-    // Wait until the flusher has actually started moving objects, so the crash
-    // interrupts a running pipeline instead of one that never began.
-    let (leader_broker, committed) = seeded_leader(&cluster, leader);
+    cycling_flush_recovery.cluster = Some(cluster);
+    cycling_flush_recovery.admin = Some(admin);
+    cycling_flush_recovery.producer = Some(producer);
+    cycling_flush_recovery.topic = Some(topic);
+    cycling_flush_recovery.leader = Some(leader);
+}
+#[rstest_bdd_macros::when(
+    "a whole flush cycle passes the prefix under live churn before the accepting broker crashes"
+)]
+async fn crash_cycling_flusher(cycling_flush_recovery: &mut CyclingFlushRecovery) {
+    let cluster = cycling_flush_recovery.cluster.as_mut().expect("cluster");
+    let topic_id = cycling_flush_recovery.topic.expect("topic");
+    let leader = cycling_flush_recovery.leader.expect("accepting leader");
+    let producer = cycling_flush_recovery
+        .producer
+        .take()
+        .expect("churn client");
+    let admin = cycling_flush_recovery.admin.take().expect("admin client");
+    let (leader_broker, committed) = seeded_leader(cluster, leader);
     wait_for(
         "the diskless flusher to reach the committed prefix",
         Duration::from_secs(90),
@@ -117,11 +150,31 @@ async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
         Duration::from_mins(2),
     )
     .await;
-    assert_matches_produced(&after_crash, 0, RECORDS);
 
-    // Bring the crashed broker back on the addresses it vacated. Its WAL
-    // replica recovers to its own checkpoint, discarding any suffix it never
-    // fsynced, and it rejoins the quorum.
+    cycling_flush_recovery.survivor = Some(survivor);
+    cycling_flush_recovery.after_crash = Some(after_crash);
+}
+#[rstest_bdd_macros::then(
+    "the surviving leader serves all {count} acknowledged offsets with the produced payloads"
+)]
+fn cycling_crash_prefix(cycling_flush_recovery: &CyclingFlushRecovery, count: usize) {
+    assert_matches_produced(
+        cycling_flush_recovery
+            .after_crash
+            .as_ref()
+            .expect("post-crash fetch"),
+        0,
+        count,
+    );
+}
+#[rstest_bdd_macros::when(
+    "the crashed broker restarts on its original addresses and rejoins all three registrations"
+)]
+async fn restart_cycling_flusher(cycling_flush_recovery: &mut CyclingFlushRecovery) {
+    let cluster = cycling_flush_recovery.cluster.as_mut().expect("cluster");
+    let leader = cycling_flush_recovery.leader.expect("accepting leader");
+    let survivor = cycling_flush_recovery.survivor.expect("survivor");
+    let topic_id = cycling_flush_recovery.topic.expect("topic");
     cluster.restart(leader).await;
     cluster
         .handle_for_node(leader)
@@ -150,11 +203,43 @@ async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
         Duration::from_mins(2),
     )
     .await;
-    assert_matches_produced(&after_restart, 0, RECORDS);
-    assert!(
-        after_restart.bytes == after_crash.bytes,
-        "the restart changed the batches the cluster serves"
-    );
 
-    cluster.shutdown().await;
+    cycling_flush_recovery.after_restart = Some(after_restart);
+}
+#[rstest_bdd_macros::then(
+    "the restarted cluster serves all {count} acknowledged offsets in exactly the post-crash batch bytes"
+)]
+fn cycling_restart_prefix(cycling_flush_recovery: &CyclingFlushRecovery, count: usize) {
+    let log = cycling_flush_recovery
+        .after_restart
+        .as_ref()
+        .expect("post-restart fetch");
+    assert_matches_produced(log, 0, count);
+    assert!(
+        log.bytes
+            == cycling_flush_recovery
+                .after_crash
+                .as_ref()
+                .expect("post-crash fetch")
+                .bytes
+    );
+}
+#[rstest_bdd_macros::then("the cycling-flush recovery cluster is shut down")]
+async fn finish_cycling_recovery(cycling_flush_recovery: &mut CyclingFlushRecovery) {
+    cycling_flush_recovery
+        .cluster
+        .take()
+        .expect("cluster")
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/restart.feature",
+    name = "a broker crashed mid flush loses no acknowledged offset"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset(
+    cycling_flush_recovery: CyclingFlushRecovery,
+) {
+    let _ = cycling_flush_recovery;
 }

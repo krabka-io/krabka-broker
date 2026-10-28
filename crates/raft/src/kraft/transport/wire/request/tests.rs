@@ -110,22 +110,6 @@ fn vote_request_preserves_legitimate_node_zero() {
 }
 
 #[test]
-fn vote_decode_accepts_kafka_base64_cluster_id() {
-    let cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-    let mut request = raw_vote_request();
-    request.cluster_id = Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
-
-    let Some(PeerRequest::Vote {
-        cluster_id: decoded,
-        ..
-    }) = decode_vote(&raw_vote_body(&request))
-    else {
-        panic!("valid Kafka cluster id must decode");
-    };
-    assert2::assert!(decoded == Some(cluster_id));
-}
-
-#[test]
 fn vote_encode_rejects_values_above_signed_wire_maximum() {
     let max_id = i32::MAX as u64;
     let max_epoch = i32::MAX as u32;
@@ -231,80 +215,6 @@ fn begin_end_round_trip() {
     assert2::assert!(decode_begin(&begin.encode()) == Some(begin));
     let end = end_request(vec![preferred_candidate(3), preferred_candidate(2)]);
     assert2::assert!(decode_end(&end.encode()) == Some(end));
-}
-
-/// The requests are Kafka's `RaftUtil.singletonBeginQuorumEpochRequest` and
-/// `singletonEndQuorumEpochRequest`: the cluster id, the recipient voter key
-/// and the leader's endpoints for `BeginQuorumEpoch`, and the successors in
-/// both of `EndQuorumEpoch`'s lists.
-#[test]
-fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
-    use krabka_protocol::{
-        Decode,
-        owned::{begin_quorum_epoch_request as bqe, end_quorum_epoch_request as eqe},
-        primitives::uuid::Uuid as WireUuid,
-    };
-
-    let begin = begin_request();
-    let raw_begin = BeginQuorumEpochRequest::decode(&mut &begin.encode()[..], QUORUM_EPOCH_VERSION)
-        .expect("decode begin request");
-    let expected_begin = BeginQuorumEpochRequest {
-        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
-        voter_id: 2,
-        topics: vec![bqe::TopicData {
-            topic_name: METADATA_TOPIC.into(),
-            partitions: vec![bqe::PartitionData {
-                partition_index: 0,
-                voter_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
-                leader_id: 5,
-                leader_epoch: 9,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        leader_endpoints: vec![bqe::LeaderEndpoint {
-            name: "CONTROLLER".into(),
-            host: "c5".into(),
-            port: 9093,
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    assert2::check!(raw_begin == expected_begin);
-
-    let end = end_request(vec![preferred_candidate(2)]);
-    let expected_end = |version: i16| EndQuorumEpochRequest {
-        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
-        topics: vec![eqe::TopicData {
-            topic_name: METADATA_TOPIC.into(),
-            partitions: vec![eqe::PartitionData {
-                partition_index: 0,
-                leader_id: 1,
-                leader_epoch: 4,
-                preferred_successors: if version == 0 { vec![2] } else { Vec::new() },
-                preferred_candidates: if version == 0 {
-                    Vec::new()
-                } else {
-                    vec![eqe::ReplicaInfo {
-                        candidate_id: 2,
-                        candidate_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
-                        ..Default::default()
-                    }]
-                },
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let raw_end = EndQuorumEpochRequest::decode(&mut &end.encode()[..], QUORUM_EPOCH_VERSION)
-        .expect("decode end request");
-    assert2::check!(raw_end == expected_end(QUORUM_EPOCH_VERSION));
-    // At v0 the successors travel in `PreferredSuccessors`.
-    let v0 = convert_request(END_QUORUM_EPOCH, &end.encode(), QUORUM_EPOCH_VERSION, 0)
-        .expect("convert to v0");
-    let raw_v0 = EndQuorumEpochRequest::decode(&mut &v0[..], 0).expect("decode v0");
-    assert2::check!(raw_v0 == expected_end(0));
 }
 
 #[test]
@@ -444,3 +354,183 @@ fn fetch_request_wire_encoding_fields() {
     check!(decoded == expected);
     check!(decode_fetch(&bytes) == Some(req));
 }
+
+use {
+    krabka_protocol::{
+        Decode,
+        owned::{begin_quorum_epoch_request as bqe, end_quorum_epoch_request as eqe},
+        primitives::uuid::Uuid as WireUuid,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
+
+struct VoteDecode {
+    body: Option<Bytes>,
+    decoded: Option<PeerRequest>,
+}
+
+#[fixture]
+fn vote() -> VoteDecode {
+    // Start this scenario with fresh inputs and observations.
+
+    VoteDecode {
+        body: None,
+        decoded: None,
+    }
+}
+
+#[given("a Kafka Vote request with base64 cluster ID {cluster_id}")]
+fn kafka_vote(vote: &mut VoteDecode, cluster_id: String) {
+    let mut request = raw_vote_request();
+    request.cluster_id = Some(cluster_id);
+    vote.body = Some(raw_vote_body(&request));
+}
+
+#[when("the Kafka Vote body is decoded as a peer request")]
+fn decode_kafka_vote(vote: &mut VoteDecode) {
+    vote.decoded = decode_vote(vote.body.as_ref().expect("a Kafka Vote body was given"));
+}
+
+#[then("the decoded Vote cluster ID is UUID {cluster_id}")]
+fn decoded_cluster_id(vote: &VoteDecode, cluster_id: String) {
+    let Some(PeerRequest::Vote {
+        cluster_id: decoded,
+        ..
+    }) = vote.decoded.as_ref()
+    else {
+        panic!("valid Kafka cluster id must decode as a Vote");
+    };
+    assert!(*decoded == Some(cluster_id.parse().expect("the feature names a UUID")));
+}
+
+struct SingletonRequest {
+    peer: Option<PeerRequest>,
+    encoded: Option<Bytes>,
+    begin: Option<BeginQuorumEpochRequest>,
+    end: Option<EndQuorumEpochRequest>,
+    v0_end: Option<EndQuorumEpochRequest>,
+}
+
+#[fixture]
+fn singleton() -> SingletonRequest {
+    // Start this scenario with fresh inputs and observations.
+
+    SingletonRequest {
+        peer: None,
+        encoded: None,
+        begin: None,
+        end: None,
+        v0_end: None,
+    }
+}
+
+#[given("a BeginQuorumEpoch for voter 2 with leader 5 at epoch 9 and endpoint c5 port 9093")]
+fn singleton_begin(singleton: &mut SingletonRequest) { singleton.peer = Some(begin_request()); }
+
+#[given("an EndQuorumEpoch from leader 1 at epoch 4 preferring voter 2")]
+fn singleton_end(singleton: &mut SingletonRequest) {
+    singleton.peer = Some(end_request(vec![preferred_candidate(2)]));
+}
+
+#[when("the singleton quorum request is encoded at the current protocol version")]
+fn encode_singleton(singleton: &mut SingletonRequest) {
+    let request = singleton
+        .peer
+        .as_ref()
+        .expect("a singleton quorum request was given");
+    let bytes = request.encode();
+    match request {
+        PeerRequest::BeginQuorumEpoch { .. } => {
+            singleton.begin = Some(
+                BeginQuorumEpochRequest::decode(&mut &bytes[..], QUORUM_EPOCH_VERSION)
+                    .expect("decode begin request"),
+            );
+        }
+        PeerRequest::EndQuorumEpoch { .. } => {
+            singleton.end = Some(
+                EndQuorumEpochRequest::decode(&mut &bytes[..], QUORUM_EPOCH_VERSION)
+                    .expect("decode end request"),
+            );
+        }
+        _ => panic!("a BeginQuorumEpoch or EndQuorumEpoch request was required"),
+    }
+    singleton.encoded = Some(bytes);
+}
+
+#[then(
+    "BeginQuorumEpoch uses Kafka's singleton metadata partition and complete voter and leader endpoint fields"
+)]
+fn kafka_singleton_begin(singleton: &SingletonRequest) {
+    let expected = BeginQuorumEpochRequest {
+        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
+        voter_id: 2,
+        topics: vec![bqe::TopicData {
+            topic_name: METADATA_TOPIC.into(),
+            partitions: vec![bqe::PartitionData {
+                partition_index: 0,
+                voter_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
+                leader_id: 5,
+                leader_epoch: 9,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        leader_endpoints: vec![bqe::LeaderEndpoint {
+            name: "CONTROLLER".into(),
+            host: "c5".into(),
+            port: 9093,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    check!(singleton.begin.as_ref() == Some(&expected));
+}
+
+#[when("the encoded EndQuorumEpoch is downgraded to protocol version zero")]
+fn downgrade_end(singleton: &mut SingletonRequest) {
+    let bytes = singleton
+        .encoded
+        .as_ref()
+        .expect("EndQuorumEpoch was encoded");
+    let v0 =
+        convert_request(END_QUORUM_EPOCH, bytes, QUORUM_EPOCH_VERSION, 0).expect("convert to v0");
+    singleton.v0_end = Some(EndQuorumEpochRequest::decode(&mut &v0[..], 0).expect("decode v0"));
+}
+
+fn expected_singleton_end(version: i16) -> EndQuorumEpochRequest {
+    EndQuorumEpochRequest {
+        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
+        topics: vec![eqe::TopicData {
+            topic_name: METADATA_TOPIC.into(),
+            partitions: vec![eqe::PartitionData {
+                partition_index: 0,
+                leader_id: 1,
+                leader_epoch: 4,
+                preferred_successors: if version == 0 { vec![2] } else { Vec::new() },
+                preferred_candidates: if version == 0 {
+                    Vec::new()
+                } else {
+                    vec![eqe::ReplicaInfo {
+                        candidate_id: 2,
+                        candidate_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
+                        ..Default::default()
+                    }]
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+#[then(
+    "EndQuorumEpoch uses Kafka's current candidate identities and version-zero preferred successors"
+)]
+fn kafka_singleton_end(singleton: &SingletonRequest) {
+    check!(singleton.end.as_ref() == Some(&expected_singleton_end(QUORUM_EPOCH_VERSION)));
+    check!(singleton.v0_end.as_ref() == Some(&expected_singleton_end(0)));
+}
+
+scenarios!("tests/features/migrated/src/kraft/transport/wire/request/tests.feature", fixtures = [vote: VoteDecode, singleton: SingletonRequest]);

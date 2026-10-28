@@ -222,46 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn topology_bytes_match_kafka_schema() {
-        let v = StreamsGroupTopologyValue {
-            epoch: 1,
-            subtopologies: vec![StoredSubtopology {
-                subtopology_id: "0".into(),
-                source_topics: vec!["s".into()],
-                source_topic_regex: vec![],
-                repartition_sink_topics: vec![],
-                state_changelog_topics: vec![StoredTopicInfo {
-                    name: "c".into(),
-                    partitions: 0,
-                    replication_factor: 3,
-                    topic_configs: vec![],
-                }],
-                repartition_source_topics: vec![],
-                copartition_groups: vec![],
-            }],
-        };
-        let want = wire_bytes(&[
-            "0000", "00000001", // Epoch
-            "02",       // one Subtopology
-            "0230",     // SubtopologyId
-            "020273",   // SourceTopics
-            "01",       // empty SourceTopicRegex
-            "02",       // one StateChangelogTopics entry
-            "0263",     // Name
-            "00000000", // Partitions
-            "0003",     // ReplicationFactor
-            "01",       // empty TopicConfigs
-            "00",       // TopicInfo tagged fields
-            "01",       // empty RepartitionSinkTopics
-            "01",       // empty RepartitionSourceTopics
-            "01",       // empty CopartitionGroups
-            "00",       // Subtopology tagged fields
-            "00",       // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[test]
     fn topology_rejects_a_missing_tagged_trailer() {
         let full = StreamsGroupTopologyValue::default().encode();
         assert!(StreamsGroupTopologyValue::decode(&full[..full.len() - 1]).is_err());
@@ -271,5 +231,79 @@ mod tests {
     fn topology_empty_round_trip() {
         let v = StreamsGroupTopologyValue::default();
         assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
+    }
+    mod bdd_topology {
+        use {
+            super::*,
+            crate::coordinator::unified::codec_observations::EncodedRecord,
+            assert2::assert,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type EncodedValue = EncodedRecord<StreamsGroupTopologyValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "topology epoch 1 has subtopology 0 reading s and changelog c with replication factor 3"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = StreamsGroupTopologyValue {
+                epoch: 1,
+                subtopologies: vec![StoredSubtopology {
+                    subtopology_id: "0".into(),
+                    source_topics: vec!["s".into()],
+                    source_topic_regex: vec![],
+                    repartition_sink_topics: vec![],
+                    state_changelog_topics: vec![StoredTopicInfo {
+                        name: "c".into(),
+                        partitions: 0,
+                        replication_factor: 3,
+                        topic_configs: vec![],
+                    }],
+                    repartition_source_topics: vec![],
+                    copartition_groups: vec![],
+                }],
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when("the coordinator persists the Streams topology in the compacted group log")]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Streams topology matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000", "00000001", // Epoch
+                "02",       // one Subtopology
+                "0230",     // SubtopologyId
+                "020273",   // SourceTopics
+                "01",       // empty SourceTopicRegex
+                "02",       // one StateChangelogTopics entry
+                "0263",     // Name
+                "00000000", // Partitions
+                "0003",     // ReplicationFactor
+                "01",       // empty TopicConfigs
+                "00",       // TopicInfo tagged fields
+                "01",       // empty RepartitionSinkTopics
+                "01",       // empty RepartitionSourceTopics
+                "01",       // empty CopartitionGroups
+                "00",       // Subtopology tagged fields
+                "00",       // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/topology.feature",tags="@topology",fixtures=[stored_value: EncodedValue]);
     }
 }

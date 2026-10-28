@@ -568,61 +568,98 @@ mod tests {
         }
     }
 
-    /// Kafka's `ConfigAdminManager.preprocess` shape checks, which answer
-    /// before any authorization. Each row is a request's resources and the
-    /// outcome for each.
-    #[test]
-    fn the_request_shape_is_checked_the_way_kafka_preprocesses_it() {
-        let resource =
-            |resource_type: i8, name: &str, configs: Vec<AlterableConfig>| AlterConfigsResource {
-                resource_type,
-                resource_name: name.into(),
-                configs,
-                ..Default::default()
-            };
-        let duplicate = Err((
-            codes::INVALID_REQUEST,
-            "Each resource must appear at most once.".to_owned(),
-        ));
-        let cases = [
-            (
-                vec![
-                    resource(RESOURCE_TYPE_TOPIC, "t", vec![]),
-                    resource(RESOURCE_TYPE_TOPIC, "t", vec![]),
-                    resource(RESOURCE_TYPE_GROUP, "t", vec![]),
-                ],
-                vec![duplicate.clone(), duplicate, Ok(())],
-            ),
-            (
-                vec![resource(RESOURCE_TYPE_TOPIC, "t", vec![
-                    config("retention.ms", OP_SET, Some("1")),
-                    config("retention.ms", OP_DELETE, None),
-                ])],
-                vec![Err((
-                    codes::INVALID_REQUEST,
-                    "Error due to duplicate config keys".to_owned(),
-                ))],
-            ),
-            (
-                vec![resource(RESOURCE_TYPE_GROUP, "g", vec![
-                    config("a", OP_SET, None),
-                    config("b", OP_DELETE, None),
-                    config("c", OP_APPEND, None),
-                ])],
-                vec![Err((
-                    codes::INVALID_REQUEST,
-                    "Null value not supported for : a, c".to_owned(),
-                ))],
-            ),
-        ];
-        for (resources, want) in cases {
-            let flags = resource_duplicate_flags(&resources);
-            let got: Vec<Result<(), (i16, String)>> = resources
-                .iter()
-                .zip(flags)
-                .map(|(resource, is_duplicate)| validate_resource_shape(resource, is_duplicate))
-                .collect();
-            check!(got == want);
+    #[derive(Default)]
+    struct IncrementalShapeScenario {
+        resources: Vec<AlterConfigsResource>,
+        outcomes: Option<Vec<Result<(), (i16, String)>>>,
+    }
+    #[rstest::fixture]
+    fn incremental_shape() -> IncrementalShapeScenario {
+        let resources = Vec::new();
+        IncrementalShapeScenario {
+            resources,
+            ..Default::default()
         }
     }
+    #[rstest_bdd_macros::given("the incremental configuration request contains resources")]
+    fn incremental_resources(
+        incremental_shape: &mut IncrementalShapeScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        incremental_shape.resources = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [kind, name, configs] = row.as_slice() else {
+                    panic!("resource type name and configuration operations required")
+                };
+                let resource_type = match kind.as_str() {
+                    "topic" => RESOURCE_TYPE_TOPIC,
+                    "group" => RESOURCE_TYPE_GROUP,
+                    _ => panic!("unknown resource kind: {kind}"),
+                };
+                let configs = if configs == "none" {
+                    Vec::new()
+                } else {
+                    configs
+                        .split(',')
+                        .map(|spec| {
+                            let columns: Vec<_> = spec.split(':').collect();
+                            let [name, operation, value] = columns.as_slice() else {
+                                panic!("config name operation value required")
+                            };
+                            config(
+                                name,
+                                operation.parse().unwrap(),
+                                if *value == "null" { None } else { Some(*value) },
+                            )
+                        })
+                        .collect()
+                };
+                AlterConfigsResource {
+                    resource_type,
+                    resource_name: name.clone(),
+                    configs,
+                    ..Default::default()
+                }
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when(
+        "the broker preprocesses duplicate resources duplicate keys and null operations"
+    )]
+    fn preprocess_incremental_shape(incremental_shape: &mut IncrementalShapeScenario) {
+        let flags = resource_duplicate_flags(&incremental_shape.resources);
+        incremental_shape.outcomes = Some(
+            incremental_shape
+                .resources
+                .iter()
+                .zip(flags)
+                .map(|(resource, duplicate)| validate_resource_shape(resource, duplicate))
+                .collect(),
+        );
+    }
+    #[rstest_bdd_macros::then("the incremental request shape outcomes in order are")]
+    fn check_incremental_shape(
+        incremental_shape: &IncrementalShapeScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [code, message] = row.as_slice() else {
+                    panic!("error code and message required")
+                };
+                let code = code.parse::<i16>().unwrap();
+                if code == codes::NONE {
+                    Ok(())
+                } else {
+                    Err((code, message.clone()))
+                }
+            })
+            .collect();
+        check!(incremental_shape.outcomes.as_ref().unwrap() == &expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_incremental_config_shape",fixtures=[incremental_shape:IncrementalShapeScenario]);
 }

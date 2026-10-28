@@ -20,8 +20,6 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
-#[cfg(unix)]
-use std::path::PathBuf;
 use {
     crate::support::{
         NodeIndex, RoleNodeSetup, client::create_topic_for_broker, producer::producer_record,
@@ -37,7 +35,7 @@ use {
     std::{
         collections::BTreeMap,
         fs::{self, Permissions},
-        path::Path,
+        path::{Path, PathBuf},
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tempfile::TempDir,
@@ -279,12 +277,46 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
         .expect("the leader acknowledges the record");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
+struct DirectoryFailure {
+    cluster: Option<Cluster>,
+    producer: Option<Producer>,
+    read_only: Option<ReadOnlyTree>,
+    follower_id: u64,
+    leader: u64,
+    primary_id: uuid::Uuid,
+    survivors: Vec<u64>,
+    failed_path: PathBuf,
+    first_timestamp: i64,
+}
+
+#[rstest::fixture]
+fn directory_failure() -> DirectoryFailure {
+    // Start this scenario with fresh inputs and observations.
+
+    DirectoryFailure {
+        cluster: None,
+        producer: None,
+        read_only: None,
+        follower_id: 0,
+        leader: 0,
+        primary_id: uuid::Uuid::nil(),
+        survivors: Vec::new(),
+        failed_path: PathBuf::new(),
+        first_timestamp: 0,
+    }
+}
+
+#[rstest_bdd_macros::given("three brokers with two log directories and a 100 ms segment roll")]
+async fn disk_cluster(directory_failure: &mut DirectoryFailure) {
     support::init_tracing();
-    let cluster = start_cluster().await;
-    // Each broker's audit partition fills its first log directory, so the
-    // target, placed in the least-loaded directory, lands in the second.
+    directory_failure.cluster = Some(start_cluster().await);
+}
+
+#[rstest_bdd_macros::given(
+    "a fully replicated target partition placed in a follower's second log directory"
+)]
+async fn target_replica(directory_failure: &mut DirectoryFailure) {
+    let cluster = directory_failure.cluster.as_ref().expect("cluster started");
     wait_until_each_hosts_an_audit_partition(&cluster.brokers).await;
     create_topic_for_broker(
         &cluster.controller,
@@ -296,31 +328,28 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     .await;
     let target = format!("{TOPIC}-0");
     wait_until_materialized(&cluster.brokers, &target).await;
-
     let record = cluster
         .controller
         .partition_record_for_test(TOPIC, 0)
-        .expect("the partition is in the image");
-    let leader = record.leader.0;
-    // The system test fails the second log directory and checks first that
-    // the partition lives there, so pick a follower where the premise holds.
+        .expect("partition");
+    directory_failure.leader = record.leader.0;
     let follower = cluster
         .brokers
         .iter()
         .find(|broker| {
-            broker.handle.node_id() != leader && broker.dir_of(&target) == Some(broker.extra.path())
+            broker.handle.node_id() != record.leader.0
+                && broker.dir_of(&target) == Some(broker.extra.path())
         })
-        .expect("a follower holds the partition in its second log directory");
-    let follower_id = follower.handle.node_id();
-    let primary_id = directory_id(follower.primary.path());
+        .expect("follower in second directory");
+    directory_failure.follower_id = follower.handle.node_id();
+    directory_failure.primary_id = directory_id(follower.primary.path());
+    directory_failure.failed_path = follower.extra.path().to_path_buf();
     let failed_id = directory_id(follower.extra.path());
     let slot = record
         .replicas
         .iter()
-        .position(|replica| replica.0 == follower_id)
-        .expect("the follower is a replica");
-    // KIP-858: the controller can map the failed directory to the partition
-    // only once the follower has reported where the replica lives.
+        .position(|replica| replica.0 == directory_failure.follower_id)
+        .expect("replica");
     cluster
         .controller
         .wait_for_image(|image| {
@@ -329,61 +358,92 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
                 .is_some_and(|partition| partition.directories.get(slot) == Some(&failed_id))
         })
         .await;
-
-    let producer = Producer::builder()
-        .bootstrap(cluster.brokers[0].handle.listen_addr().to_string())
-        .acks(Acks::One)
-        .build()
-        .await
-        .expect("producer");
-    let first_timestamp = i64::try_from(
+    directory_failure.survivors = record
+        .replicas
+        .iter()
+        .map(|replica| replica.0)
+        .filter(|id| *id != directory_failure.follower_id)
+        .collect();
+    directory_failure.survivors.sort_unstable();
+    directory_failure.producer = Some(
+        Producer::builder()
+            .bootstrap(cluster.brokers[0].handle.listen_addr().to_string())
+            .acks(Acks::One)
+            .build()
+            .await
+            .expect("producer"),
+    );
+    directory_failure.first_timestamp = i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis(),
     )
     .unwrap();
-    produce(&producer, first_timestamp).await;
+    produce(
+        directory_failure.producer.as_ref().expect("producer"),
+        directory_failure.first_timestamp,
+    )
+    .await;
     follower
         .handle
         .wait_until_local_log_end_offset(TOPIC, 0, 1)
         .await;
+}
 
-    let read_only = ReadOnlyTree::new(follower.extra.path());
-    if !read_only.refuses_writes() {
-        // Root writes through the permission bits, so nothing fails.
-        #[cfg(unix)]
-        drop(read_only);
-        cluster.shutdown().await;
-        return;
+#[rstest_bdd_macros::when(
+    "the follower's second directory becomes read-only and the next append rolls its segment"
+)]
+async fn fail_directory(directory_failure: &mut DirectoryFailure) {
+    directory_failure.read_only = Some(ReadOnlyTree::new(&directory_failure.failed_path));
+    if !directory_failure
+        .read_only
+        .as_ref()
+        .expect("read-only tree")
+        .refuses_writes()
+    {
+        drop(directory_failure.producer.take());
+        drop(directory_failure.read_only.take());
+        directory_failure
+            .cluster
+            .take()
+            .expect("cluster")
+            .shutdown()
+            .await;
+        rstest_bdd::skip!(
+            "the process can still write through the read-only directory permissions"
+        );
     }
-    // The next record is a second past the first. The follower rolls the
-    // segment to append it, and the roll creates a file in the read-only
-    // directory.
-    produce(&producer, first_timestamp + RECORD_GAP_MS).await;
+    produce(
+        directory_failure.producer.as_ref().expect("producer"),
+        directory_failure.first_timestamp + RECORD_GAP_MS,
+    )
+    .await;
+}
 
-    let mut survivors: Vec<u64> = record
-        .replicas
-        .iter()
-        .map(|replica| replica.0)
-        .filter(|replica| *replica != follower_id)
-        .collect();
-    survivors.sort_unstable();
+#[rstest_bdd_macros::then(
+    "the follower leaves the ISR, retains only its healthy directory, and stays alive without changing the leader"
+)]
+async fn failure_observed(directory_failure: &DirectoryFailure) {
+    let cluster = directory_failure.cluster.as_ref().expect("cluster");
     cluster
         .controller
         .wait_for_image(|image| {
             image.partition(TOPIC, 0).is_some_and(|partition| {
-                !partition.isr.iter().any(|replica| replica.0 == follower_id)
+                !partition
+                    .isr
+                    .iter()
+                    .any(|replica| replica.0 == directory_failure.follower_id)
             })
         })
         .await;
     let image = cluster.controller.controller_image_for_test();
-    let partition = image.partition(TOPIC, 0).expect("the partition");
+    let partition = image.partition(TOPIC, 0).expect("partition");
     let mut isr: Vec<u64> = partition.isr.iter().map(|replica| replica.0).collect();
     isr.sort_unstable();
     let registered_dirs = image
-        .broker(krabka_raft::NodeId(follower_id))
-        .expect("the follower stays registered")
+        .broker(krabka_raft::NodeId(directory_failure.follower_id))
+        .expect("follower stays registered")
         .log_dirs
         .clone();
     assert!(
@@ -391,12 +451,32 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
             partition.leader.0,
             isr,
             registered_dirs,
-            cluster.controller.broker_alive_for_test(follower_id).await,
-        ) == (leader, survivors, vec![primary_id], true)
+            cluster
+                .controller
+                .broker_alive_for_test(directory_failure.follower_id)
+                .await
+        ) == (
+            directory_failure.leader,
+            directory_failure.survivors.clone(),
+            vec![directory_failure.primary_id],
+            true
+        )
     );
+}
 
-    drop(producer);
-    #[cfg(unix)]
-    drop(read_only);
-    cluster.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/log_dir_failure.feature",
+    name = "A follower reports a failed directory during live replication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_whose_log_directory_fails_leaves_the_isr(directory_failure: DirectoryFailure) {
+    drop(directory_failure.producer.take());
+    drop(directory_failure.read_only.take());
+    directory_failure
+        .cluster
+        .take()
+        .expect("cluster")
+        .shutdown()
+        .await;
+    drop(directory_failure);
 }

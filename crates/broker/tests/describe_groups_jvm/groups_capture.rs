@@ -11,7 +11,6 @@ use {
         support::client::connect_owned,
     },
     assert2::assert,
-    krabka_broker::codes,
     krabka_protocol::owned::{
         describe_groups_request::DescribeGroupsRequest,
         describe_groups_response::{DescribeGroupsResponse, DescribedGroup},
@@ -32,94 +31,141 @@ async fn describe_real_groups(groups: &[&str]) -> DescribeGroupsResponse {
     response
 }
 
-fn assert_classic_group(classic: &DescribedGroup) {
-    assert!(
-        classic.error_code == 0,
-        "classic group describe error: {classic:?}"
-    );
-    assert!(classic.protocol_type == "consumer");
-    assert!(classic.protocol_data == "range");
-    assert!(classic.group_state == "Stable");
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct GroupOracle {
+    guard: Option<ContainerGuard>,
+    response: Option<DescribeGroupsResponse>,
+}
+
+#[fixture]
+fn oracle() -> GroupOracle {
+    // Start this scenario with fresh inputs and observations.
+
+    GroupOracle {
+        guard: None,
+        response: None,
+    }
+}
+
+#[given("cp-kafka 7.4.0 hosts classic range group g and offset-only group simple-typeless")]
+fn classic_oracle(oracle: &mut GroupOracle) {
+    drop(oracle.guard.take());
+    docker_pull(CLASSIC_IMAGE);
+    docker_run_kafka(CLASSIC_IMAGE, false);
+    oracle.guard = Some(ContainerGuard);
+    wait_for_broker("kafka-broker-api-versions");
+    prepare_classic_groups();
+}
+
+#[given("Apache Kafka 4.0.0 hosts consumer-protocol group g-next")]
+fn next_oracle(oracle: &mut GroupOracle) {
+    drop(oracle.guard.take());
+    docker_pull(NEXT_GEN_IMAGE);
+    docker_run_kafka(NEXT_GEN_IMAGE, true);
+    oracle.guard = Some(ContainerGuard);
+    wait_for_broker("/opt/kafka/bin/kafka-broker-api-versions.sh");
+    prepare_next_gen_group();
+}
+
+#[when("DescribeGroups requests groups {groups} without authorized operations")]
+async fn describe(oracle: &mut GroupOracle, groups: String) {
+    oracle.response = Some(describe_real_groups(&groups.split(',').collect::<Vec<_>>()).await);
+}
+
+fn group<'a>(oracle: &'a GroupOracle, id: &str) -> &'a DescribedGroup {
+    let response = oracle.response.as_ref().unwrap();
+    response
+        .groups
+        .iter()
+        .find(|group| group.group_id == id)
+        .unwrap_or_else(|| panic!("group {id} missing: {response:?}"))
+}
+
+#[then(
+    "classic group g has error {error}, protocol {protocol}, assignor {assignor}, state {state}, and one version-{version} metadata member"
+)]
+fn classic(
+    oracle: &GroupOracle,
+    error: i16,
+    protocol: String,
+    assignor: String,
+    state: String,
+    version: u16,
+) {
+    let classic = group(oracle, GROUP);
+    assert!(classic.error_code == error);
+    assert!(classic.protocol_type == protocol);
+    assert!(classic.protocol_data == assignor);
+    assert!(classic.group_state == state);
     assert!(classic.members.len() == 1);
     let member = &classic.members[0];
     assert!(!member.member_metadata.is_empty());
-    assert!(&member.member_metadata[..2] == [0x00, 0x03]);
+    assert!(&member.member_metadata[..2] == version.to_be_bytes());
 }
 
-fn persist_and_assert(response: &DescribeGroupsResponse) {
-    let classic = response
-        .groups
-        .iter()
-        .find(|group| group.group_id == GROUP)
-        .unwrap_or_else(|| panic!("group {GROUP} missing: {response:?}"));
-    let typeless = response
-        .groups
-        .iter()
-        .find(|group| group.group_id == TYPELESS_GROUP)
-        .unwrap_or_else(|| panic!("group {TYPELESS_GROUP} missing: {response:?}"));
+#[then("offset-only group simple-typeless has error {error} and empty protocol and assignor")]
+fn typeless(oracle: &GroupOracle, error: i16) {
+    let typeless = group(oracle, TYPELESS_GROUP);
+    assert!(typeless.error_code == error);
+    assert!(typeless.protocol_type.is_empty());
+    assert!(typeless.protocol_data.is_empty());
+}
+
+#[when("the classic and typeless responses are captured as real_kafka_classic.json")]
+fn persist_classic(oracle: &GroupOracle) {
     let fixture = serde_json::json!({
         "provenance": {
             "image": CLASSIC_IMAGE,
             "api_key": 15,
             "note": "Real cp-kafka DescribeGroups. cp/JVM is the authority for protocol_type / protocol_data / member_metadata.",
         },
-        "classic_consumer_group": group_json(classic),
-        "typeless_group": group_json(typeless),
+        "classic_consumer_group": group_json(group(oracle, GROUP)),
+        "typeless_group": group_json(group(oracle, TYPELESS_GROUP)),
     });
     write_fixture(
         "real_kafka_classic.json",
         &serde_json::to_string_pretty(&fixture).unwrap(),
     );
-    assert_classic_group(classic);
-    assert!(typeless.error_code == 0);
-    assert!(typeless.protocol_type == "");
-    assert!(typeless.protocol_data == "");
 }
 
-fn persist_and_assert_next_gen(response: &DescribeGroupsResponse) {
-    let next_gen = response
-        .groups
-        .iter()
-        .find(|group| group.group_id == NEXT_GEN_GROUP)
-        .unwrap_or_else(|| panic!("group {NEXT_GEN_GROUP} missing: {response:?}"));
+#[then(
+    "consumer group g-next has error {error}, state {state}, no classic protocol or members, and message {message}"
+)]
+fn next_generation(oracle: &GroupOracle, error: i16, state: String, message: String) {
+    let next_gen = group(oracle, NEXT_GEN_GROUP);
+    assert!(next_gen.error_code == error);
+    assert!(next_gen.error_message.as_deref() == Some(message.as_str()));
+    assert!(next_gen.protocol_type.is_empty());
+    assert!(next_gen.protocol_data.is_empty());
+    assert!(next_gen.group_state == state);
+    assert!(next_gen.members.is_empty());
+}
+
+#[when("the next-generation response is captured as real_kafka_next_gen.json")]
+fn persist_next(oracle: &GroupOracle) {
     let fixture = serde_json::json!({
         "provenance": {
             "image": NEXT_GEN_IMAGE,
             "api_key": 15,
             "note": "Real Apache Kafka next-generation consumer-group DescribeGroups authority capture.",
         },
-        "next_gen_consumer_group": group_json(next_gen),
+        "next_gen_consumer_group": group_json(group(oracle, NEXT_GEN_GROUP)),
     });
     write_fixture(
         "real_kafka_next_gen.json",
         &serde_json::to_string_pretty(&fixture).unwrap(),
     );
-    assert!(next_gen.error_code == codes::GROUP_ID_NOT_FOUND);
-    assert!(next_gen.error_message.as_deref() == Some("Group g-next is not a classic group."));
-    assert!(next_gen.protocol_type.is_empty());
-    assert!(next_gen.protocol_data.is_empty());
-    assert!(next_gen.group_state == "Dead");
-    assert!(next_gen.members.is_empty());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker; captures classic and next-generation real-Kafka DescribeGroups metadata"]
-async fn capture_real_kafka_describe_groups() {
-    docker_pull(CLASSIC_IMAGE);
-    {
-        docker_run_kafka(CLASSIC_IMAGE, false);
-        let _guard = ContainerGuard;
-        wait_for_broker("kafka-broker-api-versions");
-        prepare_classic_groups();
-        let response = describe_real_groups(&[GROUP, TYPELESS_GROUP]).await;
-        persist_and_assert(&response);
-    }
-
-    docker_pull(NEXT_GEN_IMAGE);
-    docker_run_kafka(NEXT_GEN_IMAGE, true);
-    let _guard = ContainerGuard;
-    wait_for_broker("/opt/kafka/bin/kafka-broker-api-versions.sh");
-    prepare_next_gen_group();
-    let response = describe_real_groups(&[NEXT_GEN_GROUP]).await;
-    persist_and_assert_next_gen(&response);
-}
+#[scenario(
+    path = "tests/features/migrated/tests/describe_groups_jvm/groups_capture.feature",
+    name = "capture real kafka describe groups"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn capture_real_kafka_describe_groups(oracle: GroupOracle) { drop(oracle); }

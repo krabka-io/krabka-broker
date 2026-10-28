@@ -28,7 +28,7 @@ use {
         },
         client::connect_owned,
         discovery::named_topic_metadata,
-        topics::{creatable_topic, create_topic_request, metadata_topic},
+        topics::{creatable_topic, create_topic_request},
         wire::{HeaderEncoding, request_body_capacity, request_frame},
     },
     assert2::assert,
@@ -43,7 +43,6 @@ use {
             describe_groups_response::DescribeGroupsResponse, metadata_request::MetadataRequest,
             metadata_response::MetadataResponse,
         },
-        primitives::uuid::Uuid,
     },
     std::{collections::HashSet, sync::Arc},
     tokio::{
@@ -132,181 +131,136 @@ async fn create_topic(client: &Client, name: &str, partitions: i32) {
     assert!(resp.topics[0].error_code == 0, "topic create: {resp:?}");
 }
 
-async fn seeded_group() -> Harness {
-    let h = boot_with_super_user("ANONYMOUS").await;
-    h.handle.group_create_for_test("g1");
-    h
+use krabka_protocol::owned::describe_cluster_response::DescribeClusterResponse;
+enum AuthorizedReply {
+    Topic(MetadataResponse),
+    Cluster(DescribeClusterResponse),
+    Group(DescribeGroupsResponse),
 }
-
-async fn describe_group(
-    client: &Client,
-    include_authorized_operations: bool,
-) -> DescribeGroupsResponse {
-    let resp = client
-        .send(DescribeGroupsRequest {
-            groups: vec!["g1".into()],
-            include_authorized_operations,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeGroups");
-    assert!(resp.groups.len() == 1);
-    let g = &resp.groups[0];
-    assert!(g.error_code == 0, "DescribeGroups error: {g:?}");
-    resp
+struct AuthorizedOperations {
+    harness: Option<Harness>,
+    metadata: Option<MetadataResponse>,
+    resource: String,
+    reply: Option<AuthorizedReply>,
 }
+#[rstest::fixture]
+fn operations() -> AuthorizedOperations {
+    // Start this scenario with fresh inputs and observations.
 
-// ── Metadata ────────────────────────────────────────────────────────────────
-
-/// Without `include_topic_authorized_operations`, the per-topic field
-/// must stay at the `i32::MIN` "not present" sentinel even when the
-/// authorizer would otherwise grant operations on the topic.
-#[tokio::test]
-async fn metadata_topic_authorized_operations_default_is_not_present() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-    create_topic(&h.client, "foo", 1).await;
-
-    let resp = h
-        .client
-        .send(MetadataRequest {
-            topics: Some(vec![metadata_topic(Some("foo".into()), Uuid::default())]),
-            // include_topic_authorized_operations defaults to false.
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata");
-
-    let ops = resp
-        .topics
-        .into_iter()
-        .find(|t| t.name.as_deref() == Some("foo"))
-        .map(|t| t.topic_authorized_operations)
-        .expect("foo row present");
-    assert!(ops == i32::MIN, "opt-out must leave the sentinel: {ops}");
-    h.shutdown().await;
+    AuthorizedOperations {
+        harness: None,
+        metadata: None,
+        resource: String::new(),
+        reply: None,
+    }
 }
-
-/// With `include_topic_authorized_operations = true`, a super-user sees the
-/// full topic mask.
-///
-/// A topic with no matching ACL for a non-super principal would show zero. Both
-/// rows appear in the same response. The super-user drives the request, but the
-/// broker computes the bitfield against the request's principal.
-#[tokio::test]
-async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-    create_topic(&h.client, "foo", 1).await;
-
-    let resp = h
-        .client
-        .send(MetadataRequest {
-            include_topic_authorized_operations: true,
-            ..named_topic_metadata("foo")
-        })
-        .await
-        .expect("Metadata");
-
-    let row = resp
-        .topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some("foo"))
-        .expect("foo row present");
-    assert!(
-        row.topic_authorized_operations == TOPIC_FULL_MASK,
-        "super-user must see the full topic mask, got 0b{:b}",
-        row.topic_authorized_operations
-    );
-    h.shutdown().await;
+#[rstest_bdd_macros::given("the anonymous plaintext principal is a configured super user")]
+async fn anonymous_operations_superuser(operations: &mut AuthorizedOperations) {
+    operations.harness = Some(boot_with_super_user("ANONYMOUS").await);
 }
-
-// ── DescribeCluster ─────────────────────────────────────────────────────────
-
-/// `DescribeCluster` without the include flag leaves the
-/// `cluster_authorized_operations` sentinel in place.
-#[tokio::test]
-async fn describe_cluster_authorized_operations_default_is_not_present() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-
-    let resp = h
-        .client
-        .send(DescribeClusterRequest::default())
-        .await
-        .expect("DescribeCluster");
-    assert!(resp.error_code == 0, "DescribeCluster error: {resp:?}");
-    assert!(
-        resp.cluster_authorized_operations == i32::MIN,
-        "opt-out must leave the sentinel"
-    );
-    h.shutdown().await;
+#[rstest_bdd_macros::given("resource {resource} is available for authorization discovery")]
+async fn discoverable_authorized_resource(operations: &mut AuthorizedOperations, resource: String) {
+    let harness = operations
+        .harness
+        .as_ref()
+        .expect("superuser broker started");
+    match resource.as_str() {
+        "foo" => create_topic(&harness.client, &resource, 1).await,
+        "g1" => harness.handle.group_create_for_test(&resource),
+        "cluster" => {}
+        other => panic!("unknown authorization resource {other}"),
+    }
+    operations.resource = resource;
 }
-
-/// With the include flag set, the super-user sees the full cluster mask.
-#[tokio::test]
-async fn describe_cluster_authorized_operations_super_user_gets_full_mask() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-
-    let resp = h
-        .client
-        .send(DescribeClusterRequest {
-            include_cluster_authorized_operations: true,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeCluster");
-    assert!(resp.error_code == 0, "DescribeCluster error: {resp:?}");
-    assert!(
-        resp.cluster_authorized_operations == CLUSTER_FULL_MASK,
-        "super-user must see the full cluster mask, got 0b{:b}",
-        resp.cluster_authorized_operations
-    );
-    h.shutdown().await;
+#[rstest_bdd_macros::when("{api} requests authorized operations {include} for that resource")]
+async fn discover_authorized_operations(
+    operations: &mut AuthorizedOperations,
+    api: String,
+    include: bool,
+) {
+    let client = &operations
+        .harness
+        .as_ref()
+        .expect("superuser broker started")
+        .client;
+    operations.reply = Some(match api.as_str() {
+        "Metadata" => AuthorizedReply::Topic(
+            client
+                .send(MetadataRequest {
+                    include_topic_authorized_operations: include,
+                    ..named_topic_metadata(&operations.resource)
+                })
+                .await
+                .expect("Metadata"),
+        ),
+        "DescribeCluster" => AuthorizedReply::Cluster(
+            client
+                .send(DescribeClusterRequest {
+                    include_cluster_authorized_operations: include,
+                    ..Default::default()
+                })
+                .await
+                .expect("DescribeCluster"),
+        ),
+        "DescribeGroups" => AuthorizedReply::Group(
+            client
+                .send(DescribeGroupsRequest {
+                    groups: vec![operations.resource.clone()],
+                    include_authorized_operations: include,
+                    ..Default::default()
+                })
+                .await
+                .expect("DescribeGroups"),
+        ),
+        other => panic!("unsupported authorization discovery API {other}"),
+    });
 }
-
-// ── DescribeGroups ──────────────────────────────────────────────────────────
-
-/// Without `include_authorized_operations`, each `DescribedGroup` row
-/// keeps the `i32::MIN` sentinel even when the authorizer would grant
-/// the full mask.
-#[tokio::test]
-async fn describe_groups_authorized_operations_default_is_not_present() {
-    let h = seeded_group().await;
-
-    let resp = describe_group(&h.client, false).await;
-    let g = &resp.groups[0];
-    assert!(
-        g.authorized_operations == i32::MIN,
-        "opt-out must leave the sentinel"
-    );
-    h.shutdown().await;
+#[rstest_bdd_macros::then("the reported authorized operations equal {expected}")]
+fn authorized_operations_mask(operations: &AuthorizedOperations, expected: String) {
+    let actual = match operations
+        .reply
+        .as_ref()
+        .expect("authorized operations requested")
+    {
+        AuthorizedReply::Topic(response) => {
+            response
+                .topics
+                .iter()
+                .find(|row| row.name.as_deref() == Some(operations.resource.as_str()))
+                .expect("requested topic row present")
+                .topic_authorized_operations
+        }
+        AuthorizedReply::Cluster(response) => {
+            assert!(
+                response.error_code == 0,
+                "DescribeCluster error: {response:?}"
+            );
+            response.cluster_authorized_operations
+        }
+        AuthorizedReply::Group(response) => {
+            assert!(response.groups.len() == 1);
+            let group = &response.groups[0];
+            assert!(group.error_code == 0, "DescribeGroups error: {group:?}");
+            group.authorized_operations
+        }
+    };
+    let wanted = match expected.as_str() {
+        "not-present" => i32::MIN,
+        "full-topic-mask" => TOPIC_FULL_MASK,
+        "full-cluster-mask" => CLUSTER_FULL_MASK,
+        "full-group-mask" => GROUP_FULL_MASK,
+        other => panic!("unknown authorized operations expectation {other}"),
+    };
+    assert!(actual == wanted, "expected {expected}, got 0b{actual:b}");
 }
-
-/// With the include flag set, a super-user driving the request sees the
-/// full group mask on a seeded group.
-#[tokio::test]
-async fn describe_groups_authorized_operations_super_user_gets_full_mask() {
-    let h = seeded_group().await;
-
-    let resp = describe_group(&h.client, true).await;
-    let g = &resp.groups[0];
-    assert!(
-        g.authorized_operations == GROUP_FULL_MASK,
-        "super-user must see the full group mask, got 0b{:b}",
-        g.authorized_operations
-    );
-    h.shutdown().await;
-}
-
-/// The cluster-level field also travels on the v8-10 Metadata response window.
-///
-/// The request's `include_cluster_authorized_operations` bit is the opt-in. The
-/// default, false, must leave the wire-default sentinel even on those versions.
-/// The wire codec gates the field on the encoded response version anyway, so
-/// this test exercises the populate path on the in-window v9 codec with
-/// `MetadataRequest.include_cluster_authorized_operations`.
-#[tokio::test]
-async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-
+#[rstest_bdd_macros::when(
+    "a client pins Metadata to version 9 and requests cluster authorized operations"
+)]
+async fn v9_cluster_operations_request(operations: &mut AuthorizedOperations) {
+    let h = operations
+        .harness
+        .as_ref()
+        .expect("superuser broker started");
     // Pin v9 so the cluster-level field is in the on-wire version range
     // (v8-10). The `Client` default would pick a higher Metadata version
     // that drops the field, in which case the value can't be observed
@@ -354,10 +308,48 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
     let _hdr_tagged = cur.get_u8();
     let resp = MetadataResponse::decode(&mut cur, version).expect("Metadata decode");
 
+    operations.metadata = Some(resp);
+}
+#[rstest_bdd_macros::then("Metadata v9 carries the full cluster authorized operations mask")]
+fn v9_cluster_operations_result(operations: &AuthorizedOperations) {
+    let resp = operations.metadata.as_ref().expect("Metadata v9 requested");
     assert!(
         resp.cluster_authorized_operations == CLUSTER_FULL_MASK,
         "super-user must see the full cluster mask on Metadata v9, got 0b{:b}",
         resp.cluster_authorized_operations
     );
-    h.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "Include flags control authorization discovery on each resource API"
+)]
+#[tokio::test]
+async fn include_flags_control_authorization(
+    operations: AuthorizedOperations,
+    resource: String,
+    api: String,
+    include: bool,
+    expected: String,
+) {
+    let _ = (resource, api, include, expected);
+    operations
+        .harness
+        .expect("superuser broker started")
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "metadata cluster authorized operations super user gets full mask v9"
+)]
+#[tokio::test]
+async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9(
+    operations: AuthorizedOperations,
+) {
+    operations
+        .harness
+        .expect("superuser broker started")
+        .shutdown()
+        .await;
 }

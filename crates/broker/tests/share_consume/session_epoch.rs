@@ -15,156 +15,263 @@ use {
     },
     assert2::assert,
     krabka_protocol::owned::{
-        share_fetch_request::ForgottenTopic, share_fetch_response::ShareFetchResponse,
+        share_fetch_request::{ForgottenTopic, ShareFetchRequest},
+        share_fetch_response::{PartitionData, ShareFetchResponse},
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
-/// The share-session epoch state machine rejects stale and unknown epochs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_epoch_validation() {
-    let ConsumptionFixture {
-        _permit,
-        broker: _broker,
-        client,
-        _dir,
-        tid,
-        member,
-    } = single_record_consumption_fixture().await;
+#[derive(Default)]
+struct SessionEpochScenario {
+    fixture: Option<ConsumptionFixture>,
+    response: Option<ShareFetchResponse>,
+    acquired: Option<PartitionData>,
+}
 
-    // Open (epoch 0) succeeds: top-level error_code 0.
-    let opened: ShareFetchResponse = client
-        .send(
-            share_fetch_req()
-                .session(ShareFetchSetup::from(ShareSessionSetup::opening(&member, tid)).session)
-                .max_wait(ShareFetchSetup::from(ShareSessionSetup::opening(&member, tid)).max_wait)
-                .acks(ShareFetchSetup::from(ShareSessionSetup::opening(&member, tid)).acks)
-                .call(),
-        )
-        .await
-        .expect("ShareFetch open");
-    assert!(
-        opened.error_code == NONE,
-        "open (epoch 0) must succeed, got {}",
-        opened.error_code
-    );
+#[fixture]
+fn share_session_epoch() -> SessionEpochScenario {
+    // Keep the live share session and each actual incremental response distinct.
+    SessionEpochScenario::default()
+}
 
-    // The stored epoch is now 1. A non-matching positive epoch (say 9) →
-    // INVALID_SHARE_SESSION_EPOCH (123) at the top level.
-    let stale: ShareFetchResponse = client
-        .send(
-            share_fetch_req()
-                .session(ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(9)).session)
-                .max_wait(ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(9)).max_wait)
-                .acks(ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(9)).acks)
-                .call(),
-        )
-        .await
-        .expect("ShareFetch stale");
-    assert!(
-        stale.error_code == INVALID_SHARE_SESSION_EPOCH,
-        "stale epoch must be 123 (INVALID_SHARE_SESSION_EPOCH), got {}",
-        stale.error_code
-    );
+#[given("a share member has one available record and no open fetch session")]
+async fn unopened_share_session(share_session_epoch: &mut SessionEpochScenario) {
+    share_session_epoch.fixture = Some(single_record_consumption_fixture().await);
+}
 
-    // A member with no live session sending a non-zero epoch →
-    // SHARE_SESSION_NOT_FOUND (122).
-    let MemberSession { member: ghost, .. } = join(&client, "g1", "t").await;
-    let not_found: ShareFetchResponse = client
-        .send(
-            share_fetch_req()
-                .session(ShareFetchSetup::at_epoch(&ghost, tid, ShareSessionEpoch(5)).session)
-                .max_wait(ShareFetchSetup::at_epoch(&ghost, tid, ShareSessionEpoch(5)).max_wait)
-                .acks(ShareFetchSetup::at_epoch(&ghost, tid, ShareSessionEpoch(5)).acks)
-                .call(),
+#[when("the share member fetches using session epoch {epoch}")]
+async fn fetch_share_session_epoch(share_session_epoch: &mut SessionEpochScenario, epoch: i32) {
+    let setup = if epoch == 0 {
+        ShareFetchSetup::from(ShareSessionSetup::opening(
+            &share_session_epoch.fixture().member,
+            share_session_epoch.fixture().tid,
+        ))
+    } else {
+        ShareFetchSetup::at_epoch(
+            &share_session_epoch.fixture().member,
+            share_session_epoch.fixture().tid,
+            ShareSessionEpoch(epoch),
         )
-        .await
-        .expect("ShareFetch unknown session");
-    assert!(
-        not_found.error_code == SHARE_SESSION_NOT_FOUND,
-        "unknown session must be 122 (SHARE_SESSION_NOT_FOUND), got {}",
-        not_found.error_code
+    };
+    share_session_epoch.response = Some(
+        share_session_epoch
+            .fixture()
+            .client
+            .send(session_fetch_request(setup))
+            .await
+            .expect("ShareFetch"),
     );
 }
 
-/// An incremental request with no topic rows continues to fetch every cached
-/// partition. A forgotten partition is removed from the session and stays
-/// removed on later empty incremental requests.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incremental_session_uses_cached_and_forgotten_partitions() {
-    let ConsumptionFixture {
-        _permit,
-        broker: _broker,
-        client,
-        _dir,
-        tid,
-        member,
-    } = single_record_consumption_fixture().await;
+#[then("the share session response reports {error}")]
+fn share_session_error(share_session_epoch: &SessionEpochScenario, error: String) {
+    let expected = match error.as_str() {
+        "NONE" => NONE,
+        "INVALID_SHARE_SESSION_EPOCH" => INVALID_SHARE_SESSION_EPOCH,
+        "SHARE_SESSION_NOT_FOUND" => SHARE_SESSION_NOT_FOUND,
+        _ => panic!("unknown session error {error}"),
+    };
+    let response = share_session_epoch
+        .response
+        .as_ref()
+        .expect("ShareFetch answered");
+    assert!(response.error_code == expected, "{response:?}");
+}
 
-    let first = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
-    assert!(acquired_count(&first) == 1);
+#[when("another joined member without a fetch session requests epoch five")]
+async fn missing_share_session(share_session_epoch: &mut SessionEpochScenario) {
+    let MemberSession { member, .. } = join(&share_session_epoch.fixture().client, "g1", "t").await;
+    let setup = ShareFetchSetup::at_epoch(
+        &member,
+        share_session_epoch.fixture().tid,
+        ShareSessionEpoch(5),
+    );
+    share_session_epoch.response = Some(
+        share_session_epoch
+            .fixture()
+            .client
+            .send(session_fetch_request(setup))
+            .await
+            .expect("ShareFetch unknown session"),
+    );
+}
+
+#[when("the session member opens a fetch and acquires the available record")]
+async fn acquire_session_record(share_session_epoch: &mut SessionEpochScenario) {
+    share_session_epoch.acquired = Some(
+        fetch_until_acquired(
+            &share_session_epoch.fixture().client,
+            ShareSessionSetup::opening(
+                &share_session_epoch.fixture().member,
+                share_session_epoch.fixture().tid,
+            ),
+        )
+        .await,
+    );
+}
+
+#[then("the opening session acquires one record")]
+fn opening_session_record(share_session_epoch: &SessionEpochScenario) {
+    assert!(
+        acquired_count(
+            share_session_epoch
+                .acquired
+                .as_ref()
+                .expect("records acquired")
+        ) == 1
+    );
+}
+
+#[when("the member accepts the first session record and another record is produced")]
+async fn accept_first_session_record(share_session_epoch: &SessionEpochScenario) {
     acknowledge_success(
-        &client,
-        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(0)),
+        &share_session_epoch.fixture().client,
+        ShareAck::prefix_for(
+            &share_session_epoch.fixture().member,
+            share_session_epoch.fixture().tid,
+            krabka_ids::Offset(0),
+        ),
     )
     .await;
+    produce_n()
+        .client(&share_session_epoch.fixture().client)
+        .topic_id(share_session_epoch.fixture().tid)
+        .call()
+        .await;
+}
 
-    produce_n().client(&client).topic_id(tid).call().await;
-    let cached: ShareFetchResponse = client
-        .send(
-            empty_session_request()
-                .member(member.clone())
-                .epoch(2)
-                .max_bytes(ONE_MB)
-                .call(),
-        )
-        .await
-        .expect("incremental ShareFetch");
-    assert!(cached.error_code == NONE);
-    assert!(cached.responses.len() == 1);
-    let cached_partition = &cached.responses[0].partitions[0];
-    assert!(cached_partition.partition_index == 0);
-    assert!(acquired_count(cached_partition) == 1);
+#[when("the member sends an empty incremental fetch at epoch {epoch}")]
+async fn empty_incremental_share_fetch(share_session_epoch: &mut SessionEpochScenario, epoch: i32) {
+    share_session_epoch.response = Some(
+        share_session_epoch
+            .fixture()
+            .client
+            .send(
+                empty_session_request()
+                    .member(share_session_epoch.fixture().member.clone())
+                    .epoch(epoch)
+                    .max_bytes(ONE_MB)
+                    .call(),
+            )
+            .await
+            .expect("incremental ShareFetch"),
+    );
+}
+
+#[then("the cached session returns partition zero with one acquired record")]
+fn cached_session_record(share_session_epoch: &SessionEpochScenario) {
+    let response = share_session_epoch
+        .response
+        .as_ref()
+        .expect("incremental ShareFetch answered");
+    assert!(response.error_code == NONE);
+    assert!(response.responses.len() == 1);
+    assert!(response.responses[0].partitions[0].partition_index == 0);
+    assert!(acquired_count(&response.responses[0].partitions[0]) == 1);
+}
+
+#[when("the member accepts cached offset one at epoch three")]
+async fn accept_cached_session_record(share_session_epoch: &SessionEpochScenario) {
     acknowledge_success(
-        &client,
+        &share_session_epoch.fixture().client,
         ShareAck::prefix()
-            .member(&member)
-            .topic_id(tid)
+            .member(&share_session_epoch.fixture().member)
+            .topic_id(share_session_epoch.fixture().tid)
             .epoch(3)
             .last(1)
             .call()
             .starting_at(krabka_ids::Offset(1)),
     )
     .await;
+}
 
-    let forgotten: ShareFetchResponse = client
-        .send(
-            empty_session_request()
-                .member(member.clone())
-                .epoch(4)
-                .max_bytes(ONE_MB)
-                .forgotten_topics_data(vec![ForgottenTopic {
-                    topic_id: wire(tid),
-                    partitions: vec![0],
-                    ..Default::default()
-                }])
-                .call(),
-        )
-        .await
-        .expect("forget partition");
-    assert!(forgotten.error_code == NONE);
-    assert!(forgotten.responses.is_empty());
+#[when("the member forgets partition zero at session epoch four")]
+async fn forget_session_partition(share_session_epoch: &mut SessionEpochScenario) {
+    share_session_epoch.response = Some(
+        share_session_epoch
+            .fixture()
+            .client
+            .send(
+                empty_session_request()
+                    .member(share_session_epoch.fixture().member.clone())
+                    .epoch(4)
+                    .max_bytes(ONE_MB)
+                    .forgotten_topics_data(vec![ForgottenTopic {
+                        topic_id: wire(share_session_epoch.fixture().tid),
+                        partitions: vec![0],
+                        ..Default::default()
+                    }])
+                    .call(),
+            )
+            .await
+            .expect("forget partition"),
+    );
+}
 
-    produce_n().client(&client).topic_id(tid).call().await;
-    let after_forget: ShareFetchResponse = client
-        .send(
-            empty_session_request()
-                .member(member)
-                .epoch(5)
-                .max_bytes(ONE_MB)
-                .call(),
-        )
-        .await
-        .expect("ShareFetch after forget");
-    assert!(after_forget.error_code == NONE);
-    assert!(after_forget.responses.is_empty());
+#[then("the session succeeds with no topic responses")]
+fn forgotten_session_partition(share_session_epoch: &SessionEpochScenario) {
+    let response = share_session_epoch
+        .response
+        .as_ref()
+        .expect("incremental ShareFetch answered");
+    assert!(response.error_code == NONE);
+    assert!(response.responses.is_empty());
+}
+
+#[when("one further record is produced for the forgotten session partition")]
+async fn produce_forgotten_session_record(share_session_epoch: &SessionEpochScenario) {
+    produce_n()
+        .client(&share_session_epoch.fixture().client)
+        .topic_id(share_session_epoch.fixture().tid)
+        .call()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/session_epoch.feature",
+    name = "session epoch validation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_epoch_validation(share_session_epoch: SessionEpochScenario) {
+    share_session_epoch
+        .fixture
+        .take()
+        .expect("share fixture")
+        .broker
+        .shutdown()
+        .await;
+    drop(share_session_epoch);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/session_epoch.feature",
+    name = "incremental session uses cached and forgotten partitions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incremental_session_uses_cached_and_forgotten_partitions(
+    share_session_epoch: SessionEpochScenario,
+) {
+    share_session_epoch
+        .fixture
+        .take()
+        .expect("share fixture")
+        .broker
+        .shutdown()
+        .await;
+    drop(share_session_epoch);
+}
+
+impl SessionEpochScenario {
+    fn fixture(&self) -> &ConsumptionFixture {
+        self.fixture.as_ref().expect("live scenario fixture")
+    }
+}
+
+fn session_fetch_request(setup: ShareFetchSetup<'_>) -> ShareFetchRequest {
+    share_fetch_req()
+        .session(setup.session)
+        .max_wait(setup.max_wait)
+        .acks(setup.acks)
+        .call()
 }

@@ -34,6 +34,8 @@ mod acl_output;
 mod acl_prefixed;
 #[path = "jvm_acceptance_sasl/acl_security_disabled.rs"]
 mod acl_security_disabled;
+#[path = "jvm_acceptance_sasl/authenticated_console.rs"]
+mod authenticated_console;
 mod jvm_acceptance;
 #[path = "jvm_acceptance_sasl/kafka_4_3_1_client.rs"]
 mod kafka_4_3_1_client;

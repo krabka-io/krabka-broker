@@ -38,14 +38,17 @@ use {
         topics::creatable_topic,
     },
     assert2::assert,
-    krabka_broker::{BrokerHandle, NodeId},
+    krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{create_topics_request::CreateTopicsRequest, produce_response::NodeEndpoint},
         primitives::uuid::Uuid as WireUuid,
         records::RecordBatch,
     },
+    std::mem,
     support::cluster_lock,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
 
 mod support;
@@ -115,112 +118,66 @@ async fn produce_one(
 
 use crate::support::partitions::wait_for_local_replica;
 
-/// Case A of [`produce_to_non_leader_is_rejected`]: a Produce sent to a
-/// non-leader that *does* hold a follower replica.
-///
-/// It is the case that can fail silently. A broker that appends to its own
-/// follower replica answers as if it had led the write, and only the local log
-/// end offset says otherwise -- which is why this asserts the follower's log
-/// did not grow, alongside the refusal, the leader hint and the KIP-951
-/// endpoint that makes the hint usable.
-async fn rf3_produce_to_a_follower_is_refused(
-    cluster: &[(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)],
-    rf3_id: WireUuid,
-) -> u64 {
-    let rf3_leader = cluster[0]
-        .0
-        .partition_leader_for_test("gate-rf3", 0)
-        .unwrap();
-    let follower_idx = cluster
-        .iter()
-        .position(|(h, _, _)| h.node_id() != rf3_leader)
-        .expect("a non-leader broker exists at rf=3");
-    let follower_node = cluster[follower_idx].0.node_id();
-    let follower_addr = cluster[follower_idx].1.listen_addr.to_string();
-
-    // Wait for the follower to materialize its LOCAL replica (supervisor
-    // reconcile lags the controller image). Without a local replica the rf=3
-    // case would degenerate into the rf=1 case and not prove the
-    // "don't append to a follower" property.
-    wait_for_local_replica(&cluster[follower_idx].0, "gate-rf3", 0).await;
-    let follower_leo_before = cluster[follower_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("follower hosts gate-rf3");
-
-    let follower_client = connect_client(follower_addr, None).await;
-    let ProduceAnswer {
-        error_code: code,
-        leader_hint,
-        node_endpoints,
-    } = produce_one(&follower_client, "gate-rf3", rf3_id, 0, "rf3-to-follower").await;
-    assert!(
-        code == 6,
-        "rf=3 Produce to follower node{follower_node} (leader=node{rf3_leader}) must be \
-         NOT_LEADER_OR_FOLLOWER (6); got {code}"
-    );
-    assert!(
-        leader_hint == i32::try_from(rf3_leader).unwrap(),
-        "current_leader hint must name the real leader node{rf3_leader}; got {leader_hint}"
-    );
-    // KIP-951's second half: the hint is a node id, and the producer can only
-    // re-target if the same response tells it that node's address. The
-    // endpoint must be the one the refusing broker's own image advertises for
-    // the listener the request arrived on.
-    let image = cluster[follower_idx].0.controller_image_for_test();
-    let registration = image
-        .broker(krabka_metadata::NodeId(rf3_leader))
-        .expect("the leader is registered in the follower's image");
-    let advertised = registration
-        .endpoints
-        .iter()
-        .find(|endpoint| endpoint.name == PLAINTEXT_LISTENER)
-        .expect("the leader advertises a PLAINTEXT endpoint");
-    assert!(
-        node_endpoints
-            == vec![NodeEndpoint {
-                node_id: leader_hint,
-                host: advertised.host.clone(),
-                port: i32::from(advertised.port),
-                rack: registration.rack.clone(),
-                ..Default::default()
-            }],
-        "the refused Produce must carry the leader's endpoint; got {node_endpoints:?}"
-    );
-    // The load-bearing anti-silent-append assertion: the follower's local log
-    // MUST NOT have grown. Pre-fix it advanced by one (silent follower append).
-    let follower_leo_after = cluster[follower_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("follower hosts gate-rf3");
-    assert!(
-        follower_leo_after == follower_leo_before,
-        "rejected Produce must NOT append to the follower's local log: \
-         before={follower_leo_before} after={follower_leo_after}"
-    );
-
-    rf3_leader
+#[derive(Default)]
+struct ProduceLeadership {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    admin: Option<Client>,
+    rf3_id: Option<WireUuid>,
+    rf1_id: Option<WireUuid>,
+    rf3_leader: Option<u64>,
+    rf1_leader: Option<u64>,
+    off_node_partition: Option<i32>,
+    follower_index: Option<usize>,
+    before: Option<i64>,
+    after: Option<i64>,
+    answer: Option<ProduceAnswer>,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_to_non_leader_is_rejected() {
-    let _g = cluster_lock().lock().await;
-    let cluster = registered_cluster(3).await;
+#[rstest::fixture]
+fn produce_leadership() -> ProduceLeadership {
+    // The refusal and successful retry use the same topic identities and logs.
+    ProduceLeadership::default()
+}
 
-    let bootstrap = cluster[0].1.listen_addr.to_string();
-    let admin = connect_client(bootstrap.clone(), None).await;
+impl ProduceLeadership {
+    fn admin(&self) -> &Client { self.admin.as_ref().expect("node 1 client") }
 
-    // rf=3 topic (a replica on every broker) and a rf=1, 6-partition topic
-    // (each partition on exactly one broker, so non-leaders hold no replica).
-    let cr = admin
+    fn answer(&self) -> &ProduceAnswer { self.answer.as_ref().expect("Produce answered") }
+
+    async fn shutdown(&mut self) {
+        let Self {
+            guard,
+            cluster,
+            admin,
+            ..
+        } = mem::take(self);
+        admin.expect("node 1 client").close();
+        shutdown_cluster(cluster).await;
+        drop(guard);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three registered brokers host gate-rf3 with one RF3 partition and gate-rf1 with six RF1 partitions, with every leader elected"
+)]
+async fn produce_gate_topics(produce_leadership: &mut ProduceLeadership) {
+    produce_leadership.guard = Some(cluster_lock().lock().await);
+    produce_leadership.cluster = registered_cluster(3).await;
+    produce_leadership.admin = Some(
+        connect_client(
+            produce_leadership.cluster[0].1.listen_addr.to_string(),
+            None,
+        )
+        .await,
+    );
+    let created = produce_leadership
+        .admin()
         .send(CreateTopicsRequest {
             topics: vec![
+                creatable_topic().name("gate-rf3".into()).replicas(3).call(),
                 creatable_topic()
-                    .name(("gate-rf3").into())
-                    .replicas(3)
-                    .call(),
-                creatable_topic()
-                    .name(("gate-rf1").into())
+                    .name("gate-rf1".into())
                     .partitions(6)
                     .call(),
             ],
@@ -230,164 +187,281 @@ async fn produce_to_non_leader_is_rejected() {
         .await
         .unwrap();
     assert!(
-        cr.topics.iter().all(|t| t.error_code == 0),
-        "create: {cr:?}"
+        created.topics.iter().all(|topic| topic.error_code == 0),
+        "create: {created:?}"
     );
-    // v13 Produce drops topic.name and carries only topic_id; echo the ids.
-    let rf3_id = cr
-        .topics
-        .iter()
-        .find(|t| t.name == "gate-rf3")
-        .unwrap()
-        .topic_id;
-    let rf1_id = cr
-        .topics
-        .iter()
-        .find(|t| t.name == "gate-rf1")
-        .unwrap()
-        .topic_id;
-
-    // Wait until node 1's image knows every partition's leader. Mirrors the
-    // `partition_leader_for_test(..).is_some()` predicate exactly: partition
-    // present in the image AND its leader field elected (non-zero).
-    cluster[0]
+    produce_leadership.rf3_id = Some(
+        created
+            .topics
+            .iter()
+            .find(|topic| topic.name == "gate-rf3")
+            .unwrap()
+            .topic_id,
+    );
+    produce_leadership.rf1_id = Some(
+        created
+            .topics
+            .iter()
+            .find(|topic| topic.name == "gate-rf1")
+            .unwrap()
+            .topic_id,
+    );
+    produce_leadership.cluster[0]
         .0
-        .wait_for_image(|img| {
-            img.partition("gate-rf3", 0)
-                .is_some_and(|pr| pr.leader != 0)
-                && (0..6).all(|p| {
-                    img.partition("gate-rf1", p)
-                        .is_some_and(|pr| pr.leader != 0)
+        .wait_for_image(|image| {
+            image
+                .partition("gate-rf3", 0)
+                .is_some_and(|partition| partition.leader != 0)
+                && (0..6).all(|index| {
+                    image
+                        .partition("gate-rf1", index)
+                        .is_some_and(|partition| partition.leader != 0)
                 })
         })
         .await;
+}
 
-    let rf3_leader = rf3_produce_to_a_follower_is_refused(&cluster, rf3_id).await;
-
-    // ───────────────────────────────────────────────────────────────────
-    // Case B: rf=1 — Produce to a NON-leader that holds NO replica.
-    // ───────────────────────────────────────────────────────────────────
-    let n1 = cluster[0].0.node_id();
-    let off_node_part = (0..6)
-        .find(|&p| {
-            cluster[0]
-                .0
-                .partition_leader_for_test("gate-rf1", p)
-                .is_some_and(|l| l != n1)
-        })
-        .expect("a gate-rf1 partition led off node 1");
-    let rf1_leader = cluster[0]
+#[rstest_bdd_macros::when(
+    "a one-record rf3-to-follower Produce is sent directly to a materialized RF3 follower and its log end is measured before and after"
+)]
+async fn produce_gate_follower_write(produce_leadership: &mut ProduceLeadership) {
+    let leader = produce_leadership.cluster[0]
         .0
-        .partition_leader_for_test("gate-rf1", off_node_part)
+        .partition_leader_for_test("gate-rf3", 0)
         .unwrap();
-    // Node 1 holds no replica for this rf=1 partition.
-    assert!(
-        cluster[0]
+    produce_leadership.rf3_leader = Some(leader);
+    let follower = produce_leadership
+        .cluster
+        .iter()
+        .position(|(broker, _, _)| broker.node_id() != leader)
+        .expect("RF3 follower");
+    produce_leadership.follower_index = Some(follower);
+    wait_for_local_replica(&produce_leadership.cluster[follower].0, "gate-rf3", 0).await;
+    produce_leadership.before = Some(
+        produce_leadership.cluster[follower]
             .0
-            .local_log_end_offset("gate-rf1", off_node_part)
+            .local_log_end_offset("gate-rf3", 0)
+            .expect("follower hosts gate-rf3"),
+    );
+    let client = connect_client(
+        produce_leadership.cluster[follower]
+            .1
+            .listen_addr
+            .to_string(),
+        None,
+    )
+    .await;
+    produce_leadership.answer = Some(
+        produce_one(
+            &client,
+            "gate-rf3",
+            produce_leadership.rf3_id.expect("RF3 topic"),
+            0,
+            "rf3-to-follower",
+        )
+        .await,
+    );
+    client.close();
+    produce_leadership.after = Some(
+        produce_leadership.cluster[follower]
+            .0
+            .local_log_end_offset("gate-rf3", 0)
+            .expect("follower hosts gate-rf3"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the RF3 follower returns NOT_LEADER_OR_FOLLOWER 6 with the real leader id and its complete PLAINTEXT endpoint, and its local log does not grow"
+)]
+fn refused_produce_gate_follower(produce_leadership: &ProduceLeadership) {
+    let answer = produce_leadership.answer();
+    let leader = produce_leadership.rf3_leader.expect("RF3 leader");
+    assert!(
+        answer.error_code == 6,
+        "RF3 follower must refuse Produce, got {}",
+        answer.error_code
+    );
+    assert!(answer.leader_hint == i32::try_from(leader).unwrap());
+    let image = produce_leadership.cluster
+        [produce_leadership.follower_index.expect("RF3 follower")]
+    .0
+    .controller_image_for_test();
+    let registration = image
+        .broker(krabka_metadata::NodeId(leader))
+        .expect("leader registered in follower image");
+    let advertised = registration
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == PLAINTEXT_LISTENER)
+        .expect("leader PLAINTEXT endpoint");
+    assert!(
+        answer.node_endpoints
+            == vec![NodeEndpoint {
+                node_id: answer.leader_hint,
+                host: advertised.host.clone(),
+                port: i32::from(advertised.port),
+                rack: registration.rack.clone(),
+                ..Default::default()
+            }],
+        "the refused Produce must carry the leader's endpoint; got {:?}",
+        answer.node_endpoints
+    );
+    assert!(
+        produce_leadership.after == produce_leadership.before,
+        "rejected Produce must NOT append to the follower's local log: before={:?} after={:?}",
+        produce_leadership.before,
+        produce_leadership.after
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "node 1 receives rf1-to-nonreplica for an RF1 partition led elsewhere and hosted on no local replica"
+)]
+async fn produce_gate_nonreplica_write(produce_leadership: &mut ProduceLeadership) {
+    let node = produce_leadership.cluster[0].0.node_id();
+    let partition = (0..6)
+        .find(|&partition| {
+            produce_leadership.cluster[0]
+                .0
+                .partition_leader_for_test("gate-rf1", partition)
+                .is_some_and(|leader| leader != node)
+        })
+        .expect("RF1 partition led off node 1");
+    produce_leadership.off_node_partition = Some(partition);
+    produce_leadership.rf1_leader = produce_leadership.cluster[0]
+        .0
+        .partition_leader_for_test("gate-rf1", partition);
+    assert!(
+        produce_leadership.cluster[0]
+            .0
+            .local_log_end_offset("gate-rf1", partition)
             .is_none(),
-        "test premise: node1 must NOT host gate-rf1/{off_node_part} (rf=1)"
+        "test premise: node1 must NOT host gate-rf1/{partition} (rf=1)"
     );
-    let ProduceAnswer {
-        error_code: code,
-        leader_hint,
-        ..
-    } = produce_one(
-        &admin,
-        "gate-rf1",
-        rf1_id,
-        off_node_part,
-        "rf1-to-nonreplica",
+    produce_leadership.answer = Some(
+        produce_one(
+            produce_leadership.admin(),
+            "gate-rf1",
+            produce_leadership.rf1_id.expect("RF1 topic"),
+            partition,
+            "rf1-to-nonreplica",
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the non-replica returns NOT_LEADER_OR_FOLLOWER 6 and hints the actual RF1 leader"
+)]
+fn refused_produce_gate_nonreplica(produce_leadership: &ProduceLeadership) {
+    assert!(produce_leadership.answer().error_code == 6);
+    assert!(
+        produce_leadership.answer().leader_hint
+            == i32::try_from(produce_leadership.rf1_leader.expect("RF1 leader")).unwrap()
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "the RF3 leader installs its leadership and receives rf3-to-leader with its log end measured before and after"
+)]
+async fn produce_gate_rf3_leader_write(produce_leadership: &mut ProduceLeadership) {
+    let leader = produce_leadership.rf3_leader.expect("RF3 leader");
+    let index = produce_leadership
+        .cluster
+        .iter()
+        .position(|(broker, _, _)| broker.node_id() == leader)
+        .unwrap();
+    produce_leadership.cluster[index]
+        .0
+        .wait_until_local_partition_leader("gate-rf3", 0, NodeId(leader))
+        .await;
+    produce_leadership.before = Some(
+        produce_leadership.cluster[index]
+            .0
+            .local_log_end_offset("gate-rf3", 0)
+            .expect("leader hosts gate-rf3"),
+    );
+    let client = connect_client(
+        produce_leadership.cluster[index].1.listen_addr.to_string(),
+        None,
     )
     .await;
-    assert!(
-        code == 6,
-        "rf=1 Produce to non-replica node{n1} (leader=node{rf1_leader}) must be \
-         NOT_LEADER_OR_FOLLOWER (6); got {code}"
+    produce_leadership.answer = Some(
+        produce_one(
+            &client,
+            "gate-rf3",
+            produce_leadership.rf3_id.expect("RF3 topic"),
+            0,
+            "rf3-to-leader",
+        )
+        .await,
     );
-    assert!(
-        leader_hint == i32::try_from(rf1_leader).unwrap(),
-        "current_leader hint must name node{rf1_leader}; got {leader_hint}"
+    client.close();
+    produce_leadership.after = Some(
+        produce_leadership.cluster[index]
+            .0
+            .local_log_end_offset("gate-rf3", 0)
+            .expect("leader hosts gate-rf3"),
     );
+}
 
-    // ───────────────────────────────────────────────────────────────────
-    // Leader path unchanged: the SAME Produce sent to the real leader of each
-    // partition succeeds (code 0) and the record is durably stored.
-    // ───────────────────────────────────────────────────────────────────
-    let rf3_leader_idx = cluster
-        .iter()
-        .position(|(h, _, _)| h.node_id() == rf3_leader)
-        .unwrap();
-    let leader3_client =
-        connect_client(cluster[rf3_leader_idx].1.listen_addr.to_string(), None).await;
-    // Gate on the leader broker installing its own leadership (leader, epoch
-    // and ISR) before producing, so the success Produce can't race the image
-    // apply (UNKNOWN_TOPIC_ID 100 / transient NOT_LEADER 6) — and so the
-    // `leo_before` read below is non-None.
-    cluster[rf3_leader_idx]
-        .0
-        .wait_until_local_partition_leader("gate-rf3", 0, NodeId(rf3_leader))
-        .await;
-    let leader3_leo_before = cluster[rf3_leader_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("leader hosts gate-rf3");
-    let ProduceAnswer {
-        error_code: code, ..
-    } = produce_one(&leader3_client, "gate-rf3", rf3_id, 0, "rf3-to-leader").await;
-    assert!(
-        code == 0,
-        "rf=3 Produce to the leader must succeed; got {code}"
-    );
-    let leader3_leo_after = cluster[rf3_leader_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("leader hosts gate-rf3");
-    assert!(
-        leader3_leo_after == leader3_leo_before + 1,
-        "leader's local log must grow by one on a successful Produce: \
-         before={leader3_leo_before} after={leader3_leo_after}"
-    );
+#[rstest_bdd_macros::then("the RF3 leader returns NONE 0 and appends exactly one record")]
+fn accepted_produce_gate_rf3_leader(produce_leadership: &ProduceLeadership) {
+    assert!(produce_leadership.answer().error_code == 0);
+    assert!(produce_leadership.after == produce_leadership.before.map(|offset| offset + 1));
+}
 
-    let rf1_leader_idx = cluster
+#[rstest_bdd_macros::when("the RF1 leader installs its leadership and receives rf1-to-leader")]
+async fn produce_gate_rf1_leader_write(produce_leadership: &mut ProduceLeadership) {
+    let leader = produce_leadership.rf1_leader.expect("RF1 leader");
+    let partition = produce_leadership
+        .off_node_partition
+        .expect("RF1 partition");
+    let index = produce_leadership
+        .cluster
         .iter()
-        .position(|(h, _, _)| h.node_id() == rf1_leader)
+        .position(|(broker, _, _)| broker.node_id() == leader)
         .unwrap();
-    let leader1_client =
-        connect_client(cluster[rf1_leader_idx].1.listen_addr.to_string(), None).await;
-    // The observed flake: without this gate the Produce can reach the rf=1
-    // leader before its image has applied the gate-rf1 topic_id, so the v13
-    // topic_id resolution misses and returns UNKNOWN_TOPIC_ID (100) instead of
-    // the required success. The rf=1 partition has no replica elsewhere, so
-    // nothing else forces this broker's image/replica to be warm by now.
-    // Waiting only for the local log is not enough: the partition must also
-    // have installed this broker as leader, or the Produce gets NOT_LEADER (6).
-    cluster[rf1_leader_idx]
+    produce_leadership.cluster[index]
         .0
-        .wait_until_local_partition_leader("gate-rf1", off_node_part, NodeId(rf1_leader))
+        .wait_until_local_partition_leader("gate-rf1", partition, NodeId(leader))
         .await;
-    let ProduceAnswer {
-        error_code: code, ..
-    } = produce_one(
-        &leader1_client,
-        "gate-rf1",
-        rf1_id,
-        off_node_part,
-        "rf1-to-leader",
+    let client = connect_client(
+        produce_leadership.cluster[index].1.listen_addr.to_string(),
+        None,
     )
     .await;
-    assert!(
-        code == 0,
-        "rf=1 Produce to the leader must succeed; got {code}"
+    produce_leadership.answer = Some(
+        produce_one(
+            &client,
+            "gate-rf1",
+            produce_leadership.rf1_id.expect("RF1 topic"),
+            partition,
+            "rf1-to-leader",
+        )
+        .await,
     );
-    let leader1_leo = cluster[rf1_leader_idx]
-        .0
-        .local_log_end_offset("gate-rf1", off_node_part)
-        .expect("leader hosts gate-rf1");
-    assert!(
-        leader1_leo >= 1,
-        "rf=1 record must be durably stored on its leader; leo={leader1_leo}"
+    client.close();
+    produce_leadership.after = Some(
+        produce_leadership.cluster[index]
+            .0
+            .local_log_end_offset("gate-rf1", partition)
+            .expect("leader hosts gate-rf1"),
     );
+}
 
-    shutdown_cluster(cluster).await;
+#[rstest_bdd_macros::then("the RF1 leader returns NONE 0 and durably holds at least one record")]
+fn accepted_produce_gate_rf1_leader(produce_leadership: &ProduceLeadership) {
+    assert!(produce_leadership.answer().error_code == 0);
+    assert!(produce_leadership.after.expect("RF1 log end") >= 1);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_leader_gate.feature",
+    name = "produce to non leader is rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn produce_to_non_leader_is_rejected(produce_leadership: ProduceLeadership) {
+    produce_leadership.shutdown().await;
+    drop(produce_leadership);
 }

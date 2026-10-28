@@ -464,28 +464,147 @@ mod tests {
         );
     }
 
-    /// Kafka 4.3.1's `kafka-storage format` messages, word for word: the
-    /// unknown-feature list is its production features and `krabka.version`
-    /// in name order, and a level a feature does not define is
-    /// `Feature.fromFeatureLevel`'s refusal.
-    #[yare::parameterized(
-        unknown_feature = {
-            "bogus.version", 1,
-            "Unsupported feature: bogus.version. Supported features are: \
-             eligible.leader.replicas.version, group.version, krabka.version, \
-             kraft.version, share.version, streams.version, transaction.version"
-        },
-        transaction_level = {
-            "transaction.version",
-            9,
-            "No feature:transaction.version with feature level 9",
-        },
-        group_level = { "group.version", 5, "No feature:group.version with feature level 5" },
-    )]
-    fn feature_refusals_use_kafkas_messages(feature: &str, level: i16, expected: &str) {
-        let err = resolve_format_features(None, &[spec(feature, level)], STRICT).unwrap_err();
-        assert2::assert!(err == expected, "{feature:?}");
+    struct FeatureFormatScenario {
+        release: Option<String>,
+        features: Vec<FeatureLevelRecord>,
+        unstable: UnstableFeatureVersions,
+        resolved: Option<Result<ResolvedFeatures, String>>,
+        seeded: Option<Result<Vec<MetadataRecord>, String>>,
+        parsed_zero: Option<Result<FeatureLevelRecord, String>>,
     }
+    #[rstest::fixture]
+    fn feature_format() -> FeatureFormatScenario {
+        let features = Vec::new();
+        FeatureFormatScenario {
+            release: None,
+            features,
+            unstable: STRICT,
+            resolved: None,
+            seeded: None,
+            parsed_zero: None,
+        }
+    }
+    #[rstest_bdd_macros::given("formatter release selection {release}")]
+    fn format_release(feature_format: &mut FeatureFormatScenario, release: String) {
+        feature_format.release = (release != "default").then_some(release);
+    }
+    #[rstest_bdd_macros::given("formatter feature selections {features}")]
+    fn format_feature_flags(feature_format: &mut FeatureFormatScenario, features: String) {
+        feature_format.features = if features == "none" {
+            Vec::new()
+        } else {
+            features
+                .split(',')
+                .map(|field| {
+                    let (name, level) = field.split_once('=').expect("name=level feature fixture");
+                    spec(name, level.parse().expect("feature level"))
+                })
+                .collect()
+        };
+    }
+    #[rstest_bdd_macros::given("unstable formatter features are {enabled}")]
+    fn format_unstable_features(feature_format: &mut FeatureFormatScenario, enabled: bool) {
+        feature_format.unstable = if enabled {
+            UnstableFeatureVersions::Enabled
+        } else {
+            STRICT
+        };
+    }
+    #[rstest_bdd_macros::when("formatter feature selections are resolved")]
+    fn resolve_feature_selection(feature_format: &mut FeatureFormatScenario) {
+        feature_format.resolved = Some(resolve_format_features(
+            feature_format.release.as_deref(),
+            &feature_format.features,
+            feature_format.unstable,
+        ));
+    }
+    #[rstest_bdd_macros::then("the formatter feature error is {error}")]
+    fn exact_feature_error(feature_format: &FeatureFormatScenario, error: String) {
+        let actual = feature_format
+            .resolved
+            .as_ref()
+            .expect("features resolved")
+            .as_ref()
+            .expect_err("feature request rejected");
+        assert2::assert!(*actual == error);
+    }
+    #[rstest_bdd_macros::then(
+        "the unsupported feature error lists every supported feature in Kafka order"
+    )]
+    fn unsupported_feature_error(feature_format: &FeatureFormatScenario) {
+        let expected = format!(
+            "Unsupported feature: bogus.version. Supported features are: {SUPPORTED_FEATURES}"
+        );
+        let actual = feature_format
+            .resolved
+            .as_ref()
+            .expect("features resolved")
+            .as_ref()
+            .expect_err("unsupported feature rejected");
+        assert2::assert!(*actual == expected);
+    }
+    #[rstest_bdd_macros::then("unknown release 9.9 is reported before an unsupported feature")]
+    fn unknown_release_precedes_feature(feature_format: &FeatureFormatScenario) {
+        let actual = feature_format
+            .resolved
+            .as_ref()
+            .expect("features resolved")
+            .as_ref()
+            .expect_err("unknown release rejected");
+        assert2::assert!(*actual == unknown_release("9.9"));
+    }
+    #[rstest_bdd_macros::when("the formatter builds bootstrap feature records")]
+    fn bootstrap_feature_selection(feature_format: &mut FeatureFormatScenario) {
+        feature_format.seeded = Some(
+            resolve_format_features(
+                feature_format.release.as_deref(),
+                &feature_format.features,
+                feature_format.unstable,
+            )
+            .map(
+                |ResolvedFeatures {
+                     metadata_version,
+                     overrides,
+                 }| {
+                    krabka_metadata::bootstrap_feature_records_with_overrides(
+                        metadata_version,
+                        &overrides,
+                    )
+                },
+            ),
+        );
+        feature_format.parsed_zero = Some(parse_feature_spec("krabka.version=0"));
+    }
+    fn expected_release_feature_records() -> Vec<MetadataRecord> {
+        [
+            ("metadata.version", LATEST_PRODUCTION_METADATA_VERSION),
+            ("group.version", 1),
+            ("transaction.version", 2),
+            ("share.version", 1),
+            ("streams.version", 1),
+            ("eligible.leader.replicas.version", 1),
+        ]
+        .into_iter()
+        .map(|(name, level)| MetadataRecord::V1FeatureLevel(spec(name, level)))
+        .collect()
+    }
+    #[rstest_bdd_macros::then(
+        "bootstrap preserves release defaults and omits the level-zero krabka.version record"
+    )]
+    fn omitted_krabka_bootstrap(feature_format: &FeatureFormatScenario) {
+        assert2::check!(feature_format.seeded == Some(Ok(expected_release_feature_records())));
+        assert2::check!(feature_format.parsed_zero == Some(Ok(spec("krabka.version", 0))));
+    }
+    #[rstest_bdd_macros::then(
+        "bootstrap preserves release defaults and adds krabka.version level 1"
+    )]
+    fn enabled_krabka_bootstrap(feature_format: &FeatureFormatScenario) {
+        let mut expected = expected_release_feature_records();
+        expected.push(MetadataRecord::V1FeatureLevel(spec("krabka.version", 1)));
+        assert2::check!(feature_format.seeded == Some(Ok(expected)));
+        assert2::check!(feature_format.parsed_zero == Some(Ok(spec("krabka.version", 0))));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/formatter_feature_levels", fixtures = [feature_format: FeatureFormatScenario]);
 
     #[yare::parameterized(
         group_version_above_maximum = { "group.version", 5 },
@@ -506,141 +625,6 @@ mod tests {
                     metadata_version: 30,
                     overrides: BTreeMap::new(),
                 })
-        );
-    }
-
-    /// Every rejection `kafka-storage format` makes about `--feature` and
-    /// `--release-version`, with Kafka 4.3.1's text (`Formatter`,
-    /// `Feature.fromFeatureLevel`, `MetadataVersion.fromFeatureLevel`), and
-    /// the order it makes them in: the release first, then every name, then
-    /// every level.
-    #[yare::parameterized(
-        unknown_feature = {
-            None,
-            vec![spec("bogus.version", 1)],
-            STRICT,
-            format!("Unsupported feature: bogus.version. Supported features are: {SUPPORTED_FEATURES}"),
-        },
-        unknown_feature_unstable = {
-            None,
-            vec![spec("bogus.version", 1)],
-            UnstableFeatureVersions::Enabled,
-            format!("Unsupported feature: bogus.version. Supported features are: {SUPPORTED_FEATURES}"),
-        },
-        group_level = {
-            None,
-            vec![spec("group.version", 5)],
-            STRICT,
-            "No feature:group.version with feature level 5".to_owned(),
-        },
-        transaction_level = {
-            None,
-            vec![spec("transaction.version", 3)],
-            STRICT,
-            "No feature:transaction.version with feature level 3".to_owned(),
-        },
-        negative_level = {
-            None,
-            vec![spec("group.version", -1)],
-            STRICT,
-            "No feature:group.version with feature level -1".to_owned(),
-        },
-        metadata_below_table = {
-            None,
-            vec![spec("metadata.version", 6)],
-            STRICT,
-            "No MetadataVersion with feature level 6. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        metadata_one_below_table = {
-            None,
-            vec![spec("metadata.version", 1)],
-            STRICT,
-            "No MetadataVersion with feature level 1. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        unstable_level_not_stable = {
-            None,
-            vec![spec("metadata.version", 31)],
-            STRICT,
-            "metadata.version 4.4-IV0 is not yet stable.".to_owned(),
-        },
-        metadata_32_above_table = {
-            None,
-            vec![spec("metadata.version", 32)],
-            STRICT,
-            "No MetadataVersion with feature level 32. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        metadata_33_above_table = {
-            None,
-            vec![spec("metadata.version", 33)],
-            STRICT,
-            "No MetadataVersion with feature level 33. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        metadata_34_above_table = {
-            None,
-            vec![spec("metadata.version", 34)],
-            STRICT,
-            "No MetadataVersion with feature level 34. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        metadata_99_above_table = {
-            None,
-            vec![spec("metadata.version", 99)],
-            STRICT,
-            "No MetadataVersion with feature level 99. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        unstable_below_table = {
-            None,
-            vec![spec("metadata.version", 6)],
-            UnstableFeatureVersions::Enabled,
-            "No MetadataVersion with feature level 6. Valid feature levels are from 7 to 34.".to_owned(),
-        },
-        unstable_above_table = {
-            None,
-            vec![spec("metadata.version", 35)],
-            UnstableFeatureVersions::Enabled,
-            "No MetadataVersion with feature level 35. Valid feature levels are from 7 to 34.".to_owned(),
-        },
-        unknown_release_precedes_feature = {
-            Some("9.9"),
-            vec![spec("bogus.version", 1)],
-            STRICT,
-            unknown_release("9.9"),
-        },
-        release_and_metadata_are_ambiguous = {
-            Some("4.0-IV0"),
-            vec![spec("metadata.version", 24)],
-            STRICT,
-            "Use --release-version instead of --feature metadata.version=X to avoid ambiguity.".to_owned(),
-        },
-        ambiguity_precedes_bad_level = {
-            Some("4.0-IV0"),
-            vec![spec("metadata.version", 99)],
-            STRICT,
-            "Use --release-version instead of --feature metadata.version=X to avoid ambiguity.".to_owned(),
-        },
-        metadata_error_precedes_unknown_name = {
-            None,
-            vec![spec("bogus.version", 1), spec("metadata.version", 99)],
-            STRICT,
-            "No MetadataVersion with feature level 99. Valid feature levels are from 7 to 31.".to_owned(),
-        },
-        unknown_name_precedes_bad_level = {
-            None,
-            vec![spec("group.version", 5), spec("bogus.version", 1)],
-            STRICT,
-            format!("Unsupported feature: bogus.version. Supported features are: {SUPPORTED_FEATURES}"),
-        },
-    )]
-    fn feature_errors_are_kafkas_formatter_errors(
-        release: Option<&str>,
-        features: Vec<FeatureLevelRecord>,
-        unstable: UnstableFeatureVersions,
-        want: String,
-    ) {
-        assert2::check!(
-            resolve_format_features(release, &features, unstable)
-                .map(|resolved| resolved.metadata_version)
-                == Err(want),
-            "{release:?} {features:?} {unstable:?}"
         );
     }
 
@@ -749,89 +733,6 @@ mod tests {
             },
         );
         assert2::check!(seeded == want, "{release:?} {features:?} {unstable:?}");
-    }
-
-    /// `krabka.version` bootstraps at level 0, which seeds no record, as Kafka
-    /// omits every level-0 feature from `bootstrap.checkpoint`. A JVM node in
-    /// a mixed cluster supports only level 0, so the level is left for an
-    /// operator to finalize once every node is krabka. `--feature
-    /// krabka.version=N` overrides it, as `kafka-storage format --feature`
-    /// overrides a Kafka feature, and a level past the supported range is
-    /// `Feature.fromFeatureLevel`'s refusal.
-    #[yare::parameterized(
-        no_override = { "no override" },
-        override_one = { "override to 1" },
-        override_zero = { "override to 0" },
-        override_above_range = { "override past the range" },
-    )]
-    fn krabka_version_bootstraps_at_level_zero_unless_overridden(scenario: &str) {
-        /// What it is, the `--feature` flags, and the seeded records or the error.
-        struct Case<'a> {
-            what: &'a str,
-            features: Vec<FeatureLevelRecord>,
-            want: Result<Vec<MetadataRecord>, String>,
-        }
-        let feature = |name: &str, level| {
-            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-                name: name.into(),
-                level,
-            })
-        };
-        // The latest production release's defaults, Kafka 4.3's.
-        let release_defaults = vec![
-            feature("metadata.version", LATEST_PRODUCTION_METADATA_VERSION),
-            feature("group.version", 1),
-            feature("transaction.version", 2),
-            feature("share.version", 1),
-            feature("streams.version", 1),
-            feature("eligible.leader.replicas.version", 1),
-        ];
-        let with_krabka = |level| {
-            let mut records = release_defaults.clone();
-            records.push(feature("krabka.version", level));
-            records
-        };
-        let krabka = |level| vec![spec("krabka.version", level)];
-        let cases = [
-            Case {
-                what: "no override",
-                features: vec![],
-                want: Ok(release_defaults.clone()),
-            },
-            Case {
-                what: "override to 1",
-                features: krabka(1),
-                want: Ok(with_krabka(1)),
-            },
-            Case {
-                what: "override to 0",
-                features: krabka(0),
-                want: Ok(release_defaults.clone()),
-            },
-            Case {
-                what: "override past the range",
-                features: krabka(3),
-                want: Err("No feature:krabka.version with feature level 3".to_owned()),
-            },
-        ];
-        let Case {
-            what,
-            features,
-            want,
-        } = cases
-            .into_iter()
-            .find(|case| case.what == scenario)
-            .expect("named yare case exists");
-        let seeded = resolve_format_features(None, &features, STRICT).map(
-            |ResolvedFeatures {
-                 metadata_version: bootstrap_mv,
-                 overrides,
-             }| {
-                krabka_metadata::bootstrap_feature_records_with_overrides(bootstrap_mv, &overrides)
-            },
-        );
-        assert2::check!(seeded == want, "{what}");
-        assert2::check!(parse_feature_spec("krabka.version=0") == Ok(spec("krabka.version", 0)));
     }
 
     #[test]

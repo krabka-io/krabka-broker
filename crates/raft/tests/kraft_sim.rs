@@ -1,74 +1,117 @@
-//! Deterministic, in-memory, multi-node simulation of the KIP-595 and KIP-996
-//! `KRaft` consensus core (`krabka_raft::kraft`).
-//!
-//! This is the headline acceptance test for the in-memory consensus core. It wires N
-//! `QuorumStateMachine`s together through an in-memory message bus and a logical
-//! clock, which are the shared [`sim_harness`] module. It then asserts that the
-//! cluster reaches the canonical states of one leader and an agreed high
-//! watermark over an in-memory [`SimLog`].
-//!
-//! The harness itself lives in `tests/sim_harness/mod.rs` and is shared with
-//! `kraft_log_sim.rs`, which runs the same core over a real on-disk `KraftLog`.
+//! Deterministic acceptance scenarios for the in-memory `KRaft` consensus core.
 #![cfg(test)]
 
 mod sim_harness;
 
 use {
     krabka_ids::NodeId,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
     sim_harness::{cluster::Sim, sim_log::SimLog},
 };
 
-/// A cluster whose nodes use the in-memory fake log.
-fn new_sim(voter_ids: &[NodeId]) -> Sim<SimLog> {
-    Sim::new_with(voter_ids, |_id| SimLog::default())
+struct ConsensusScenario {
+    sim: Option<Sim<SimLog>>,
+    leader: Option<NodeId>,
+    replacements: Vec<NodeId>,
+    target: Option<i64>,
 }
 
-#[test]
-fn three_nodes_elect_exactly_one_leader() {
-    let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.stabilize_one_leader(10_000);
-    // Every voter agrees on a single leader epoch.
+impl ConsensusScenario {
+    fn sim(&mut self) -> &mut Sim<SimLog> { self.sim.as_mut().expect("three voters were given") }
+}
+
+#[fixture]
+fn consensus() -> ConsensusScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    ConsensusScenario {
+        sim: None,
+        leader: None,
+        replacements: Vec::new(),
+        target: None,
+    }
+}
+
+#[given("three in-memory KRaft voters")]
+fn three_voters(consensus: &mut ConsensusScenario) {
+    consensus.sim = Some(Sim::new_with(&[NodeId(1), NodeId(2), NodeId(3)], |_id| {
+        SimLog::default()
+    }));
+}
+
+#[when("the voters stabilize")]
+fn stabilize(consensus: &mut ConsensusScenario) {
+    consensus.leader = Some(consensus.sim().stabilize_one_leader(10_000));
+}
+
+#[given("the voters have elected a leader")]
+fn elected_leader(consensus: &mut ConsensusScenario) { stabilize(consensus); }
+
+#[then("all voters agree on one leader epoch")]
+fn agreed_epoch(consensus: &ConsensusScenario) {
+    let sim = consensus.sim.as_ref().expect("three voters were given");
+    let leader = consensus.leader.expect("the voters stabilized");
+    assert2::assert!(sim.leaders() == vec![leader]);
     assert2::assert!(sim.distinct_epochs().len() == 1);
 }
 
-#[test]
-fn re_elects_single_leader_after_leader_partition() {
-    let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let old_leader = sim.stabilize_one_leader(10_000);
-
-    // Isolate the leader; the majority side must elect a new one.
-    sim.partition(old_leader);
-    sim.run_until_stable(10_000);
-    let new_leaders: Vec<_> = sim
+#[when("the leader is isolated")]
+fn isolate_leader(consensus: &mut ConsensusScenario) {
+    let leader = consensus.leader.expect("a leader was elected");
+    consensus.sim().partition(leader);
+    consensus.sim().run_until_stable(10_000);
+    consensus.replacements = consensus
+        .sim()
         .leaders()
         .into_iter()
-        .filter(|&l| l != old_leader)
+        .filter(|&id| id != leader)
         .collect();
-    assert2::assert!(new_leaders.len() == 1);
-
-    // Heal the partition; the old leader rejoins and steps down to follower,
-    // leaving a single leader cluster-wide.
-    sim.heal(old_leader);
-    sim.stabilize_one_leader(10_000);
-    assert2::assert!(sim.leaders()[0] == new_leaders[0]);
 }
 
-#[test]
-fn committed_high_watermark_agrees_across_voters() {
-    let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let leader = sim.stabilize_one_leader(10_000);
-
-    // The leader already appended its LeaderChange control record at promotion;
-    // capture the log end, then produce 5 data records on top.
-    let before = sim.log_end_offset(leader);
-    sim.leader_append(leader, 5);
-    let target = before + 5;
-
-    sim.run_until_stable(10_000);
-
-    // The HWM must reach the appended offset (current-epoch entries are now
-    // majority-replicated — this is the FIX-2 leader-completeness gate) and all
-    // voters must have replicated up to it.
-    assert2::assert!(sim.leader_high_watermark(leader) >= target);
-    assert2::assert!(sim.all_voters_fetched_to(sim.leader_high_watermark(leader)));
+#[then("the majority elects exactly one replacement leader")]
+fn replacement_leader(consensus: &ConsensusScenario) {
+    assert2::assert!(consensus.replacements.len() == 1);
 }
+
+#[when("the partition heals")]
+fn heal_partition(consensus: &mut ConsensusScenario) {
+    let leader = consensus.leader.expect("a leader was elected");
+    consensus.sim().heal(leader);
+    consensus.sim().stabilize_one_leader(10_000);
+}
+
+#[then("the replacement remains the only leader")]
+fn replacement_remains(consensus: &mut ConsensusScenario) {
+    let [replacement] = consensus.replacements.as_slice() else {
+        panic!("the majority did not elect exactly one replacement");
+    };
+    let replacement = *replacement;
+    assert2::assert!(consensus.sim().leaders() == vec![replacement]);
+}
+
+#[when("the leader appends {records} records and replication settles")]
+fn append_records(consensus: &mut ConsensusScenario, records: usize) {
+    let leader = consensus.leader.expect("a leader was elected");
+    let before = consensus.sim().log_end_offset(leader);
+    consensus.sim().leader_append(leader, records);
+    consensus.target =
+        Some(before + i64::try_from(records).expect("record count fits in an offset"));
+    consensus.sim().run_until_stable(10_000);
+}
+
+#[then("the leader commits the appended records")]
+fn records_committed(consensus: &mut ConsensusScenario) {
+    let leader = consensus.leader.expect("a leader was elected");
+    let target = consensus.target.expect("records were appended");
+    assert2::assert!(consensus.sim().leader_high_watermark(leader) >= target);
+}
+
+#[then("all voters fetch through the committed high watermark")]
+fn voters_caught_up(consensus: &mut ConsensusScenario) {
+    let leader = consensus.leader.expect("a leader was elected");
+    let watermark = consensus.sim().leader_high_watermark(leader);
+    assert2::assert!(consensus.sim().all_voters_fetched_to(watermark));
+}
+
+scenarios!("tests/features/kraft_sim.feature", fixtures = [consensus: ConsensusScenario]);

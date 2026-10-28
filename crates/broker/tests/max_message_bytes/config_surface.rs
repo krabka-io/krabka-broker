@@ -8,10 +8,7 @@ use {
             self,
             configs::{ConfigMutationOutcome, alter_topic_config, topic_config},
         },
-        wire::{
-            MAX_MESSAGE_BYTES, accepted, create_topic, orders_fixture, produce_batch_of_wire_len,
-            too_large,
-        },
+        wire::{MAX_MESSAGE_BYTES, accepted, create_topic, produce_batch_of_wire_len, too_large},
     },
     assert2::check,
     krabka_broker::codes,
@@ -30,23 +27,57 @@ const CONFIG_TYPE_INT: i8 = 3;
 
 const CAP: usize = 2048;
 
-/// `CreateTopics` accepts the key, and `DescribeConfigs` echoes it.
-///
-/// The whole entry is compared rather than its value alone. `kafka-configs
-/// --describe` renders the source and the read-only flag beside the value, and
-/// a key reported as read-only would tell an operator that the alter in the
-/// next case cannot work.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
-    let p = support::start().await;
-    create_topic(&p.broker, &p.client, "orders", &[(
+use {
+    krabka_protocol::{owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct MessageCap {
+    process: Option<support::InProcess>,
+    topic: Uuid,
+    described: Option<DescribeConfigsResourceResult>,
+    appended: Option<PartitionProduceResponse>,
+    changed: Option<ConfigMutationOutcome>,
+    alterations: Vec<(String, ConfigMutationOutcome)>,
+}
+#[fixture]
+fn cap() -> MessageCap {
+    // Start this scenario with fresh inputs and observations.
+
+    MessageCap {
+        process: None,
+        topic: Uuid::ZERO,
+        described: None,
+        appended: None,
+        changed: None,
+        alterations: Vec::new(),
+    }
+}
+#[given("orders has a maximum message size of 2048 bytes")]
+async fn configured(cap: &mut MessageCap) {
+    let process = support::start().await;
+    cap.topic = create_topic(&process.broker, &process.client, "orders", &[(
         MAX_MESSAGE_BYTES,
         &CAP.to_string(),
     )])
     .await;
-
+    cap.process = Some(process);
+}
+#[given("orders uses the broker's default maximum message size")]
+async fn default_cap(cap: &mut MessageCap) {
+    let process = support::start().await;
+    cap.topic = create_topic(&process.broker, &process.client, "orders", &[]).await;
+    cap.process = Some(process);
+}
+#[when("the operator describes the maximum message size")]
+async fn describe(cap: &mut MessageCap) {
+    let process = cap.process.as_ref().expect("orders created");
+    cap.described = Some(describe_max_message_bytes(&process.client, "orders").await);
+}
+#[then("the complete config entry reports a mutable dynamic topic integer of 2048")]
+fn entry(cap: &MessageCap) {
     check!(
-        describe_max_message_bytes(&p.client, "orders").await
+        *cap.described.as_ref().expect("config described")
             == DescribeConfigsResourceResult {
                 name: MAX_MESSAGE_BYTES.to_owned(),
                 value: Some(CAP.to_string()),
@@ -59,77 +90,76 @@ async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
     );
-
-    p.broker.shutdown().await;
 }
-
-/// `kafka-configs --alter --add-config max.message.bytes=...` raises the cap
-/// on a live topic, and the produce path picks the new value up.
-///
-/// The refusal before the alter and the acceptance after it are the same
-/// batch. That is what separates "the alter was stored" from "the alter took
-/// effect": a broker that recorded the override and kept gating on the old
-/// value would answer `NONE` to the alter and `MESSAGE_TOO_LARGE` to the
-/// produce, which is the failure an operator would be least able to explain.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
-    let (p, topic) = orders_fixture(&[(MAX_MESSAGE_BYTES, &CAP.to_string())]).await;
-
-    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == too_large());
-
-    let raised = (CAP + 1).to_string();
+#[when("a producer submits a 2049 byte batch")]
+async fn append(cap: &mut MessageCap) {
+    let process = cap.process.as_ref().expect("orders created");
+    cap.appended =
+        Some(produce_batch_of_wire_len(&process.client, "orders", cap.topic, CAP + 1).await);
+}
+#[then("the complete produce response refuses the oversized batch")]
+fn oversized(cap: &MessageCap) {
+    check!(*cap.appended.as_ref().expect("produce completed") == too_large());
+}
+#[when("the operator incrementally raises the cap to 2049 bytes")]
+async fn raise(cap: &mut MessageCap) {
+    let process = cap.process.as_ref().expect("orders created");
+    cap.changed =
+        Some(set_max_message_bytes(&process.client, "orders", &(CAP + 1).to_string()).await);
+}
+#[then("the alteration succeeds without an error message")]
+fn changed(cap: &MessageCap) {
     check!(
-        set_max_message_bytes(&p.client, "orders", &raised).await
+        *cap.changed.as_ref().expect("alter completed")
             == ConfigMutationOutcome {
                 error_code: codes::NONE,
-                error_message: None,
+                error_message: None
             }
     );
-    check!(describe_max_message_bytes(&p.client, "orders").await.value == Some(raised));
-    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == accepted(0, 0));
-
-    p.broker.shutdown().await;
 }
-
-/// The value check matches Kafka's: `INT` with `atLeast(0)`.
-///
-/// `apache/kafka:4.3.1` answers "Value must be at least 0" to `-1` and "Not a
-/// number of type INT" to `2147483648` and to `abc`, and accepts `0`. A broker
-/// that took `-1` would store a cap no batch can satisfy.
-///
-/// The refusal's error code is asserted, not merely its non-zero-ness, because
-/// `INVALID_CONFIG` (40) is the code this whole feature exists to stop the
-/// broker sending for a *valid* value. A refusal that arrived as some other
-/// code would leave `kafka-configs` printing an unfamiliar failure.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_alter_path_rejects_the_values_kafka_rejects() {
-    let p = support::start().await;
-    create_topic(&p.broker, &p.client, "orders", &[]).await;
-
-    for (value, expected) in [
-        ("0", codes::NONE),
-        ("2147483647", codes::NONE),
-        ("-1", codes::INVALID_CONFIG),
-        ("2147483648", codes::INVALID_CONFIG),
-        ("plenty", codes::INVALID_CONFIG),
-    ] {
-        let ConfigMutationOutcome {
-            error_code,
-            error_message,
-        } = set_max_message_bytes(&p.client, "orders", value).await;
+#[then("the described maximum message size is 2049 bytes")]
+fn raised(cap: &MessageCap) {
+    check!(cap.described.as_ref().expect("config described").value == Some((CAP + 1).to_string()));
+}
+#[then("the same batch is accepted at offset zero")]
+fn accepted_batch(cap: &MessageCap) {
+    check!(*cap.appended.as_ref().expect("produce completed") == accepted(0, 0));
+}
+#[when("the operator tries the maximum message size values")]
+async fn boundaries(cap: &mut MessageCap, datatable: Vec<Vec<String>>) {
+    let process = cap.process.as_ref().expect("orders created");
+    for row in datatable.into_iter().skip(1) {
+        let value = row.into_iter().next().expect("config value");
+        let result = set_max_message_bytes(&process.client, "orders", &value).await;
+        cap.alterations.push((value, result));
+    }
+}
+#[then("integer boundary values have the expected errors and refusal messages")]
+fn validated(cap: &MessageCap, datatable: Vec<Vec<String>>) {
+    let expected: Vec<(String, i16)> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let columns: [String; 2] = row.try_into().expect("value and code");
+            let [value, code] = columns;
+            (value, code.parse().expect("integer error code"))
+        })
+        .collect();
+    check!(cap.alterations.len() == expected.len());
+    for ((value, result), (wanted, code)) in cap.alterations.iter().zip(expected) {
+        check!(*value == wanted);
         check!(
-            error_code == expected,
-            "max.message.bytes={value} answered {error_code}"
+            result.error_code == code,
+            "max.message.bytes={value} answered {}",
+            result.error_code
         );
         check!(
-            error_message.is_some() == (expected != codes::NONE),
-            "max.message.bytes={value} answered {error_message:?}"
+            result.error_message.is_some() == (code != codes::NONE),
+            "max.message.bytes={value} answered {:?}",
+            result.error_message
         );
     }
-
-    p.broker.shutdown().await;
 }
-
 /// Read the topic's `max.message.bytes` entry back through `DescribeConfigs`.
 async fn describe_max_message_bytes(client: &Client, topic: &str) -> DescribeConfigsResourceResult {
     topic_config(client, topic, MAX_MESSAGE_BYTES).await
@@ -144,4 +174,43 @@ async fn set_max_message_bytes(client: &Client, topic: &str, value: &str) -> Con
         .maybe_value(Some(value))
         .call()
         .await
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "A created message cap is visible as a mutable integer topic override"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_topics_accepts_the_key_and_describe_configs_echoes_it(cap: MessageCap) {
+    cap.process
+        .expect("cap broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "Raising a live cap admits the previously refused batch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_incremental_alter_raises_the_cap_for_the_next_produce(cap: MessageCap) {
+    cap.process
+        .expect("cap broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "Alter configuration applies Kafka integer boundary validation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_alter_path_rejects_the_values_kafka_rejects(cap: MessageCap) {
+    cap.process
+        .expect("cap broker started")
+        .broker
+        .shutdown()
+        .await;
 }

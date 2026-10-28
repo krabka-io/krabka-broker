@@ -8,7 +8,10 @@ use {
         handlers::{self, ApiKeyCode, KRABKA_PRIVATE_API_KEY_FLOOR},
     },
     assert2::assert,
-    std::{collections::BTreeSet, ptr},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        ptr,
+    },
 };
 
 #[test]
@@ -158,33 +161,127 @@ fn registry_reports_missing_keys() {
     assert!(registry.get(9999).is_none());
 }
 
-#[test]
-fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
-    let registry = build_registry();
-    let registered: BTreeSet<ApiKeyCode> = registry.registered_api_keys().collect();
-    let dispatched: BTreeSet<ApiKeyCode> = dispatched_apis()
-        .into_iter()
-        .map(|api| api.api_key)
-        .collect();
+struct RegistryContract {
+    registry: Option<DispatchRegistry>,
+    registered: Option<BTreeSet<ApiKeyCode>>,
+    advertised: Option<BTreeSet<ApiKeyCode>>,
+    policies: Option<BTreeMap<ApiKeyCode, RequestQuotaPolicy>>,
+}
 
-    // A key with a generated schema is in the catalog: every Kafka key, and
-    // `GetReplicaLogInfo` (1020), the one krabka-private key that has a
-    // schema in krabka-protocol.
-    let registered_with_schema: BTreeSet<ApiKeyCode> = registered
+#[rstest::fixture]
+fn registry_contract() -> RegistryContract {
+    // Start this scenario with fresh inputs and observations.
+
+    RegistryContract {
+        registry: None,
+        registered: None,
+        advertised: None,
+        policies: None,
+    }
+}
+
+#[rstest_bdd_macros::given("the broker's complete handler dispatch registry is assembled")]
+fn assembled_dispatch_registry(registry_contract: &mut RegistryContract) {
+    registry_contract.registry = Some(build_registry());
+}
+
+#[rstest_bdd_macros::when("the registered and advertised Kafka API keys are enumerated")]
+fn enumerate_dispatch_apis(registry_contract: &mut RegistryContract) {
+    let registry = registry_contract
+        .registry
+        .as_ref()
+        .expect("the registry was assembled");
+    registry_contract.registered = Some(registry.registered_api_keys().collect());
+    registry_contract.advertised = Some(
+        dispatched_apis()
+            .into_iter()
+            .map(|api| api.api_key)
+            .collect(),
+    );
+}
+
+#[rstest_bdd_macros::when("the dispatch request-quota policy for every registered API is read")]
+fn read_dispatch_quota_policies(registry_contract: &mut RegistryContract) {
+    let registry = registry_contract
+        .registry
+        .as_ref()
+        .expect("the registry was assembled");
+    registry_contract.policies = Some(
+        registry
+            .registered_api_keys()
+            .map(|key| {
+                (
+                    key,
+                    registry.get(key).expect("a registered API").quota_policy(),
+                )
+            })
+            .collect(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "every advertised API is registered and every registered schema API is advertised"
+)]
+fn advertised_registry_coverage(registry_contract: &RegistryContract) {
+    let registered = registry_contract
+        .registered
+        .as_ref()
+        .expect("registered keys were read");
+    let advertised = registry_contract
+        .advertised
+        .as_ref()
+        .expect("advertised keys were read");
+    let with_schema: BTreeSet<_> = registered
         .iter()
         .copied()
         .filter(|key| ApiKey::from_i16(*key).is_some())
         .collect();
-
-    // Every dispatched key is registered, and every registered key with a
-    // generated schema is dispatched. The other krabka-private keys are
-    // deliberately absent from the catalog: advertising them would put
-    // UNKNOWN(1010) rows into kafka-broker-api-versions output, a visible
-    // divergence from a real broker, and a client that does not find a key
-    // negotiates (0, 0), which is right for a MIN = MAX = 0 request.
-    assert!(dispatched.is_subset(&registered));
-    assert!(registered_with_schema == dispatched);
+    assert!(!registered.is_empty());
+    assert!(advertised.is_subset(registered));
+    assert!(with_schema == *advertised);
 }
+
+#[rstest_bdd_macros::then("every registered API retains Kafka's request-quota accounting policy")]
+fn dispatch_quota_accounting(registry_contract: &RegistryContract) {
+    let observed = registry_contract
+        .policies
+        .as_ref()
+        .expect("all quota policies were read");
+    assert!(!observed.is_empty());
+    let self_accounted = [
+        ApiKey::Produce,
+        ApiKey::Fetch,
+        ApiKey::ShareFetch,
+        ApiKey::ApiVersions,
+    ];
+    let exempt = [
+        ApiKey::SaslHandshake,
+        ApiKey::SaslAuthenticate,
+        ApiKey::WriteTxnMarkers,
+        ApiKey::AlterPartition,
+        ApiKey::FetchSnapshot,
+        ApiKey::UpdateRaftVoter,
+    ];
+    let expected: BTreeMap<_, _> = observed
+        .keys()
+        .map(|&key| {
+            let policy = if self_accounted.iter().any(|api| *api as i16 == key) {
+                RequestQuotaPolicy::SelfAccounted
+            } else if exempt.iter().any(|api| *api as i16 == key)
+                || (key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR
+                    && ApiKey::from_i16(key).is_none())
+            {
+                RequestQuotaPolicy::InlineExempt
+            } else {
+                RequestQuotaPolicy::ApplyFallbackAccounting
+            };
+            (key, policy)
+        })
+        .collect();
+    assert!(*observed == expected);
+}
+
+rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/registry/tests.feature", fixtures = [registry_contract: RegistryContract]);
 
 /// The only krabka-private key in the catalog is `GetReplicaLogInfo` (1020),
 /// and it is inter-broker only, so no listener a client can reach advertises
@@ -270,61 +367,4 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
         handler,
         handlers::api_versions::handle as ContextHandler
     ));
-}
-
-/// KIP-124 (#692): Kafka charges the request quota for every request, and
-/// exempts only the apis it answers through `sendResponseExemptThrottle` and
-/// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`,
-/// `ShareFetch` and `ApiVersions` charge it in their handler. Kafka defines no
-/// krabka-private api, so the ones in the private table are exempt. Every
-/// other registered api, `GetReplicaLogInfo` included, is charged by the
-/// dispatch loop.
-#[test]
-fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
-    use std::collections::BTreeMap;
-
-    let registry = build_registry();
-    let self_accounted = [
-        ApiKey::Produce,
-        ApiKey::Fetch,
-        ApiKey::ShareFetch,
-        ApiKey::ApiVersions,
-    ];
-    let exempt = [
-        ApiKey::SaslHandshake,
-        ApiKey::SaslAuthenticate,
-        ApiKey::WriteTxnMarkers,
-        ApiKey::AlterPartition,
-        ApiKey::FetchSnapshot,
-        ApiKey::UpdateRaftVoter,
-    ];
-
-    let observed: BTreeMap<ApiKeyCode, RequestQuotaPolicy> = registry
-        .registered_api_keys()
-        .map(|api_key| {
-            let policy = registry.get(api_key).expect("registered").quota_policy();
-            (api_key, policy)
-        })
-        .collect();
-    let expected: BTreeMap<ApiKeyCode, RequestQuotaPolicy> = observed
-        .keys()
-        .map(|&api_key| {
-            let policy = if self_accounted.iter().any(|api| *api as i16 == api_key) {
-                RequestQuotaPolicy::SelfAccounted
-            } else if exempt.iter().any(|api| *api as i16 == api_key)
-                // The krabka-private apis registered through the private
-                // table. `GetReplicaLogInfo` (1020) is in the private range,
-                // but it is registered like a Kafka api and stays charged.
-                || (api_key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR
-                    && ApiKey::from_i16(api_key).is_none())
-            {
-                RequestQuotaPolicy::InlineExempt
-            } else {
-                RequestQuotaPolicy::ApplyFallbackAccounting
-            };
-            (api_key, policy)
-        })
-        .collect();
-
-    assert!(observed == expected);
 }

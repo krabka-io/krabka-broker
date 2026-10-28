@@ -1,128 +1,79 @@
-//! `kafka-console-producer` and `kafka-console-consumer` round-trips that read
-//! one partition directly, with no consumer group in the path.
-//!
-//! The group-driven console runs live in `console_groups`, so a failure here
-//! points at the produce and fetch path and not at the coordinator.
+//! Cross-client produce/consume and log-append timestamp workflows.
 
 use {
     crate::jvm_acceptance::{
         KAFKA_IMAGE, assert_console_values, broker0_advertised, consume_console_partition,
-        create_console_topic, docker_run_kafka_tool, nc_check_connectivity,
-        produce_console_checked, start_console_broker, start_host_broker,
+        create_console_topic, docker_run_kafka_tool, nc_check_connectivity, produce_console,
+        start_console_broker, start_host_broker,
     },
     assert2::assert,
+    bytes::Bytes,
+    krabka_broker::BrokerHandle,
+    krabka_client_producer::{Acks, Compression, Producer, ProducerRecord},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+    tempfile::TempDir,
 };
 
-// `flavor = "multi_thread"` is essential here. The test bodies make
-// synchronous blocking `Command::output()` calls for each `docker run`.
-// On a single-threaded runtime those calls block the only worker — which
-// is also driving the broker's accept loop. Incoming TCP connections then
-// complete the kernel-level handshake but the broker never reads them,
-// and the Java AdminClient times out. A multi-thread runtime puts the
-// broker on a separate worker so the test's blocking calls don't starve it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn console_producer_round_trip() {
-    const TOPIC: &str = "krabka-broker-itest";
-
-    let (broker, _dir) = start_console_broker(TOPIC, 1).await;
-
-    // 2. Produce 3 records via stdin.
-
-    produce_console_checked(KAFKA_IMAGE, TOPIC, b"alpha\nbravo\ncharlie\n");
-
-    // 3. Consume them back via --partition 0 (bypasses groups entirely).
-    let consumer_out = consume_console_partition(TOPIC, 3, 10000, &[]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    assert_console_values(&s, &["alpha", "bravo", "charlie"], "consumer didn't emit");
-
-    broker.shutdown().await;
+struct ConsoleExchange {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    topic: String,
+    values: Vec<String>,
+    produced: Option<Output>,
+    partitions: Vec<i32>,
+    consumed: Option<Output>,
+    printed_record: Option<String>,
+    timestamp: Option<i64>,
+    resolved: String,
 }
 
-// Same multi-thread runtime caveat as `console_producer_round_trip`:
-// the test body makes blocking `Command::output()` calls; a
-// single-threaded runtime would starve the broker's accept loop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn rust_producer_to_console_consumer() {
-    use krabka_client_producer::{Acks, Compression, Producer, ProducerRecord};
+#[fixture]
+fn console() -> ConsoleExchange {
+    // Start this scenario with fresh inputs and observations.
 
-    const TOPIC: &str = "krabka-rust-producer-itest";
-
-    let (broker, _dir) = start_host_broker().await;
-
-    // 1. Create the topic.
-    create_console_topic(KAFKA_IMAGE, &[], TOPIC, 1, 1);
-
-    // 2. Build a Rust producer pointed at the host broker and produce 3 records.
-    {
-        let producer = Producer::builder()
-            .bootstrap(broker0_advertised().to_owned())
-            .enable_idempotence(true)
-            .acks(Acks::All)
-            .compression(Compression::Lz4)
-            .build()
-            .await
-            .expect("producer");
-        for v in ["x", "y", "z"] {
-            let fut = producer
-                .send(ProducerRecord {
-                    topic: TOPIC.into(),
-                    value: Some(bytes::Bytes::from(v)),
-                    ..Default::default()
-                })
-                .await;
-            let m = fut.expect("ack");
-            assert!(m.partition == 0);
-        }
-        producer.flush().await.expect("flush");
-        producer.close().await
+    ConsoleExchange {
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        values: Vec::new(),
+        produced: None,
+        partitions: Vec::new(),
+        consumed: None,
+        printed_record: None,
+        timestamp: None,
+        resolved: String::new(),
     }
-    .expect("close");
-
-    // 3. Consume via kafka-console-consumer --partition 0.
-    let consumer_out = consume_console_partition(TOPIC, 3, 20000, &[]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    assert_console_values(&s, &["x", "y", "z"], "missing");
-
-    broker.shutdown().await;
 }
 
-/// The JVM tools read a `message.timestamp.type=LogAppendTime` topic as a
-/// log-append-time topic: `kafka-console-consumer --property
-/// print.timestamp=true` prints `LogAppendTime:<ms>` rather than
-/// `CreateTime:<ms>`, and `GetOffsetShell --time <that ms>` resolves the stamp
-/// back to the batch's offset.
-///
-/// The printed prefix is the claim this case exists for. It comes from
-/// `ConsumerRecord.timestampType()`, which the JVM client reads out of the
-/// batch's attribute bit — the one the broker patched at append. A broker that
-/// answered the right `logAppendTimeMs` in the produce response but left the
-/// stored bit alone still prints `CreateTime` here, and no in-process test of
-/// the response row can see that.
-///
-/// The `--time` lookup is the second half: Kafka builds the time index from
-/// the rewritten `maxTimestamp`, so `offsetsForTimes` on such a topic answers
-/// in append time. A broker that stamped the header but indexed the producer's
-/// timestamp passes the print check and fails this one.
-///
-/// This case has never been executed: the machine it was written on has no
-/// working Docker daemon. Run it with
-/// `cargo test -p krabka-broker --test jvm_acceptance_cli -- --ignored --nocapture`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn console_consumer_prints_log_append_time() {
-    const TOPIC: &str = "krabka-log-append-time";
+#[given("console topic {topic} has one partition")]
+async fn console_topic(console: &mut ConsoleExchange, topic: String) {
+    let (broker, directory) = start_console_broker(&topic, 1).await;
+    console.broker = Some(broker);
+    console.directory = Some(directory);
+    console.topic = topic;
+}
 
-    let (broker, _dir) = start_host_broker().await;
+#[given("host topic {topic} is ready for an idempotent Rust LZ4 producer")]
+async fn rust_topic(console: &mut ConsoleExchange, topic: String) {
+    let (broker, directory) = start_host_broker().await;
+    create_console_topic(KAFKA_IMAGE, &[], &topic, 1, 1);
+    console.broker = Some(broker);
+    console.directory = Some(directory);
+    console.topic = topic;
+}
+
+#[given("topic {topic} stores broker log-append timestamps")]
+async fn append_time_topic(console: &mut ConsoleExchange, topic: String) {
+    let (broker, directory) = start_host_broker().await;
     nc_check_connectivity();
-
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
         "--if-not-exists",
         "--topic",
-        TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
@@ -132,47 +83,208 @@ async fn console_consumer_prints_log_append_time() {
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+    console.broker = Some(broker);
+    console.directory = Some(directory);
+    console.topic = topic;
+}
 
-    produce_console_checked(KAFKA_IMAGE, TOPIC, b"stamped\n");
+#[given("the producer record values are")]
+fn producer_values(console: &mut ConsoleExchange, datatable: Vec<Vec<String>>) {
+    console.values = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [value]: [String; 1] = row.try_into().expect("one record value");
+            value
+        })
+        .collect();
+}
 
-    let consumer_out =
-        consume_console_partition(TOPIC, 1, 20000, &["--property", "print.timestamp=true"]);
-    let printed = String::from_utf8_lossy(&consumer_out.stdout);
-    // The default formatter prints `<timestampType>:<ms>\t<value>`.
-    let line = printed
+#[when("the stock console producer writes those values")]
+fn console_produce(console: &mut ConsoleExchange) {
+    let mut payload = console.values.join("\n");
+    payload.push('\n');
+    console.produced = Some(produce_console(
+        KAFKA_IMAGE,
+        &[],
+        &console.topic,
+        false,
+        payload.as_bytes(),
+    ));
+}
+
+#[then("the stock producer exits successfully")]
+fn console_produced(console: &ConsoleExchange) {
+    let output = console
+        .produced
+        .as_ref()
+        .expect("the console producer completed");
+    assert!(
+        output.status.success(),
+        "producer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[when("the idempotent Rust LZ4 producer writes and flushes those values")]
+async fn rust_produce(console: &mut ConsoleExchange) {
+    {
+        let producer = Producer::builder()
+            .bootstrap(broker0_advertised().to_owned())
+            .enable_idempotence(true)
+            .acks(Acks::All)
+            .compression(Compression::Lz4)
+            .build()
+            .await
+            .expect("producer");
+        for value in &console.values {
+            let metadata = producer
+                .send(ProducerRecord {
+                    topic: console.topic.clone(),
+                    value: Some(Bytes::copy_from_slice(value.as_bytes())),
+                    ..Default::default()
+                })
+                .await
+                .expect("ack");
+            console.partitions.push(metadata.partition);
+        }
+        producer.flush().await.expect("flush");
+        producer.close().await
+    }
+    .expect("close");
+}
+
+#[then("every Rust producer acknowledgement names partition zero")]
+fn rust_produced(console: &ConsoleExchange) {
+    assert!(console.partitions.len() == console.values.len());
+    assert!(console.partitions.iter().all(|&partition| partition == 0));
+}
+
+#[when("a partition console consumer reads the values within {timeout} milliseconds")]
+fn partition_consume(console: &mut ConsoleExchange, timeout: u32) {
+    console.consumed = Some(consume_console_partition(
+        &console.topic,
+        console.values.len(),
+        timeout,
+        &[],
+    ));
+}
+
+#[then("the console consumer emits exactly the producer values in order")]
+fn consumed_values(console: &ConsoleExchange) {
+    let output = console
+        .consumed
+        .as_ref()
+        .expect("the console consumer completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = console
+        .values
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_console_values(&stdout, &expected, "consumer did not emit");
+    assert!(
+        stdout.lines().collect::<Vec<_>>() == expected,
+        "console output changed record order or values: {stdout:?}"
+    );
+}
+
+#[when("the console consumer prints one record with its timestamp")]
+fn consume_timestamp(console: &mut ConsoleExchange) {
+    let output = consume_console_partition(&console.topic, 1, 20_000, &[
+        "--property",
+        "print.timestamp=true",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    console.printed_record = stdout
         .lines()
         .find(|line| line.contains("stamped"))
-        .unwrap_or_else(|| panic!("no record printed: {printed:?}"));
+        .map(str::to_owned);
+    console.timestamp = console
+        .printed_record
+        .as_ref()
+        .and_then(|line| line.split_once(':'))
+        .and_then(|(_, value)| value.split('\t').next())
+        .and_then(|value| value.trim().parse().ok());
+    console.consumed = Some(output);
+}
+
+#[then("the printed record carries a numeric LogAppendTime stamp")]
+fn printed_append_time(console: &ConsoleExchange) {
+    let line = console
+        .printed_record
+        .as_ref()
+        .expect("a stamped record was printed");
     assert!(
         line.starts_with("LogAppendTime:"),
         "the JVM client must read the stored batch as log-append time: {line:?}"
     );
-    let stamp: i64 = line
-        .trim_start_matches("LogAppendTime:")
-        .split('\t')
-        .next()
-        .expect("a timestamp before the tab")
-        .trim()
-        .parse()
-        .expect("the printed stamp is a millisecond clock reading");
+    assert!(
+        console.timestamp.is_some(),
+        "the printed stamp is a millisecond clock reading"
+    );
+}
 
-    // The stamp resolves back to the batch it was written into, so the time
-    // index carries append time and not the producer's own timestamp.
-    let offsets_out = docker_run_kafka_tool(&[
+#[when("GetOffsetShell resolves that printed timestamp")]
+fn resolve_timestamp(console: &mut ConsoleExchange) {
+    let stamp = console
+        .timestamp
+        .expect("the consumer printed a numeric timestamp");
+    let output = docker_run_kafka_tool(&[
         "kafka-run-class",
         "kafka.tools.GetOffsetShell",
         "--broker-list",
         broker0_advertised(),
         "--topic",
-        TOPIC,
+        &console.topic,
         "--time",
         &stamp.to_string(),
     ]);
-    let resolved = String::from_utf8_lossy(&offsets_out.stdout);
-    assert!(
-        resolved.contains(&format!("{TOPIC}:0:0")),
-        "the stamp must resolve to offset 0: {resolved:?}"
-    );
+    console.resolved = String::from_utf8_lossy(&output.stdout).into_owned();
+}
 
-    broker.shutdown().await;
+#[then("the printed timestamp resolves to partition zero offset zero")]
+fn resolved_append_time(console: &ConsoleExchange) {
+    assert!(
+        console.resolved.contains(&format!("{}:0:0", console.topic)),
+        "the stamp must resolve to offset zero: {:?}",
+        console.resolved
+    );
+}
+
+async fn stop_console(console: ConsoleExchange) {
+    console
+        .broker
+        .expect("a host broker was started")
+        .shutdown()
+        .await;
+}
+
+// Blocking Docker commands require another Tokio worker to serve the broker.
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "Stock console tools round trip partition records without a consumer group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_producer_round_trip(console: ConsoleExchange) { stop_console(console).await; }
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "The stock console consumer reads an idempotent Rust producer's LZ4 records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rust_producer_to_console_consumer(console: ConsoleExchange) {
+    stop_console(console).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "A log-append timestamp printed by the JVM client resolves back to its record"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_consumer_prints_log_append_time(console: ConsoleExchange) {
+    stop_console(console).await;
 }

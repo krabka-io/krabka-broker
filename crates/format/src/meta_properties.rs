@@ -525,26 +525,6 @@ mod tests {
     const CLUSTER: &str = "AQIDBAUGBwgJCgsMDQ4PEA";
     const DIRECTORY: &str = "U-hCdTzaSPyFB3swwc7Qdw";
 
-    /// A `verify_ensemble` case: what it is, the set, the expected cluster
-    /// id and node id, and the result.
-    struct EnsembleCase {
-        what: &'static str,
-        set: Vec<DirectoryFile>,
-        cluster_id: Option<ClusterId>,
-        node_id: Option<i32>,
-        want: Result<Option<ClusterId>, String>,
-    }
-
-    /// The `meta.properties` read from one directory.
-    struct DirectoryFile {
-        dir: &'static str,
-        meta: MetaProperties,
-    }
-
-    fn directory(dir: &'static str, meta: MetaProperties) -> DirectoryFile {
-        DirectoryFile { dir, meta }
-    }
-
     fn at(seconds: u64) -> SystemTime { UNIX_EPOCH + Duration::from_secs(seconds) }
 
     fn meta(node_id: i32, directory_id: Option<&str>) -> MetaProperties {
@@ -575,27 +555,154 @@ mod tests {
         );
     }
 
-    /// The bytes are the bytes Kafka's `PropertiesUtils.writePropertiesFile`
-    /// writes for the same ids at the same time on a UTC host:
-    /// `Properties.store(writer, "")` puts the empty comment, the date
-    /// comment, and the entries in key order, each line ended by `\n`.
-    #[yare::parameterized(
-        with_directory_id = {
-            "a formatted directory",
-            meta(1, Some(DIRECTORY)),
-            "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
-             directory.id=U-hCdTzaSPyFB3swwc7Qdw\nnode.id=1\nversion=1\n"
-        },
-        without_directory_id = {
-            "no directory id",
-            meta(2_147_483_647, None),
-            "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
-             node.id=2147483647\nversion=1\n"
-        },
-    )]
-    fn the_file_is_the_one_kafka_writes(what: &str, meta: MetaProperties, want: &str) {
-        assert2::check!(meta.to_file_text(at(1_709_210_096)) == want, "{what}");
+    #[derive(Default)]
+    struct MetaFileScenario {
+        properties: Option<MetaProperties>,
+        timestamp: u64,
+        text: String,
+        encoded: String,
+        parsed: Option<Result<MetaProperties, String>>,
+        files: Vec<(String, MetaProperties)>,
+        expected_cluster: Option<ClusterId>,
+        expected_node: Option<i32>,
+        verified: Option<Result<Option<ClusterId>, String>>,
     }
+    #[rstest::fixture]
+    fn meta_file() -> MetaFileScenario {
+        let text = String::new();
+        MetaFileScenario {
+            text,
+            ..MetaFileScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "cluster AQIDBAUGBwgJCgsMDQ4PEA node {node} and directory ID {directory}"
+    )]
+    fn meta_file_ids(meta_file: &mut MetaFileScenario, node: i32, directory: String) {
+        meta_file.properties = Some(meta(
+            node,
+            (directory != "omitted").then_some(directory.as_str()),
+        ));
+    }
+    #[rstest_bdd_macros::given("meta.properties is written at Unix second {timestamp}")]
+    fn meta_file_timestamp(meta_file: &mut MetaFileScenario, timestamp: u64) {
+        meta_file.timestamp = timestamp;
+    }
+    #[rstest_bdd_macros::when("the Kafka meta.properties file text is generated")]
+    fn write_meta_file_text(meta_file: &mut MetaFileScenario) {
+        meta_file.encoded = meta_file
+            .properties
+            .as_ref()
+            .expect("metadata IDs given")
+            .to_file_text(at(meta_file.timestamp));
+    }
+    #[rstest_bdd_macros::then("the meta.properties file is exactly")]
+    fn exact_meta_file_text(meta_file: &MetaFileScenario, docstring: String) {
+        assert2::check!(meta_file.encoded == format!("{}\n", docstring.trim_matches('\n')));
+    }
+
+    #[rstest_bdd_macros::given("meta.properties file contents")]
+    fn existing_meta_file_text(meta_file: &mut MetaFileScenario, docstring: String) {
+        meta_file.text = format!("{}\n", docstring.trim_matches('\n'));
+    }
+    #[rstest_bdd_macros::given("a meta.properties file with a trailing space after node ID 1")]
+    fn trailing_meta_node_space(meta_file: &mut MetaFileScenario) {
+        meta_file.text = "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n".into();
+    }
+    #[rstest_bdd_macros::when("the meta.properties file is parsed")]
+    fn parse_meta_file_text(meta_file: &mut MetaFileScenario) {
+        meta_file.parsed = Some(
+            MetaProperties::parse(meta_file.text.as_bytes()).map_err(|error| error.to_string()),
+        );
+    }
+    #[rstest_bdd_macros::then("the meta.properties error is {error}")]
+    fn exact_meta_parse_error(meta_file: &MetaFileScenario, error: String) {
+        assert2::check!(meta_file.parsed == Some(Err(error)), "{:?}", meta_file.text);
+    }
+
+    #[rstest_bdd_macros::given("directory verification expects cluster {cluster} and node {node}")]
+    fn expected_directory_ids(meta_file: &mut MetaFileScenario, cluster: String, node: String) {
+        meta_file.expected_cluster = (cluster != "discover").then(|| {
+            ClusterId(Uuid::from_u128(
+                cluster.parse().expect("expected cluster UUID integer"),
+            ))
+        });
+        meta_file.expected_node =
+            (node != "discover").then(|| node.parse().expect("expected node ID"));
+    }
+    #[rstest_bdd_macros::given("formatted directory metadata")]
+    fn existing_directory_metadata(meta_file: &mut MetaFileScenario, datatable: Vec<Vec<String>>) {
+        meta_file.files = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [path, cluster, node, directory] = row.as_slice() else {
+                    panic!("directory path cluster node and directory ID columns required")
+                };
+                (path.clone(), MetaProperties {
+                    cluster_id: ClusterId(Uuid::from_u128(
+                        cluster.parse().expect("cluster UUID integer"),
+                    )),
+                    node_id: node.parse().expect("stored node ID"),
+                    directory_id: (directory != "omitted").then(|| {
+                        DirectoryId(Uuid::from_u128(
+                            directory.parse().expect("directory UUID integer"),
+                        ))
+                    }),
+                })
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when("the directory metadata ensemble is verified")]
+    fn verify_directory_metadata(meta_file: &mut MetaFileScenario) {
+        meta_file.verified = Some(verify_ensemble(
+            meta_file
+                .files
+                .iter()
+                .map(|(path, properties)| (Path::new(path), properties)),
+            meta_file.expected_cluster,
+            meta_file.expected_node,
+        ));
+    }
+    #[rstest_bdd_macros::then("the verified directory cluster is {cluster}")]
+    fn directory_cluster_id(meta_file: &MetaFileScenario, cluster: String) {
+        let expected = (cluster != "unknown").then(|| {
+            ClusterId(Uuid::from_u128(
+                cluster.parse().expect("cluster UUID integer"),
+            ))
+        });
+        assert2::check!(meta_file.verified == Some(Ok(expected)));
+    }
+    #[rstest_bdd_macros::then("directory verification refuses {reason}")]
+    fn directory_metadata_error(meta_file: &MetaFileScenario, reason: String) {
+        let expected = match reason.as_str() {
+            "a cluster mismatch" => format!(
+                "Invalid cluster.id in: {}. Expected {}, but read {}",
+                Path::new("/a").join(META_PROPERTIES).display(),
+                ClusterId(Uuid::from_u128(0xc2)),
+                ClusterId(Uuid::from_u128(0xc1))
+            ),
+            "a configured node mismatch" => node_id_mismatch_message()
+                .stored(2)
+                .previous(1)
+                .path(&Path::new("/a").join(META_PROPERTIES))
+                .call(),
+            "disagreeing stored node IDs" => format!(
+                "Stored node id 4 doesn't match previous node id 3 in {}. If you moved your data, make sure your configured node id matches. If you intend to create a new node, you should remove all data in your data directories.",
+                Path::new("/b").join(META_PROPERTIES).display()
+            ),
+            "a reserved directory ID" => {
+                "Invalid reserved directory ID AAAAAAAAAAAAAAAAAAAAAg found in /a".into()
+            }
+            "a duplicate directory ID" => format!(
+                "Duplicate directory ID Optional[{}] found. It was the ID of /a, but also of /b",
+                DirectoryId(Uuid::from_u128(0x1000))
+            ),
+            _ => panic!("unknown directory conflict {reason}"),
+        };
+        assert2::check!(meta_file.verified == Some(Err(expected)));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/meta_properties_contract", fixtures = [meta_file: MetaFileScenario]);
 
     /// Every file krabka writes reads back as the same ids.
     #[yare::parameterized(
@@ -652,199 +759,5 @@ mod tests {
             MetaProperties::parse(text.as_bytes()).map_err(|e| e.to_string()) == Ok(want),
             "{text:?}"
         );
-    }
-
-    /// A file that does not read gets the message of the exception Kafka
-    /// throws for it, and the first fault in Kafka's order wins.
-    #[yare::parameterized(
-        bad_version = { "version=one\n", "Invalid meta.properties version string 'one'" },
-        unknown_version = {
-            "version=2\nnode.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unknown meta.properties version number 2",
-        },
-        unsupported_zero = {
-            "version=0\nbroker.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        missing_version = {
-            "node.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        old_json = {
-            "{\n  \"cluster_id\": \"AQIDBAUGBwgJCgsMDQ4PEA\",\n  \"version\": 3\n}\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        no_node_or_cluster = { "version=1\n", "Failed to find node.id" },
-        node_trailing_space = {
-            "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unable to read node.id as a base-10 number.",
-        },
-        node_overflow = {
-            "version=1\nnode.id=2147483648\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unable to read node.id as a base-10 number.",
-        },
-        bad_directory_precedes_cluster_missing = {
-            "version=1\nnode.id=1\ndirectory.id=nope\n",
-            "Unable to read directory.id as a Uuid: Input string `nope` decoded as 3 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-        },
-        no_cluster = { "version=1\nnode.id=1\n", "cluster.id was not found." },
-        invalid_cluster = {
-            "version=1\nnode.id=1\ncluster.id=AAAAAA\n",
-            "Unable to read cluster.id as a Uuid: Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-        },
-        malformed_escape = {
-            "version=1\nnode.id=1\ncluster.id=\\u00zz\n",
-            "Malformed \\uxxxx encoding.",
-        },
-    )]
-    fn a_bad_file_gets_kafkas_message(text: &str, want: &str) {
-        assert2::check!(
-            MetaProperties::parse(text.as_bytes()).map_err(|e| e.to_string())
-                == Err(want.to_owned()),
-            "{text:?}"
-        );
-    }
-
-    /// `verify_ensemble` agrees with Kafka's `MetaPropertiesEnsemble.verify`
-    /// for each way a set can disagree.
-    #[yare::parameterized(
-        nothing_formatted = { "nothing formatted" },
-        one_cluster_and_node = { "one cluster, one node" },
-        set_supplies_node_id = { "the set supplies the node id" },
-        cluster_id_disagrees = { "the given cluster id disagrees" },
-        node_id_disagrees = { "the configured node id disagrees" },
-        directory_node_ids_disagree = { "two directories disagree on the node id" },
-        reserved_directory_id = { "a reserved directory id" },
-        shared_directory_id = { "a shared directory id" },
-        missing_directory_ids = { "no directory id is no conflict" },
-    )]
-    fn verify_ensemble_matches_kafka(scenario: &str) {
-        let c1 = ClusterId(Uuid::from_u128(0xc1));
-        let c2 = ClusterId(Uuid::from_u128(0xc2));
-        let file = |cluster_id, node_id, directory: u128| MetaProperties {
-            cluster_id,
-            node_id,
-            directory_id: Some(DirectoryId(Uuid::from_u128(directory))),
-        };
-        let cases: Vec<EnsembleCase> = vec![
-            EnsembleCase {
-                what: "nothing formatted",
-                set: vec![],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Ok(None),
-            },
-            EnsembleCase {
-                what: "one cluster, one node",
-                set: vec![
-                    directory("/a", file(c1, 1, 0x1000)),
-                    directory("/b", file(c1, 1, 0x2000)),
-                ],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Ok(Some(c1)),
-            },
-            EnsembleCase {
-                what: "the set supplies the node id",
-                set: vec![
-                    directory("/a", file(c1, 4, 0x1000)),
-                    directory("/b", file(c1, 4, 0x2000)),
-                ],
-                cluster_id: Some(c1),
-                node_id: None,
-                want: Ok(Some(c1)),
-            },
-            EnsembleCase {
-                what: "the given cluster id disagrees",
-                set: vec![directory("/a", file(c1, 1, 0x1000))],
-                cluster_id: Some(c2),
-                node_id: Some(1),
-                want: Err(format!(
-                    "Invalid cluster.id in: {}. Expected {c2}, but read {c1}",
-                    Path::new("/a").join(META_PROPERTIES).display()
-                )),
-            },
-            EnsembleCase {
-                what: "the configured node id disagrees",
-                set: vec![directory("/a", file(c1, 2, 0x1000))],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Err(node_id_mismatch_message()
-                    .stored(2)
-                    .previous(1)
-                    .path(&Path::new("/a").join(META_PROPERTIES))
-                    .call()),
-            },
-            EnsembleCase {
-                what: "two directories disagree on the node id",
-                set: vec![
-                    directory("/a", file(c1, 3, 0x1000)),
-                    directory("/b", file(c1, 4, 0x2000)),
-                ],
-                cluster_id: None,
-                node_id: None,
-                want: Err(format!(
-                    "Stored node id 4 doesn't match previous node id 3 in {}. If you moved \
-                         your data, make sure your configured node id matches. If you intend to \
-                         create a new node, you should remove all data in your data directories.",
-                    Path::new("/b").join(META_PROPERTIES).display()
-                )),
-            },
-            EnsembleCase {
-                what: "a reserved directory id",
-                set: vec![directory("/a", file(c1, 1, 2))],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Err(
-                    "Invalid reserved directory ID AAAAAAAAAAAAAAAAAAAAAg found in /a".to_owned(),
-                ),
-            },
-            EnsembleCase {
-                what: "a shared directory id",
-                set: vec![
-                    directory("/a", file(c1, 1, 0x1000)),
-                    directory("/b", file(c1, 1, 0x1000)),
-                ],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Err(format!(
-                    "Duplicate directory ID Optional[{}] found. It was the ID of /a, but also of \
-                     /b",
-                    DirectoryId(Uuid::from_u128(0x1000))
-                )),
-            },
-            EnsembleCase {
-                what: "no directory id is no conflict",
-                set: vec![
-                    directory("/a", MetaProperties {
-                        directory_id: None,
-                        ..file(c1, 1, 0)
-                    }),
-                    directory("/b", MetaProperties {
-                        directory_id: None,
-                        ..file(c1, 1, 0)
-                    }),
-                ],
-                cluster_id: None,
-                node_id: Some(1),
-                want: Ok(Some(c1)),
-            },
-        ];
-        let EnsembleCase {
-            what,
-            set,
-            cluster_id,
-            node_id,
-            want,
-        } = cases
-            .into_iter()
-            .find(|case| case.what == scenario)
-            .expect("named yare case exists");
-        let got = verify_ensemble(
-            set.iter().map(|file| (Path::new(file.dir), &file.meta)),
-            cluster_id,
-            node_id,
-        );
-        assert2::check!(got == want, "{what}");
     }
 }

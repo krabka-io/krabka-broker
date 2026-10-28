@@ -54,49 +54,85 @@ pub(super) fn timestamp_kind(timestamp: i64, version: i16) -> krabka_verified::L
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, krabka_verified::ListOffsetsKind};
 
-    #[test]
-    fn sentinel_constants_match_kafka_wire_values() {
-        let cases = [
-            ("EARLIEST_TIMESTAMP", EARLIEST_TIMESTAMP, -2),
-            ("LATEST_TIMESTAMP", LATEST_TIMESTAMP, -1),
-            ("MAX_TIMESTAMP", MAX_TIMESTAMP, -3),
-            ("EARLIEST_LOCAL_TIMESTAMP", EARLIEST_LOCAL_TIMESTAMP, -4),
-            ("LATEST_TIERED_TIMESTAMP", LATEST_TIERED_TIMESTAMP, -5),
-            (
-                "EARLIEST_PENDING_UPLOAD_TIMESTAMP",
-                EARLIEST_PENDING_UPLOAD_TIMESTAMP,
-                -6,
-            ),
-        ];
-        for (name, sentinel, want) in cases {
-            assert!(sentinel == want, "{name}");
+    struct OffsetTimestampContract {
+        position: String,
+        timestamp: i64,
+        version: i16,
+        encoded: Option<i64>,
+        classified: Option<ListOffsetsKind>,
+    }
+
+    #[rstest::fixture]
+    fn offset_timestamp() -> OffsetTimestampContract {
+        // Start this scenario with fresh inputs and observations.
+
+        OffsetTimestampContract {
+            position: String::new(),
+            timestamp: 0,
+            version: 0,
+            encoded: None,
+            classified: None,
         }
     }
 
-    #[test]
-    fn tiered_sentinels_require_their_kafka_versions() {
-        let cases = [
-            (EARLIEST_TIMESTAMP, 0, true),
-            (LATEST_TIMESTAMP, 0, true),
-            (MAX_TIMESTAMP, 6, false),
-            (MAX_TIMESTAMP, 7, true),
-            (EARLIEST_LOCAL_TIMESTAMP, 7, false),
-            (EARLIEST_LOCAL_TIMESTAMP, 8, true),
-            (LATEST_TIERED_TIMESTAMP, 8, false),
-            (LATEST_TIERED_TIMESTAMP, 9, true),
-            (EARLIEST_PENDING_UPLOAD_TIMESTAMP, 10, false),
-            (EARLIEST_PENDING_UPLOAD_TIMESTAMP, 11, true),
-            (-7, 11, false),
-            (0, 1, true),
-        ];
-        for (timestamp, version, expected) in cases {
-            assert!(
-                (timestamp_kind(timestamp, version)
-                    != krabka_verified::ListOffsetsKind::Unsupported)
-                    == expected
-            );
-        }
+    #[rstest_bdd_macros::given("the client requests the {position} log position")]
+    fn requested_position(offset_timestamp: &mut OffsetTimestampContract, position: String) {
+        offset_timestamp.position = position;
     }
+
+    #[rstest_bdd_macros::given(
+        "a ListOffsets version {version} request carries timestamp {timestamp}"
+    )]
+    fn timestamp_request(
+        offset_timestamp: &mut OffsetTimestampContract,
+        version: i16,
+        timestamp: i64,
+    ) {
+        offset_timestamp.version = version;
+        offset_timestamp.timestamp = timestamp;
+    }
+
+    #[rstest_bdd_macros::when("the position is encoded as a Kafka request timestamp")]
+    fn encode_position(offset_timestamp: &mut OffsetTimestampContract) {
+        offset_timestamp.encoded = Some(match offset_timestamp.position.as_str() {
+            "earliest" => EARLIEST_TIMESTAMP,
+            "latest" => LATEST_TIMESTAMP,
+            "maximum-timestamp" => MAX_TIMESTAMP,
+            "earliest-local" => EARLIEST_LOCAL_TIMESTAMP,
+            "latest-tiered" => LATEST_TIERED_TIMESTAMP,
+            "earliest-pending-upload" => EARLIEST_PENDING_UPLOAD_TIMESTAMP,
+            other => panic!("unknown ListOffsets position {other}"),
+        });
+    }
+
+    #[rstest_bdd_macros::when("the broker classifies the ListOffsets timestamp")]
+    fn classify_timestamp(offset_timestamp: &mut OffsetTimestampContract) {
+        offset_timestamp.classified = Some(timestamp_kind(
+            offset_timestamp.timestamp,
+            offset_timestamp.version,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the wire timestamp is {timestamp}")]
+    fn wire_timestamp(offset_timestamp: &OffsetTimestampContract, timestamp: i64) {
+        assert!(offset_timestamp.encoded == Some(timestamp));
+    }
+
+    #[rstest_bdd_macros::then("the timestamp is {support} by that protocol version")]
+    fn timestamp_support(offset_timestamp: &OffsetTimestampContract, support: String) {
+        let supported = match support.as_str() {
+            "supported" => true,
+            "unsupported" => false,
+            _ => panic!("unknown support expectation {support}"),
+        };
+        let classified = offset_timestamp
+            .classified
+            .as_ref()
+            .expect("the request was classified");
+        assert!((*classified != ListOffsetsKind::Unsupported) == supported);
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/list_offsets/sentinels.feature", fixtures = [offset_timestamp: OffsetTimestampContract]);
 }

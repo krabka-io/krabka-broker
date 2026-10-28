@@ -124,7 +124,8 @@ mod tests {
                 remove_raft_voter::handle,
             },
             test_support::{
-                decode_response as decode_other_response, encode_request as encode_other_request,
+                StartedBroker, decode_response as decode_other_response,
+                encode_request as encode_other_request,
             },
         },
         assert2::assert,
@@ -166,9 +167,6 @@ mod tests {
         request
     }
 
-    /// Applies one malformation to an otherwise well-formed request.
-    type Mutate = fn(&mut UpdateRaftVoterRequest);
-
     krabka_macros::wire_codec_helpers! {
         encode_request(UpdateRaftVoterRequest);
         decode_response(UpdateRaftVoterResponse);
@@ -181,7 +179,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            authorizer::AuthorizationResult,
+            authorizer::{AllowAllAuthorizer, AuthorizationResult},
             handlers::{
                 raft_voter::{VoterCase, check_voter_case},
                 test_support::{voter_cluster_id, voter_leader_epoch},
@@ -237,85 +235,91 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// A malformation, and the code that Kafka answers it with.
-    struct RejectedField {
-        what: &'static str,
-        mutate: Mutate,
-        want: i16,
+    #[derive(Default)]
+    struct UpdateVoterScenario {
+        started: Option<StartedBroker>,
+        request: Option<UpdateRaftVoterRequest>,
+        leader_id: i32,
+        epoch: i32,
+        response: Option<UpdateRaftVoterResponse>,
     }
-
-    /// Each rejected field carries the code that
-    /// `KafkaRaftClient.handleUpdateVoterRequest` carries for it. None of
-    /// them is voter-specific: KIP-853 adds no "invalid voter update" code.
-    #[tokio::test]
-    async fn handle_reports_the_kafka_code_for_each_rejected_field() {
-        let version = 0;
-        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
-        let cluster_id = broker.controller.current_image().cluster_id().to_string();
-        let epoch = i32::try_from(broker.controller.quorum_state().current_term)
-            .expect("the test quorum's term fits an i32");
-        let well_formed = || {
-            let mut req = request(2);
-            req.cluster_id = Some(cluster_id.clone());
-            req.current_leader_epoch = epoch;
-            req
-        };
-
-        let cases: [RejectedField; 7] = [
-            RejectedField {
-                what: "another cluster's id",
-                mutate: |req| req.cluster_id = Some("not-this-cluster".into()),
-                want: codes::INCONSISTENT_CLUSTER_ID,
-            },
-            RejectedField {
-                what: "an epoch the quorum has left behind",
-                mutate: |req| req.current_leader_epoch -= 1,
-                want: codes::FENCED_LEADER_EPOCH,
-            },
-            RejectedField {
-                what: "an epoch ahead of the quorum's",
-                mutate: |req| req.current_leader_epoch += 1,
-                want: codes::UNKNOWN_LEADER_EPOCH,
-            },
-            RejectedField {
-                what: "a zero voter directory id",
-                mutate: |req| req.voter_directory_id = ProtoUuid([0; 16]),
-                want: codes::INVALID_REQUEST,
-            },
-            RejectedField {
-                what: "no listeners at all",
-                mutate: |req| req.listeners.clear(),
-                want: codes::INVALID_REQUEST,
-            },
-            RejectedField {
-                what: "an inverted kraft.version range",
-                mutate: |req| req.k_raft_version_feature.min_supported_version = 2,
-                want: codes::INVALID_REQUEST,
-            },
-            RejectedField {
-                what: "listeners without the leader's controller listener",
-                mutate: |req| req.listeners[0].name = "PLAINTEXT".into(),
-                want: codes::INVALID_REQUEST,
-            },
-        ];
-        let leader_id = i32::try_from(broker.config.node_id.0).expect("node id fits an i32");
-
-        for RejectedField { what, mutate, want } in cases {
-            let mut req = well_formed();
-            mutate(&mut req);
-            let resp = answer(&broker, version, &req, &ctx).await;
-            assert!(resp.error_code == want, "{what}");
-            // Every refusal names the leader, as `RaftUtil.updateVoterResponse`
-            // fills it.
-            assert!(
-                (
-                    resp.current_leader.leader_id,
-                    resp.current_leader.leader_epoch,
-                ) == (leader_id, epoch),
-                "{what}"
-            );
+    #[rstest::fixture]
+    fn voter_update() -> UpdateVoterScenario {
+        let started = None;
+        UpdateVoterScenario {
+            started,
+            ..Default::default()
         }
-        broker_handle.shutdown().await;
+    }
+    #[rstest_bdd_macros::given(
+        "an authorized UpdateRaftVoter request names voter 2 and the current cluster and leader epoch"
+    )]
+    async fn current_voter_request(voter_update: &mut UpdateVoterScenario) {
+        let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let broker = started.broker.broker_arc_for_test();
+        voter_update.epoch = i32::try_from(broker.controller.quorum_state().current_term)
+            .expect("the test quorum's term fits an i32");
+        voter_update.leader_id =
+            i32::try_from(broker.config.node_id.0).expect("node id fits an i32");
+        let mut req = request(2);
+        req.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
+        req.current_leader_epoch = voter_update.epoch;
+        voter_update.request = Some(req);
+        voter_update.started = Some(started);
+    }
+    #[rstest_bdd_macros::given("the voter update contains {malformation}")]
+    fn malformed_voter_request(voter_update: &mut UpdateVoterScenario, malformation: String) {
+        let req = voter_update.request.as_mut().unwrap();
+        match malformation.as_str() {
+            "another cluster ID" => req.cluster_id = Some("not-this-cluster".into()),
+            "an epoch one behind" => req.current_leader_epoch -= 1,
+            "an epoch one ahead" => req.current_leader_epoch += 1,
+            "a zero voter directory ID" => req.voter_directory_id = ProtoUuid([0; 16]),
+            "no listeners" => req.listeners.clear(),
+            "an inverted kraft.version range" => {
+                req.k_raft_version_feature.min_supported_version = 2;
+            }
+            "only a PLAINTEXT listener" => req.listeners[0].name = "PLAINTEXT".into(),
+            _ => panic!("unknown voter malformation: {malformation}"),
+        }
+    }
+    #[rstest_bdd_macros::when("the broker handles the version 0 voter update")]
+    async fn handle_voter_update(voter_update: &mut UpdateVoterScenario) {
+        let broker = voter_update
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        voter_update.response =
+            Some(answer(&broker, 0, voter_update.request.as_ref().unwrap(), &ctx).await);
+    }
+    #[rstest_bdd_macros::then(
+        "the voter update returns error {code} and still identifies the current leader and epoch"
+    )]
+    async fn check_voter_refusal(voter_update: &mut UpdateVoterScenario, code: i16) {
+        let response = voter_update.response.as_ref().unwrap();
+        assert!(response.error_code == code);
+        assert!(
+            (
+                response.current_leader.leader_id,
+                response.current_leader.leader_epoch
+            ) == (voter_update.leader_id, voter_update.epoch)
+        );
+        voter_update.started.take().unwrap().broker.shutdown().await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_update_voter/validation.feature",
+        name = "Invalid voter fields retain Kafka error codes and leader hints"
+    )]
+    #[tokio::test]
+    async fn handle_reports_the_kafka_code_for_each_rejected_field(
+        voter_update: UpdateVoterScenario,
+        malformation: String,
+        code: i16,
+    ) {
+        let _ = (voter_update, malformation, code);
     }
 
     /// `KafkaRaftClient.hasValidClusterId` answers true for a request that

@@ -5,25 +5,28 @@
 use {
     crate::{
         harness::{
-            RetainedBroker, alice_password, metadata_probe, start_scram_alice, wrong_scram_password,
+            RetainedBroker, alice_password, metadata_probe, read_after_auth, start_scram_alice,
+            wrong_scram_password,
         },
         kafka_wire::{
             ScramAuthenticationSetup, sasl_authenticate_on, sasl_handshake_on,
             sasl_scram_authenticate_on,
         },
-        reauth_cases::{
-            capped_session_closes, different_principal_closes, repeated_expired_reauth,
-            same_principal_reopens,
-        },
+        reauth_cases::{Reauthentication, reauthentication},
         support::{
             sasl::{HashIterations, provision_scram, sasl_plaintext_mechanisms},
             wire::CorrelationId,
         },
     },
     assert2::assert,
+    bytes::Bytes,
+    krabka_broker::{Broker, BrokerHandle},
     krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
     krabka_security::SaslMechanism,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
     std::{io, net::SocketAddr},
+    tempfile::TempDir,
     tokio::net::TcpStream,
 };
 
@@ -34,18 +37,18 @@ use {
 /// public `AlterUserScramCredentials` handler. It then runs the two-round
 /// RFC 5802 exchange end-to-end and asserts that the post-auth Metadata
 /// request succeeds.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha512 happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha512_happy_path() {
-    let RetainedBroker {
-        log_dir: _log_dir,
-        handle,
-        addr,
-    } = scram_fixture(SaslMechanism::ScramSha512).await;
-    let result =
-        drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha512)
-            .await;
-    handle.shutdown().await;
-    result.expect("SASL/SCRAM session must succeed end-to-end");
+async fn sasl_scram_sha512_happy_path(authentication: ScramAuthentication) {
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// Negative path: with a wrong password, `SaslAuthenticate` round 2 responds
@@ -55,25 +58,18 @@ async fn sasl_scram_sha512_happy_path() {
 /// `drive_sasl_scram_session` reports the failure as a non-zero error code on
 /// the auth response, or as an EOF when the Metadata read that follows
 /// returns no bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha512 wrong password closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha512_wrong_password_closes_connection() {
-    let RetainedBroker {
-        log_dir: _log_dir,
-        handle,
-        addr,
-    } = scram_fixture(SaslMechanism::ScramSha512).await;
-    let result = drive_sasl_scram_session(
-        addr,
-        "alice",
-        &wrong_scram_password(),
-        SaslMechanism::ScramSha512,
-    )
-    .await;
-    handle.shutdown().await;
-    assert!(
-        result.is_err(),
-        "wrong password must fail SCRAM session: {result:?}"
-    );
+async fn sasl_scram_sha512_wrong_password_closes_connection(authentication: ScramAuthentication) {
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// SASL/SCRAM-SHA-256 happy path.
@@ -82,114 +78,58 @@ async fn sasl_scram_sha512_wrong_password_closes_connection() {
 /// credential and configures the listener to enable only SHA-256. This proves
 /// that the new mechanism is wired end-to-end, and that it does not use the
 /// SHA-512 code by accident.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha256 happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha256_happy_path() {
-    let RetainedBroker {
-        log_dir: _log_dir,
-        handle,
-        addr,
-    } = scram_fixture(SaslMechanism::ScramSha256).await;
-    let result =
-        drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha256)
-            .await;
-    handle.shutdown().await;
-    result.expect("SASL/SCRAM-SHA-256 session must succeed end-to-end");
+async fn sasl_scram_sha256_happy_path(authentication: ScramAuthentication) {
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// Negative path for SHA-256: a wrong password must close the connection,
 /// the same as in the SHA-512 variant.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha256 wrong password closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha256_wrong_password_closes_connection() {
-    let RetainedBroker {
-        log_dir: _log_dir,
-        handle,
-        addr,
-    } = scram_fixture(SaslMechanism::ScramSha256).await;
-    let result = drive_sasl_scram_session(
-        addr,
-        "alice",
-        &wrong_scram_password(),
-        SaslMechanism::ScramSha256,
-    )
-    .await;
-    handle.shutdown().await;
-    assert!(
-        result.is_err(),
-        "wrong password must fail SHA-256 SCRAM session: {result:?}"
-    );
+async fn sasl_scram_sha256_wrong_password_closes_connection(authentication: ScramAuthentication) {
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// Kafka's `ScramSaslServer` refuses a stored credential stretched fewer than
 /// 4096 times in round 1, with the generic invalid-credentials text, and
 /// accepts one at 4096. Such a credential reaches the image only through a
 /// bootstrap record, never through `AlterUserScramCredentials`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram credential below 4096 iterations is refused in round one"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {
-    for (mechanism, iterations, expected) in [
-        (
-            SaslMechanism::ScramSha256,
-            4095,
-            Some(
-                "Authentication failed during authentication due to invalid credentials with \
-                 SASL mechanism SCRAM-SHA-256",
-            ),
-        ),
-        (
-            SaslMechanism::ScramSha512,
-            4095,
-            Some(
-                "Authentication failed during authentication due to invalid credentials with \
-                 SASL mechanism SCRAM-SHA-512",
-            ),
-        ),
-        (SaslMechanism::ScramSha256, 4096, None),
-        (SaslMechanism::ScramSha512, 4096, None),
-    ] {
-        let log_dir = tempfile::tempdir().unwrap();
-        let cfg = sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![mechanism]);
-        let handle = krabka_broker::Broker::start(cfg)
-            .await
-            .expect("broker must start");
-        provision_scram()
-            .broker(&handle)
-            .mechanism(mechanism)
-            .iterations(HashIterations(iterations))
-            .call()
-            .await;
-        let mut stream = TcpStream::connect(handle.listen_addr())
-            .await
-            .expect("connect");
-        let response = scram_authenticate(
-            &mut stream,
-            &mut CorrelationId(0),
-            &ScramAuthenticationSetup {
-                client_id: "krabka-sasl-test",
-                user: "alice",
-                password: alice_password(),
-                mechanism,
-            },
-        )
-        .await
-        .expect("SCRAM rounds complete");
-        handle.shutdown().await;
-        let refused = expected.map(|message| SaslAuthenticateResponse {
-            error_code: 58,
-            error_message: Some(message.to_owned()),
-            ..Default::default()
-        });
-        match refused {
-            Some(refused) => {
-                assert!(
-                    response == refused,
-                    "{mechanism:?} at {iterations} iterations"
-                );
-            }
-            None => assert!(
-                response.error_code == 0,
-                "{mechanism:?} at {iterations} iterations"
-            ),
-        }
-    }
+async fn scram_credential_below_4096_iterations_is_refused_in_round_one(
+    authentication: ScramAuthentication,
+    mechanism: String,
+    iterations: u32,
+    expectation: String,
+) {
+    let _ = (mechanism, iterations, expectation);
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// Drive a complete SASL/SCRAM session against a `SASL_PLAINTEXT` listener.
@@ -208,14 +148,23 @@ pub async fn drive_sasl_scram_session(
     mechanism: krabka_security::SaslMechanism,
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
-    sasl_scram_authenticate_on(&mut stream, &ScramAuthenticationSetup {
+    drive_sasl_scram_session_on(&mut stream, user, password, mechanism).await
+}
+
+async fn drive_sasl_scram_session_on(
+    stream: &mut TcpStream,
+    user: &str,
+    password: &str,
+    mechanism: SaslMechanism,
+) -> io::Result<()> {
+    sasl_scram_authenticate_on(stream, &ScramAuthenticationSetup {
         client_id: "krabka-sasl-test",
         user,
-        password: (password).into(),
+        password: password.into(),
         mechanism,
     })
     .await?;
-    metadata_probe(&mut stream, 5).await
+    metadata_probe(stream, 5).await
 }
 
 /// Kafka's `ScramFormatter.xor` throws `IllegalArgumentException` on a
@@ -223,62 +172,23 @@ pub async fn drive_sasl_scram_session(
 /// `Selector` then closes the connection with no `SaslAuthenticate`
 /// response. A proof of the right length and the wrong value still gets the
 /// usual error-58 answer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "a scram proof of the wrong length closes with no response"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {
-    for (case, proof, answered) in [
-        ("empty proof", String::new(), false),
-        // Valid base64 of 30 bytes; 43 characters would fail the grammar,
-        // which Kafka answers with error 58.
-        ("thirty bytes", "A".repeat(40), false),
-        (
-            "right length, wrong value",
-            format!("{}=", "A".repeat(43)),
-            true,
-        ),
-    ] {
-        let RetainedBroker {
-            log_dir: _log_dir,
-            handle,
-            addr,
-        } = scram_fixture(SaslMechanism::ScramSha256).await;
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        sasl_handshake_on()
-            .stream(&mut stream)
-            .correlation(1)
-            .mechanism(SaslMechanism::ScramSha256.wire_name())
-            .call()
-            .await
-            .unwrap();
-        let (client_first, client) = krabka_macros::scram_client_first!(
-            "alice",
-            alice_password().as_str(),
-            SaslMechanism::ScramSha256
-        )
-        .unwrap();
-        let first = sasl_authenticate_on()
-            .stream(&mut stream)
-            .auth_bytes(bytes::Bytes::from(client_first))
-            .correlation(2)
-            .call()
-            .await
-            .unwrap();
-        let (client_final, _client) = client.step(&first.auth_bytes).unwrap();
-        let client_final = String::from_utf8(client_final).unwrap();
-        let (without_proof, _) = client_final.rsplit_once(",p=").unwrap();
-        let result = sasl_authenticate_on()
-            .stream(&mut stream)
-            .auth_bytes(bytes::Bytes::from(format!("{without_proof},p={proof}")))
-            .correlation(3)
-            .call()
-            .await;
-        handle.shutdown().await;
-        let outcome = result.as_ref().map(|response| response.error_code);
-        if answered {
-            assert!(outcome.ok() == Some(58), "case {case}: {result:?}");
-        } else {
-            assert!(outcome.is_err(), "case {case}: {result:?}");
-        }
-    }
+async fn a_scram_proof_of_the_wrong_length_closes_with_no_response(
+    authentication: ScramAuthentication,
+    proof: String,
+    outcome: String,
+) {
+    let _ = (proof, outcome);
+    authentication
+        .broker
+        .expect("a SCRAM listener")
+        .shutdown()
+        .await;
 }
 
 /// Runs the two RFC 5802 rounds on `stream` and returns the round-2
@@ -331,23 +241,42 @@ pub async fn scram_authenticate(
 /// The close happens on that request and not on a timer, which is where Kafka
 /// puts it (`Processor.processCompletedReceives`): a connection that has fallen
 /// silent is reclaimed by `connections.max.idle.ms`, not by this window.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram session capped by connections max reauth then closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_session_capped_by_connections_max_reauth_then_closes() {
-    capped_session_closes(SaslMechanism::ScramSha512).await;
+async fn scram_session_capped_by_connections_max_reauth_then_closes(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
 }
 
 /// KIP-368: a SCRAM re-auth for the same principal runs both rounds in the
 /// `Reauthenticating` state and re-arms the window.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram in band reauth same principal reopens data plane"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_in_band_reauth_same_principal_reopens_data_plane() {
-    same_principal_reopens(SaslMechanism::ScramSha512).await;
+async fn scram_in_band_reauth_same_principal_reopens_data_plane(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a SCRAM re-auth as a
 /// different user answers `SASL_AUTHENTICATION_FAILED` (58) and closes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram in band reauth with different principal closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_in_band_reauth_with_different_principal_closes() {
-    different_principal_closes(SaslMechanism::ScramSha512).await;
+async fn scram_in_band_reauth_with_different_principal_closes(reauthentication: Reauthentication) {
+    reauthentication.shutdown().await;
 }
 
 /// KIP-368: a connection re-authenticates round after round for the whole life
@@ -364,23 +293,309 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
 /// The window here is short and the test sleeps past it before every round, so
 /// each of the three rounds starts expired. A broker that closed on the deadline
 /// itself fails on the first one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram reauth after the window elapsed keeps serving round after round"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    repeated_expired_reauth(
-        SaslMechanism::ScramSha512,
-        krabka_units::secs(1),
-        900..=1_000,
-    )
-    .await;
+async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
 }
 
 async fn scram_fixture(mechanism: SaslMechanism) -> RetainedBroker {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_scram_alice(log_dir.path().to_path_buf(), mechanism).await;
-    let addr = handle.listen_addr();
-    RetainedBroker {
-        log_dir,
-        handle,
-        addr,
+    RetainedBroker { log_dir, handle }
+}
+
+struct ScramAuthentication {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    mechanism: Option<SaslMechanism>,
+    password: String,
+    stream: Option<TcpStream>,
+    result: Option<io::Result<()>>,
+    response: Option<io::Result<SaslAuthenticateResponse>>,
+    final_without_proof: Option<String>,
+    bytes_read: Option<usize>,
+}
+
+#[fixture]
+fn authentication() -> ScramAuthentication {
+    // Start this scenario with fresh inputs and observations.
+
+    ScramAuthentication {
+        broker: None,
+        directory: None,
+        mechanism: None,
+        password: String::new(),
+        stream: None,
+        result: None,
+        response: None,
+        final_without_proof: None,
+        bytes_read: None,
+    }
+}
+
+fn scram_mechanism(name: &str) -> SaslMechanism {
+    match name {
+        "SCRAM-SHA-256" => SaslMechanism::ScramSha256,
+        "SCRAM-SHA-512" => SaslMechanism::ScramSha512,
+        other => panic!("unsupported SCRAM fixture mechanism {other}"),
+    }
+}
+
+#[given("a {mechanism} listener with alice's SCRAM credential")]
+async fn scram_listener(authentication: &mut ScramAuthentication, mechanism: String) {
+    let mechanism = scram_mechanism(&mechanism);
+    let RetainedBroker { log_dir, handle } = scram_fixture(mechanism).await;
+    authentication.directory = Some(log_dir);
+    authentication.broker = Some(handle);
+    authentication.mechanism = Some(mechanism);
+}
+
+#[given("alice supplies the configured SCRAM password")]
+fn correct_scram_password(authentication: &mut ScramAuthentication) {
+    authentication.password = alice_password();
+}
+
+#[given("alice supplies a wrong SCRAM password")]
+fn wrong_scram_password_given(authentication: &mut ScramAuthentication) {
+    authentication.password = wrong_scram_password();
+}
+
+#[when(
+    "alice opens a fresh SCRAM connection and requests Metadata after verifying the server signature"
+)]
+async fn complete_scram_session(authentication: &mut ScramAuthentication) {
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a SCRAM listener")
+        .listen_addr();
+    let mechanism = authentication
+        .mechanism
+        .expect("the enabled SCRAM mechanism");
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .expect("connect to the SCRAM listener");
+    authentication.result = Some(
+        drive_sasl_scram_session_on(&mut stream, "alice", &authentication.password, mechanism)
+            .await,
+    );
+    authentication.stream = Some(stream);
+}
+
+#[then("the SCRAM server signature verifies and Metadata succeeds")]
+fn successful_scram_session(authentication: &ScramAuthentication) {
+    authentication
+        .result
+        .as_ref()
+        .expect("a SCRAM session was attempted")
+        .as_ref()
+        .expect("SASL/SCRAM session and server signature must succeed end-to-end");
+}
+
+#[then("SCRAM credentials are rejected with SASL_AUTHENTICATION_FAILED")]
+fn refused_scram_session(authentication: &ScramAuthentication) {
+    let result = authentication
+        .result
+        .as_ref()
+        .expect("a SCRAM session was attempted");
+    assert!(
+        result.is_err(),
+        "wrong password must fail SCRAM session: {result:?}"
+    );
+    let error = result
+        .as_ref()
+        .expect_err("wrong credentials must be rejected");
+    assert!(
+        error.to_string().contains("error_code=58"),
+        "the broker must reject credentials, not fail unrelated I/O: {error}"
+    );
+}
+
+#[when("the refused SCRAM client reads the connection")]
+async fn read_refused_scram(authentication: &mut ScramAuthentication) {
+    authentication.bytes_read = Some(
+        read_after_auth(
+            authentication
+                .stream
+                .as_mut()
+                .expect("an attempted SCRAM connection"),
+        )
+        .await,
+    );
+}
+
+#[then("the refused SCRAM connection is closed at EOF")]
+fn refused_scram_closed(authentication: &ScramAuthentication) {
+    assert!(
+        authentication.bytes_read == Some(0),
+        "the broker must close after failed SCRAM authentication"
+    );
+}
+
+#[given("alice has a {mechanism} credential stretched with {iterations} iterations")]
+async fn stored_iterations(
+    authentication: &mut ScramAuthentication,
+    mechanism: String,
+    iterations: u32,
+) {
+    let mechanism = scram_mechanism(&mechanism);
+    let directory = tempfile::tempdir().unwrap();
+    let config = sasl_plaintext_mechanisms(directory.path().to_path_buf(), vec![mechanism]);
+    let broker = Broker::start(config).await.expect("broker must start");
+    provision_scram()
+        .broker(&broker)
+        .mechanism(mechanism)
+        .iterations(HashIterations(iterations))
+        .call()
+        .await;
+    authentication.broker = Some(broker);
+    authentication.directory = Some(directory);
+    authentication.mechanism = Some(mechanism);
+    authentication.password = alice_password();
+}
+
+#[when("alice performs the SCRAM authentication rounds")]
+async fn authenticate_stored_credential(authentication: &mut ScramAuthentication) {
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a stored SCRAM credential")
+        .listen_addr();
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    authentication.response = Some(
+        scram_authenticate(
+            &mut stream,
+            &mut CorrelationId(0),
+            &ScramAuthenticationSetup {
+                client_id: "krabka-sasl-test",
+                user: "alice",
+                password: authentication.password.clone(),
+                mechanism: authentication
+                    .mechanism
+                    .expect("the stored credential mechanism"),
+            },
+        )
+        .await,
+    );
+    authentication.stream = Some(stream);
+}
+
+#[then("SCRAM credential validation reports {expectation}")]
+fn credential_iteration_result(authentication: &ScramAuthentication, expectation: String) {
+    let response = authentication
+        .response
+        .as_ref()
+        .expect("SCRAM authentication was attempted")
+        .as_ref()
+        .expect("SCRAM rounds complete");
+    match expectation.as_str() {
+        "accepted" => assert!(response.error_code == 0),
+        "invalid-credentials" => {
+            let mechanism = authentication
+                .mechanism
+                .expect("the stored credential mechanism")
+                .wire_name();
+            assert!(
+                response
+                    == &SaslAuthenticateResponse {
+                        error_code: 58,
+                        error_message: Some(format!(
+                            "Authentication failed during authentication due to invalid credentials with SASL mechanism {mechanism}"
+                        )),
+                        ..Default::default()
+                    }
+            );
+        }
+        other => panic!("unknown SCRAM credential expectation {other}"),
+    }
+}
+
+#[given("alice has completed a valid SHA-256 SCRAM first round")]
+async fn prepared_scram_final(authentication: &mut ScramAuthentication) {
+    scram_listener(authentication, "SCRAM-SHA-256".into()).await;
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a SHA-256 SCRAM listener")
+        .listen_addr();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    sasl_handshake_on()
+        .stream(&mut stream)
+        .correlation(1)
+        .mechanism(SaslMechanism::ScramSha256.wire_name())
+        .call()
+        .await
+        .unwrap();
+    let (client_first, client) = krabka_macros::scram_client_first!(
+        "alice",
+        alice_password().as_str(),
+        SaslMechanism::ScramSha256
+    )
+    .unwrap();
+    let first = sasl_authenticate_on()
+        .stream(&mut stream)
+        .auth_bytes(Bytes::from(client_first))
+        .correlation(2)
+        .call()
+        .await
+        .unwrap();
+    let (client_final, _client) = client.step(&first.auth_bytes).unwrap();
+    let client_final = String::from_utf8(client_final).unwrap();
+    let (without_proof, _) = client_final.rsplit_once(",p=").unwrap();
+    authentication.final_without_proof = Some(without_proof.to_owned());
+    authentication.stream = Some(stream);
+}
+
+#[when("a SCRAM client-final message with proof {proof} is submitted")]
+async fn malformed_scram_final(authentication: &mut ScramAuthentication, proof: String) {
+    let proof = match proof.as_str() {
+        "empty" => String::new(),
+        "30-bytes" => "A".repeat(40),
+        "32-bytes-wrong" => format!("{}=", "A".repeat(43)),
+        other => panic!("unknown SCRAM proof fixture {other}"),
+    };
+    let prefix = authentication
+        .final_without_proof
+        .as_ref()
+        .expect("a prepared SCRAM client-final message");
+    authentication.response = Some(
+        sasl_authenticate_on()
+            .stream(
+                authentication
+                    .stream
+                    .as_mut()
+                    .expect("an active SCRAM exchange"),
+            )
+            .auth_bytes(Bytes::from(format!("{prefix},p={proof}")))
+            .correlation(3)
+            .call()
+            .await,
+    );
+}
+
+#[then("the SCRAM proof response is {outcome}")]
+fn scram_proof_result(authentication: &ScramAuthentication, outcome: String) {
+    let result = authentication
+        .response
+        .as_ref()
+        .expect("a SCRAM final proof was submitted");
+    let error = result.as_ref().map(|response| response.error_code);
+    match outcome.as_str() {
+        "absent" => assert!(
+            error.is_err(),
+            "a wrong-length proof must close without a response: {result:?}"
+        ),
+        "SASL_AUTHENTICATION_FAILED" => assert!(
+            error.ok() == Some(58),
+            "a wrong-value proof must be refused: {result:?}"
+        ),
+        other => panic!("unknown SCRAM proof outcome {other}"),
     }
 }

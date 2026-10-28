@@ -4,6 +4,9 @@ load(
     "./generate_kip_matrix.axl",
     "annotation_bodies",
     "api_versions_rows",
+    "bdd_feature_scenarios",
+    "bdd_scenario_bindings",
+    "bdd_step_matches",
     "built_image_keys",
     "calls_function",
     "catalog_outside_annotations",
@@ -720,6 +723,9 @@ def _test_suite_functions(_ctx):
         functions[1].body.find('"{}"') >= 0,
         "a brace inside a format string does not close the body",
     )
+    inline = suite_functions("async fn first() {}\nfn second() {\n    run();\n}\nfn last() {}")
+    check_eq("empty BDD wrappers do not consume the next function", [f.name for f in inline], ["first", "second", "last"])
+    check_eq("empty wrappers have empty bodies", [f.body for f in inline], ["", "    run();", ""])
 
 def _test_direct_client_cases(_ctx):
     check_eq("an indexed row", direct_client_cases("    &CLIENTS[1]", 2), [1])
@@ -758,6 +764,143 @@ def _test_client_cases_by_function(_ctx):
         [1],
     )
     check_eq("a helper that touches no client drives none", driven["run_client"], [])
+
+_BDD_SUITE = "\n".join([
+    '#[given("a ready broker")]',
+    "async fn broker() {}",
+    "#[rstest_bdd_macros::given(",
+    '    "pinned clients select topics"',
+    ")]",
+    "async fn selected_clients(",
+    "    #[datatable] rows: Rows<ClientInput>,",
+    ") {",
+    "    for row in rows { CLIENTS.iter().find(|client| client.image == row.image); }",
+    "}",
+    '#[when("clients request {api}")]',
+    "fn request(api: String) {",
+    "    exchange(api);",
+    "}",
+    '#[then("every request succeeds")]',
+    "fn succeeds() {}",
+    '#[then("the modern client negotiates")]',
+    "fn modern() {",
+    "    nested_modern();",
+    "}",
+    "fn nested_modern() {",
+    "    modern_client();",
+    "}",
+    "fn modern_client() {",
+    "    &CLIENTS[1]",
+    "}",
+    '#[then("an unrelated client is used")]',
+    "fn unrelated() {",
+    "    &CLIENTS[0]",
+    "}",
+    "#[rstest_bdd_macros::scenario(",
+    '    path = "tests/client.feature",',
+    '    name = "modern consumer",',
+    ")]",
+    "#[tokio::test]",
+    "async fn modern_consumer() {}",
+    '#[scenario(path = "tests/client.feature", name = "classic consumers")]',
+    "async fn classic_consumers() {}",
+    "async fn bdd_verify_uncalled() {",
+    "    &CLIENTS[0]",
+    "}",
+    "async fn uncalled() {}",
+])
+
+_BDD_FEATURE = "\n".join([
+    "Feature: Pinned clients",
+    "  Background:",
+    "    Given a ready broker",
+    "  Scenario: modern consumer",
+    "    Given pinned clients select topics",
+    "      | image | program | library |",
+    "      | docker.io/krabka-io/kcat:librdkafka-2.15.0 | kcat | librdkafka 2.15.0 |",
+    "    When clients request Fetch",
+    "    Then every request succeeds",
+    "    And the modern client negotiates",
+    "  Scenario: classic consumers",
+    "    Given pinned clients select topics",
+    "      | image | program | library |",
+    "      | mirror.gcr.io/edenhill/kcat:1.7.1 | kcat | librdkafka 1.8.2 |",
+    "      | docker.io/krabka-io/kcat:librdkafka-2.15.0 | kcat | librdkafka 2.15.0 |",
+    "    When clients request JoinGroup",
+    "    Then every request succeeds",
+])
+
+def _test_bdd_scenario_bindings(_ctx):
+    bindings = bdd_scenario_bindings(_BDD_SUITE)
+    check_eq("only explicit bound tests", sorted(bindings), ["classic_consumers", "modern_consumer"])
+    check_eq("qualified multiline path", bindings["modern_consumer"].path, "tests/client.feature")
+    check_eq("scenario title is not guessed from the function", bindings["modern_consumer"].name, "modern consumer")
+    check_eq("unqualified one-line binding", bindings["classic_consumers"].name, "classic consumers")
+
+def _test_bdd_step_matches(_ctx):
+    check_eq("literal match", bdd_step_matches("a ready broker", "a ready broker"), True)
+    check_eq("literal mismatch", bdd_step_matches("a ready broker", "another broker"), False)
+    check_eq("capture may itself contain the following literal", bdd_step_matches("client {name} received", "client first received second received"), True)
+    check_eq("typed parameter value", bdd_step_matches("receiver {enabled}", "receiver true"), True)
+    check_eq("several captures and punctuation", bdd_step_matches("Fetch {bytes} bytes, timeout {wait} ms", "Fetch 65536 bytes, timeout 2000 ms"), True)
+    check_eq("parameters cannot swallow missing suffix", bdd_step_matches("Fetch {bytes} bytes", "Fetch 65536 records"), False)
+    check_eq("empty capture cannot satisfy a parameter", bdd_step_matches("receiver {enabled}", "receiver "), False)
+    check_eq("match consumes the whole step", bdd_step_matches("a ready broker", "a ready broker extra"), False)
+
+def _test_bdd_feature_scenarios(_ctx):
+    scenarios = bdd_feature_scenarios(_BDD_FEATURE)
+    modern = scenarios["modern consumer"]
+    check_eq("Background precedes the scenario", modern[0].text, "a ready broker")
+    check_eq("And inherits Then", modern[-1].kind, "then")
+    check_eq("step data stays with the matching scenario", modern[1].table[1][0], _CLIENTS[1][0])
+    check_eq("the other scenario has two selected rows", len(scenarios["classic consumers"][1].table), 3)
+
+def _test_bdd_feature_outline(_ctx):
+    feature = "\n".join([
+        "Feature: Client rows",
+        "  Scenario Outline: negotiated API",
+        "    Given client <client> is ready",
+        "    When clients request <api>",
+        "    Then the trace contains:",
+        '      """',
+        "      Given this is payload, not a step",
+        '      """',
+        "    And selected rows are:",
+        "      | image |",
+        "      | <client> |",
+        "    Examples:",
+        "      | client | api |",
+        "      | old | JoinGroup |",
+        "      | modern | ConsumerGroupHeartbeat |",
+    ])
+    steps = bdd_feature_scenarios(feature)["negotiated API"]
+    check_eq("two four-step examples", len(steps), 8)
+    check_eq("first example actual input", steps[0].text, "client old is ready")
+    check_eq("second example actual action", steps[5].text, "clients request ConsumerGroupHeartbeat")
+    check_eq("structured input expands with its example", steps[7].table[1], ["modern"])
+    check_eq("docstring does not add a Given binding", steps[3].kind, "then")
+
+def _test_bdd_client_evidence(_ctx):
+    driven = client_cases_by_function(_BDD_SUITE, 2, features = {"tests/client.feature": _BDD_FEATURE}, clients = _CLIENTS)
+    check_eq("modern scenario gets exactly its client, never the table-wide catalog", driven["modern_consumer"], [1])
+    check_eq("classic scenario actually exercises both selected clients", driven["classic_consumers"], [0, 1])
+    check_eq("the modern step reaches a two-helper chain", driven["modern"], [1])
+    check_eq("a prefix without a real scenario binding grants no evidence", driven["uncalled"], [])
+    inline = _BDD_SUITE.replace("async fn selected_clients(\n    #[datatable] rows: Rows<ClientInput>,\n) {", "async fn selected_clients(#[datatable] rows: Rows<ClientInput>) {")
+    inline_driven = client_cases_by_function(inline, 2, features = {"tests/client.feature": _BDD_FEATURE}, clients = _CLIENTS)
+    check_eq("one-line datatable parameters also narrow the catalog", inline_driven["modern_consumer"], [1])
+
+def _test_bdd_client_selection_is_scenario_local(_ctx):
+    feature = _BDD_FEATURE.replace(
+        "      | docker.io/krabka-io/kcat:librdkafka-2.15.0 | kcat | librdkafka 2.15.0 |",
+        "      | mirror.gcr.io/edenhill/kcat:1.7.1 | kcat | librdkafka 1.8.2 |",
+    ).replace("    And the modern client negotiates", "")
+    driven = client_cases_by_function(_BDD_SUITE, 2, features = {"tests/client.feature": feature}, clients = _CLIENTS)
+    check_eq("changing the selected feature row changes the evidence", driven["modern_consumer"], [0])
+    check_eq("an unexecuted modern Then grants no modern-client credit", driven["classic_consumers"], [0])
+    catalog_assertion = _BDD_FEATURE.replace("    And the modern client negotiates", "    And the modern client negotiates\n    And an unrelated client is used")
+    bounded = client_cases_by_function(_BDD_SUITE, 2, features = {"tests/client.feature": catalog_assertion}, clients = _CLIENTS)
+    check_eq("a bound native catalog reference cannot add an unselected client", bounded["modern_consumer"], [1])
 
 def _test_client_evidence(_ctx):
     check_eq(
@@ -985,6 +1128,12 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_direct_client_cases,
     _test_calls_function,
     _test_client_cases_by_function,
+    _test_bdd_scenario_bindings,
+    _test_bdd_step_matches,
+    _test_bdd_feature_scenarios,
+    _test_bdd_feature_outline,
+    _test_bdd_client_evidence,
+    _test_bdd_client_selection_is_scenario_local,
     _test_client_evidence,
     _test_client_cell,
     _test_kip_row,

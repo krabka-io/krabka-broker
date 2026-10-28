@@ -139,3 +139,422 @@ pub async fn wait_for_token_gone(handle: &BrokerHandle, token_id: &str) {
 pub async fn start_admin_alice() -> (BrokerHandle, TempDir, SocketAddr) {
     start_broker_with_super_users(&[("admin", "admin-pw"), ("alice", "alice-pw")], &["admin"]).await
 }
+
+use {
+    crate::{
+        rpc::{
+            check_created_identity, send_create_delegation_token, send_describe_delegation_token,
+            send_expire_delegation_token, send_renew_delegation_token,
+        },
+        wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
+    },
+    assert2::{assert, check},
+    base64::{Engine as _, engine::general_purpose},
+    krabka_protocol::owned::{
+        create_delegation_token_request::{CreatableRenewers, CreateDelegationTokenRequest},
+        create_delegation_token_response::CreateDelegationTokenResponse,
+        describe_delegation_token_request::{
+            DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
+        },
+        describe_delegation_token_response::DescribeDelegationTokenResponse,
+        expire_delegation_token_request::ExpireDelegationTokenRequest,
+        expire_delegation_token_response::ExpireDelegationTokenResponse,
+        renew_delegation_token_request::RenewDelegationTokenRequest,
+        renew_delegation_token_response::RenewDelegationTokenResponse,
+    },
+    std::{collections::BTreeMap, io},
+    tokio::net::TcpStream,
+};
+pub struct TokenWorkflow {
+    pub broker: Option<BrokerHandle>,
+    pub directory: Option<TempDir>,
+    pub address: Option<SocketAddr>,
+    pub sessions: BTreeMap<String, TcpStream>,
+    pub tokens: BTreeMap<String, CreateDelegationTokenResponse>,
+    pub created: Option<CreateDelegationTokenResponse>,
+    pub renewed: Option<RenewDelegationTokenResponse>,
+    pub expired: Option<ExpireDelegationTokenResponse>,
+    pub described: Option<DescribeDelegationTokenResponse>,
+    pub authenticated: Option<io::Result<TcpStream>>,
+}
+impl TokenWorkflow {
+    pub fn address(&self) -> SocketAddr { self.address.expect("delegation broker started") }
+
+    pub async fn shutdown(self) {
+        drop(self.sessions);
+        drop(self.authenticated);
+        self.broker
+            .expect("delegation broker started")
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+pub fn tokens() -> TokenWorkflow {
+    // Start this scenario with fresh inputs and observations.
+
+    TokenWorkflow {
+        broker: None,
+        directory: None,
+        address: None,
+        sessions: BTreeMap::new(),
+        tokens: BTreeMap::new(),
+        created: None,
+        renewed: None,
+        expired: None,
+        described: None,
+        authenticated: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a token broker has alice wonderland and bob builder with a 7 day ceiling and 24 hour renew period"
+)]
+async fn delegation_lifecycle_broker(tokens: &mut TokenWorkflow) {
+    let (broker, directory, address) = start_broker().await;
+    tokens.broker = Some(broker);
+    tokens.directory = Some(directory);
+    tokens.address = Some(address);
+}
+#[rstest_bdd_macros::given(
+    "a token broker has super user admin admin-pw and ordinary alice alice-pw"
+)]
+async fn delegation_act_as_broker(tokens: &mut TokenWorkflow) {
+    let (broker, directory, address) = start_admin_alice().await;
+    tokens.broker = Some(broker);
+    tokens.directory = Some(directory);
+    tokens.address = Some(address);
+}
+#[rstest_bdd_macros::given("a token broker has alice alice-pw and no super users")]
+async fn delegation_unprivileged_broker(tokens: &mut TokenWorkflow) {
+    let (broker, directory, address) =
+        start_broker_with_super_users(&[("alice", "alice-pw")], &[]).await;
+    tokens.broker = Some(broker);
+    tokens.directory = Some(directory);
+    tokens.address = Some(address);
+}
+#[rstest_bdd_macros::given("{principal} authenticates with PLAIN password {password}")]
+async fn delegation_plain_actor(tokens: &mut TokenWorkflow, principal: String, password: String) {
+    let session = sasl_plain_authenticate(tokens.address(), &principal, password.as_bytes())
+        .await
+        .expect("PLAIN authentication");
+    tokens.sessions.insert(principal, session);
+}
+#[rstest_bdd_macros::when(
+    "{principal} mints token {alias} for owner {owner} with renewers {renewers} and lifetime {lifetime}"
+)]
+async fn mint_named_token(
+    tokens: &mut TokenWorkflow,
+    principal: String,
+    alias: String,
+    owner: String,
+    renewers: String,
+    lifetime: i64,
+) {
+    let renewers = if renewers == "none" {
+        Vec::new()
+    } else {
+        renewers
+            .split(',')
+            .map(|renewer| CreatableRenewers {
+                principal_type: "User".into(),
+                principal_name: renewer.into(),
+                ..Default::default()
+            })
+            .collect()
+    };
+    let mut request = CreateDelegationTokenRequest {
+        renewers,
+        max_lifetime_ms: lifetime,
+        ..Default::default()
+    };
+    if owner != "caller" {
+        request.owner_principal_type = Some("User".into());
+        request.owner_principal_name = Some(owner);
+    }
+    let response = send_create_delegation_token(
+        tokens
+            .sessions
+            .get_mut(&principal)
+            .expect("principal authenticated"),
+        100,
+        &request,
+    )
+    .await
+    .expect("CreateDelegationToken");
+    tokens.tokens.insert(alias, response.clone());
+    tokens.created = Some(response);
+}
+#[rstest_bdd_macros::then("token creation reports error {error}")]
+fn token_created_error(tokens: &TokenWorkflow, error: i16) {
+    check!(
+        tokens
+            .created
+            .as_ref()
+            .expect("token creation attempted")
+            .error_code
+            == error
+    );
+}
+#[rstest_bdd_macros::then(
+    "token {alias} response names owner User {owner} requester User {requester} a token id and 64 byte HMAC"
+)]
+fn named_token_identity(tokens: &TokenWorkflow, alias: String, owner: String, requester: String) {
+    check_created_identity(
+        tokens.tokens.get(&alias).expect("named token minted"),
+        &owner,
+        &requester,
+    );
+}
+#[rstest_bdd_macros::then(
+    "token {alias} initial expiry follows issue time and is strictly before its maximum timestamp"
+)]
+fn named_token_lifetime(tokens: &TokenWorkflow, alias: String) {
+    let response = tokens.tokens.get(&alias).expect("named token minted");
+    check!(response.expiry_timestamp_ms > response.issue_timestamp_ms);
+    assert!(
+        response.expiry_timestamp_ms < response.max_timestamp_ms,
+        "initial expiry must remain below max when renew period is below lifetime"
+    );
+}
+#[rstest_bdd_macros::then(
+    "token {alias} is committed with owner User {owner} requester User {requester} and renewers {renewers}"
+)]
+async fn named_token_committed(
+    tokens: &TokenWorkflow,
+    alias: String,
+    owner: String,
+    requester: String,
+    renewers: String,
+) {
+    let created = tokens.tokens.get(&alias).expect("named token minted");
+    let token = wait_for_token(
+        tokens.broker.as_ref().expect("delegation broker started"),
+        &created.token_id,
+    )
+    .await;
+    check!(token.owner.principal_type == "User");
+    check!(token.owner.name == owner);
+    check!(token.requester.principal_type == "User");
+    check!(token.requester.name == requester);
+    let expected: Vec<_> = if renewers == "none" {
+        Vec::new()
+    } else {
+        renewers.split(',').collect()
+    };
+    assert!(token.renewers.len() == expected.len());
+    for (renewer, expected) in token.renewers.iter().zip(expected) {
+        check!(renewer.principal_type == "User");
+        check!(renewer.name == expected);
+    }
+}
+#[rstest_bdd_macros::when(
+    "a new connection authenticates with token {alias} using SCRAM SHA 256 and base64 HMAC"
+)]
+async fn authenticate_named_token(tokens: &mut TokenWorkflow, alias: String) {
+    let token = tokens.tokens.get(&alias).expect("named token minted");
+    let password = general_purpose::STANDARD.encode(&token.hmac);
+    tokens.authenticated =
+        Some(sasl_scram_sha256_authenticate(tokens.address(), &token.token_id, &password).await);
+}
+#[rstest_bdd_macros::then("the token SCRAM connection authenticates successfully")]
+fn named_token_authenticated(tokens: &TokenWorkflow) {
+    assert!(
+        tokens
+            .authenticated
+            .as_ref()
+            .expect("token login attempted")
+            .is_ok()
+    );
+}
+#[rstest_bdd_macros::when("the token authenticated connection tries to mint another token")]
+async fn mint_from_token_session(tokens: &mut TokenWorkflow) {
+    let stream = tokens
+        .authenticated
+        .as_mut()
+        .expect("token login attempted")
+        .as_mut()
+        .expect("token authenticated");
+    tokens.created = Some(
+        send_create_delegation_token(stream, 200, &CreateDelegationTokenRequest {
+            max_lifetime_ms: -1,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateDelegationToken on token session"),
+    );
+}
+#[rstest_bdd_macros::when("{principal} renews token {alias} for {period} milliseconds")]
+async fn renew_named_token(
+    tokens: &mut TokenWorkflow,
+    principal: String,
+    alias: String,
+    period: i64,
+) {
+    let hmac = tokens
+        .tokens
+        .get(&alias)
+        .expect("named token minted")
+        .hmac
+        .clone();
+    tokens.renewed = Some(
+        send_renew_delegation_token(
+            tokens
+                .sessions
+                .get_mut(&principal)
+                .expect("principal authenticated"),
+            300,
+            &RenewDelegationTokenRequest {
+                hmac,
+                renew_period_ms: period,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("RenewDelegationToken"),
+    );
+}
+#[rstest_bdd_macros::then("token renewal reports error {error}")]
+fn named_token_renewal_error(tokens: &TokenWorkflow, error: i16) {
+    check!(
+        tokens
+            .renewed
+            .as_ref()
+            .expect("renewal attempted")
+            .error_code
+            == error
+    );
+}
+#[rstest_bdd_macros::then(
+    "token {alias} renewed expiry never moves backward or beyond the maximum timestamp"
+)]
+fn named_token_renewed_window(tokens: &TokenWorkflow, alias: String) {
+    let created = tokens.tokens.get(&alias).expect("named token minted");
+    let renewed = tokens.renewed.as_ref().expect("renewal attempted");
+    check!(renewed.expiry_timestamp_ms >= created.expiry_timestamp_ms);
+    check!(renewed.expiry_timestamp_ms <= created.max_timestamp_ms);
+}
+#[rstest_bdd_macros::when("{principal} describes tokens using owner filter User {owner}")]
+async fn describe_named_tokens(tokens: &mut TokenWorkflow, principal: String, owner: String) {
+    tokens.described = Some(
+        send_describe_delegation_token(
+            tokens
+                .sessions
+                .get_mut(&principal)
+                .expect("principal authenticated"),
+            400,
+            &DescribeDelegationTokenRequest {
+                owners: Some(vec![DescribeDelegationTokenOwner {
+                    principal_type: "User".into(),
+                    principal_name: owner,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("DescribeDelegationToken"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the successful description contains exactly token {alias} owned by User {owner}"
+)]
+fn named_token_described(tokens: &TokenWorkflow, alias: String, owner: String) {
+    let described = tokens.described.as_ref().expect("tokens described");
+    check!(described.error_code == 0);
+    assert!(described.tokens.len() == 1);
+    check!(
+        described.tokens[0].token_id
+            == tokens
+                .tokens
+                .get(&alias)
+                .expect("named token minted")
+                .token_id
+    );
+    check!(described.tokens[0].principal_type == "User");
+    check!(described.tokens[0].principal_name == owner);
+}
+#[rstest_bdd_macros::then("the described token requester is User {requester}")]
+fn named_token_described_requester(tokens: &TokenWorkflow, requester: String) {
+    let described = tokens.described.as_ref().expect("tokens described");
+    check!(described.tokens[0].token_requester_principal_type == "User");
+    check!(described.tokens[0].token_requester_principal_name == requester);
+}
+#[rstest_bdd_macros::when("{principal} expires token {alias} with period {period}")]
+async fn expire_named_token(
+    tokens: &mut TokenWorkflow,
+    principal: String,
+    alias: String,
+    period: i64,
+) {
+    let hmac = tokens
+        .tokens
+        .get(&alias)
+        .expect("named token minted")
+        .hmac
+        .clone();
+    tokens.expired = Some(
+        send_expire_delegation_token(
+            tokens
+                .sessions
+                .get_mut(&principal)
+                .expect("principal authenticated"),
+            500,
+            &ExpireDelegationTokenRequest {
+                hmac,
+                expiry_time_period_ms: period,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("ExpireDelegationToken"),
+    );
+}
+#[rstest_bdd_macros::then("token expiry reports error {error}")]
+fn named_token_expiry_error(tokens: &TokenWorkflow, error: i16) {
+    check!(
+        tokens
+            .expired
+            .as_ref()
+            .expect("expiry attempted")
+            .error_code
+            == error
+    );
+}
+#[rstest_bdd_macros::then("token {alias} has disappeared from the committed image")]
+async fn named_token_removed(tokens: &TokenWorkflow, alias: String) {
+    wait_for_token_gone(
+        tokens.broker.as_ref().expect("delegation broker started"),
+        &tokens
+            .tokens
+            .get(&alias)
+            .expect("named token minted")
+            .token_id,
+    )
+    .await;
+}
+#[rstest_bdd_macros::when(
+    "all existing sessions disconnect and fresh SCRAM authentication uses expired token {alias}"
+)]
+async fn authenticate_expired_named_token(tokens: &mut TokenWorkflow, alias: String) {
+    tokens.sessions.clear();
+    drop(tokens.authenticated.take());
+    let token = tokens.tokens.get(&alias).expect("named token minted");
+    wait_for_token_gone(
+        tokens.broker.as_ref().expect("delegation broker started"),
+        &token.token_id,
+    )
+    .await;
+    let password = general_purpose::STANDARD.encode(&token.hmac);
+    tokens.authenticated =
+        Some(sasl_scram_sha256_authenticate(tokens.address(), &token.token_id, &password).await);
+}
+#[rstest_bdd_macros::then("the expired token cannot authenticate on the fresh connection")]
+fn expired_named_token_rejected(tokens: &TokenWorkflow) {
+    assert!(
+        tokens
+            .authenticated
+            .as_ref()
+            .expect("fresh expired-token login attempted")
+            .is_err()
+    );
+}

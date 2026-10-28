@@ -2,6 +2,7 @@ use {
     super::*,
     assert2::check,
     krabka_security::ListenerProtocol::{Plaintext, SaslPlaintext, SaslSsl, Ssl},
+    rstest_bdd::datatable::Rows,
 };
 
 fn protocols() -> BTreeMap<String, ListenerProtocol> {
@@ -31,87 +32,6 @@ fn a_list_value_splits_as_config_def_splits_it(value: &str, expected: &[&str]) {
     check!(config_list(value) == expected);
 }
 
-#[yare::parameterized(
-    wildcard = {
-        "PLAINTEXT://:9092",
-        Ok(vec![endpoint("PLAINTEXT", Plaintext, None, 9092)])
-    },
-    lower_case_name = {
-        "internal://127.0.0.1:9094",
-        Ok(vec![endpoint("INTERNAL", SaslPlaintext, Some("127.0.0.1"), 9094)])
-    },
-    bracketed_ipv6 = {
-        "SSL://[::1]:9093",
-        Ok(vec![endpoint("SSL", Ssl, Some("::1"), 9093)])
-    },
-    two = {
-        "PLAINTEXT://localhost:9092,SSL://localhost:9093",
-        Ok(vec![
-            endpoint("PLAINTEXT", Plaintext, Some("localhost"), 9092),
-            endpoint("SSL", Ssl, Some("localhost"), 9093),
-        ])
-    },
-    unparsable = {
-        "PLAINTEXT:9092",
-        Err("Error creating broker listeners from '[PLAINTEXT:9092]': Unable to parse \
-             PLAINTEXT:9092 to a broker endpoint".to_owned())
-    },
-    port_overflow = {
-        "PLAINTEXT://:99999999999",
-        Err("Error creating broker listeners from '[PLAINTEXT://:99999999999]': For input \
-             string: \"99999999999\"".to_owned())
-    },
-    unmapped = {
-        "EXTERNAL://:9095",
-        Err("Error creating broker listeners from '[EXTERNAL://:9095]': No security protocol \
-             defined for listener EXTERNAL".to_owned())
-    },
-    repeated_name = {
-        "PLAINTEXT://:9092,plaintext://:9093",
-        Err("Error creating broker listeners from '[PLAINTEXT://:9092, plaintext://:9093]': \
-             Each listener must have a different name, listeners: [PLAINTEXT://:9092, \
-             plaintext://:9093]".to_owned())
-    },
-    repeated_port = {
-        "PLAINTEXT://:9092,SSL://:9092",
-        Err("Error creating broker listeners from '[PLAINTEXT://:9092, SSL://:9092]': Each \
-             listener must have a different port, listeners: [PLAINTEXT://:9092, \
-             SSL://:9092]".to_owned())
-    },
-    port_zero_may_repeat = {
-        "PLAINTEXT://:0,SSL://:0",
-        Ok(vec![
-            endpoint("PLAINTEXT", Plaintext, None, 0),
-            endpoint("SSL", Ssl, None, 0),
-        ])
-    },
-    ipv4_and_ipv6_share_a_port = {
-        "PLAINTEXT://127.0.0.1:9092,SSL://[::1]:9092",
-        Ok(vec![
-            endpoint("PLAINTEXT", Plaintext, Some("127.0.0.1"), 9092),
-            endpoint("SSL", Ssl, Some("::1"), 9092),
-        ])
-    },
-    two_ipv4_share_a_port = {
-        "PLAINTEXT://127.0.0.1:9092,SSL://127.0.0.2:9092",
-        Err("Error creating broker listeners from '[PLAINTEXT://127.0.0.1:9092, \
-             SSL://127.0.0.2:9092]': If you have two listeners on the same port then one needs \
-             to be IPv4 and the other IPv6, listeners: [PLAINTEXT://127.0.0.1:9092, \
-             SSL://127.0.0.2:9092], port: 9092".to_owned())
-    },
-    three_share_a_port = {
-        "PLAINTEXT://127.0.0.1:9092,SSL://[::1]:9092,INTERNAL://127.0.0.2:9092",
-        Err("Error creating broker listeners from '[PLAINTEXT://127.0.0.1:9092, \
-             SSL://[::1]:9092, INTERNAL://127.0.0.2:9092]': Each listener must have a \
-             different port unless exactly one listener has an IPv4 address and the other \
-             IPv6 address, listeners: [PLAINTEXT://127.0.0.1:9092, SSL://[::1]:9092, \
-             INTERNAL://127.0.0.2:9092], port: 9092".to_owned())
-    },
-)]
-fn listeners_read_as_kafka_reads_them(value: &str, expected: Result<Vec<Endpoint>, String>) {
-    check!(listener_endpoints(&config_list(value), &protocols(), true) == expected);
-}
-
 #[test]
 fn advertised_listeners_may_share_a_port() {
     let listeners = config_list("PLAINTEXT://a:9092,SSL://b:9092");
@@ -122,41 +42,6 @@ fn advertised_listeners_may_share_a_port() {
                 endpoint("SSL", Ssl, Some("b"), 9092),
             ])
     );
-}
-
-#[yare::parameterized(
-    empty = { "", Ok(BTreeMap::new()) },
-    lower_case = {
-        "internal:sasl_ssl, PLAINTEXT:PLAINTEXT,",
-        Ok(BTreeMap::from([
-            ("INTERNAL".to_owned(), SaslSsl),
-            ("PLAINTEXT".to_owned(), Plaintext),
-        ]))
-    },
-    later_entry_wins = {
-        "A:SSL,A:PLAINTEXT",
-        Ok(BTreeMap::from([("A".to_owned(), Plaintext)]))
-    },
-    no_colon = {
-        "PLAINTEXT",
-        Err("Error parsing configuration property 'listener.security.protocol.map': begin 0, \
-             end -1, length 9".to_owned())
-    },
-    unknown_protocol = {
-        "A:TLS",
-        Err("Invalid security protocol `TLS` defined in listener.security.protocol.map"
-            .to_owned())
-    },
-    names_meet_once_normalised = {
-        "a:SSL,A:SSL",
-        Err("Duplicate key A (attempted merging values SSL and SSL)".to_owned())
-    },
-)]
-fn the_protocol_map_reads_as_kafka_reads_it(
-    value: &str,
-    expected: Result<BTreeMap<String, ListenerProtocol>, String>,
-) {
-    check!(protocol_map(value) == expected);
 }
 
 fn view(per_broker: &[(&str, &str)]) -> ListenerView {
@@ -226,3 +111,118 @@ fn the_view_layers_static_default_and_per_broker_configs() {
             == BTreeMap::from([(SASL_ENABLED_MECHANISMS.to_owned(), "OAUTHBEARER".to_owned())])
     );
 }
+
+#[derive(Default)]
+struct ListenerConfiguration {
+    input: String,
+    endpoints: Option<Result<Vec<Endpoint>, String>>,
+    mapping: Option<Result<BTreeMap<String, ListenerProtocol>, String>>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ExpectedListenerEndpoint {
+    name: String,
+    protocol: String,
+    host: String,
+    port: i32,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ExpectedListenerProtocol {
+    name: String,
+    protocol: String,
+}
+
+#[rstest::fixture]
+fn listener_configuration() -> ListenerConfiguration {
+    // Parsing every independent configuration starts without a prior result.
+    ListenerConfiguration::default()
+}
+
+fn expected_listener_protocol(protocol: &str) -> ListenerProtocol {
+    match protocol {
+        "Plaintext" => Plaintext,
+        "Ssl" => Ssl,
+        "SaslPlaintext" => SaslPlaintext,
+        "SaslSsl" => SaslSsl,
+        _ => panic!("unsupported expected protocol {protocol}"),
+    }
+}
+
+#[rstest_bdd_macros::given("listener addresses are JSON {value}")]
+#[rstest_bdd_macros::given("the protocol mapping is JSON {value}")]
+fn listener_configuration_input(listener_configuration: &mut ListenerConfiguration, value: String) {
+    listener_configuration.input =
+        serde_json::from_str(&value).expect("JSON preserves configuration whitespace");
+}
+
+#[rstest_bdd_macros::when(
+    "broker listener addresses are resolved against the configured protocols"
+)]
+fn resolve_configured_listeners(listener_configuration: &mut ListenerConfiguration) {
+    listener_configuration.endpoints = Some(listener_endpoints(
+        &config_list(&listener_configuration.input),
+        &protocols(),
+        true,
+    ));
+}
+
+#[rstest_bdd_macros::when("the listener protocol mapping is parsed")]
+fn parse_listener_protocols(listener_configuration: &mut ListenerConfiguration) {
+    listener_configuration.mapping = Some(protocol_map(&listener_configuration.input));
+}
+
+#[rstest_bdd_macros::then("listener resolution fails with {message}")]
+fn refused_listener_addresses(listener_configuration: &ListenerConfiguration, message: String) {
+    check!(listener_configuration.endpoints == Some(Err(message)));
+}
+
+#[rstest_bdd_macros::then("protocol mapping fails with {message}")]
+fn refused_listener_protocols(listener_configuration: &ListenerConfiguration, message: String) {
+    check!(listener_configuration.mapping == Some(Err(message)));
+}
+
+#[rstest_bdd_macros::then("the resolved listener endpoints are:")]
+fn resolved_listener_addresses(
+    listener_configuration: &ListenerConfiguration,
+    #[datatable] rows: Rows<ExpectedListenerEndpoint>,
+) {
+    let expected = rows
+        .into_iter()
+        .map(|row| {
+            endpoint(
+                &row.name,
+                expected_listener_protocol(&row.protocol),
+                if row.host == "wildcard" {
+                    None
+                } else {
+                    Some(row.host.as_str())
+                },
+                row.port,
+            )
+        })
+        .collect();
+    check!(listener_configuration.endpoints == Some(Ok(expected)));
+}
+
+#[rstest_bdd_macros::then("the normalized listener protocol mappings are:")]
+fn resolved_listener_protocols(
+    listener_configuration: &ListenerConfiguration,
+    #[datatable] rows: Rows<ExpectedListenerProtocol>,
+) {
+    let expected = rows
+        .into_iter()
+        .map(|row| (row.name, expected_listener_protocol(&row.protocol)))
+        .collect();
+    check!(listener_configuration.mapping == Some(Ok(expected)));
+}
+
+#[rstest_bdd_macros::then("the listener protocol mapping is empty")]
+fn empty_listener_protocols(listener_configuration: &ListenerConfiguration) {
+    check!(listener_configuration.mapping == Some(Ok(BTreeMap::new())));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/config_keys/listener_endpoints/tests",
+    fixtures = [listener_configuration: ListenerConfiguration]
+);

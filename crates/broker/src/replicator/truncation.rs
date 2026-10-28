@@ -740,111 +740,6 @@ mod tests {
         std::{cell::RefCell, future, net::TcpListener},
     };
 
-    /// One row per branch of `getOffsetTruncationState`.
-    #[test]
-    fn diverging_truncation_offset_follows_kafka_get_offset_truncation_state() {
-        let unplaced = EpochEnd {
-            epoch: LeaderEpoch(-1),
-            end_offset: Offset(-1),
-        };
-        // (name, this replica's endOffsetFor, leader epoch, leader end, log end,
-        // expected offset)
-        for (name, follower, leader_epoch, leader_end, log_end, expected) in [
-            (
-                "the leader's end offset is undefined",
-                EpochEnd {
-                    epoch: LeaderEpoch(4),
-                    end_offset: Offset(8),
-                },
-                4,
-                -1,
-                9,
-                9,
-            ),
-            (
-                "the local epochs cannot place the epoch",
-                unplaced,
-                6,
-                12,
-                15,
-                12,
-            ),
-            (
-                "the local epochs cannot place the epoch, past the log end",
-                unplaced,
-                6,
-                20,
-                15,
-                15,
-            ),
-            (
-                "the epoch is unknown here: only the end of the smaller epoch",
-                EpochEnd {
-                    epoch: LeaderEpoch(4),
-                    end_offset: Offset(10),
-                },
-                5,
-                12,
-                15,
-                10,
-            ),
-            (
-                "the epoch is unknown here, and that end is past the log end",
-                EpochEnd {
-                    epoch: LeaderEpoch(4),
-                    end_offset: Offset(10),
-                },
-                5,
-                12,
-                8,
-                8,
-            ),
-            (
-                "a known epoch: the leader ends first",
-                EpochEnd {
-                    epoch: LeaderEpoch(5),
-                    end_offset: Offset(12),
-                },
-                5,
-                10,
-                15,
-                10,
-            ),
-            (
-                "a known epoch: this replica ends first",
-                EpochEnd {
-                    epoch: LeaderEpoch(5),
-                    end_offset: Offset(10),
-                },
-                5,
-                12,
-                15,
-                10,
-            ),
-            (
-                "a known epoch: the log ends first",
-                EpochEnd {
-                    epoch: LeaderEpoch(5),
-                    end_offset: Offset(12),
-                },
-                5,
-                14,
-                11,
-                11,
-            ),
-        ] {
-            assert!(
-                diverging_truncation_offset(
-                    follower,
-                    LeaderEpoch(leader_epoch),
-                    Offset(leader_end),
-                    Offset(log_end),
-                ) == Offset(expected),
-                "{name}"
-            );
-        }
-    }
-
     #[test]
     fn offset_epoch_request_and_connection_options_preserve_identity_fields() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
@@ -1054,102 +949,6 @@ mod tests {
         asked: Vec<i64>,
         log_start: i64,
         log_end: i64,
-    }
-
-    /// Kafka's `AbstractFetcherThread.fetchOffsetAndTruncate`, over a
-    /// replica holding offsets 0..6 and a leader scripted per sentinel.
-    #[tokio::test]
-    async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {
-        let backoff =
-            RowAction::Backoff(ReplicationRuntimeConfig::default().unexpected_error_backoff);
-        let lookup_failed = || Err::<i64, _>("scripted lookup failure".to_owned());
-        let recovery = |action, asked: &[i64], log_start, log_end| Recovery {
-            action,
-            asked: asked.to_vec(),
-            log_start,
-            log_end,
-        };
-        // (name, leader LATEST, leader EARLIEST, expected recovery)
-        let cases = [
-            (
-                "unclean election: the leader ends below this replica",
-                Ok(4),
-                Ok(0),
-                recovery(RowAction::Continue, &[-1], 0, 4),
-            ),
-            (
-                "the leader's log start is above this replica's end",
-                Ok(20),
-                Ok(12),
-                recovery(RowAction::Continue, &[-1, -2], 12, 12),
-            ),
-            (
-                "the leader's log start is inside this replica's log",
-                Ok(20),
-                Ok(3),
-                recovery(RowAction::Continue, &[-1, -2], 0, 6),
-            ),
-            (
-                "the leader's log start is this replica's end",
-                Ok(20),
-                Ok(6),
-                recovery(RowAction::Continue, &[-1, -2], 0, 6),
-            ),
-            (
-                "the leader ends where this replica ends",
-                Ok(6),
-                Ok(0),
-                recovery(RowAction::Continue, &[-1, -2], 0, 6),
-            ),
-            (
-                "the log end lookup fails",
-                lookup_failed(),
-                Ok(0),
-                recovery(backoff, &[-1], 0, 6),
-            ),
-            (
-                "the log start lookup fails",
-                Ok(20),
-                lookup_failed(),
-                recovery(backoff, &[-1, -2], 0, 6),
-            ),
-        ];
-        for (name, latest, earliest, expected) in cases {
-            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-            ensure_local_partition(&cfg).unwrap();
-            let partition = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
-            {
-                let mut log = partition.log.lock().unwrap();
-                for _ in 0..6 {
-                    let mut batch = RecordBatch {
-                        partition_leader_epoch: 4,
-                        records: vec![Record::default()],
-                        ..Default::default()
-                    };
-                    log.append(&mut batch).unwrap();
-                }
-            }
-            let asked = RefCell::new(Vec::new());
-
-            let action = recover_offset_out_of_range(&cfg, |timestamp| {
-                asked.borrow_mut().push(timestamp);
-                let answer = match timestamp {
-                    LATEST_TIMESTAMP => latest.clone(),
-                    EARLIEST_TIMESTAMP => earliest.clone(),
-                    other => Err(format!("unexpected sentinel {other}")),
-                };
-                future::ready(answer)
-            })
-            .await;
-
-            let got = Recovery {
-                action,
-                asked: asked.into_inner(),
-                log_start: partition.log_start_offset().0,
-                log_end: partition.log_end_offset().0,
-            };
-            assert!(got == expected, "{name}");
-        }
     }
 
     /// The replica a KIP-1023 recovery row starts from: the flag as the
@@ -1428,5 +1227,154 @@ mod tests {
             err.contains("handle_epoch_fence: connect"),
             "unexpected error: {err}"
         );
+    }
+    #[derive(Default)]
+    struct DivergingLog {
+        input: Option<[i64; 5]>,
+        target: Option<Offset>,
+    }
+    #[rstest::fixture]
+    fn diverging_log() -> DivergingLog {
+        // Each policy decision has a fresh epoch-history observation.
+        DivergingLog::default()
+    }
+    #[rstest_bdd_macros::given("follower epoch/end, leader epoch/end and local end {input}")]
+    fn diverging_history(diverging_log: &mut DivergingLog, input: String) {
+        diverging_log.input = Some(serde_json::from_str(&input).expect("epoch history"));
+    }
+    #[rstest_bdd_macros::when("the follower calculates its divergence truncation target")]
+    fn calculate_divergence(diverging_log: &mut DivergingLog) {
+        let [epoch, end, leader_epoch, leader_end, local_end] =
+            diverging_log.input.expect("history");
+        diverging_log.target = Some(diverging_truncation_offset(
+            EpochEnd {
+                epoch: LeaderEpoch(i32::try_from(epoch).expect("follower epoch")),
+                end_offset: Offset(end),
+            },
+            LeaderEpoch(i32::try_from(leader_epoch).expect("leader epoch")),
+            Offset(leader_end),
+            Offset(local_end),
+        ));
+    }
+    #[rstest_bdd_macros::then("the divergence truncation offset is {offset}")]
+    fn divergence_target(diverging_log: &DivergingLog, offset: i64) {
+        assert!(diverging_log.target.expect("calculated target") == Offset(offset));
+    }
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/replicator/truncation/divergence.feature",
+        fixtures = [diverging_log: DivergingLog],
+    );
+
+    #[derive(Default)]
+    struct OutOfRangeLog {
+        config: Option<Config>,
+        latest: Option<Result<i64, String>>,
+        earliest: Option<Result<i64, String>>,
+        recovery: Option<Recovery>,
+        directory_guard: Option<tempfile::TempDir>,
+    }
+    #[rstest::fixture]
+    fn out_of_range_log() -> OutOfRangeLog {
+        // A fresh physical replica log belongs to every recovery scenario.
+        OutOfRangeLog::default()
+    }
+    #[rstest_bdd_macros::given("a replica with offsets 0 through 5 and leader lookups {lookups}")]
+    fn replica_for_recovery(out_of_range_log: &mut OutOfRangeLog, lookups: String) {
+        let [latest, earliest]: [Option<i64>; 2] =
+            serde_json::from_str(&lookups).expect("leader lookup outcomes");
+        let (cfg, directory) = test_config(image_with_leader(LEADER_ID));
+        ensure_local_partition(&cfg).expect("local replica");
+        let partition = cfg
+            .partitions
+            .get(&cfg.topic, cfg.partition)
+            .expect("partition");
+        let mut log = partition.log.lock().expect("replica log");
+        for _ in 0..6 {
+            let mut batch = RecordBatch {
+                partition_leader_epoch: 4,
+                records: vec![Record::default()],
+                ..Default::default()
+            };
+            log.append(&mut batch).expect("replica batch");
+        }
+        drop(log);
+        let answer =
+            |offset: Option<i64>| offset.ok_or_else(|| "scripted lookup failure".to_owned());
+        out_of_range_log.latest = Some(answer(latest));
+        out_of_range_log.earliest = Some(answer(earliest));
+        out_of_range_log.config = Some(cfg);
+        out_of_range_log.directory_guard = Some(directory);
+    }
+    #[rstest_bdd_macros::when("the follower recovers from OFFSET_OUT_OF_RANGE")]
+    async fn recover_replica(out_of_range_log: &mut OutOfRangeLog) {
+        let cfg = out_of_range_log
+            .config
+            .as_ref()
+            .expect("replica configuration");
+        let asked = RefCell::new(Vec::new());
+        let latest = out_of_range_log.latest.as_ref().expect("latest lookup");
+        let earliest = out_of_range_log.earliest.as_ref().expect("earliest lookup");
+        let action = recover_offset_out_of_range(cfg, |timestamp| {
+            asked.borrow_mut().push(timestamp);
+            future::ready(match timestamp {
+                LATEST_TIMESTAMP => latest.clone(),
+                EARLIEST_TIMESTAMP => earliest.clone(),
+                other => Err(format!("unexpected sentinel {other}")),
+            })
+        })
+        .await;
+        let partition = cfg
+            .partitions
+            .get(&cfg.topic, cfg.partition)
+            .expect("local partition");
+        out_of_range_log.recovery = Some(Recovery {
+            action,
+            asked: asked.into_inner(),
+            log_start: partition.log_start_offset().0,
+            log_end: partition.log_end_offset().0,
+        });
+    }
+    #[derive(serde::Deserialize)]
+    struct ExpectedRecovery {
+        action: String,
+        asked: Vec<i64>,
+        log_start: i64,
+        log_end: i64,
+    }
+    #[rstest_bdd_macros::then("the recovery action, lookup order and log bounds are {expected}")]
+    fn recovered_replica(out_of_range_log: &OutOfRangeLog, expected: String) {
+        let expected: ExpectedRecovery =
+            serde_json::from_str(&expected).expect("expected recovery");
+        let action = match expected.action.as_str() {
+            "continue" => RowAction::Continue,
+            "unexpected-error-backoff" => {
+                RowAction::Backoff(ReplicationRuntimeConfig::default().unexpected_error_backoff)
+            }
+            other => panic!("unknown recovery action {other}"),
+        };
+        assert!(
+            out_of_range_log
+                .recovery
+                .as_ref()
+                .expect("recovery executed")
+                == &Recovery {
+                    action,
+                    asked: expected.asked,
+                    log_start: expected.log_start,
+                    log_end: expected.log_end,
+                }
+        );
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/replicator/truncation/recovery.feature",
+        name = "Recover a replica after its fetch offset is rejected"
+    )]
+    #[tokio::test]
+    async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate(
+        out_of_range_log: OutOfRangeLog,
+        lookups: String,
+        expected: String,
+    ) {
+        let _ = (out_of_range_log, lookups, expected);
     }
 }

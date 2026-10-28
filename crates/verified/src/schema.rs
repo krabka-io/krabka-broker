@@ -128,7 +128,7 @@ pub fn schema_batch_admission(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, assert2::check, std::vec};
 
     #[yare::parameterized(
         unknown = { SchemaFailureKind::Unknown, SchemaFailureDecision::Reject },
@@ -162,93 +162,61 @@ mod tests {
         check!(schema_frame_id(magic, id_0, id_1, id_2, id_3) == expected);
     }
 
-    #[yare::parameterized(
-        key_enabled = {
-            "key validation checks a key",
-            true,
-            false,
-            SchemaFieldRole::Key,
-            true,
-            SchemaFieldAction::CheckKey,
-        },
-        value_enabled = {
-            "value validation checks a value",
-            false,
-            true,
-            SchemaFieldRole::Value,
-            true,
-            SchemaFieldAction::CheckValue,
-        },
-        both_key = {
-            "both enabled checks a key",
-            true,
-            true,
-            SchemaFieldRole::Key,
-            true,
-            SchemaFieldAction::CheckKey,
-        },
-        both_value = {
-            "both enabled checks a value",
-            true,
-            true,
-            SchemaFieldRole::Value,
-            true,
-            SchemaFieldAction::CheckValue,
-        },
-        null_key = {
-            "a null key is exempt",
-            true,
-            true,
-            SchemaFieldRole::Key,
-            false,
-            SchemaFieldAction::Skip,
-        },
-        null_value = {
-            "a null value (tombstone) is exempt",
-            true,
-            true,
-            SchemaFieldRole::Value,
-            false,
-            SchemaFieldAction::Skip,
-        },
-        value_only_skips_key = {
-            "value-only validation skips the key",
-            false,
-            true,
-            SchemaFieldRole::Key,
-            true,
-            SchemaFieldAction::Skip,
-        },
-        key_only_skips_value = {
-            "key-only validation skips the value",
-            true,
-            false,
-            SchemaFieldRole::Value,
-            true,
-            SchemaFieldAction::Skip,
-        },
-        disabled = {
-            "validation disabled skips everything",
-            false,
-            false,
-            SchemaFieldRole::Value,
-            true,
-            SchemaFieldAction::Skip,
-        },
-    )]
-    fn only_configured_non_null_fields_are_validated(
-        scenario: &str,
+    struct SchemaFieldScenario {
         key_enabled: bool,
         value_enabled: bool,
-        role: SchemaFieldRole,
-        present: bool,
-        expected: SchemaFieldAction,
-    ) {
-        check!(
-            schema_field_action(key_enabled, value_enabled, role, present) == expected,
-            "{scenario}"
-        );
+        action: Option<SchemaFieldAction>,
     }
+
+    #[rstest::fixture]
+    fn field() -> SchemaFieldScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        SchemaFieldScenario {
+            key_enabled: false,
+            value_enabled: false,
+            action: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("schema validation enabled for keys {keys} and values {values}")]
+    fn schema_configuration(field: &mut SchemaFieldScenario, keys: bool, values: bool) {
+        field.key_enabled = keys;
+        field.value_enabled = values;
+    }
+
+    #[rstest_bdd_macros::when("a {role} field with a {payload} payload is inspected")]
+    fn inspect_schema_field(field: &mut SchemaFieldScenario, role: String, payload: String) {
+        let role = match role.as_str() {
+            "key" => SchemaFieldRole::Key,
+            "value" => SchemaFieldRole::Value,
+            _ => panic!("unknown schema field role: {role}"),
+        };
+        let present = match payload.as_str() {
+            "nonnull" => true,
+            "null" => false,
+            _ => panic!("unknown schema payload presence: {payload}"),
+        };
+        field.action = Some(schema_field_action(
+            field.key_enabled,
+            field.value_enabled,
+            role,
+            present,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("schema validation will {action}")]
+    fn schema_field_action_matches(field: &SchemaFieldScenario, action: String) {
+        let expected = match action.as_str() {
+            "check-key" => SchemaFieldAction::CheckKey,
+            "check-value" => SchemaFieldAction::CheckValue,
+            "skip-field" => SchemaFieldAction::Skip,
+            _ => panic!("unknown schema validation action: {action}"),
+        };
+        check!(field.action == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/schema.feature", fixtures = [field: SchemaFieldScenario]);
 
     #[yare::parameterized(
         empty = { true, 0, 0, SchemaBatchAdmission::Admit },

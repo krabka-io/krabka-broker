@@ -878,75 +878,96 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
     }
 }
 
-/// Kafka indexes an aborted transaction in the segment holding its abort
-/// marker, in marker order (`TransactionIndex.append` requires `lastOffset` to
-/// strictly increase). The transaction's first offset is not constrained by
-/// the segment base or by the previous entry.
+#[derive(Default)]
+struct MarkerOrderScenario {
+    context: Option<VerificationContext>,
+    segment: Option<SegmentInventory>,
+    verified: Option<Result<VerifiedSegment, RestoreError>>,
+}
+#[rstest::fixture]
+fn marker_order() -> MarkerOrderScenario {
+    let context = None;
+    MarkerOrderScenario {
+        context,
+        ..MarkerOrderScenario::default()
+    }
+}
+
+#[rstest_bdd_macros::given("an archived segment containing offsets 100 through 104")]
+fn marker_segment(marker_order: &mut MarkerOrderScenario) {
+    marker_order.context = Some(verification_context());
+}
+
+#[rstest_bdd_macros::given("archive transaction index entries in marker order")]
+fn marker_index(marker_order: &mut MarkerOrderScenario, datatable: Vec<Vec<String>>) {
+    let entries: Vec<TxnEntry> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [start, last, producer] = row.as_slice() else {
+                panic!("transaction index row requires start last and producer columns")
+            };
+            TxnEntry {
+                start_offset: start.parse().expect("transaction start offset"),
+                last_offset: last.parse().expect("transaction abort marker offset"),
+                producer_id: producer.parse().expect("transaction producer ID"),
+            }
+        })
+        .collect();
+    let context = marker_order
+        .context
+        .as_ref()
+        .expect("archive segment given");
+    let mut fixture = valid_segment_bytes();
+    fixture.transaction_index = Some(txn_index_bytes(&entries));
+    marker_order.segment = Some(write_segment(context.dir.path(), &fixture, &[]));
+}
+
+#[rstest_bdd_macros::when("the archived segment and transaction index are verified")]
+async fn verify_marker_order(marker_order: &mut MarkerOrderScenario) {
+    let context = marker_order
+        .context
+        .as_ref()
+        .expect("archive segment given");
+    marker_order.verified = Some(
+        verify_segment(
+            &context.store,
+            &context.partition,
+            marker_order
+                .segment
+                .as_ref()
+                .expect("transaction index given"),
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the transaction index is accepted without requiring start-offset order")]
+fn accepted_marker_order(marker_order: &MarkerOrderScenario) {
+    let verified = marker_order.verified.as_ref().expect("archive verified");
+    check!(verified.is_ok(), "{:?}", verified.as_ref().err());
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
+    name = "Sequential transaction aborts are accepted"
+)]
 #[tokio::test]
-async fn transaction_index_accepts_kafka_marker_order() {
-    struct MarkerOrderCase<'a> {
-        name: &'a str,
-        entries: &'a [TxnEntry],
-    }
+async fn transaction_index_accepts_kafka_marker_order(marker_order: MarkerOrderScenario) {}
 
-    let cases = [
-        MarkerOrderCase {
-            name: "sequential aborts",
-            entries: &[
-                TxnEntry {
-                    start_offset: 100,
-                    last_offset: 101,
-                    producer_id: 7,
-                },
-                TxnEntry {
-                    start_offset: 102,
-                    last_offset: 103,
-                    producer_id: 8,
-                },
-            ],
-        },
-        // Producer 2 opens at 102 and aborts at 103; producer 1 opened
-        // earlier at 100 and aborts later at 104.
-        MarkerOrderCase {
-            name: "interleaved aborts",
-            entries: &[
-                TxnEntry {
-                    start_offset: 102,
-                    last_offset: 103,
-                    producer_id: 2,
-                },
-                TxnEntry {
-                    start_offset: 100,
-                    last_offset: 104,
-                    producer_id: 1,
-                },
-            ],
-        },
-        // The transaction's data sits in an earlier segment; its abort marker
-        // at 100 is the first offset of this one.
-        MarkerOrderCase {
-            name: "transaction spanning a segment roll",
-            entries: &[TxnEntry {
-                start_offset: 40,
-                last_offset: 100,
-                producer_id: 1_000,
-            }],
-        },
-    ];
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
+    name = "Interleaved transactions may start in the opposite order to their abort markers"
+)]
+#[tokio::test]
+async fn transaction_index_accepts_interleaved_starts(marker_order: MarkerOrderScenario) {}
 
-    for MarkerOrderCase { name, entries } in cases {
-        let VerificationContext {
-            dir,
-            store,
-            partition,
-        } = verification_context();
-        let mut fixture = valid_segment_bytes();
-        fixture.transaction_index = Some(txn_index_bytes(entries));
-
-        let segment = write_segment(dir.path(), &fixture, &[]);
-        let verified = verify_segment(&store, &partition, &segment).await;
-        check!(verified.is_ok(), "{name}: {:?}", verified.as_ref().err());
-    }
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
+    name = "A transaction can start before the segment containing its abort marker"
+)]
+#[tokio::test]
+async fn transaction_index_accepts_transaction_spanning_segment(marker_order: MarkerOrderScenario) {
 }
 
 #[tokio::test]

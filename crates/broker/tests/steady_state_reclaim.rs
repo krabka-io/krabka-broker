@@ -189,15 +189,47 @@ async fn second_half_rise(settings: Settings) -> Rise {
     }
 }
 
-/// At Kafka's defaults a steady committer and a steady no-op writer each
-/// climb by a half's writes from one half to the next. At the soak's roll,
-/// snapshot and retention settings, both directories rise by less than a
-/// quarter of that.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
-    let defaults = second_half_rise(Settings::KafkaDefaults).await;
-    let soak = second_half_rise(Settings::Soak).await;
+#[derive(Default)]
+struct ReclamationComparison {
+    settings: Option<(Settings, Settings)>,
+    defaults: Option<Rise>,
+    soak: Option<Rise>,
+}
 
+#[rstest::fixture]
+fn reclamation_comparison() -> ReclamationComparison {
+    // The paired workloads have independent brokers and directory samples.
+    ReclamationComparison::default()
+}
+
+#[rstest_bdd_macros::given(
+    "one broker retains Kafka default rolls and another rolls, snapshots and retains metadata every 100 milliseconds"
+)]
+fn comparison_settings(reclamation_comparison: &mut ReclamationComparison) {
+    reclamation_comparison.settings = Some((Settings::KafkaDefaults, Settings::Soak));
+}
+
+#[rstest_bdd_macros::when(
+    "each broker receives two halves of 300 offset commits spaced 10 milliseconds apart with sizes sampled every 20 commits"
+)]
+async fn sample_reclamation(reclamation_comparison: &mut ReclamationComparison) {
+    let (defaults, soak) = reclamation_comparison
+        .settings
+        .expect("paired retention settings");
+    reclamation_comparison.defaults = Some(second_half_rise(defaults).await);
+    reclamation_comparison.soak = Some(second_half_rise(soak).await);
+}
+
+#[rstest_bdd_macros::then(
+    "offsets and metadata both grow at defaults and their median rise with reclamation is less than one quarter of the default rise"
+)]
+fn bounded_reclamation(reclamation_comparison: &ReclamationComparison) {
+    let defaults = reclamation_comparison
+        .defaults
+        .expect("default directory samples");
+    let soak = reclamation_comparison
+        .soak
+        .expect("reclaimed directory samples");
     let rows = [
         ("__consumer_offsets", defaults.offsets, soak.offsets),
         ("__cluster_metadata-0", defaults.metadata, soak.metadata),
@@ -217,4 +249,15 @@ async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
              {at_defaults} at Kafka's defaults: rolling it did not reclaim it"
         );
     }
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/steady_state_reclaim.feature",
+    name = "the soak settings reclaim what kafkas defaults let climb"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb(
+    reclamation_comparison: ReclamationComparison,
+) {
+    let _ = reclamation_comparison;
 }

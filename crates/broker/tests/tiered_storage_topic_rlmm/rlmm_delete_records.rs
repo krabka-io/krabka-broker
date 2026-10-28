@@ -15,17 +15,16 @@
 
 use {
     crate::{
-        rlmm_cluster::{
-            await_activation, await_tiered_config, build_client, start_broker_with_topic_rlmm,
-        },
+        TopicRlmmScenario,
+        rlmm_cluster::await_tiered_config,
         rlmm_round_trip::remote_log_files,
-        run_broker_test,
         support::{
             fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
             topic_id_for,
             topics::topic_configs,
         },
         topic_fixture::create_configured_topic,
+        topic_rlmm,
     },
     assert2::{assert, check},
     krabka_client_admin::{AdminClient, DeleteRecordsOp},
@@ -46,84 +45,120 @@ const TOPIC: &str = "tiered-delete-records-itest";
 /// segment, so the floor lands between two remote segments.
 const DELETE_THROUGH: i64 = 40;
 
-/// A fetch below the offset an operator passed to `DeleteRecords` is
-/// `OFFSET_OUT_OF_RANGE` on a tiered topic, and the remote copies below the
-/// new floor are freed.
-#[test]
-fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it() {
-    run_broker_test(delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case());
+#[rstest_bdd_macros::given(
+    "a topic-backed tiered topic has 80 records, 1-KiB segments, one byte local retention and unlimited total retention"
+)]
+fn delete_records_tiered_topic(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.start_active_plaintext();
+    topic_rlmm
+        .runtime
+        .block_on(create_tiered_topic(topic_rlmm.client()));
+    topic_rlmm
+        .runtime
+        .block_on(await_tiered_config(topic_rlmm.broker(), TOPIC));
+    topic_rlmm
+        .runtime
+        .block_on(topic_rlmm.broker().produce_records_for_test(TOPIC, 0, 80))
+        .expect("produce records");
+    topic_rlmm
+        .runtime
+        .block_on(await_copied_segments(topic_rlmm.remote_dir(), 2));
+    topic_rlmm.topic = TOPIC.into();
 }
 
-async fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case() {
-    let (broker, _log_dir, remote_dir) = start_broker_with_topic_rlmm().await;
-    await_activation(&broker).await;
+#[rstest_bdd_macros::when("Fetch reads the remote offset zero before moving the global floor")]
+fn read_tiered_prefix(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm
+        .first_value
+        .set(topic_rlmm.runtime.block_on(async {
+            let topic_id = topic_id_for(topic_rlmm.client(), TOPIC).await;
+            await_fetch_records(topic_rlmm.client(), topic_id, 0)
+                .await
+                .map(bytes::Bytes::from)
+        }));
+}
 
-    let client = build_client(&broker).await;
-    create_tiered_topic(&client).await;
-    await_tiered_config(&broker, TOPIC).await;
+#[rstest_bdd_macros::when("DeleteRecords moves partition 0 global floor to 40")]
+fn delete_tiered_prefix(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.tiered_before = remote_log_files(topic_rlmm.remote_dir());
+    topic_rlmm.delete_outcomes = topic_rlmm.runtime.block_on(async {
+        let mut admin = AdminClient::connect(&[topic_rlmm.broker().listen_addr().to_string()])
+            .await
+            .expect("admin connect");
+        admin
+            .delete_records(
+                &[DeleteRecordsOp {
+                    topic: TOPIC.to_owned(),
+                    partition: 0,
+                    offset: DELETE_THROUGH,
+                }],
+                krabka_units::secs(5),
+            )
+            .await
+            .expect("DeleteRecords")
+            .into_iter()
+            .map(|row| (row.error_code, row.low_watermark))
+            .collect()
+    });
+}
 
-    broker
-        .produce_records_for_test(TOPIC, 0, 80)
-        .await
-        .expect("produce records");
-    await_copied_segments(remote_dir.path(), 2).await;
-
-    let topic_id = topic_id_for(&client, TOPIC).await;
-    // The local segments are evicted by `local.retention.bytes=1`, so this
-    // read proves the remote tier answers for offset 0 before anything asks
-    // it to stop.
-    let served = await_fetch_records(&client, topic_id, 0).await;
+#[rstest_bdd_macros::then("DeleteRecords succeeds for exactly one partition with low watermark 40")]
+fn tiered_delete_watermark(topic_rlmm: &TopicRlmmScenario) {
     assert!(
-        served == Some(b"test-record-0".to_vec()),
-        "offset 0 should read back from the remote tier, got {served:?}"
+        topic_rlmm.delete_outcomes == [(0, DELETE_THROUGH)],
+        "DeleteRecords failed: {:?}",
+        topic_rlmm.delete_outcomes
     );
+}
 
-    // Name the objects the archive holds before the floor moves, so the wait
-    // below is not confused by the copy task adding more.
-    let tiered_before = remote_log_files(remote_dir.path());
+#[rstest_bdd_macros::when("Fetch reads offset zero and offset forty after the deletion")]
+fn read_deleted_tiered_prefix(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.refused = Some(topic_rlmm.runtime.block_on(async {
+        let topic_id = topic_id_for(topic_rlmm.client(), TOPIC).await;
+        fetch_once(topic_rlmm.client(), topic_id, 0).await
+    }));
+    topic_rlmm.above.set(topic_rlmm.runtime.block_on(async {
+        let topic_id = topic_id_for(topic_rlmm.client(), TOPIC).await;
+        await_fetch_records(topic_rlmm.client(), topic_id, DELETE_THROUGH).await
+    }));
+}
 
-    let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
-        .await
-        .expect("admin connect");
-    let outcomes = admin
-        .delete_records(
-            &[DeleteRecordsOp {
-                topic: TOPIC.to_owned(),
-                partition: 0,
-                offset: DELETE_THROUGH,
-            }],
-            krabka_units::secs(5),
-        )
-        .await
-        .expect("DeleteRecords");
-    assert!(
-        outcomes.len() == 1 && outcomes[0].error_code == 0,
-        "DeleteRecords failed: {outcomes:?}"
-    );
-    check!(outcomes[0].low_watermark == DELETE_THROUGH);
-
-    // The RLMM still lists the segment that holds offset 0 and the archive
-    // still has its bytes, and the fetch must refuse it all the same.
-    let refused = fetch_once(&client, topic_id, 0).await;
+#[rstest_bdd_macros::then(
+    "offset zero is OFFSET_OUT_OF_RANGE with log start -1 while offset forty remains readable"
+)]
+fn deleted_tiered_visibility(topic_rlmm: &TopicRlmmScenario) {
+    let refused = topic_rlmm.refused.as_ref().expect("deleted prefix fetched");
     check!(
         refused.error_code == 1,
         "offset 0 should be OFFSET_OUT_OF_RANGE after DeleteRecords, got {}",
         refused.error_code
     );
-    // Kafka's non-tiered OFFSET_OUT_OF_RANGE row carries -1 offsets.
     check!(refused.log_start_offset == -1);
-    // The floor is not a wall across the whole partition: what is left above
-    // it still reads.
-    let above = await_fetch_records(&client, topic_id, DELETE_THROUGH).await;
-    check!(above.is_some(), "the records above the floor still read");
+    check!(
+        topic_rlmm
+            .above
+            .get()
+            .expect("offset forty fetched")
+            .is_some(),
+        "the records above the floor still read"
+    );
+}
 
-    // The expiration pass frees what the floor breached. `retention.ms` and
-    // `retention.bytes` are both off on this topic, so the log-start breach
-    // is the only axis that can delete anything here.
-    await_remote_segments_freed(&tiered_before).await;
+#[rstest_bdd_macros::then(
+    "remote retention frees every previously archived segment breached by the floor"
+)]
+fn freed_tiered_prefix(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm
+        .runtime
+        .block_on(await_remote_segments_freed(&topic_rlmm.tiered_before));
+}
 
-    drop(client);
-    broker.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_delete_records.feature",
+    name = "delete records puts the tiered prefix out of range and frees it"
+)]
+fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it(topic_rlmm: TopicRlmmScenario) {
+    topic_rlmm.shutdown();
 }
 
 async fn create_tiered_topic(client: &Client) {

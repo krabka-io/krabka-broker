@@ -5,239 +5,208 @@ use {
     crate::{
         support,
         wire::{
-            COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES,
-            SEGMENT_BYTES, accepted, create_topic, gzip_batch, orders_fixture, produce_batch,
-            produce_batch_of_wire_len, record_list_too_large, too_large, wire_len,
+            COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE, MAX_MESSAGE_BYTES, SEGMENT_BYTES, accepted,
+            create_topic, gzip_batch, produce_batch, produce_batch_of_wire_len,
+            record_list_too_large, too_large, wire_len,
         },
     },
     assert2::check,
     krabka_compression::CompressionType,
-    krabka_protocol::{owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid},
+    krabka_protocol::{
+        owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid,
+        records::RecordBatch,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::collections::BTreeMap,
 };
 
-/// A per-topic cap of 2048 bytes, the value the boundary was settled at
-/// against `apache/kafka:4.1.0`.
-const CAP: usize = 2048;
-
-async fn check_exact_limit(
-    process: &support::InProcess,
-    topic: Uuid,
-    limit: usize,
-    refusal: PartitionProduceResponse,
-) {
-    check!(
-        produce_batch_of_wire_len(&process.client, "orders", topic, limit).await == accepted(0, 0)
-    );
-    check!(produce_batch_of_wire_len(&process.client, "orders", topic, limit + 1).await == refusal);
-    check!(process.broker.local_log_end_offset("orders", 0) == Some(1));
-    check!(
-        produce_batch_of_wire_len(&process.client, "orders", topic, limit).await == accepted(1, 0)
-    );
-    check!(process.broker.local_log_end_offset("orders", 0) == Some(2));
+struct BatchGate {
+    process: Option<support::InProcess>,
+    topics: BTreeMap<String, Uuid>,
+    response: Option<PartitionProduceResponse>,
+    gzip: Option<RecordBatch>,
 }
+#[fixture]
+fn gate() -> BatchGate {
+    // Start this scenario with fresh inputs and observations.
 
-/// The cap is exact, and a refusal costs the log nothing.
-///
-/// This is the feature in one case. The batch at the cap goes first, so the
-/// refusal that follows is the size and not a produce path that never worked;
-/// and the batch at the cap after it lands at offset 1, which is the assertion
-/// that matters most. A broker that answered `MESSAGE_TOO_LARGE` *and*
-/// appended would pass on the error code alone and have written the very
-/// 100-MiB batch the cap exists to keep out of the partition.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {
-    let (p, topic) = orders_fixture(&[(MAX_MESSAGE_BYTES, &CAP.to_string())]).await;
-
-    check_exact_limit(&p, topic, CAP, too_large()).await;
-
-    p.broker.shutdown().await;
+    BatchGate {
+        process: None,
+        topics: BTreeMap::new(),
+        response: None,
+        gzip: None,
+    }
 }
-
-/// A topic that forces a codec the producer did not use holds the batch to
-/// `max.message.bytes` at its stored size, to the byte.
-///
-/// The producer sends gzip and the topic stores lz4, which shrinks repeated
-/// bytes far less, so the stored batch is the larger of the two and the gate
-/// on the stored form is the one that binds. The broker encodes the stored
-/// form once and measures it against the cap, then against `segment.bytes`,
-/// then appends it: a batch of exactly the cap appends and a cap one byte
-/// smaller refuses it, so whatever the gates measured is what the writer
-/// would store.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_exactly() {
-    /// lz4's level, set on the topic so the length below is the one the
-    /// broker computes.
-    const LZ4_LEVEL: i32 = 9;
-
+#[given("a broker hosts topics with these message and segment limits")]
+async fn limits(gate: &mut BatchGate, datatable: Vec<Vec<String>>) {
+    let process = support::start().await;
+    for row in datatable.into_iter().skip(1) {
+        let [name, message, segment, codec]: [String; 4] =
+            row.try_into().expect("topic, cap, segment size and codec");
+        let mut settings = Vec::new();
+        if message != "default" {
+            settings.push((MAX_MESSAGE_BYTES, message.as_str()));
+        }
+        if segment != "default" {
+            settings.push((SEGMENT_BYTES, segment.as_str()));
+        }
+        if codec != "producer" {
+            settings.push((COMPRESSION_TYPE, codec.as_str()));
+        }
+        let id = create_topic(&process.broker, &process.client, &name, &settings).await;
+        gate.topics.insert(name, id);
+    }
+    gate.process = Some(process);
+}
+#[given("a gzip batch of twenty thousand bytes is smaller than its level nine LZ4 storage form")]
+async fn recompression_limits(gate: &mut BatchGate) {
     let batch = gzip_batch(20_000);
     let mut stored = batch.clone();
     stored.attributes = stored.attributes.with_compression(CompressionType::Lz4);
-    let mut buf = bytes::BytesMut::new();
+    let mut bytes = bytes::BytesMut::new();
     stored
-        .encode_with_compression_level(&mut buf, Some(LZ4_LEVEL))
+        .encode_with_compression_level(&mut bytes, Some(9))
         .expect("encode lz4");
-    let stored_len = buf.len();
-    check!(wire_len(&batch) < stored_len - 1);
-
-    let p = support::start().await;
-    let level = LZ4_LEVEL.to_string();
-    // One topic whose cap is the stored size, and one a byte below it.
-    for (name, cap, answer, log_end) in [
-        ("under", stored_len - 1, too_large(), 0),
-        ("at", stored_len, accepted(0, 0), 1),
-    ] {
-        let topic = create_topic(&p.broker, &p.client, name, &[
+    let stored_length = bytes.len();
+    check!(wire_len(&batch) < stored_length - 1);
+    let process = support::start().await;
+    for (name, cap) in [("under", stored_length - 1), ("at", stored_length)] {
+        let id = create_topic(&process.broker, &process.client, name, &[
             (MAX_MESSAGE_BYTES, &cap.to_string()),
             (COMPRESSION_TYPE, "lz4"),
-            (COMPRESSION_LZ4_LEVEL, &level),
+            (COMPRESSION_LZ4_LEVEL, "9"),
         ])
         .await;
-        check!(
-            produce_batch(&p.client, name, topic, batch.clone()).await == answer,
-            "{name}"
-        );
-        check!(
-            p.broker.local_log_end_offset(name, 0) == Some(log_end),
-            "{name}"
-        );
+        gate.topics.insert(name.into(), id);
     }
-
-    p.broker.shutdown().await;
+    gate.gzip = Some(batch);
+    gate.process = Some(process);
+}
+#[when("a producer appends a {size} byte wire batch to {topic}")]
+async fn wire_append(gate: &mut BatchGate, size: usize, topic: String) {
+    let process = gate.process.as_ref().expect("topic limits configured");
+    gate.response =
+        Some(produce_batch_of_wire_len(&process.client, &topic, gate.topics[&topic], size).await);
+}
+#[when("a producer appends the gzip batch to {topic}")]
+async fn recompressed_append(gate: &mut BatchGate, topic: String) {
+    let process = gate.process.as_ref().expect("topic limits configured");
+    gate.response = Some(
+        produce_batch(
+            &process.client,
+            &topic,
+            gate.topics[&topic],
+            gate.gzip.as_ref().expect("gzip input prepared").clone(),
+        )
+        .await,
+    );
+}
+#[when("a producer appends gzip compressed content of {size} bytes to orders")]
+async fn expanded_append(gate: &mut BatchGate, size: usize) {
+    let process = gate.process.as_ref().expect("topic limits configured");
+    let batch = gzip_batch(size);
+    if size == 100_000 {
+        check!(wire_len(&batch) < 2048);
+        check!(batch.encoded_len() > 2048);
+    }
+    gate.response =
+        Some(produce_batch(&process.client, "orders", gate.topics["orders"], batch).await);
+}
+#[then("the batch is accepted at offset {offset}")]
+fn appended(gate: &BatchGate, offset: i64) {
+    check!(*gate.response.as_ref().expect("append completed") == accepted(offset, 0));
+}
+#[then("the batch is refused as a message too large")]
+fn message_refused(gate: &BatchGate) {
+    check!(*gate.response.as_ref().expect("append completed") == too_large());
+}
+#[then("the batch is refused as a record list too large for the segment")]
+fn segment_refused(gate: &BatchGate) {
+    check!(*gate.response.as_ref().expect("append completed") == record_list_too_large());
+}
+#[then("topic {topic} has log end offset {offset}")]
+fn log_end(gate: &BatchGate, topic: String, offset: i64) {
+    let process = gate.process.as_ref().expect("topic limits configured");
+    check!(process.broker.local_log_end_offset(&topic, 0) == Some(offset));
 }
 
-/// A record set larger than `segment.bytes` is refused with
-/// `RECORD_LIST_TOO_LARGE` (18) even when `max.message.bytes` would take it.
-///
-/// Kafka's floor for `segment.bytes` is 1 MiB and the default
-/// `max.message.bytes` is a little over it, so the two meet in the default
-/// configuration: `UnifiedLog.append` throws `RecordBatchTooLargeException`
-/// for a set larger than the segment (`apache/kafka:4.3.1`, and trunk keeps it
-/// for client appends). A batch is never split across segments, so without the
-/// refusal it would land whole in a segment of its own, bigger than the size
-/// the operator configured.
-///
-/// The batch of exactly `segment.bytes` goes first and goes again after the
-/// refusal: the limit is strict, and the refusal costs the log nothing.
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "An exact message cap accepts its boundary and refuses one byte more"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_larger_than_segment_bytes_is_refused_even_when_the_message_cap_allows_it() {
-    /// Kafka's floor for `segment.bytes`.
-    const SEGMENT: usize = 1_048_576;
-
-    let p = support::start().await;
-    let topic = create_topic(&p.broker, &p.client, "orders", &[
-        (MAX_MESSAGE_BYTES, &(SEGMENT * 2).to_string()),
-        (SEGMENT_BYTES, &SEGMENT.to_string()),
-    ])
-    .await;
-
-    check_exact_limit(&p, topic, SEGMENT, record_list_too_large()).await;
-
-    p.broker.shutdown().await;
+async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused(gate: BatchGate) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
 }
 
-/// A topic that sets no `max.message.bytes` inherits the broker's
-/// `message.max.bytes`.
-///
-/// Kafka reports exactly this as the `DEFAULT_CONFIG` synonym of an unset
-/// `max.message.bytes`, and the number is the same 1048588 on both keys. The
-/// case exists because the per-topic override is the easy half: a broker that
-/// enforced the cap only where an operator had spelled one out would leave
-/// every default topic accepting the 100-MiB batch.
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "Recompression measures the exact stored LZ4 batch size"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_with_no_override_inherits_the_brokers_message_max_bytes() {
-    let p = support::start().await;
-    let topic = create_topic(&p.broker, &p.client, "orders", &[]).await;
-
-    check!(
-        produce_batch_of_wire_len(&p.client, "orders", topic, KAFKA_DEFAULT).await
-            == accepted(0, 0)
-    );
-    check!(
-        produce_batch_of_wire_len(&p.client, "orders", topic, KAFKA_DEFAULT + 1).await
-            == too_large()
-    );
-    check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
-
-    p.broker.shutdown().await;
+async fn a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_exactly(gate: BatchGate) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
 }
 
-/// A per-topic override overrides the broker default in both directions.
-///
-/// The tightened topic refuses a batch the broker default would have taken,
-/// and the loosened topic takes one the broker default would have refused.
-/// Together they say the produce path reads the topic's value rather than a
-/// constant that happens to agree with it.
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "Segment size independently limits a whole record batch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_override_binds_below_and_above_the_broker_default() {
-    let p = support::start().await;
-    let tight = create_topic(&p.broker, &p.client, "tight", &[(
-        MAX_MESSAGE_BYTES,
-        &CAP.to_string(),
-    )])
-    .await;
-    let loose = create_topic(&p.broker, &p.client, "loose", &[(
-        MAX_MESSAGE_BYTES,
-        &(KAFKA_DEFAULT * 2).to_string(),
-    )])
-    .await;
-
-    check!(produce_batch_of_wire_len(&p.client, "tight", tight, CAP + 1).await == too_large());
-    check!(p.broker.local_log_end_offset("tight", 0) == Some(0));
-    check!(
-        produce_batch_of_wire_len(&p.client, "loose", loose, KAFKA_DEFAULT + 1).await
-            == accepted(0, 0)
-    );
-
-    p.broker.shutdown().await;
+async fn a_batch_larger_than_segment_bytes_is_refused_even_when_the_message_cap_allows_it(
+    gate: BatchGate,
+) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
 }
 
-/// A topic that forces `compression.type=uncompressed` measures the batch it
-/// stores, not the batch that arrived.
-///
-/// This is the hole a wire-length-only gate leaves open. The producer sends a
-/// gzip batch of a few hundred bytes, comfortably under a 2048-byte cap, and
-/// the broker has to expand it before it can store it because the topic
-/// forbids the producer's codec. What lands in the log is a six-figure batch,
-/// which is precisely the batch the cap exists to keep out: every consumer of
-/// that partition has to fetch it whole.
-///
-/// Kafka refuses it. `message.max.bytes` is documented as "the largest record
-/// batch size allowed by Kafka (after compression if compression is enabled)",
-/// and `UnifiedLog.append` in `apache/kafka:4.3.1` re-runs its per-batch size
-/// check over the re-encoded batches whenever `LogValidator` reports
-/// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException` its
-/// pre-append check throws.
-///
-/// The compressed wire length is asserted to sit under the cap, so the case
-/// cannot pass because the pre-append gate caught the batch on its way in. The
-/// small gzip batch afterwards is what separates "the broker measures the
-/// stored form" from "the broker refuses every recompressed batch".
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "An unconfigured topic inherits the broker message cap"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_the_topic_expands_is_measured_after_the_broker_re_encodes_it() {
-    /// Repeated bytes, so gzip returns a batch hundreds of times smaller than
-    /// the one the broker will store.
-    const EXPANDS_PAST_THE_CAP: usize = 100_000;
-    /// Small enough to sit under the cap in both forms.
-    const FITS_EITHER_WAY: usize = 100;
+async fn a_topic_with_no_override_inherits_the_brokers_message_max_bytes(gate: BatchGate) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
+}
 
-    let p = support::start().await;
-    let topic = create_topic(&p.broker, &p.client, "orders", &[
-        (MAX_MESSAGE_BYTES, &CAP.to_string()),
-        (COMPRESSION_TYPE, "uncompressed"),
-    ])
-    .await;
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "Topic overrides tighten and loosen the broker default"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_override_binds_below_and_above_the_broker_default(gate: BatchGate) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
+}
 
-    let oversized = gzip_batch(EXPANDS_PAST_THE_CAP);
-    check!(wire_len(&oversized) < CAP);
-    check!(oversized.encoded_len() > CAP);
-
-    check!(produce_batch(&p.client, "orders", topic, oversized).await == too_large());
-    check!(p.broker.local_log_end_offset("orders", 0) == Some(0));
-    check!(
-        produce_batch(&p.client, "orders", topic, gzip_batch(FITS_EITHER_WAY)).await
-            == accepted(0, 0)
-    );
-    check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
-
-    p.broker.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "An uncompressed storage policy measures the expanded batch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_the_topic_expands_is_measured_after_the_broker_re_encodes_it(gate: BatchGate) {
+    gate.process
+        .expect("batch gate broker started")
+        .broker
+        .shutdown()
+        .await;
 }

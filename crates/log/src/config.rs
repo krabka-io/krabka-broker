@@ -533,10 +533,35 @@ mod tests {
         krabka_units::prelude::{ByteSizeExt as _, TimeExt, bytes, millis, secs},
     };
 
-    #[test]
-    fn defaults_match_kafka_4x() {
+    #[derive(Default)]
+    struct LogPolicyScenario {
+        config: Option<LogConfig>,
+        policy: Option<CleanupPolicy>,
+        compact: Option<bool>,
+        delete: Option<bool>,
+        rendered: String,
+    }
+    #[rstest::fixture]
+    fn log_policy() -> LogPolicyScenario {
+        let rendered = String::new();
+        LogPolicyScenario {
+            rendered,
+            ..LogPolicyScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::when("the default log policy is requested")]
+    fn request_log_defaults(log_policy: &mut LogPolicyScenario) {
+        log_policy.config = Some(LogConfig::default());
+    }
+    #[rstest_bdd_macros::then(
+        "all default log settings match Kafka 4.x and Krabka's documented storage policy"
+    )]
+    fn complete_log_defaults(log_policy: &LogPolicyScenario) {
         assert2::assert!(
-            LogConfig::default()
+            *log_policy
+                .config
+                .as_ref()
+                .expect("default log policy requested")
                 == LogConfig {
                     read_buffer_cap: mebibytes(4),
                     read_ahead_max: mebibytes(4),
@@ -580,13 +605,17 @@ mod tests {
                 }
         );
     }
-
-    #[test]
-    fn defaults_cross_the_raw_seams_as_kafkas_documented_numbers() {
+    #[rstest_bdd_macros::then(
+        "sizes and times cross the raw storage seams in their documented base units"
+    )]
+    fn raw_log_defaults(log_policy: &LogPolicyScenario) {
         // The quantities exist to be handed to `.index` sizing, retention
         // arithmetic, and Kafka config reporting as plain integers; a
         // scale slip in a constructor would show up here.
-        let c = LogConfig::default();
+        let c = log_policy
+            .config
+            .as_ref()
+            .expect("default log policy requested");
         assert2::check!(c.segment_size.bytes_u64() == 1_073_741_824);
         assert2::check!(c.index_interval.bytes_u64() == 4_096);
         assert2::check!(c.segment_index_size.bytes_u64() == 10_485_760);
@@ -595,30 +624,39 @@ mod tests {
         assert2::check!(c.retention.map(TimeExt::millis_i64) == Some(604_800_000));
         assert2::check!(c.delete_retention.millis_i64() == 86_400_000);
     }
+    #[rstest_bdd_macros::given("log cleanup policy {policy}")]
+    fn log_cleanup_policy(log_policy: &mut LogPolicyScenario, policy: String) {
+        log_policy.policy = Some(match policy.as_str() {
+            "delete" => CleanupPolicy::Delete,
+            "compact" => CleanupPolicy::Compact,
+            "compact,delete" => CleanupPolicy::CompactAndDelete,
+            "none" => CleanupPolicy::NoCleanup,
+            _ => panic!("unknown cleanup policy {policy}"),
+        });
+    }
+    #[rstest_bdd_macros::when("cleanup policy membership and Kafka text are inspected")]
+    fn inspect_cleanup_policy(log_policy: &mut LogPolicyScenario) {
+        let policy = log_policy.policy.expect("cleanup policy given");
+        log_policy.compact = Some(policy.contains_compact());
+        log_policy.delete = Some(policy.contains_delete());
+        log_policy.rendered = policy.as_str().into();
+    }
+    #[rstest_bdd_macros::then("compact membership is {compact} and delete membership is {delete}")]
+    fn log_cleanup_membership(log_policy: &LogPolicyScenario, compact: bool, delete: bool) {
+        assert2::check!(log_policy.compact == Some(compact));
+        assert2::check!(log_policy.delete == Some(delete));
+    }
+    #[rstest_bdd_macros::then("cleanup policy text is {text}")]
+    fn log_cleanup_text(log_policy: &LogPolicyScenario, text: String) {
+        let expected = if text == "empty" { "" } else { &text };
+        assert2::check!(log_policy.rendered == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/log_policy", fixtures = [log_policy: LogPolicyScenario]);
 
     #[test]
     fn default_cleanup_policy_is_delete() {
         let c = LogConfig::default();
         assert2::assert!(c.cleanup_policy == CleanupPolicy::Delete);
-    }
-
-    #[yare::parameterized(
-        delete = { CleanupPolicy::Delete, false, true, "delete" },
-        compact = { CleanupPolicy::Compact, true, false, "compact" },
-        compact_and_delete = { CleanupPolicy::CompactAndDelete, true, true, "compact,delete" },
-        no_cleanup = { CleanupPolicy::NoCleanup, false, false, "" },
-    )]
-    fn a_policy_reports_the_halves_of_kafkas_cleanup_policy_list_it_contains(
-        policy: CleanupPolicy,
-        compact: bool,
-        delete: bool,
-        rendered: &'static str,
-    ) {
-        // `LogConfig` in Kafka derives `compact` and `delete` from the list by
-        // membership, so `compact,delete` is both, and each name alone is one.
-        assert2::check!(policy.contains_compact() == compact, "{policy:?}");
-        assert2::check!(policy.contains_delete() == delete, "{policy:?}");
-        assert2::check!(policy.as_str() == rendered, "{policy:?}");
     }
 
     #[test]

@@ -222,6 +222,7 @@ mod tests {
         assert2::check,
         clap::{Args as _, Parser as _},
         krabka_units::convert::ByteSizeExt,
+        std::sync::MutexGuard,
     };
 
     /// The values each flag is offered in [`runtime_flags_keep_their_shape`].
@@ -457,33 +458,59 @@ mod tests {
         streams-group-assignor KRABKA_STREAMS_GROUP_ASSIGNOR None ------------+\n\
 ";
 
-    /// `--message-max-bytes` takes exactly the values Kafka's `INT` with
-    /// `atLeast(0)` takes.
-    ///
-    /// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
-    /// "Value must be at least 0", and refuses `2147483648` with "Not a number
-    /// of type INT". The topic-level `max.message.bytes` this key defaults
-    /// enforces the same domain, so an operator cannot set a broker-wide cap
-    /// through the flag that `kafka-configs --alter` would refuse on a topic.
-    #[yare::parameterized(
-        zero = { "0B", Some(0) },
-        bytes = { "2048B", Some(2048) },
-        int_max = { "2147483647B", Some(2_147_483_647) },
-        mebibytes = { "1MiB", Some(1_048_576) },
-        negative = { "-1B", None },
-        above_int_max = { "2147483648B", None },
-        gibibytes = { "2GiB", None },
-        fractional_byte = { "1.5B", None },
-    )]
-    fn message_max_bytes_takes_kafkas_int_at_least_zero(
-        value: &'static str,
-        expected: Option<u64>,
-    ) {
-        let _guard = env_guard();
-        let parsed = Args::try_parse_from(["krabka-broker", "--message-max-bytes", value])
-            .ok()
-            .and_then(|args| args.runtime.message_max_bytes)
-            .map(ByteSizeExt::bytes_u64);
-        check!(parsed == expected, "--message-max-bytes={value}");
+    struct MessageLimitCommand {
+        _environment: MutexGuard<'static, ()>,
+        value: String,
+        parsed: Option<Result<Args, clap::Error>>,
     }
+
+    #[rstest::fixture]
+    fn message_limit_command() -> MessageLimitCommand {
+        // Start this scenario with fresh inputs and observations.
+
+        MessageLimitCommand {
+            _environment: env_guard(),
+            value: String::new(),
+            parsed: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("the operator supplies message limit {value}")]
+    fn message_limit_argument(message_limit_command: &mut MessageLimitCommand, value: String) {
+        message_limit_command.value = value;
+    }
+
+    #[rstest_bdd_macros::when("the broker parses the message limit command line")]
+    fn parse_message_limit_command(message_limit_command: &mut MessageLimitCommand) {
+        message_limit_command.parsed = Some(Args::try_parse_from([
+            "krabka-broker",
+            "--message-max-bytes",
+            &message_limit_command.value,
+        ]));
+    }
+
+    /// Kafka's INT atLeast(0) domain also applies to dimensioned byte values.
+    #[rstest_bdd_macros::then("the broker-wide message limit is {bytes} bytes")]
+    fn accepted_message_limit(message_limit_command: &MessageLimitCommand, bytes: u64) {
+        let parsed = message_limit_command
+            .parsed
+            .as_ref()
+            .expect("the command line was parsed")
+            .as_ref()
+            .expect("a whole byte count within Kafka INT must be accepted");
+        check!(parsed.runtime.message_max_bytes.map(ByteSizeExt::bytes_u64) == Some(bytes));
+    }
+
+    #[rstest_bdd_macros::then("the invalid message limit is rejected")]
+    fn rejected_message_limit(message_limit_command: &MessageLimitCommand) {
+        check!(
+            message_limit_command
+                .parsed
+                .as_ref()
+                .expect("the command line was parsed")
+                .is_err()
+        );
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/bin/broker/runtime_args.feature", fixtures = [message_limit_command: MessageLimitCommand]);
 }

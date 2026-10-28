@@ -275,8 +275,18 @@ pub(super) fn commit_record_for_group(group: &str, partition: i32, offset: i64) 
 pub(super) fn replay_log(
     records: impl IntoIterator<Item = LogRecord>,
 ) -> ReplayedCoordinator<Result<super::replay::Replayed, BrokerError>> {
-    use krabka_protocol::records::{Record, RecordBatch};
     let coordinator = bare_coordinator();
+    let replayed = replay_log_into(&coordinator, records);
+    ReplayedCoordinator {
+        coordinator,
+        replayed,
+    }
+}
+fn replay_log_into(
+    coordinator: &Arc<GroupCoordinator>,
+    records: impl IntoIterator<Item = LogRecord>,
+) -> Result<super::replay::Replayed, BrokerError> {
+    use krabka_protocol::records::{Record, RecordBatch};
     let dir = tempfile::tempdir().unwrap();
     let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
     for LogRecord { key, value } in records {
@@ -290,9 +300,21 @@ pub(super) fn replay_log(
         })
         .unwrap();
     }
-    let replayed = super::replay::replay_records(&log, &coordinator);
-    ReplayedCoordinator {
+    super::replay::replay_records(&log, coordinator)
+}
+/// Write literal compacted records and run the native bootstrap loader against a fresh test coordinator.
+///
+/// # Errors
+/// Returns the native startup error when the persisted records violate group replay rules.
+pub fn replay_compacted_group_log(
+    coordinator: &Arc<GroupCoordinator>,
+    records: impl IntoIterator<Item = (Bytes, Option<Bytes>)>,
+) -> Result<(), BrokerError> {
+    replay_log_into(
         coordinator,
-        replayed,
-    }
+        records
+            .into_iter()
+            .map(|(key, value)| LogRecord { key, value }),
+    )
+    .map(drop)
 }

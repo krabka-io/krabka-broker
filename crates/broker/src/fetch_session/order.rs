@@ -209,6 +209,7 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        rstest_bdd::Slot,
     };
 
     const SECOND: Duration = Duration::from_secs(1);
@@ -240,153 +241,93 @@ mod tests {
         order
     }
 
-    /// A newcomer: its privilege, the partitions it caches, and the second it
-    /// arrives.
-    #[derive(Clone, Copy)]
-    struct Newcomer {
+    struct SessionEviction {
+        order: SessionOrder,
+        previous_second: u32,
+        victim: rstest_bdd::Slot<Option<FetchSessionId>>,
+    }
+
+    #[rstest::fixture]
+    fn session_eviction() -> SessionEviction {
+        // Start this scenario with fresh inputs and observations.
+
+        SessionEviction {
+            order: SessionOrder::new(),
+            previous_second: 0,
+            victim: Slot::default(),
+        }
+    }
+
+    #[rstest_bdd_macros::given("an empty fetch session eviction index")]
+    fn empty_eviction_index(session_eviction: &mut SessionEviction) {
+        session_eviction.order = SessionOrder::new();
+    }
+
+    #[rstest_bdd_macros::given(
+        "cached session {id} has follower privilege {privileged} and {size} partitions at second {seconds}"
+    )]
+    fn cached_eviction_session(
+        session_eviction: &mut SessionEviction,
+        id: FetchSessionId,
         privileged: bool,
         size: usize,
         seconds: u32,
+    ) {
+        assert!(
+            seconds >= session_eviction.previous_second,
+            "time must not go backwards"
+        );
+        session_eviction.previous_second = seconds;
+        session_eviction
+            .order
+            .insert(id, privileged, size, seconds * SECOND);
     }
 
-    /// A newcomer, as the table writes it.
-    const fn newcomer(privileged: bool, size: usize, seconds: u32) -> Newcomer {
-        Newcomer {
+    #[rstest_bdd_macros::given("session {id} is used with {size} partitions at second {seconds}")]
+    fn touched_eviction_session(
+        session_eviction: &mut SessionEviction,
+        id: FetchSessionId,
+        size: usize,
+        seconds: u32,
+    ) {
+        assert!(
+            seconds >= session_eviction.previous_second,
+            "time must not go backwards"
+        );
+        session_eviction.previous_second = seconds;
+        session_eviction.order.touch(id, size, seconds * SECOND);
+    }
+
+    #[rstest_bdd_macros::when(
+        "a newcomer with follower privilege {privileged} and {size} partitions seeks eviction at second {seconds}"
+    )]
+    fn choose_eviction_victim(
+        session_eviction: &mut SessionEviction,
+        privileged: bool,
+        size: usize,
+        seconds: u32,
+    ) {
+        session_eviction.victim.set(session_eviction.order.victim(
             privileged,
             size,
-            seconds,
-        }
+            seconds * SECOND,
+        ));
     }
 
-    /// One `victim` scenario.
-    struct VictimCase {
-        label: &'static str,
-        /// The steps that built the index.
-        steps: &'static [Step],
-        newcomer: Newcomer,
-        /// The session the newcomer may displace.
-        want: Option<FetchSessionId>,
+    #[rstest_bdd_macros::then("no fetch session can be evicted")]
+    fn no_eviction_victim(session_eviction: &SessionEviction) {
+        check!(session_eviction.victim.get() == Some(None));
     }
 
-    #[test]
-    fn victim_selection_follows_kafkas_try_evict() {
-        // Ids 1 and 2 are consumer sessions, ids 3 and 4 follower sessions.
-        // Every session below that has been touched after `MIN_EVICTION` (120
-        // s) of life is "old" by creation; the others are not.
-        let cases: [VictimCase; 14] = [
-            VictimCase {
-                label: "an empty cache has no victim",
-                steps: &[],
-                newcomer: newcomer(false, 1, 0),
-                want: None,
-            },
-            VictimCase {
-                label: "a session unused for more than the minimum is stale, and goes",
-                steps: &[Step::Insert(1, false, 9, 0)],
-                newcomer: newcomer(false, 1, 121),
-                want: Some(1),
-            },
-            VictimCase {
-                label: "a session unused for exactly the minimum is not stale",
-                steps: &[Step::Insert(1, false, 9, 0)],
-                newcomer: newcomer(false, 1, 120),
-                want: None,
-            },
-            VictimCase {
-                label: "a stale follower session goes to a consumer newcomer too",
-                steps: &[Step::Insert(3, true, 9, 0)],
-                newcomer: newcomer(false, 1, 121),
-                want: Some(3),
-            },
-            VictimCase {
-                label: "staleness picks the session unused the longest",
-                steps: &[
-                    Step::Insert(1, false, 1, 0),
-                    Step::Insert(2, false, 1, 10),
-                    Step::Touch(1, 1, 20),
-                ],
-                newcomer: newcomer(false, 1, 131),
-                want: Some(2),
-            },
-            VictimCase {
-                label: "a consumer never displaces a recently used session of its own class",
-                steps: &[Step::Insert(1, false, 1, 0), Step::Insert(2, false, 1, 1)],
-                newcomer: newcomer(false, 100, 2),
-                want: None,
-            },
-            VictimCase {
-                label: "a consumer never displaces a session created within the minimum",
-                steps: &[Step::Insert(1, false, 1, 100), Step::Touch(1, 1, 110)],
-                newcomer: newcomer(false, 100, 115),
-                want: None,
-            },
-            VictimCase {
-                label: "a larger consumer displaces an older, smaller consumer session",
-                steps: &[Step::Insert(1, false, 2, 0), Step::Touch(1, 2, 121)],
-                newcomer: newcomer(false, 3, 122),
-                want: Some(1),
-            },
-            VictimCase {
-                label: "an equally large consumer does not",
-                steps: &[Step::Insert(1, false, 2, 0), Step::Touch(1, 2, 121)],
-                newcomer: newcomer(false, 2, 122),
-                want: None,
-            },
-            VictimCase {
-                label: "a smaller consumer does not",
-                steps: &[Step::Insert(1, false, 2, 0), Step::Touch(1, 2, 121)],
-                newcomer: newcomer(false, 1, 122),
-                want: None,
-            },
-            VictimCase {
-                label: "a consumer displaces the smallest old consumer session, not the oldest",
-                steps: &[
-                    Step::Insert(1, false, 5, 0),
-                    Step::Insert(2, false, 3, 1),
-                    Step::Touch(1, 5, 121),
-                    Step::Touch(2, 3, 122),
-                ],
-                newcomer: newcomer(false, 9, 123),
-                want: Some(2),
-            },
-            VictimCase {
-                label: "a consumer never displaces a follower session, however old",
-                steps: &[Step::Insert(3, true, 1, 0), Step::Touch(3, 1, 121)],
-                newcomer: newcomer(false, 1000, 122),
-                want: None,
-            },
-            VictimCase {
-                label: "a follower displaces any consumer session, however small the follower",
-                steps: &[Step::Insert(1, false, 50, 0), Step::Insert(3, true, 1, 1)],
-                newcomer: newcomer(true, 1, 2),
-                want: Some(1),
-            },
-            VictimCase {
-                label: "a follower displaces an old follower session only when it is larger",
-                steps: &[Step::Insert(3, true, 2, 0), Step::Touch(3, 2, 121)],
-                newcomer: newcomer(true, 2, 122),
-                want: None,
-            },
-        ];
-        for VictimCase {
-            label,
-            steps,
-            newcomer:
-                Newcomer {
-                    privileged,
-                    size,
-                    seconds,
-                },
-            want,
-        } in cases
-        {
-            let order = seeded(steps);
-            check!(
-                order.victim(privileged, size, seconds * SECOND) == want,
-                "{label}"
-            );
-        }
+    #[rstest_bdd_macros::then("fetch session {id} is selected for eviction")]
+    fn selected_eviction_victim(session_eviction: &SessionEviction, id: FetchSessionId) {
+        check!(session_eviction.victim.get() == Some(Some(id)));
     }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/fetch_session/order",
+        fixtures = [session_eviction: SessionEviction]
+    );
 
     #[test]
     fn a_larger_follower_displaces_an_old_follower_session() {

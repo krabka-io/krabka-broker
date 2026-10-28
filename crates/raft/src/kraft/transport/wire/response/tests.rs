@@ -275,39 +275,6 @@ fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
     );
 }
 
-/// The bytes are those of Kafka's `KafkaRaftClient.buildEmptyFetchResponse`
-/// on a follower of leader 2: the error, the leader and epoch, no high
-/// watermark, the log start, empty non-null records and aborted
-/// transactions, and the leader's `NodeEndpoints` entry.
-#[yare::parameterized(
-        known_leader = {
-            "known leader",
-            refused_fetch_answer(leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
-            kafka_empty_fetch_response(2, 5, vec![fetch_resp::NodeEndpoint {
-                node_id: 2,
-                host: "controller-2".into(),
-                port: 9093,
-                ..Default::default()
-            }]),
-        },
-        // `singletonFetchResponse` adds no entry without a leader id.
-        unknown_leader = {
-            "unknown leader",
-            refused_fetch_answer(leader(None, 5, Some(leader_endpoint("controller-2", 9093)))),
-            kafka_empty_fetch_response(-1, 5, Vec::new())
-        },
-)]
-fn a_refused_fetch_is_kafkas_empty_fetch_response(
-    case: &'static str,
-    answer: PeerResponse,
-    expected: FetchResponse,
-) {
-    check!(
-        answer.encode() == encode_body(&expected, FETCH_VERSION),
-        "{case}"
-    );
-}
-
 /// Kafka's `Endpoints.fromFetchResponse` keeps only the entry for
 /// `CurrentLeader.LeaderId`.
 #[test]
@@ -371,3 +338,66 @@ fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
         .expect("decode FetchSnapshot");
     assert2::check!(raw.error_code == 7);
 }
+
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
+
+struct RefusedFetch {
+    leader: Option<QuorumLeader>,
+    encoded: Option<Bytes>,
+}
+
+#[fixture]
+fn fetch_refusal() -> RefusedFetch {
+    // Start this scenario with fresh inputs and observations.
+
+    RefusedFetch {
+        leader: None,
+        encoded: None,
+    }
+}
+
+#[given("a followed leader {id} at epoch 5 with endpoint controller-2 port 9093")]
+fn followed_leader(fetch_refusal: &mut RefusedFetch, id: String) {
+    let id = if id == "unknown" {
+        None
+    } else {
+        Some(id.parse().expect("leader ID is an integer"))
+    };
+    fetch_refusal.leader = Some(leader(id, 5, Some(leader_endpoint("controller-2", 9093))));
+}
+
+#[when("the follower encodes its refused Fetch response")]
+fn encode_refused_fetch(fetch_refusal: &mut RefusedFetch) {
+    fetch_refusal.encoded = Some(
+        refused_fetch_answer(
+            fetch_refusal
+                .leader
+                .take()
+                .expect("leader routing facts were given"),
+        )
+        .encode(),
+    );
+}
+
+#[then(
+    "the wire bytes equal Kafka's empty Fetch response for leader {id} with endpoint present {endpoint}"
+)]
+fn kafka_fetch_refusal(fetch_refusal: &RefusedFetch, id: i32, endpoint: bool) {
+    let endpoints = if endpoint {
+        vec![fetch_resp::NodeEndpoint {
+            node_id: 2,
+            host: "controller-2".into(),
+            port: 9093,
+            ..Default::default()
+        }]
+    } else {
+        Vec::new()
+    };
+    let expected = kafka_empty_fetch_response(id, 5, endpoints);
+    check!(fetch_refusal.encoded.as_ref() == Some(&encode_body(&expected, FETCH_VERSION)));
+}
+
+scenarios!("tests/features/migrated/src/kraft/transport/wire/response/tests.feature", fixtures = [fetch_refusal: RefusedFetch]);

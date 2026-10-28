@@ -152,6 +152,7 @@ mod tests {
             MetadataImage, MetadataRecord, NodeId,
             voters::{KRaftVersionRange, Voter, VoterSet},
         },
+        rstest_bdd::Slot,
     };
 
     const LOCAL: LocalController = LocalController {
@@ -159,30 +160,141 @@ mod tests {
         unstable_features: krabka_raft::UnstableFeatureVersions::Disabled,
     };
 
-    #[test]
-    fn range_reasons_use_kafka_version_range_text() {
-        let cases = [
-            (1, SupportedRange { min: 0, max: 1 }, None),
-            (
-                9,
-                SupportedRange { min: 0, max: 1 },
-                Some("Broker 2 only supports versions 0-1"),
-            ),
-            (
-                2,
-                SupportedRange { min: 1, max: 1 },
-                Some("Broker 2 only supports versions 1"),
-            ),
-            (1, DISABLED, Some("Broker 2 does not support this feature.")),
-            (0, DISABLED, None),
-        ];
-        for (level, range, want) in cases {
-            assert!(
-                reason_range_not_supported(level, "Broker 2", range).as_deref() == want,
-                "{level} {range:?}"
-            );
+    struct FeatureCompatibilityContract {
+        range: SupportedRange,
+        level: i16,
+        image: Option<MetadataImage>,
+        reason: Slot<Option<String>>,
+    }
+
+    #[rstest::fixture]
+    fn feature_compatibility() -> FeatureCompatibilityContract {
+        // Start this scenario with fresh inputs and observations.
+
+        FeatureCompatibilityContract {
+            range: DISABLED,
+            level: 0,
+            image: None,
+            reason: Slot::default(),
         }
     }
+
+    #[rstest_bdd_macros::given("Broker 2 supports feature levels {minimum} through {maximum}")]
+    fn broker_feature_range(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        minimum: i16,
+        maximum: i16,
+    ) {
+        feature_compatibility.range = SupportedRange {
+            min: minimum,
+            max: maximum,
+        };
+    }
+
+    #[rstest_bdd_macros::given("the requested feature level is {level}")]
+    fn requested_feature_level(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        level: i16,
+    ) {
+        feature_compatibility.level = level;
+    }
+
+    #[rstest_bdd_macros::given("the feature-update cluster uses metadata version {version}")]
+    fn feature_cluster_metadata(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        version: i16,
+    ) {
+        feature_compatibility.image = Some(image(version));
+    }
+
+    fn advertised_group_support(availability: &str) -> BTreeMap<String, (i16, i16)> {
+        let mut features = krabka_metadata::supported_feature_ranges();
+        match availability {
+            "present" => {}
+            "absent" => {
+                features.remove("group.version");
+            }
+            other => panic!("unknown feature availability {other}"),
+        }
+        features
+    }
+
+    #[rstest_bdd_macros::given("broker {node} advertises group.version as {availability}")]
+    fn broker_group_feature(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        node: u64,
+        availability: String,
+    ) {
+        feature_compatibility
+            .image
+            .as_mut()
+            .expect("a cluster metadata version was given")
+            .apply(&broker(node, advertised_group_support(&availability)));
+    }
+
+    #[rstest_bdd_macros::given("controller {node} advertises group.version as {availability}")]
+    fn controller_group_feature(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        node: u64,
+        availability: String,
+    ) {
+        feature_compatibility
+            .image
+            .as_mut()
+            .expect("a cluster metadata version was given")
+            .apply(&controller(node, advertised_group_support(&availability)));
+    }
+
+    #[rstest_bdd_macros::given("the feature-update quorum voters are {nodes}")]
+    fn feature_quorum(feature_compatibility: &mut FeatureCompatibilityContract, nodes: String) {
+        let ids: Vec<u64> = nodes
+            .split(',')
+            .map(|id| id.parse().expect("a voter node ID"))
+            .collect();
+        feature_compatibility
+            .image
+            .as_mut()
+            .expect("a cluster metadata version was given")
+            .apply(&voters(&ids));
+    }
+
+    #[rstest_bdd_macros::when("Broker 2 checks the requested feature level against its range")]
+    fn check_broker_feature_range(feature_compatibility: &mut FeatureCompatibilityContract) {
+        feature_compatibility.reason.set(reason_range_not_supported(
+            feature_compatibility.level,
+            "Broker 2",
+            feature_compatibility.range,
+        ));
+    }
+
+    #[rstest_bdd_macros::when("controller 1 checks cluster support for {feature} level {level}")]
+    fn check_cluster_feature(
+        feature_compatibility: &mut FeatureCompatibilityContract,
+        feature: String,
+        level: i16,
+    ) {
+        feature_compatibility.reason.set(reason_not_supported(
+            feature_compatibility
+                .image
+                .as_ref()
+                .expect("a cluster was given"),
+            LOCAL,
+            &feature,
+            level,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the feature compatibility diagnostic is {message}")]
+    fn feature_compatibility_reason(
+        feature_compatibility: &FeatureCompatibilityContract,
+        message: String,
+    ) {
+        let expected: Option<String> =
+            serde_json::from_str(&message).expect("nullable JSON diagnostic");
+        assert!(feature_compatibility.reason.get() == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/update_features/preconditions.feature", fixtures = [feature_compatibility: FeatureCompatibilityContract]);
 
     /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`, so a controller
     /// supports it only with `unstable.feature.versions.enable`, and answers
@@ -254,89 +366,6 @@ mod tests {
                 kraft_version: KRaftVersionRange::default(),
             })),
         })
-    }
-
-    #[test]
-    fn nodes_answer_in_kafka_order() {
-        let all = krabka_metadata::supported_feature_ranges();
-        let mut no_group = all.clone();
-        no_group.remove("group.version");
-        let cases = [
-            (
-                "every node supports",
-                30,
-                vec![broker(2, all.clone())],
-                "group.version",
-                1,
-                None,
-            ),
-            (
-                "unknown feature, local first",
-                30,
-                vec![broker(2, no_group.clone())],
-                "no.such.feature",
-                1,
-                Some("Local controller 1 does not support this feature."),
-            ),
-            (
-                "local range",
-                30,
-                vec![],
-                "group.version",
-                9,
-                Some("Local controller 1 only supports versions 0-1"),
-            ),
-            (
-                "broker without the feature",
-                30,
-                vec![broker(2, no_group.clone())],
-                "group.version",
-                1,
-                Some("Broker 2 does not support this feature."),
-            ),
-            (
-                "other controller without the feature",
-                30,
-                vec![controller(3, no_group.clone())],
-                "group.version",
-                1,
-                Some("Controller 3 does not support this feature."),
-            ),
-            (
-                "the local controller's registration is not read",
-                30,
-                vec![controller(1, no_group.clone())],
-                "group.version",
-                1,
-                None,
-            ),
-            (
-                "controllers do not answer before 3.7-IV0",
-                14,
-                vec![controller(3, no_group.clone()), voters(&[1, 4])],
-                "group.version",
-                1,
-                None,
-            ),
-            (
-                "unregistered voter",
-                30,
-                vec![controller(3, all), voters(&[1, 3, 4])],
-                "group.version",
-                1,
-                Some("controller 4 has not registered, and may not support this feature"),
-            ),
-        ];
-        for (case, metadata_version, records, feature, level, want) in cases {
-            let mut image = image(metadata_version);
-            for record in &records {
-                image.apply(record);
-            }
-            assert!(
-                reason_not_supported(&image, LOCAL, feature, level).as_deref() == want,
-                "{case}"
-            );
-        }
     }
 
     #[yare::parameterized(

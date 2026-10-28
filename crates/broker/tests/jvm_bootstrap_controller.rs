@@ -122,10 +122,9 @@ async fn start_host_broker_with(adjust: impl FnOnce(&mut BrokerConfig)) -> Start
 
 /// Run one Kafka admin tool with `--bootstrap-controller <controller>` from
 /// the oracle container, which reaches the host through
-/// `--add-host=host.docker.internal:host-gateway`. Returns its stdout, and
-/// fails the test with the captured output when the tool exits non-zero --
-/// which is what a routing gap looks like from inside the JVM.
-fn kafka_tool(tool: &str, args: &[&str]) -> String {
+/// `--add-host=host.docker.internal:host-gateway`. Captures stdout, stderr
+/// and status so each scenario can check its observed controller result.
+fn kafka_tool(tool: &str, args: &[&str]) -> Output {
     let binary = format!("/opt/kafka/bin/{tool}.sh");
     let mut full: Vec<&str> = vec![
         "run",
@@ -147,29 +146,55 @@ fn kafka_tool(tool: &str, args: &[&str]) -> String {
         "KRABKA[test] {tool} {args:?} status={}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status,
     );
-    check!(
-        output.status.success(),
-        "{tool} {args:?} failed: stdout={stdout} stderr={stderr}"
-    );
-    stdout
+    output
 }
 
-/// `kafka-configs --bootstrap-controller --entity-type brokers`: `--alter`
-/// writes a dynamic config through `IncrementalAlterConfigs` (44) and
-/// `--describe` reads it back through `DescribeConfigs` (32), both over the
-/// controller listener with no broker endpoint configured anywhere.
-///
-/// The KIP-73 replication throttle is the config under test because krabka
-/// takes that one per broker; the cluster-wide keys would name a different
-/// resource and exercise the same two api keys.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config() {
-    const THROTTLE: &str = "leader.replication.throttled.rate=1048576";
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+};
+const THROTTLE: &str = "leader.replication.throttled.rate=1048576";
+const ACL_TOPIC: &str = "controller-acl-topic";
+struct ControllerAdministration {
+    broker: Option<StartedBroker>,
+    commands: Vec<Output>,
+    capability: Option<Output>,
+    image: Option<&'static str>,
+}
+#[fixture]
+fn admin() -> ControllerAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-    let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
-
-    kafka_tool("kafka-configs", &[
+    ControllerAdministration {
+        broker: None,
+        commands: Vec::new(),
+        capability: None,
+        image: None,
+    }
+}
+#[given("a broker exposes its live controller administration listener")]
+async fn controller(admin: &mut ControllerAdministration) {
+    admin.broker = Some(start_host_broker_with(|_| {}).await);
+}
+#[given("the live controller listener authorizes its ANONYMOUS principal as an ACL administrator")]
+async fn authorized_controller(admin: &mut ControllerAdministration) {
+    admin.broker = Some(
+        start_host_broker_with(|config| {
+            config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+                iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect(),
+            ));
+        })
+        .await,
+    );
+}
+#[given("the pinned stock Kafka distribution provides the topic administration tool")]
+fn pinned_tool(admin: &mut ControllerAdministration) { admin.image = Some(KAFKA_IMAGE); }
+#[when(
+    "the operator sets broker one's replication throttle and reads it back through the controller"
+)]
+fn throttle(admin: &mut ControllerAdministration) {
+    admin.commands.push(kafka_tool("kafka-configs", &[
         "--entity-type",
         "brokers",
         "--entity-name",
@@ -177,57 +202,69 @@ async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config(
         "--alter",
         "--add-config",
         THROTTLE,
-    ]);
-    let described = kafka_tool("kafka-configs", &[
+    ]));
+    admin.commands.push(kafka_tool("kafka-configs", &[
         "--entity-type",
         "brokers",
         "--entity-name",
         "1",
         "--describe",
-    ]);
-
-    check!(
-        described.contains(THROTTLE),
-        "describe missing the dynamic config just written: {described}"
-    );
-    broker.shutdown().await;
+    ]));
 }
-
-/// `kafka-acls --bootstrap-controller` end to end: `--add`, `--list`,
-/// `--remove`, then `--list` again. That is `CreateAcls` (30), `DescribeAcls`
-/// (29) and `DeleteAcls` (31) routed over the controller listener, which is
-/// the add/read/delete lifecycle KIP-919 exists to keep available when no
-/// broker is reachable.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_acls_bootstrap_controller_add_list_remove() {
-    const TOPIC: &str = "controller-acl-topic";
-
-    let StartedBroker { broker, dir: _dir } = start_host_broker_with(|config| {
-        // The PLAINTEXT controller listener carries `ANONYMOUS`, so that
-        // principal is the super user, as Kafka's docs set it up.
-        config.authorizer = Arc::new(SimpleAclAuthorizer::new(
-            iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect(),
-        ));
-    })
-    .await;
-
-    kafka_tool("kafka-acls", &[
+fn successful(commands: &[Output]) {
+    check!(!commands.is_empty());
+    for output in commands {
+        check!(
+            output.status.success(),
+            "controller tool failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+#[then("the successful controller config report contains the written replication throttle")]
+fn throttle_read(admin: &ControllerAdministration) {
+    successful(&admin.commands);
+    let stdout = String::from_utf8_lossy(
+        &admin
+            .commands
+            .last()
+            .expect("config report captured")
+            .stdout,
+    );
+    check!(
+        stdout.contains(THROTTLE),
+        "describe missing dynamic config: {stdout}"
+    );
+}
+#[when("the controller ACL tool adds alice's Read binding and lists the topic")]
+fn add_acl(admin: &mut ControllerAdministration) {
+    admin.commands.push(kafka_tool("kafka-acls", &[
         "--add",
         "--allow-principal",
         "User:alice",
         "--operation",
         "Read",
         "--topic",
-        TOPIC,
-    ]);
-    let listed = kafka_tool("kafka-acls", &["--list", "--topic", TOPIC]);
+        ACL_TOPIC,
+    ]));
+    admin
+        .commands
+        .push(kafka_tool("kafka-acls", &["--list", "--topic", ACL_TOPIC]));
+}
+#[then("the successful controller ACL listing contains alice's Read grant")]
+fn acl_present(admin: &ControllerAdministration) {
+    successful(&admin.commands);
+    let stdout =
+        String::from_utf8_lossy(&admin.commands.last().expect("ACL report captured").stdout);
     check!(
-        listed.contains("User:alice") && listed.contains("READ"),
-        "list missing the ACL just written: {listed}"
+        stdout.contains("User:alice") && stdout.contains("READ"),
+        "list missing ACL: {stdout}"
     );
-
-    kafka_tool("kafka-acls", &[
+}
+#[when("the controller ACL tool removes alice's binding and lists the topic again")]
+fn remove_acl(admin: &mut ControllerAdministration) {
+    admin.commands.push(kafka_tool("kafka-acls", &[
         "--remove",
         "--force",
         "--allow-principal",
@@ -235,100 +272,163 @@ async fn kafka_acls_bootstrap_controller_add_list_remove() {
         "--operation",
         "Read",
         "--topic",
-        TOPIC,
-    ]);
-    let remaining = kafka_tool("kafka-acls", &["--list", "--topic", TOPIC]);
-
-    check!(
-        !remaining.contains("User:alice"),
-        "the ACL survived the remove: {remaining}"
-    );
-    broker.shutdown().await;
+        ACL_TOPIC,
+    ]));
+    admin
+        .commands
+        .push(kafka_tool("kafka-acls", &["--list", "--topic", ACL_TOPIC]));
 }
-
-/// `kafka-reassign-partitions --bootstrap-controller --list` reaches
-/// `ListPartitionReassignments` (46) on the controller listener and reports an
-/// empty set rather than a disconnect.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_reassign_partitions_bootstrap_controller_lists() {
-    let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
-
-    let listed = kafka_tool("kafka-reassign-partitions", &["--list"]);
-
+#[then("the successful controller ACL listing no longer contains alice")]
+fn acl_absent(admin: &ControllerAdministration) {
+    successful(&admin.commands);
+    let stdout =
+        String::from_utf8_lossy(&admin.commands.last().expect("ACL report captured").stdout);
     check!(
-        listed.contains("No partition reassignments found."),
-        "unexpected reassignment listing: {listed}"
+        !stdout.contains("User:alice"),
+        "ACL survived removal: {stdout}"
     );
-    broker.shutdown().await;
 }
-
-/// `kafka-topics` carries no `--bootstrap-controller` option in the pinned
-/// oracle image, which is why the topic lifecycle is proved on the controller
-/// listener by `controller_admin_surface` rather than by this suite. Pinning
-/// it here keeps the reason checkable rather than a comment: if a later Kafka
-/// grows the option, this case fails and the suite gains a real end-to-end
-/// topic test.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_has_no_bootstrap_controller_option() {
-    let output = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            KAFKA_IMAGE,
-            "/opt/kafka/bin/kafka-topics.sh",
-            "--bootstrap-controller",
-            "127.0.0.1:1",
-            "--list",
-        ])
-        .output()
-        .expect("spawn docker run kafka-topics");
+#[when("the operator lists reassignments through the controller listener")]
+fn reassignments(admin: &mut ControllerAdministration) {
+    admin
+        .commands
+        .push(kafka_tool("kafka-reassign-partitions", &["--list"]));
+}
+#[then("the successful controller report says no partition reassignments exist")]
+fn no_reassignments(admin: &ControllerAdministration) {
+    successful(&admin.commands);
+    let stdout = String::from_utf8_lossy(
+        &admin
+            .commands
+            .last()
+            .expect("reassignment report captured")
+            .stdout,
+    );
+    check!(
+        stdout.contains("No partition reassignments found."),
+        "unexpected reassignment report: {stdout}"
+    );
+}
+#[when("the operator asks kafka topics to list through bootstrap controller")]
+fn topic_capability(admin: &mut ControllerAdministration) {
+    admin.capability = Some(
+        Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                admin.image.expect("pinned topic tool selected"),
+                "/opt/kafka/bin/kafka-topics.sh",
+                "--bootstrap-controller",
+                "127.0.0.1:1",
+                "--list",
+            ])
+            .output()
+            .expect("spawn docker run kafka-topics"),
+    );
+}
+#[then("the pinned topic tool reports that bootstrap controller is not a recognized option")]
+fn unsupported(admin: &ControllerAdministration) {
+    let output = admin
+        .capability
+        .as_ref()
+        .expect("topic capability probe completed");
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stderr)
     );
-
     check!(
         combined.contains("bootstrap-controller is not a recognized option"),
-        "kafka-topics grew a --bootstrap-controller option: {combined}"
+        "topic tool option changed: {combined}"
     );
 }
-
-/// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
-/// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
-/// routed over the controller listener.
-///
-/// KIP-919 names feature management as a thing an operator must be able to do
-/// with no broker reachable -- a cluster whose brokers will not start because
-/// of a finalized feature level is exactly when this matters, and it is the
-/// only tool of the three offering `--bootstrap-controller` that had no
-/// container test driving it that way.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
-    let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
-
-    let described = kafka_tool("kafka-features", &["describe"]);
-    let before = support::jvm_finalized_level(&described, "transaction.version");
-    check!(
-        before == Some(2),
-        "expected transaction.version finalized at 2 before the downgrade, got {before:?}: {described}"
+#[when("the operator describes finalized features through the controller listener")]
+fn features(admin: &mut ControllerAdministration) {
+    admin
+        .commands
+        .push(kafka_tool("kafka-features", &["describe"]));
+}
+#[then("the successful controller report finalizes transaction version at {version}")]
+fn finalized(admin: &ControllerAdministration, version: i64) {
+    successful(&admin.commands);
+    let stdout = String::from_utf8_lossy(
+        &admin
+            .commands
+            .last()
+            .expect("feature report captured")
+            .stdout,
     );
-
-    kafka_tool("kafka-features", &[
+    check!(
+        support::jvm_finalized_level(&stdout, "transaction.version") == Some(version),
+        "unexpected feature report: {stdout}"
+    );
+}
+#[when("the operator downgrades transaction version to one through the controller listener")]
+fn downgrade(admin: &mut ControllerAdministration) {
+    admin.commands.push(kafka_tool("kafka-features", &[
         "downgrade",
         "--feature",
         "transaction.version=1",
         "--unsafe",
-    ]);
+    ]));
+}
+async fn shutdown(admin: ControllerAdministration) {
+    if let Some(StartedBroker { broker, dir }) = admin.broker {
+        broker.shutdown().await;
+        drop(dir);
+    }
+}
 
-    let after_out = kafka_tool("kafka-features", &["describe"]);
-    let after = support::jvm_finalized_level(&after_out, "transaction.version");
-    check!(
-        after == Some(1),
-        "downgrade did not move transaction.version over the controller listener, got {after:?}: {after_out}"
-    );
-    broker.shutdown().await;
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "Dynamic broker configuration round trips through the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config(
+    admin: ControllerAdministration,
+) {
+    shutdown(admin).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "ACL administration completes its lifecycle through the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_acls_bootstrap_controller_add_list_remove(admin: ControllerAdministration) {
+    shutdown(admin).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "Reassignment inspection reaches the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_reassign_partitions_bootstrap_controller_lists(admin: ControllerAdministration) {
+    shutdown(admin).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "The stock topic tool explicitly lacks controller bootstrap support"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_has_no_bootstrap_controller_option(admin: ControllerAdministration) {
+    shutdown(admin).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "Finalized features can be changed through the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_features_bootstrap_controller_describes_and_downgrades(
+    admin: ControllerAdministration,
+) {
+    shutdown(admin).await;
 }

@@ -455,49 +455,6 @@ mod tests {
         member_epoch: i32,
     }
 
-    #[test]
-    fn state_name_follows_kafka_consumer_group_state() {
-        let at = |epoch, assignment_state| {
-            let mut m = member("m1");
-            m.member_epoch = epoch;
-            m.assignment_state = assignment_state;
-            m
-        };
-        // (group epoch, target epoch, members, expected state)
-        let rows = [
-            (3, 3, vec![], "Empty"),
-            (4, 3, vec![], "Empty"),
-            (
-                4,
-                3,
-                vec![at(3, MemberAssignmentState::Stable)],
-                "Assigning",
-            ),
-            (
-                3,
-                3,
-                vec![at(2, MemberAssignmentState::Stable)],
-                "Reconciling",
-            ),
-            (
-                3,
-                3,
-                vec![at(3, MemberAssignmentState::UnreleasedPartitions)],
-                "Reconciling",
-            ),
-            (3, 3, vec![at(3, MemberAssignmentState::Stable)], "Stable"),
-        ];
-        for (group_epoch, target_epoch, members, expected) in rows {
-            let mut g = GroupState::new("g");
-            g.group_epoch = group_epoch;
-            g.target.epoch = target_epoch;
-            for m in members {
-                g.members.insert(m.member_id.clone(), m);
-            }
-            assert!(g.state_name() == expected);
-        }
-    }
-
     const T: Uuid = Uuid([1; 16]);
 
     /// One row of issue #800's table: the committing member's protocol, the
@@ -505,16 +462,6 @@ mod tests {
     /// holds `native` and `classic`, both at member epoch 5, each assigned
     /// partition 0 at epoch 3, partition 1 at epoch 5, and partition 2 pending
     /// revocation from epoch 2.
-    struct CommitRow {
-        name: &'static str,
-        member_id: &'static str,
-        instance_id: Option<&'static str>,
-        epoch: i32,
-        fence: CommitFence,
-        partitions: &'static [i32],
-        result: Result<(), i16>,
-    }
-
     fn commit_group(empty: bool) -> GroupState {
         let mut g = GroupState::new("g");
         if empty {
@@ -536,221 +483,9 @@ mod tests {
     }
 
     // The rows of `offset_commit_follows_kafka_consumer_group_rule`.
-    fn commit_rows() -> Vec<CommitRow> {
-        const V9: CommitFence = CommitFence::Offset { api_version: 9 };
-        const TXN: CommitFence = CommitFence::Transactional;
-        let row = |name, member_id, epoch, fence, partitions, result| CommitRow {
-            name,
-            member_id,
-            instance_id: None,
-            epoch,
-            fence,
-            partitions,
-            result,
-        };
-        vec![
-            row("native, member epoch", "native", 5, V9, &[0, 1, 3], Ok(())),
-            row(
-                "native, newer epoch",
-                "native",
-                6,
-                V9,
-                &[0],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "native, older epoch, assigned before it",
-                "native",
-                4,
-                V9,
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "native, older epoch, pending since before it",
-                "native",
-                4,
-                V9,
-                &[2],
-                Ok(()),
-            ),
-            row(
-                "native, older epoch, assigned at it",
-                "native",
-                3,
-                V9,
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "native, older epoch, assigned after it",
-                "native",
-                4,
-                V9,
-                &[1],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "native, older epoch, not assigned",
-                "native",
-                4,
-                V9,
-                &[3],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "native, older epoch, one partition refused",
-                "native",
-                4,
-                V9,
-                &[0, 1],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "native, older epoch, no partition",
-                "native",
-                4,
-                V9,
-                &[],
-                Ok(()),
-            ),
-            row(
-                "native, v8",
-                "native",
-                5,
-                CommitFence::Offset { api_version: 8 },
-                &[0],
-                Err(codes::UNSUPPORTED_VERSION),
-            ),
-            row(
-                "classic, v8",
-                "classic",
-                5,
-                CommitFence::Offset { api_version: 8 },
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "classic, newer generation",
-                "classic",
-                6,
-                V9,
-                &[0],
-                Err(codes::ILLEGAL_GENERATION),
-            ),
-            row(
-                "classic, older generation, assigned before it",
-                "classic",
-                4,
-                V9,
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "classic, older generation, assigned after it",
-                "classic",
-                4,
-                V9,
-                &[1],
-                Err(codes::ILLEGAL_GENERATION),
-            ),
-            row(
-                "classic, older generation, not assigned",
-                "classic",
-                4,
-                V9,
-                &[3],
-                Err(codes::ILLEGAL_GENERATION),
-            ),
-            row(
-                "admin, group with members",
-                "",
-                -1,
-                V9,
-                &[0],
-                Err(codes::UNKNOWN_MEMBER_ID),
-            ),
-            row(
-                "unknown member",
-                "ghost",
-                5,
-                V9,
-                &[0],
-                Err(codes::UNKNOWN_MEMBER_ID),
-            ),
-            row("txn, no group metadata", "", -1, TXN, &[0], Ok(())),
-            row(
-                "txn, native, v8 is not checked",
-                "native",
-                5,
-                TXN,
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "txn, native, older epoch, assigned before it",
-                "native",
-                4,
-                TXN,
-                &[0],
-                Ok(()),
-            ),
-            row(
-                "txn, native, older epoch, assigned after it",
-                "native",
-                4,
-                TXN,
-                &[1],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "txn, native, newer epoch",
-                "native",
-                6,
-                TXN,
-                &[0],
-                Err(codes::STALE_MEMBER_EPOCH),
-            ),
-            row(
-                "txn, classic, older generation, not assigned",
-                "classic",
-                4,
-                TXN,
-                &[3],
-                Err(codes::ILLEGAL_GENERATION),
-            ),
-            CommitRow {
-                instance_id: Some("i1"),
-                ..row(
-                    "txn, instance id and no member",
-                    "",
-                    -1,
-                    TXN,
-                    &[0],
-                    Err(codes::UNKNOWN_MEMBER_ID),
-                )
-            },
-        ]
-    }
 
     /// Kafka 4.3.1's `ConsumerGroup.validateOffsetCommit` and
     /// `createAssignmentEpochValidator`, row by row.
-    #[test]
-    fn offset_commit_follows_kafka_consumer_group_rule() {
-        let rows = commit_rows();
-        let g = commit_group(false);
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for r in &rows {
-            let partitions: Vec<(Uuid, i32)> = r.partitions.iter().map(|&p| (T, p)).collect();
-            let got =
-                g.validate_offset_commit(r.member_id, r.instance_id, r.epoch, r.fence, &partitions);
-            actual.push((r.name, got));
-            expected.push((r.name, r.result));
-        }
-        assert!(actual == expected);
-    }
-
     /// A group with no members takes a commit with a negative epoch from
     /// anyone, at any version, and refuses any other.
     #[test]
@@ -785,69 +520,6 @@ mod tests {
     /// is granted it, keeps the epoch of a partition it keeps or moves to
     /// pending revocation, and drops the epoch of a partition it gives up.
     /// A static member that leaves for a while keeps its partitions at epoch 0.
-    #[test]
-    fn assignment_epochs_follow_kafka_current_assignment_builder() {
-        struct ReconciliationStep {
-            epoch: i32,
-            target: Vec<i32>,
-            owned: Vec<i32>,
-        }
-
-        fn reconcile_step(g: &mut GroupState, topics: &Topics, step: ReconciliationStep) {
-            g.group_epoch = step.epoch;
-            g.install_target([("m1".to_owned(), [(T, step.target)].into())].into());
-            g.reconcile_member("m1", Some(&[(T, step.owned)].into()), false, topics);
-        }
-
-        let mut g = GroupState::new("g");
-        let topics = Topics(vec![NamedTopic { name: "t", id: T }]);
-        g.add_or_update_member(subscribed_member("m1", &["t"]));
-        let epochs = |g: &GroupState| sorted_epoch_pairs(g.members["m1"].assignment_epochs.get(&T));
-        let mut steps = Vec::new();
-
-        // Epoch 1: granted partitions 0 and 1.
-        g.group_epoch = 1;
-        g.install_target([("m1".to_owned(), [(T, vec![0, 1])].into())].into());
-        g.reconcile_member("m1", Some(&HashMap::new()), true, &topics);
-        steps.push(epochs(&g));
-
-        // Epoch 2: partition 1 goes. The member still owns it, so it is
-        // pending revocation with the epoch it was assigned at.
-        reconcile_step(&mut g, &topics, ReconciliationStep {
-            epoch: 2,
-            target: vec![0],
-            owned: vec![0, 1],
-        });
-        steps.push(epochs(&g));
-
-        // The member revokes it and moves to epoch 2.
-        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false, &topics);
-        steps.push(epochs(&g));
-
-        // Epoch 3: partition 2 comes, at epoch 3; partition 0 keeps epoch 1.
-        reconcile_step(&mut g, &topics, ReconciliationStep {
-            epoch: 3,
-            target: vec![0, 2],
-            owned: vec![0],
-        });
-        steps.push(epochs(&g));
-
-        // A static leave keeps the assignment at epoch 0.
-        g.release_static_member("m1");
-        steps.push(epochs(&g));
-
-        assert!(
-            steps
-                == vec![
-                    vec![(0, 1), (1, 1)],
-                    vec![(0, 1), (1, 1)],
-                    vec![(0, 1)],
-                    vec![(0, 1), (2, 3)],
-                    vec![(0, 0), (2, 0)],
-                ]
-        );
-    }
-
     #[test]
     fn the_assignment_interval_holds_the_next_assignment_back() {
         let assigned_at = 1_000_000;
@@ -1074,5 +746,179 @@ mod tests {
         let m = &g.members["m1"];
         assert!(m.member_epoch == 5);
         assert!(m.previous_member_epoch == 0);
+    }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct ConsumerBehavior {
+        group: Option<GroupState>,
+        state_name: Option<String>,
+        commit: Option<Result<(), i16>>,
+    }
+    #[rstest::fixture]
+    fn consumer_group() -> ConsumerBehavior {
+        // Start this scenario with fresh inputs and observations.
+        ConsumerBehavior::default()
+    }
+    #[given(
+        "a consumer group at epoch {epoch} target epoch {target} has member epoch {member_epoch} in state {state}"
+    )]
+    fn consumer_group_state(
+        consumer_group: &mut ConsumerBehavior,
+        epoch: i32,
+        target: i32,
+        member_epoch: String,
+        state: String,
+    ) {
+        let mut group = GroupState::new("g");
+        group.group_epoch = epoch;
+        group.target.epoch = target;
+        if member_epoch != "absent" {
+            let mut member = member("m1");
+            member.member_epoch = member_epoch.parse().expect("member epoch");
+            member.assignment_state = match state.as_str() {
+                "stable" => MemberAssignmentState::Stable,
+                "unreleased" => MemberAssignmentState::UnreleasedPartitions,
+                _ => panic!("unknown member state"),
+            };
+            group.members.insert(member.member_id.clone(), member);
+        }
+        consumer_group.group = Some(group);
+    }
+    #[when("the coordinator describes the consumer group state")]
+    fn describe_consumer_state(consumer_group: &mut ConsumerBehavior) {
+        consumer_group.state_name = Some(
+            consumer_group
+                .group
+                .as_ref()
+                .expect("group prepared")
+                .state_name()
+                .to_owned(),
+        );
+    }
+    #[then("the consumer group state is {state}")]
+    fn consumer_group_state_name(consumer_group: &ConsumerBehavior, state: String) {
+        assert!(consumer_group.state_name.as_ref() == Some(&state));
+    }
+    #[given(
+        "native and classic members at epoch 5 own partition 0 since epoch 3 partition 1 since epoch 5 and revoke partition 2 since epoch 2"
+    )]
+    fn consumer_commit_members(consumer_group: &mut ConsumerBehavior) {
+        consumer_group.group = Some(commit_group(false));
+    }
+    fn partition_numbers(value: &str) -> Vec<i32> {
+        if value == "none" {
+            vec![]
+        } else {
+            value
+                .split(',')
+                .map(|number| number.parse().expect("partition number"))
+                .collect()
+        }
+    }
+    #[when(
+        "member {member} instance {instance} commits at epoch {epoch} using {fence} for partitions {partitions}"
+    )]
+    fn consumer_commit_request(
+        consumer_group: &mut ConsumerBehavior,
+        member: String,
+        instance: String,
+        epoch: i32,
+        fence: String,
+        partitions: String,
+    ) {
+        let member = if member == "empty" { "" } else { &member };
+        let instance = if instance == "absent" {
+            None
+        } else {
+            Some(instance.as_str())
+        };
+        let fence = match fence.as_str() {
+            "offset-v9" => CommitFence::Offset { api_version: 9 },
+            "offset-v8" => CommitFence::Offset { api_version: 8 },
+            "transactional" => CommitFence::Transactional,
+            _ => panic!("unknown commit fence"),
+        };
+        let partitions = partition_numbers(&partitions)
+            .into_iter()
+            .map(|partition| (T, partition))
+            .collect::<Vec<_>>();
+        consumer_group.commit = Some(
+            consumer_group
+                .group
+                .as_ref()
+                .expect("group prepared")
+                .validate_offset_commit(member, instance, epoch, fence, &partitions),
+        );
+    }
+    #[then("the offset commit returns Kafka error code {code}")]
+    fn consumer_commit_result(consumer_group: &ConsumerBehavior, code: i16) {
+        assert!(consumer_group.commit == Some(if code == 0 { Ok(()) } else { Err(code) }));
+    }
+    #[given("consumer member m1 subscribes to topic t before any assignment")]
+    fn unassigned_consumer_member(consumer_group: &mut ConsumerBehavior) {
+        let mut group = GroupState::new("g");
+        group.add_or_update_member(subscribed_member("m1", &["t"]));
+        consumer_group.group = Some(group);
+    }
+    #[when(
+        "target epoch {epoch} assigns partitions {target} and m1 reports owned partitions {owned} joining {joining}"
+    )]
+    fn consumer_partition_reconciliation(
+        consumer_group: &mut ConsumerBehavior,
+        epoch: i32,
+        target: String,
+        owned: String,
+        joining: bool,
+    ) {
+        let group = consumer_group.group.as_mut().expect("group prepared");
+        let topics = Topics(vec![NamedTopic { name: "t", id: T }]);
+        group.group_epoch = epoch;
+        group.install_target([("m1".to_owned(), [(T, partition_numbers(&target))].into())].into());
+        let owned = if owned == "none" {
+            HashMap::new()
+        } else {
+            [(T, partition_numbers(&owned))].into()
+        };
+        group.reconcile_member("m1", Some(&owned), joining, &topics);
+    }
+    #[when("m1 reports revoking partition 1 while retaining partition 0")]
+    fn consumer_finishes_revocation(consumer_group: &mut ConsumerBehavior) {
+        let topics = Topics(vec![NamedTopic { name: "t", id: T }]);
+        consumer_group
+            .group
+            .as_mut()
+            .expect("group prepared")
+            .reconcile_member("m1", Some(&[(T, vec![0])].into()), false, &topics);
+    }
+    #[when("m1 temporarily leaves as a static member")]
+    fn consumer_static_release(consumer_group: &mut ConsumerBehavior) {
+        consumer_group
+            .group
+            .as_mut()
+            .expect("group prepared")
+            .release_static_member("m1");
+    }
+    #[then("the partition assignment epochs are {epochs}")]
+    fn consumer_partition_epochs(consumer_group: &ConsumerBehavior, epochs: String) {
+        let expected = epochs
+            .split(',')
+            .map(|pair| {
+                let (partition, epoch) = pair.split_once(':').expect("partition:epoch");
+                (
+                    partition.parse::<i32>().expect("partition"),
+                    epoch.parse::<i32>().expect("assignment epoch"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let group = consumer_group.group.as_ref().expect("group prepared");
+        assert!(sorted_epoch_pairs(group.members["m1"].assignment_epochs.get(&T)) == expected);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/consumer_state/group.feature",tags="not @commit-coverage-reference",fixtures=[consumer_group:ConsumerBehavior]);
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/consumer_state/group.feature",
+        name = "Offset commits enforce member generation and per-partition assignment epoch fences (1: member native, instance absent)"
+    )]
+    fn offset_commit_follows_kafka_consumer_group_rule(consumer_group: ConsumerBehavior) {
+        let _ = consumer_group;
     }
 }

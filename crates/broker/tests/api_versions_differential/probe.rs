@@ -82,7 +82,7 @@ mod tests {
         super::{retry_until, wait_bounded},
         assert2::assert,
         std::{
-            process::{Child, Command, Stdio},
+            process::{Child, Command, ExitStatus, Stdio},
             thread,
             time::{Duration, Instant},
         },
@@ -98,82 +98,128 @@ mod tests {
             .expect("spawn sh")
     }
 
-    #[yare::parameterized(
-        success = { "exit 0", true },
-        failure = { "exit 3", false },
-    )]
-    fn a_child_that_exits_in_time_reports_its_status(script: &str, expected_success: bool) {
-        let mut child = spawn(script);
-        let status = wait_bounded(&mut child, Duration::from_secs(30));
-        assert2::assert!(status.map(|status| status.success()) == Some(expected_success));
+    struct ProbeBudget {
+        child: Option<Child>,
+        status: rstest_bdd::Slot<Option<ExitStatus>>,
+        elapsed: Option<Duration>,
+        budget: Duration,
+        ready_after: Option<u32>,
+        blocks: bool,
+        seen: u32,
+        attempts: Option<Result<u32, u32>>,
     }
+    #[rstest::fixture]
+    fn probe() -> ProbeBudget {
+        // Start this scenario with fresh inputs and observations.
 
-    #[test]
-    fn a_child_that_outruns_its_budget_is_killed_and_reaped() {
-        let mut child = spawn("sleep 300");
+        ProbeBudget {
+            child: None,
+            status: rstest_bdd::Slot::default(),
+            elapsed: None,
+            budget: Duration::ZERO,
+            ready_after: None,
+            blocks: false,
+            seen: 0,
+            attempts: None,
+        }
+    }
+    #[rstest_bdd_macros::given("a child process executing {script}")]
+    fn probe_child(probe: &mut ProbeBudget, script: String) { probe.child = Some(spawn(&script)); }
+    #[rstest_bdd_macros::given("the child has already exited")]
+    fn probe_child_exited(probe: &mut ProbeBudget) {
+        probe
+            .child
+            .as_mut()
+            .expect("child spawned")
+            .wait()
+            .expect("wait on child process");
+    }
+    #[rstest_bdd_macros::when("the child is waited on with a {millis} millisecond budget")]
+    fn bounded_child_wait(probe: &mut ProbeBudget, millis: u64) {
         let started = Instant::now();
-        let status = wait_bounded(&mut child, Duration::from_millis(200));
-        let elapsed = started.elapsed();
-
-        assert!(status.is_none());
-        assert!(elapsed < Duration::from_secs(30));
-        // The child was reaped inside the call, so its status is already known
-        // and no process is left behind.
-        assert!(child.try_wait().expect("wait on child process").is_some());
+        probe.status.set(wait_bounded(
+            probe.child.as_mut().expect("child spawned"),
+            Duration::from_millis(millis),
+        ));
+        probe.elapsed = Some(started.elapsed());
     }
-
-    #[test]
-    fn a_zero_budget_still_reports_a_child_that_has_already_exited() {
-        let mut child = spawn("exit 0");
-        child.wait().expect("wait on child process");
-
-        let status = wait_bounded(&mut child, Duration::ZERO);
-
-        assert!(status.map(|status| status.success()) == Some(true));
+    #[rstest_bdd_macros::then("the child reports successful exit {successful}")]
+    fn probe_exit_status(probe: &ProbeBudget, successful: bool) {
+        let status = probe.status.get().expect("child waited on");
+        assert!(status.map(|status| status.success()) == Some(successful));
     }
-
-    #[test]
-    fn readiness_stops_at_the_first_ready_probe() {
-        let mut seen = 0;
-        let attempts = retry_until(Duration::from_secs(30), Duration::ZERO, |_| {
-            seen += 1;
-            seen == 3
-        });
-
-        assert!(attempts == Ok(3));
-        assert!(seen == 3);
-    }
-
-    #[test]
-    fn a_probe_that_blocks_cannot_outlive_the_deadline() {
-        let budget = Duration::from_millis(300);
-        let started = Instant::now();
-        // The probe spends every bit of budget it is handed and never reports
-        // ready, which is how an unresponsive broker behaves: without the
-        // remaining budget reaching it, one attempt alone would outlast the
-        // whole wait.
-        let attempts = retry_until(budget, Duration::from_millis(10), |remaining| {
-            thread::sleep(remaining);
-            false
-        });
-        let elapsed = started.elapsed();
-
-        assert!(attempts.is_err());
-        assert!(elapsed < budget * 10);
-    }
-
-    #[test]
-    fn a_probe_that_never_reports_ready_gives_up_at_the_deadline() {
-        let started = Instant::now();
-        let attempts = retry_until(
-            Duration::from_millis(200),
-            Duration::from_millis(20),
-            |_| false,
+    #[rstest_bdd_macros::then("the overrun child is killed and reaped within 30 seconds")]
+    fn overrun_child_reaped(probe: &mut ProbeBudget) {
+        assert!(probe.status.get().expect("child waited on").is_none());
+        assert!(probe.elapsed.expect("wait measured") < Duration::from_secs(30));
+        assert!(
+            probe
+                .child
+                .as_mut()
+                .expect("child spawned")
+                .try_wait()
+                .expect("wait on child process")
+                .is_some()
         );
-        let elapsed = started.elapsed();
-
-        assert!(attempts.is_err());
+    }
+    #[rstest_bdd_macros::given("a readiness probe that becomes ready on attempt {attempt}")]
+    fn eventual_readiness(probe: &mut ProbeBudget, attempt: u32) {
+        probe.ready_after = Some(attempt);
+    }
+    #[rstest_bdd_macros::given("a readiness probe that never becomes ready")]
+    fn unavailable_probe(probe: &mut ProbeBudget) { probe.ready_after = None; }
+    #[rstest_bdd_macros::given("each probe blocks for all its remaining budget")]
+    fn blocking_probe(probe: &mut ProbeBudget) { probe.blocks = true; }
+    #[rstest_bdd_macros::when(
+        "readiness is retried for {millis} milliseconds with a {gap} millisecond gap"
+    )]
+    fn retry_probe(probe: &mut ProbeBudget, millis: u64, gap: u64) {
+        probe.budget = Duration::from_millis(millis);
+        let started = Instant::now();
+        let ready_after = probe.ready_after;
+        let blocks = probe.blocks;
+        let seen = &mut probe.seen;
+        probe.attempts = Some(retry_until(
+            probe.budget,
+            Duration::from_millis(gap),
+            |remaining| {
+                *seen += 1;
+                if blocks {
+                    thread::sleep(remaining);
+                }
+                ready_after == Some(*seen)
+            },
+        ));
+        probe.elapsed = Some(started.elapsed());
+    }
+    #[rstest_bdd_macros::then("readiness succeeds after exactly {attempts} attempts")]
+    fn ready_attempt_count(probe: &ProbeBudget, attempts: u32) {
+        assert!(probe.attempts == Some(Ok(attempts)));
+        assert!(probe.seen == attempts);
+    }
+    #[rstest_bdd_macros::then("the blocking probe exhausts its budget within ten budgets")]
+    fn blocking_deadline(probe: &ProbeBudget) {
+        assert!(
+            probe
+                .attempts
+                .as_ref()
+                .expect("readiness attempted")
+                .is_err()
+        );
+        assert!(probe.elapsed.expect("retry measured") < probe.budget * 10);
+    }
+    #[rstest_bdd_macros::then("readiness fails at the deadline within 30 seconds")]
+    fn readiness_deadline(probe: &ProbeBudget) {
+        assert!(
+            probe
+                .attempts
+                .as_ref()
+                .expect("readiness attempted")
+                .is_err()
+        );
+        let elapsed = probe.elapsed.expect("retry measured");
         assert!(elapsed >= Duration::from_millis(200));
         assert!(elapsed < Duration::from_secs(30));
     }
+    rstest_bdd_macros::scenarios!("tests/features/migrated/tests/api_versions_differential/probe.feature", fixtures = [probe: ProbeBudget]);
 }

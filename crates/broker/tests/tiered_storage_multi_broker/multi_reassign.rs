@@ -24,9 +24,7 @@
 use {
     crate::{
         multi_client::topic_id_for,
-        multi_cluster::{
-            controller_leader_addr, ready_admin, start_three_tiered_brokers_with_segment_sizes,
-        },
+        multi_cluster::{TieredCluster, controller_leader_addr, ready_admin, start_tiered_cluster},
         multi_workload::local_segment_bases,
         support::{
             client::connect_owned,
@@ -142,49 +140,90 @@ async fn reassign_to(controller: &Client, replicas: Vec<i32>) {
     );
 }
 
-/// A replica added to a tiered partition inherits the archive by reference,
-/// not by copy.
-///
-/// Broker 1 archives 400 records over many 1 KiB segments and evicts every one
-/// of them locally, so its log begins far above zero and everything below that
-/// exists only in the shared object store. Broker 3 is then added as a
-/// replica. It starts from an empty log at offset 0, which is squarely inside
-/// the band the leader keeps only in the tier.
-///
-/// What it must do is restart at the leader's local log start and replicate
-/// forward from there.
-///
-/// The measurement that says so is the cumulative
-/// `replication_bytes_in` counter on the new replica: it has to stay below the
-/// size of the archive. That is the one number a later eviction cannot
-/// flatter, and it is exactly what fails when the leader serves the follower
-/// out of the tier instead -- the replica then pulls every archived byte over
-/// the wire and drops it again on its next local-retention tick, so its disk
-/// and its log start end up looking just as they do here. The disk and
-/// log-start checks below hold the rest of the shape: the replica's log begins
-/// at or above the leader's local log start and its files are bounded by local
-/// retention.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
-    let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers_with_segment_sizes([
-        krabka_units::kibibytes(1),
-        krabka_units::kibibytes(1),
-        krabka_units::kibibytes(1),
-    ])
+#[derive(Default)]
+struct TieredReassignment {
+    cluster: Option<TieredCluster>,
+    admin: Option<Client>,
+    controller_client: Option<Client>,
+    archive: Option<u64>,
+    leader_local_start: Option<i64>,
+}
+
+#[rstest::fixture]
+fn tiered_reassignment() -> TieredReassignment {
+    // The archive size is measured before the empty replica is added.
+    TieredReassignment::default()
+}
+
+impl TieredReassignment {
+    fn cluster(&self) -> &TieredCluster {
+        self.cluster.as_ref().expect("tiered reassignment cluster")
+    }
+
+    fn admin(&self) -> &Client { self.admin.as_ref().expect("tiered admin") }
+
+    async fn shutdown(self) {
+        let Self {
+            cluster,
+            admin,
+            controller_client,
+            ..
+        } = self;
+        drop((admin, controller_client));
+        let TieredCluster {
+            brokers,
+            log_dirs,
+            remote_dir,
+            ..
+        } = cluster.expect("tiered reassignment cluster");
+        for broker in brokers {
+            broker.shutdown().await;
+        }
+        drop((log_dirs, remote_dir));
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three tiered brokers use 1-KiB segments and broker 1 alone hosts the data partition"
+)]
+async fn single_replica_tiered_assignment(tiered_reassignment: &mut TieredReassignment) {
+    tiered_reassignment.cluster = Some(start_tiered_cluster([krabka_units::kibibytes(1); 3]).await);
+    tiered_reassignment.admin = Some(
+        ready_admin(
+            [
+                &tiered_reassignment.cluster().brokers[0],
+                &tiered_reassignment.cluster().brokers[1],
+                &tiered_reassignment.cluster().brokers[2],
+            ],
+            "tiered-reassign-admin",
+        )
+        .await,
+    );
+    create_single_replica_tiered_topic(
+        tiered_reassignment.admin(),
+        &tiered_reassignment.cluster().brokers[0],
+    )
     .await;
-    let admin = ready_admin([&b1, &b2, &b3], "tiered-reassign-admin").await;
-    create_single_replica_tiered_topic(&admin, &b1).await;
     assert!(
-        b1.partition_leader_for_test(TOPIC, 0) == Some(b1.node_id()),
+        tiered_reassignment.cluster().brokers[0].partition_leader_for_test(TOPIC, 0)
+            == Some(tiered_reassignment.cluster().brokers[0].node_id()),
         "the manual assignment makes broker 1 the only replica and so the leader"
     );
+}
 
-    let topic_id = topic_id_for(&admin, TOPIC).await;
-    produce_records(&admin, topic_id, RECORDS).await;
+#[rstest_bdd_macros::when("broker 1 acknowledges four hundred 256-byte records")]
+async fn write_tiered_reassignment_records(tiered_reassignment: &TieredReassignment) {
+    let topic_id = topic_id_for(tiered_reassignment.admin(), TOPIC).await;
+    produce_records(tiered_reassignment.admin(), topic_id, RECORDS).await;
+}
 
-    let leader_dir = log_dirs[0].path().join(format!("{TOPIC}-0"));
-    let new_replica_dir = log_dirs[2].path().join(format!("{TOPIC}-0"));
-
+#[rstest_bdd_macros::then(
+    "all sealed segments are archived and locally evicted, leaving an archive over four times the retained local bytes"
+)]
+async fn archived_reassignment_premise(tiered_reassignment: &mut TieredReassignment) {
+    let leader_dir = tiered_reassignment.cluster().log_dirs[0]
+        .path()
+        .join(format!("{TOPIC}-0"));
     // Every sealed segment archived and then evicted: the leader's log start
     // is what tells us so, and it is the offset the new replica must land on.
     let eviction_deadline = Instant::now() + Duration::from_mins(3);
@@ -196,7 +235,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         let bases = local_segment_bases(&leader_dir);
         if let [base] = bases[..]
             && base > 0
-            && archive_bytes(remote_dir.path()) > 0
+            && archive_bytes(tiered_reassignment.cluster().remote_dir.path()) > 0
         {
             break base;
         }
@@ -204,13 +243,15 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
             Instant::now() <= eviction_deadline,
             "the leader never archived and evicted every sealed segment; \
              segments={bases:?} archive={}",
-            archive_bytes(remote_dir.path()),
+            archive_bytes(tiered_reassignment.cluster().remote_dir.path()),
         );
         // intentional: the copy pass and local retention both run on the
         // broker's own 1s interval, and the object store is a directory.
         time::sleep(Duration::from_millis(300)).await;
     };
-    let archive = archive_bytes(remote_dir.path());
+    let archive = archive_bytes(tiered_reassignment.cluster().remote_dir.path());
+    tiered_reassignment.archive = Some(archive);
+    tiered_reassignment.leader_local_start = Some(leader_local_start);
     let leader_local = local_log_bytes(&leader_dir);
     eprintln!(
         "ITEST: the leader's log starts at {leader_local_start}; \
@@ -224,25 +265,59 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         "the archive ({archive} bytes) is not meaningfully larger than what the \
          leader still holds locally ({leader_local} bytes)"
     );
+}
 
+#[rstest_bdd_macros::when(
+    "the active controller reassigns the partition from replica 1 to replicas 1 and 3"
+)]
+async fn add_tiered_replica(tiered_reassignment: &mut TieredReassignment) {
     // Add broker 3 as a replica. The request goes to the controller leader's
     // own listener, as `kafka-reassign-partitions` sends it.
-    let controller_addr = controller_leader_addr([&b1, &b2, &b3]).await;
-    let controller_client = connect_owned(
-        &controller_addr,
-        "tiered-reassign-controller",
-        "controller client",
+    let controller_addr = controller_leader_addr([
+        &tiered_reassignment.cluster().brokers[0],
+        &tiered_reassignment.cluster().brokers[1],
+        &tiered_reassignment.cluster().brokers[2],
+    ])
+    .await;
+    tiered_reassignment.controller_client = Some(
+        connect_owned(
+            &controller_addr,
+            "tiered-reassign-controller",
+            "controller client",
+        )
+        .await,
+    );
+    reassign_to(
+        tiered_reassignment
+            .controller_client
+            .as_ref()
+            .expect("controller client"),
+        vec![1, 3],
     )
     .await;
-    reassign_to(&controller_client, vec![1, 3]).await;
+}
 
+#[rstest_bdd_macros::then(
+    "replica 3 catches up, starts at or above the leader's local start, pulls less than half the archive bytes and retains fewer disk bytes than the archive"
+)]
+async fn bounded_tiered_reassignment(tiered_reassignment: &TieredReassignment) {
+    let leader_dir = tiered_reassignment.cluster().log_dirs[0]
+        .path()
+        .join(format!("{TOPIC}-0"));
+    let new_replica_dir = tiered_reassignment.cluster().log_dirs[2]
+        .path()
+        .join(format!("{TOPIC}-0"));
+    let leader_local_start = tiered_reassignment
+        .leader_local_start
+        .expect("archived local start");
+    let archive = tiered_reassignment.archive.expect("measured archive bytes");
     // Broker 3 hosts the partition and catches up to the leader's log end.
-    let leader_end = b1
+    let leader_end = tiered_reassignment.cluster().brokers[0]
         .local_log_end_offset(TOPIC, 0)
         .expect("the leader holds the partition");
     let catch_up_deadline = Instant::now() + Duration::from_mins(3);
     loop {
-        if b3
+        if tiered_reassignment.cluster().brokers[2]
             .local_log_end_offset(TOPIC, 0)
             .is_some_and(|end| end >= leader_end)
         {
@@ -251,8 +326,8 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         assert!(
             Instant::now() <= catch_up_deadline,
             "the new replica reached {:?} of the leader's {leader_end}; log_start={:?}",
-            b3.local_log_end_offset(TOPIC, 0),
-            b3.partition_log_start_for_test(TOPIC, 0),
+            tiered_reassignment.cluster().brokers[2].local_log_end_offset(TOPIC, 0),
+            tiered_reassignment.cluster().brokers[2].partition_log_start_for_test(TOPIC, 0),
         );
         // intentional: replication has no in-process completion signal here.
         time::sleep(Duration::from_millis(300)).await;
@@ -280,7 +355,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         topic: Arc::from(TOPIC),
         partition: 0,
     };
-    let replicated = b3
+    let replicated = tiered_reassignment.cluster().brokers[2]
         .metrics()
         .replication_bytes_in
         .get_or_create(&label)
@@ -302,10 +377,15 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         "the new replica holds {new_replica_local} bytes on disk against an archive of \
          {archive} bytes"
     );
+}
 
-    drop(admin);
-    drop(controller_client);
-    b1.shutdown().await;
-    b2.shutdown().await;
-    b3.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_reassign.feature",
+    name = "a replica added to a tiered partition does not pull the archive"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive(
+    tiered_reassignment: TieredReassignment,
+) {
+    tiered_reassignment.shutdown().await;
 }

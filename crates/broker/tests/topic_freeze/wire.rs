@@ -177,12 +177,6 @@ pub fn refused(kind: &str, scope: &str, reason: &str, log_end_offset: i64) -> Pr
     }
 }
 
-/// Check that the unfrozen control still accepts a record before shutting down.
-pub async fn finish_with_control_record(broker: BrokerHandle, client: &Client, control: WireUuid) {
-    check!(produce_outcome(&broker, client, CONTROL, control).await == accepted(1));
-    broker.shutdown().await;
-}
-
 // Keep expected outcomes and optional scenario labels at the assertion site.
 
 /// Create a topic with one accepted record, freeze it and verify refusal.

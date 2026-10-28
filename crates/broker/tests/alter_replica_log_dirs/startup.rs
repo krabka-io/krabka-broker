@@ -8,7 +8,9 @@
 
 use {
     crate::{
+        ReplicaDirectoryScenario,
         harness::{count_topic_dirs, wait_for_move_complete},
+        replica_directory,
         support::{
             producer::enqueue_unkeyed_values,
             storage::{start_two_dir_broker, two_dir_config},
@@ -22,16 +24,10 @@ use {
     krabka_client_producer::Producer,
     std::fs,
 };
-
-/// Boot a broker, create a topic, produce records, shut down, then
-/// plant a `<topic>-<partition>-future/` directory in the OTHER log
-/// dir before the restart. The restart must (a) re-discover the
-/// stranded future log with `log_dir::scan_future`, (b) call
-/// `future_log::resume_move` for the real partition, and (c) drive
-/// the move to completion, so that `DescribeLogDirs` reports the
-/// partition in the target dir with `is_future_key=false`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn startup_resumes_move_for_existing_partition() {
+#[rstest_bdd_macros::given(
+    "a stopped two-directory broker stores t partition 0 with records v0 through v4 and an empty t-0-future directory exists in the other log directory"
+)]
+async fn interrupted_replica_directory_move(replica_directory: &mut ReplicaDirectoryScenario) {
     // First boot: create topic, produce a handful of records, then
     // shut down cleanly so the partition directory is left on disk.
     let (handle, primary, extra, addr) = start_two_dir_broker().await;
@@ -79,57 +75,91 @@ async fn startup_resumes_move_for_existing_partition() {
         "source must still be here"
     );
 
-    // Restart against the same dirs. `BootstrapMode::Rejoin`
-    // because the raft log from the first boot is still on disk.
-    let mut cfg = two_dir_config(primary.path(), extra.path());
-    cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let handle = Broker::start(cfg).await.expect("restart");
-    let addr = handle.listen_addr();
-
-    // Wait for the resumed move to converge: partition lives in
-    // target dir with no remaining future entries.
-    wait_for_move_complete(addr, target_dir, "t", &[0]).await;
-    check!(count_topic_dirs(target_dir, "t") == 1);
-    check!(count_topic_dirs(current_dir, "t") == 0);
-    check!(!future_path.exists(), "future dir must be renamed away");
-
-    handle.shutdown().await;
+    replica_directory.target = target_dir.to_path_buf();
+    replica_directory.source = current_dir.to_path_buf();
+    replica_directory.future = future_path;
+    replica_directory.primary = Some(primary);
+    replica_directory.extra = Some(extra);
 }
-
-/// Plant a `<topic>-<partition>-future` directory in one of the
-/// configured log.dirs for a topic that does not exist, then start the
-/// broker. The startup scan in `Broker::start` must remove the
-/// stranded future dir. `DescribeLogDirs` then reports no future entries.
-#[tokio::test]
-async fn startup_cleans_up_stranded_future_dir() {
-    let primary = tempfile::tempdir().unwrap();
-    let extra = tempfile::tempdir().unwrap();
-
-    // Stranded future dir: topic "ghost" was never created.
-    let stranded = extra.path().join("ghost-0-future");
-    fs::create_dir_all(&stranded).unwrap();
-    assert!(stranded.exists());
-
-    let cfg = two_dir_config(primary.path(), extra.path());
-    let handle = Broker::start(cfg).await.expect("broker start");
-    let addr = handle.listen_addr();
-
-    // Broker startup must have swept the stranded future dir.
-    assert!(
-        !stranded.exists(),
-        "startup must remove stranded future dir at {}",
-        stranded.display()
+#[rstest_bdd_macros::given(
+    "ghost was never created but ghost-0-future exists in the extra configured log directory"
+)]
+fn orphaned_replica_future_directory(replica_directory: &mut ReplicaDirectoryScenario) {
+    let primary = tempfile::tempdir().expect("primary directory");
+    let extra = tempfile::tempdir().expect("extra directory");
+    let future = extra.path().join("ghost-0-future");
+    fs::create_dir_all(&future).expect("plant orphan future directory");
+    assert!(future.exists());
+    replica_directory.future = future;
+    replica_directory.primary = Some(primary);
+    replica_directory.extra = Some(extra);
+}
+#[rstest_bdd_macros::when("the broker starts against both log directories in {mode} mode")]
+async fn start_with_replica_future_directories(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    mode: String,
+) {
+    let mut config = two_dir_config(replica_directory.primary(), replica_directory.extra());
+    match mode.as_str() {
+        "rejoin" => config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin,
+        "fresh-bootstrap" => {}
+        other => panic!("unknown startup mode {other}"),
+    }
+    let handle = Broker::start(config).await.expect("broker start");
+    replica_directory.described = Some(describe_log_dirs(handle.listen_addr()).await);
+    replica_directory.handle = Some(handle);
+}
+#[rstest_bdd_macros::then(
+    "the interrupted move completes in the target directory, the source has no t partitions and t-0-future is renamed away"
+)]
+async fn resumed_replica_directory_move(replica_directory: &mut ReplicaDirectoryScenario) {
+    wait_for_move_complete(
+        replica_directory.address(),
+        &replica_directory.target,
+        "t",
+        &[0],
+    )
+    .await;
+    check!(count_topic_dirs(&replica_directory.target, "t") == 1);
+    check!(count_topic_dirs(&replica_directory.source, "t") == 0);
+    check!(
+        !replica_directory.future.exists(),
+        "future directory is renamed away"
     );
-
-    // DescribeLogDirs surfaces no future entries.
-    let resp = describe_log_dirs(addr).await;
-    let any_future = resp
-        .results
-        .iter()
-        .flat_map(|r| r.topics.iter())
-        .flat_map(|t| t.partitions.iter())
-        .any(|p| p.is_future_key);
-    assert!(!any_future, "no future entries should remain after sweep");
-
-    handle.shutdown().await;
+    replica_directory.shutdown().await;
 }
+#[rstest_bdd_macros::then(
+    "startup removes ghost-0-future and DescribeLogDirs reports no future entries"
+)]
+async fn swept_orphan_replica_directory(replica_directory: &mut ReplicaDirectoryScenario) {
+    assert!(
+        !replica_directory.future.exists(),
+        "orphan future directory remains: {}",
+        replica_directory.future.display()
+    );
+    let response = replica_directory
+        .described
+        .as_ref()
+        .expect("startup directory description");
+    assert!(
+        !response
+            .results
+            .iter()
+            .flat_map(|result| result.topics.iter())
+            .flat_map(|topic| topic.partitions.iter())
+            .any(|partition| partition.is_future_key)
+    );
+    replica_directory.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/storage/replica_directory_startup.feature",
+    name = "Restart resumes a planted future directory for an existing partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_resumes_move_for_existing_partition(replica_directory: ReplicaDirectoryScenario) {}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/storage/replica_directory_startup.feature",
+    name = "Startup removes future directories for topics that never existed"
+)]
+#[tokio::test]
+async fn startup_cleans_up_stranded_future_dir(replica_directory: ReplicaDirectoryScenario) {}

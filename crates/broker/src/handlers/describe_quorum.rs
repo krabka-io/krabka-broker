@@ -143,32 +143,41 @@ mod tests {
         krabka_protocol::{Decode as _, Encode as _, owned::describe_quorum_response},
     };
 
-    /// Each whole-request refusal carries Kafka's `Errors.message()` for
-    /// its code, as `DescribeQuorumRequest.getTopLevelErrorResponse` sets.
-    #[test]
-    fn top_level_error_response_carries_kafkas_message() {
-        for (error_code, message) in [
-            (
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                "Cluster authorization failed.",
-            ),
-            (
-                codes::NOT_LEADER_OR_FOLLOWER,
-                "For requests intended only for the leader, this error indicates that the \
-                 broker is not the current leader. For requests intended for any replica, this \
-                 error indicates that the broker is not a replica of the topic partition.",
-            ),
-        ] {
-            assert!(
-                top_level_error_response(error_code)
-                    == DescribeQuorumResponse {
-                        error_code,
-                        error_message: Some(message.to_owned()),
-                        ..Default::default()
-                    }
-            );
+    #[derive(Default)]
+    struct QuorumErrorScenario {
+        error_code: i16,
+        response: Option<DescribeQuorumResponse>,
+    }
+    #[rstest::fixture]
+    fn quorum_error() -> QuorumErrorScenario {
+        let response = None;
+        QuorumErrorScenario {
+            response,
+            ..Default::default()
         }
     }
+    #[rstest_bdd_macros::given("DescribeQuorum refuses the whole request with error {code}")]
+    fn refused_quorum_request(quorum_error: &mut QuorumErrorScenario, code: i16) {
+        quorum_error.error_code = code;
+    }
+    #[rstest_bdd_macros::when("the top-level quorum error response is built")]
+    fn quorum_error_response(quorum_error: &mut QuorumErrorScenario) {
+        quorum_error.response = Some(top_level_error_response(quorum_error.error_code));
+    }
+    #[rstest_bdd_macros::then(
+        "the quorum response carries the requested error and Kafka message {message}"
+    )]
+    fn check_quorum_error_response(quorum_error: &QuorumErrorScenario, message: String) {
+        assert!(
+            quorum_error.response.as_ref().unwrap()
+                == &DescribeQuorumResponse {
+                    error_code: quorum_error.error_code,
+                    error_message: Some(message),
+                    ..Default::default()
+                }
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_describe_quorum",fixtures=[quorum_error:QuorumErrorScenario]);
 
     /// The refusal survives the wire at v2+, where `ErrorMessage` exists,
     /// with the message intact rather than null.

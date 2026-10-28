@@ -417,54 +417,52 @@ mod tests {
         check!(record == expected);
     }
 
-    /// `ControllerConfigurationValidator.validateTopicName` runs before the
-    /// configs, and the existence check after them, each with Kafka's code
-    /// and message.
-    #[test]
-    fn topic_names_are_checked_in_kafkas_order() {
-        let image = image_with_topic("orders");
-        let cases = [
-            (
-                "",
-                vec![(config_keys::RETENTION_MS, "1000")],
-                (
-                    codes::INVALID_REQUEST,
-                    "Default topic resources are not allowed.".to_owned(),
-                ),
-            ),
-            (
-                "a/b",
-                vec![(config_keys::RETENTION_MS, "1000")],
-                (
-                    codes::INVALID_TOPIC_EXCEPTION,
-                    "Topic name is invalid: 'a/b' contains one or more characters other than \
-                     ASCII alphanumerics, '.', '_' and '-'"
-                        .to_owned(),
-                ),
-            ),
-            (
-                "missing",
-                vec![(config_keys::RETENTION_MS, "1000")],
-                (
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    "The topic 'missing' does not exist.".to_owned(),
-                ),
-            ),
-            (
-                "missing",
-                vec![(config_keys::RETENTION_MS, "abc")],
-                (
-                    codes::INVALID_CONFIG,
-                    "Invalid value abc for configuration retention.ms: Not a number of type LONG"
-                        .to_owned(),
-                ),
-            ),
-        ];
-        for (name, configs, want) in cases {
-            check!(
-                topic_config_record(&topic_resource(name, &configs), &image) == Err(want),
-                "{name:?}"
-            );
+    #[derive(Default)]
+    struct TopicConfigOrderScenario {
+        image: Option<krabka_metadata::MetadataImage>,
+        name: String,
+        retention: String,
+        result: Option<Result<MetadataRecord, (i16, String)>>,
+    }
+    #[rstest::fixture]
+    fn topic_config_order() -> TopicConfigOrderScenario {
+        let image = None;
+        TopicConfigOrderScenario {
+            image,
+            ..Default::default()
         }
     }
+    #[rstest_bdd_macros::given(
+        "topic orders exists and a replacement for topic {name} sets retention.ms to {retention}"
+    )]
+    fn requested_topic_retention(
+        topic_config_order: &mut TopicConfigOrderScenario,
+        name: String,
+        retention: String,
+    ) {
+        topic_config_order.image = Some(image_with_topic("orders"));
+        topic_config_order.name = if name == "empty" { String::new() } else { name };
+        topic_config_order.retention = retention;
+    }
+    #[rstest_bdd_macros::when(
+        "the controller validates the authoritative topic configuration replacement"
+    )]
+    fn validate_topic_replacement_order(topic_config_order: &mut TopicConfigOrderScenario) {
+        topic_config_order.result = Some(topic_config_record(
+            &topic_resource(&topic_config_order.name, &[(
+                config_keys::RETENTION_MS,
+                &topic_config_order.retention,
+            )]),
+            topic_config_order.image.as_ref().unwrap(),
+        ));
+    }
+    #[rstest_bdd_macros::then("topic replacement returns code {code} and message {message}")]
+    fn check_topic_replacement_order(
+        topic_config_order: &TopicConfigOrderScenario,
+        code: i16,
+        message: String,
+    ) {
+        check!(topic_config_order.result.as_ref().unwrap() == &Err((code, message)));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_topic_config_order",fixtures=[topic_config_order:TopicConfigOrderScenario]);
 }

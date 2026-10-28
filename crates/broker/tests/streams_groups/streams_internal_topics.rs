@@ -9,105 +9,103 @@
 use {
     crate::{
         streams_harness::{
-            active_partitions_for, boot, connect, create_topic, finalize_streams_version,
-            first_join, follow_up, status_codes, topology,
+            StreamsGroupScenario, active_partitions_for, first_join, follow_up, status_codes,
+            streams_group, topology,
         },
         support::streams::request_active_tasks,
     },
     assert2::assert,
     krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::time::Duration,
     tokio::time,
 };
 
-/// A stateful subtopology, that is, one with a state-changelog topic, drives
-/// the broker to auto-create the changelog internal topic. Once that topic
-/// exists, the member converges with no `MISSING_INTERNAL_TOPICS` status, which
-/// is status code 3.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stateful_member_triggers_internal_topic_creation() {
-    let (broker, bootstrap, _dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, "sk-input", 1).await;
-
-    let changelog = TopicInfo {
+#[given("the stateful streams topology declares app-store-changelog with derived partition count")]
+fn stateful_streams_topology(streams_group: &mut StreamsGroupScenario) {
+    streams_group.topology = Some(topology(&streams_group.topic, vec![TopicInfo {
         name: "app-store-changelog".into(),
-        partitions: 0, // broker derives from the subtopology's task count
+        partitions: 0,
         replication_factor: 1,
         topic_configs: vec![],
         ..Default::default()
-    };
-    let topo = topology("sk-input", vec![changelog]);
+    }]));
+}
 
-    // First join. The very first reconcile may emit MISSING_INTERNAL_TOPICS (3)
-    // because the changelog is created asynchronously and a re-read of the image
-    // may not yet observe it; retry until the active task lands with no
-    // missing-internal-topics status.
-    let mut resp = client
-        .send(first_join("streams-app-2", topo.clone()))
+#[when("the stateful member joins and retries heartbeats while internal topics are provisioned")]
+async fn provision_streams_topics(streams_group: &mut StreamsGroupScenario) {
+    let topology = streams_group.topology.as_ref().expect("stateful topology");
+    let mut response = streams_group
+        .client()
+        .send(first_join(&streams_group.group, topology.clone()))
         .await
         .expect("first heartbeat");
-    let mut member_id = resp.member_id.clone();
-    let mut converged = false;
+    let mut member = response.member_id.clone();
     for _ in 0..15 {
-        if resp.error_code == 14 {
-            // COORDINATOR_LOAD_IN_PROGRESS: retry the first join with the topology.
-            resp = client
-                .send(first_join("streams-app-2", topo.clone()))
+        if response.error_code == 14 {
+            response = streams_group
+                .client()
+                .send(first_join(&streams_group.group, topology.clone()))
                 .await
                 .expect("retry first heartbeat");
-            member_id = resp.member_id.clone();
+            member = response.member_id.clone();
             continue;
         }
-        assert!(resp.error_code == 0, "heartbeat error: {resp:?}");
-        let missing_internal = status_codes(&resp).contains(&3);
-        if active_partitions_for(&resp, "0") == vec![0] && !missing_internal {
-            converged = true;
+        assert!(response.error_code == 0, "heartbeat error: {response:?}");
+        if active_partitions_for(&response, "0") == vec![0] && !status_codes(&response).contains(&3)
+        {
             break;
         }
-        // intentional: backoff between heartbeats while polling the RPC response
-        // for active-task assignment plus clearing of the MISSING_INTERNAL_TOPICS
-        // status. This convergence is coordinator-local; it has no metadata-image
-        // signal or metric, so a bounded re-heartbeat loop is the only observer.
         time::sleep(Duration::from_millis(300)).await;
-        let active = request_active_tasks(&resp);
-        // A heartbeat after the join carries no topology: Kafka refuses one.
-        let hb = follow_up()
-            .group("streams-app-2")
-            .member_id(&member_id)
-            .epoch(resp.member_epoch)
-            .maybe_active(active)
+        let request = follow_up()
+            .group(&streams_group.group)
+            .member_id(&member)
+            .epoch(response.member_epoch)
+            .maybe_active(request_active_tasks(&response))
             .call();
-        resp = client.send(hb).await.expect("follow-up heartbeat");
-        member_id = resp.member_id.clone();
+        response = streams_group
+            .client()
+            .send(request)
+            .await
+            .expect("follow-up heartbeat");
+        member = response.member_id.clone();
     }
+    streams_group.member = member;
+    streams_group.heartbeat = Some(response);
+}
 
+#[then("the stateful member owns task zero without MISSING_INTERNAL_TOPICS")]
+fn stateful_streams_converged(streams_group: &StreamsGroupScenario) {
+    let response = streams_group
+        .heartbeat
+        .as_ref()
+        .expect("stateful heartbeats finished");
     assert!(
-        converged,
-        "member never converged to active task [0] with no MISSING_INTERNAL_TOPICS; \
-         last response: {resp:?}"
+        active_partitions_for(response, "0") == vec![0] && !status_codes(response).contains(&3),
+        "member never converged: {response:?}"
     );
-    assert!(
-        !status_codes(&resp).contains(&3),
-        "no MISSING_INTERNAL_TOPICS (3) status once converged, got {:?}",
-        resp.status
-    );
+    assert!(!status_codes(response).contains(&3));
+}
 
-    // The changelog internal topic must now exist in the controller image with
-    // one partition (matching the single-partition source / subtopology task
-    // count).
-    let image = broker.controller_image_for_test();
-    let changelog_rec = image.topic("app-store-changelog");
-    let changelog_rec = changelog_rec.unwrap_or_else(|| {
-        panic!(
-            "changelog topic 'app-store-changelog' must be auto-created; topics present: {:?}",
-            image.topics().map(|t| &t.name).collect::<Vec<_>>()
-        )
-    });
-    assert!(
-        changelog_rec.partitions == 1,
-        "changelog topic must have 1 partition, got {}",
-        changelog_rec.partitions
-    );
+#[then("the controller image contains app-store-changelog with one partition")]
+fn provisioned_streams_changelog(streams_group: &StreamsGroupScenario) {
+    let image = streams_group
+        .broker
+        .as_ref()
+        .expect("streams broker")
+        .controller_image_for_test();
+    let changelog = image
+        .topic("app-store-changelog")
+        .expect("changelog auto-created");
+    assert!(changelog.partitions == 1);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_internal_topics.feature",
+    name = "stateful member triggers internal topic creation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stateful_member_triggers_internal_topic_creation(streams_group: StreamsGroupScenario) {
+    streams_group.shutdown().await;
+    drop(streams_group);
 }

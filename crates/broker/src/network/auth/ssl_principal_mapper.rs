@@ -275,6 +275,7 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        rstest_bdd::Slot,
     };
 
     /// Rules, a distinguished name and the principal the rules map it to.
@@ -313,56 +314,58 @@ mod tests {
         }
     }
 
-    /// Kafka's own documented `ssl.principal.mapping.rules` examples, each
-    /// against a DN it matches and one it does not.
-    #[test]
-    fn kafka_documented_rules_map_the_subject_dn() {
-        // (rules, distinguished name, principal)
-        let cases = [
-            mapping(
-                &["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"][..],
-                "CN=serviceuser,OU=ServiceUsers,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                Some("serviceuser"),
-            ),
-            // No rule matches and there is no DEFAULT tail, so the mapping is
-            // refused rather than falling back to the DN.
-            mapping(
-                &["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"][..],
-                "CN=adminUser,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                None,
-            ),
-            mapping(
-                &["RULE:^CN=(.*?),OU=(.*?),O=(.*?),L=(.*?),ST=(.*?),C=(.*?)$/$1@$2/L"][..],
-                "CN=adminUser,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                Some("adminuser@admin"),
-            ),
-            mapping(
-                &["RULE:^.*[Cc][Nn]=([a-zA-Z0-9.]*).*$/$1/U"][..],
-                "cn=User,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                Some("USER"),
-            ),
-            mapping(
-                &["DEFAULT"][..],
-                "CN=alice,OU=x,O=y",
-                Some("CN=alice,OU=x,O=y"),
-            ),
-            // First match wins: the specific rule shadows the DEFAULT tail.
-            mapping(
-                &["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"][..],
-                "CN=alice,OU=integration,O=krabka",
-                Some("alice"),
-            ),
-            // The DEFAULT tail is what passes an unmatched DN through.
-            mapping(
-                &["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"][..],
-                "OU=integration,O=krabka",
-                Some("OU=integration,O=krabka"),
-            ),
-            // An explicitly empty list has no rule to match, so it maps
-            // nothing.
-            mapping(&[][..], "CN=alice,OU=x,O=y", None),
-        ];
-        check_mappings(cases);
+    #[derive(Default)]
+    struct TlsPrincipalScenario {
+        rules: Vec<String>,
+        distinguished_name: String,
+        principal: Slot<Option<String>>,
+    }
+
+    #[rstest::fixture]
+    fn tls_principal() -> TlsPrincipalScenario {
+        // Keep tls principal inputs and observations fresh for each scenario.
+        TlsPrincipalScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("the ordered TLS principal mapping rules are JSON {rules}")]
+    fn tls_mapping_rules(tls_principal: &mut TlsPrincipalScenario, rules: String) {
+        tls_principal.rules =
+            serde_json::from_str(&rules).expect("explicit ordered TLS principal rules");
+    }
+
+    #[rstest_bdd_macros::given("the TLS peer subject DN is {distinguished_name}")]
+    fn tls_subject_name(tls_principal: &mut TlsPrincipalScenario, distinguished_name: String) {
+        tls_principal.distinguished_name = distinguished_name;
+    }
+
+    #[rstest_bdd_macros::when("the broker maps the TLS subject to its ACL principal")]
+    fn map_tls_subject(tls_principal: &mut TlsPrincipalScenario) {
+        let specs: Vec<_> = tls_principal.rules.iter().map(String::as_str).collect();
+        let mapper = SslPrincipalMapper::parse(&specs).expect("the mapping rules parse");
+        tls_principal
+            .principal
+            .set(mapper.apply(&tls_principal.distinguished_name));
+    }
+
+    #[rstest_bdd_macros::then("the TLS ACL principal is JSON {expected}")]
+    fn mapped_tls_subject(tls_principal: &TlsPrincipalScenario, expected: String) {
+        let expected: Option<String> =
+            serde_json::from_str(&expected).expect("independent nullable TLS principal");
+        check!(tls_principal.principal.get() == Some(expected));
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/ssl_principal_mapper.feature",
+        name = "Map Kafka documented TLS subjects"
+    )]
+    fn kafka_documented_rules_map_the_subject_dn(
+        tls_principal: TlsPrincipalScenario,
+        case: String,
+        rules: String,
+        distinguished_name: String,
+        expected: String,
+    ) {
+        let _ = (tls_principal, case, rules, distinguished_name, expected);
     }
 
     /// `Matcher.matches()` and `String.replaceAll`, which the `regex` crate

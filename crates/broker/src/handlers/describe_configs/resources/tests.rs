@@ -17,7 +17,7 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS},
-        codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
+        codes::INVALID_REQUEST,
         config::BrokerConfig,
         config_keys::{
             KAFKA_TRUNK_TOPIC_KEYS,
@@ -1153,8 +1153,43 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
     check!(names == vec![LEADER_THROTTLED_RATE_KEY]);
 }
 
-#[test]
-fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
+struct ConfigDescriptionScenario {
+    image: Option<MetadataImage>,
+    stored_images: Vec<(String, MetadataImage)>,
+    kind: i8,
+    name: String,
+    key: String,
+    results: Vec<DescribeConfigsResult>,
+}
+#[rstest::fixture]
+fn config_description() -> ConfigDescriptionScenario {
+    let image = None;
+    ConfigDescriptionScenario {
+        image,
+        stored_images: Vec::new(),
+        kind: 0,
+        name: String::new(),
+        key: String::new(),
+        results: Vec::new(),
+    }
+}
+fn described_resource_kind(kind: &str) -> i8 {
+    match kind {
+        "topic" => RESOURCE_TYPE_TOPIC,
+        "client_metrics" => RESOURCE_TYPE_CLIENT_METRICS,
+        "group" => RESOURCE_TYPE_GROUP,
+        "broker" => RESOURCE_TYPE_BROKER,
+        _ => panic!("unknown described resource type: {kind}"),
+    }
+}
+#[rstest_bdd_macros::given(
+    "topic orders exists and the requested configuration resource is {kind} named {name}"
+)]
+fn described_resource_identity(
+    config_description: &mut ConfigDescriptionScenario,
+    kind: String,
+    name: String,
+) {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: "orders".into(),
@@ -1162,91 +1197,321 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
         partitions: 1,
         replication_factor: 1,
     }));
-    let cases = [
-        (
-            RESOURCE_TYPE_TOPIC,
-            "missing",
-            UNKNOWN_TOPIC_OR_PARTITION,
-            None,
-        ),
-        (
-            RESOURCE_TYPE_TOPIC,
-            "",
-            INVALID_TOPIC_EXCEPTION,
-            Some("Topic name is invalid: the empty string is not allowed"),
-        ),
-        (
-            RESOURCE_TYPE_TOPIC,
-            "bad/name",
-            INVALID_TOPIC_EXCEPTION,
-            Some(
-                "Topic name is invalid: 'bad/name' contains one or more characters other than \
-                 ASCII alphanumerics, '.', '_' and '-'",
-            ),
-        ),
-        (
-            RESOURCE_TYPE_CLIENT_METRICS,
-            "",
-            INVALID_REQUEST,
-            Some("Client metrics subscription name must not be empty"),
-        ),
-        (
-            RESOURCE_TYPE_GROUP,
-            "",
-            INVALID_REQUEST,
-            Some("Group name must not be empty"),
-        ),
-        (
-            RESOURCE_TYPE_BROKER,
-            "abc",
-            INVALID_REQUEST,
-            Some("Broker id must be an integer, but it is: abc"),
-        ),
-        (
-            RESOURCE_TYPE_BROKER,
-            "-1",
-            INVALID_REQUEST,
-            Some("Unexpected broker id, expected 1 or empty string, but received -1"),
-        ),
-    ];
-    for (resource_type, name, error_code, message) in cases {
-        let result = describe_at(
-            ServingConfig {
-                node: krabka_metadata::NodeId(1),
-                static_broker: untuned(),
-            },
-            &image,
-            resource_type,
-            name,
-            None,
-            EVERYTHING,
-        );
-        check!(
-            result
-                == krabka_macros::tagged_wire!(DescribeConfigsResult {
-                    error_code,
-                    error_message: message.map(str::to_owned),
-                    resource_type,
-                    resource_name: name.to_owned(),
-                    configs: Vec::new(),
-                }),
-            "{resource_type} {name:?}"
-        );
-    }
-    let found = describe_at(
+    config_description.image = Some(image);
+    config_description.kind = described_resource_kind(&kind);
+    config_description.name = if name == "empty" { String::new() } else { name };
+}
+#[rstest_bdd_macros::given(
+    "group streams-1 has no configuration overrides and unstable API versions are disabled"
+)]
+fn stable_group_config_defaults(config_description: &mut ConfigDescriptionScenario) {
+    config_description.image = Some(MetadataImage::new(Uuid::nil()));
+    config_description.kind = RESOURCE_TYPE_GROUP;
+    config_description.name = "streams-1".into();
+}
+#[rstest_bdd_macros::given("broker 1 has no dynamic configuration overrides")]
+fn named_broker_defaults(config_description: &mut ConfigDescriptionScenario) {
+    config_description.image = Some(MetadataImage::new(Uuid::nil()));
+    config_description.kind = RESOURCE_TYPE_BROKER;
+    config_description.name = "1".into();
+}
+#[rstest_bdd_macros::given("group g overrides streams.session.timeout.ms with 60000")]
+fn overridden_group_timeout(config_description: &mut ConfigDescriptionScenario) {
+    config_description.image = Some(group_config_image("streams.session.timeout.ms", "60000"));
+    config_description.kind = RESOURCE_TYPE_GROUP;
+    config_description.name = "g".into();
+}
+#[rstest_bdd_macros::given(
+    "both default and named broker configuration resources store key {key} value {value}"
+)]
+fn stored_broker_key(
+    config_description: &mut ConfigDescriptionScenario,
+    key: String,
+    value: String,
+) {
+    config_description.kind = RESOURCE_TYPE_BROKER;
+    config_description.key = key;
+    config_description.stored_images = [("", DEFAULT_BROKER_CONFIG_NODE_ID), ("1", SERVING_NODE)]
+        .into_iter()
+        .map(|(name, node)| {
+            (
+                name.into(),
+                image_with_broker_config(node, &[ConfigPair {
+                    name: &config_description.key,
+                    value: &value,
+                }]),
+            )
+        })
+        .collect();
+}
+#[rstest_bdd_macros::when(
+    "broker 1 describes the requested resource with complete configuration metadata"
+)]
+fn describe_resource_identity(config_description: &mut ConfigDescriptionScenario) {
+    config_description.results.push(describe_at(
         ServingConfig {
             node: krabka_metadata::NodeId(1),
             static_broker: untuned(),
         },
-        &image,
-        RESOURCE_TYPE_TOPIC,
-        "orders",
+        config_description.image.as_ref().unwrap(),
+        config_description.kind,
+        &config_description.name,
         None,
         EVERYTHING,
-    );
-    check!(found.error_code == NONE);
-    check!(!found.configs.is_empty());
+    ));
 }
+#[rstest_bdd_macros::when("the group configuration is described with stable API versions")]
+fn describe_stable_group_defaults(config_description: &mut ConfigDescriptionScenario) {
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
+    config_description.results.push(describe_one(
+        config_description.image.as_ref().unwrap(),
+        &resource_request(RESOURCE_TYPE_GROUP, &config_description.name, None),
+        ServingBroker {
+            node: krabka_metadata::NodeId(1),
+            static_broker: untuned(),
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+            unstable_api_versions: UnstableApiVersions::Disabled,
+        },
+        300_000,
+        EVERYTHING,
+    ));
+}
+#[rstest_bdd_macros::when(
+    "the requested configuration resource is described with synonyms and documentation"
+)]
+fn describe_resource_metadata(config_description: &mut ConfigDescriptionScenario) {
+    config_description.results.push(describe(
+        config_description.image.as_ref().unwrap(),
+        config_description.kind,
+        &config_description.name,
+        None,
+        EVERYTHING,
+    ));
+}
+#[rstest_bdd_macros::when("the stored key is described from both broker resource scopes")]
+fn describe_stored_broker_key(config_description: &mut ConfigDescriptionScenario) {
+    for (name, image) in &config_description.stored_images {
+        config_description.results.push(describe(
+            image,
+            RESOURCE_TYPE_BROKER,
+            name,
+            Some(vec![config_description.key.clone()]),
+            VALUES_ONLY,
+        ));
+    }
+}
+#[rstest_bdd_macros::then(
+    "the complete configuration resource refusal has code {code} and message {message}"
+)]
+fn check_described_resource_refusal(
+    config_description: &ConfigDescriptionScenario,
+    code: i16,
+    message: String,
+) {
+    let error_message = if message == "null" {
+        None
+    } else {
+        Some(message)
+    };
+    check!(
+        config_description.results
+            == vec![krabka_macros::tagged_wire!(DescribeConfigsResult {
+                error_code: code,
+                error_message,
+                resource_type: config_description.kind,
+                resource_name: config_description.name.clone(),
+                configs: Vec::new()
+            })]
+    );
+}
+#[rstest_bdd_macros::then("the existing topic configuration is accepted and contains entries")]
+fn check_existing_topic_configs(config_description: &ConfigDescriptionScenario) {
+    check!(config_description.results[0].error_code == NONE);
+    check!(!config_description.results[0].configs.is_empty());
+}
+#[rstest_bdd_macros::then(
+    "both stored entries disclose value {value} with sensitivity {sensitive} wire type {wire_type} and read-only {read_only}"
+)]
+fn check_stored_broker_key(
+    config_description: &ConfigDescriptionScenario,
+    value: String,
+    sensitive: bool,
+    wire_type: i8,
+    read_only: bool,
+) {
+    let value = if value == "null" {
+        None
+    } else {
+        Some(value.as_str())
+    };
+    check!(config_description.results.len() == 2);
+    for result in &config_description.results {
+        let entry = entry_named(result, &config_description.key);
+        check!(
+            (
+                entry.value.as_deref(),
+                entry.is_sensitive,
+                entry.config_type,
+                entry.read_only
+            ) == (value, sensitive, wire_type, read_only),
+            "{} on {:?}",
+            config_description.key,
+            result.resource_name
+        );
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "stable group configuration lists exactly the seventeen Kafka 4.3.1 keys"
+)]
+fn verify_a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled(
+    config_description: &ConfigDescriptionScenario,
+) {
+    let result = &config_description.results[0];
+    let reported: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+    check!(
+        reported
+            == vec![
+                "consumer.assignment.interval.ms",
+                "consumer.heartbeat.interval.ms",
+                "consumer.session.timeout.ms",
+                "share.assignment.interval.ms",
+                "share.auto.offset.reset",
+                "share.delivery.count.limit",
+                "share.heartbeat.interval.ms",
+                "share.isolation.level",
+                "share.partition.max.record.locks",
+                "share.record.lock.duration.ms",
+                "share.renew.acknowledge.enable",
+                "share.session.timeout.ms",
+                "streams.assignment.interval.ms",
+                "streams.heartbeat.interval.ms",
+                "streams.initial.rebalance.delay.ms",
+                "streams.num.standby.replicas",
+                "streams.session.timeout.ms",
+            ]
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "every non-internal broker key is typed listed and safely disclosed with its Kafka default metadata"
+)]
+fn verify_a_named_broker_reports_every_kafka_config_key(
+    config_description: &ConfigDescriptionScenario,
+) {
+    let result = &config_description.results[0];
+    for row in KAFKA_BROKER_CONFIGS {
+        let count = result
+            .configs
+            .iter()
+            .filter(|entry| entry.name == row.name)
+            .count();
+        check!(count == usize::from(!row.internal), "{}", row.name);
+    }
+
+    // `num.network.threads` is not one krabka holds a static value of: it is
+    // the built-in default, typed, at `DEFAULT_CONFIG`.
+    let entry = entry_named(result, "num.network.threads");
+    check!(
+        (
+            entry.value.as_deref(),
+            entry.config_source,
+            entry.config_type,
+            entry.read_only,
+            entry.synonyms.clone(),
+        ) == (
+            Some("3"),
+            CONFIG_SOURCE_DEFAULT,
+            ConfigType::Int.wire(),
+            false,
+            vec![synonym("num.network.threads", "3", CONFIG_SOURCE_DEFAULT)],
+        )
+    );
+    // A `PASSWORD` key is typed and withheld, and a read-only key says so.
+    let entry = entry_named(result, "ssl.keystore.password");
+    check!((entry.value.clone(), entry.is_sensitive, entry.config_type) == (None, true, 9));
+    check!(entry_named(result, "auto.leader.rebalance.enable").read_only);
+    // An internal key is not listed.
+    check!(
+        !result
+            .configs
+            .iter()
+            .any(|entry| entry.name == "unstable.api.versions.enable")
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "all Kafka group keys are listed and overrides precede exact broker default synonyms"
+)]
+fn verify_a_group_reports_every_kafka_group_key_with_its_broker_synonym(
+    config_description: &ConfigDescriptionScenario,
+) {
+    let result = &config_description.results[0];
+    let names: Vec<&str> = result
+        .configs
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let kafka: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
+    check!(names == kafka);
+
+    let cases = [
+        (
+            "consumer.session.timeout.ms",
+            "45000",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(
+                "group.consumer.session.timeout.ms",
+                "45000",
+                CONFIG_SOURCE_DEFAULT,
+            )],
+        ),
+        (
+            "streams.session.timeout.ms",
+            "60000",
+            CONFIG_SOURCE_DYNAMIC_GROUP,
+            vec![
+                synonym(
+                    "streams.session.timeout.ms",
+                    "60000",
+                    CONFIG_SOURCE_DYNAMIC_GROUP,
+                ),
+                synonym(
+                    "group.streams.session.timeout.ms",
+                    "45000",
+                    CONFIG_SOURCE_DEFAULT,
+                ),
+            ],
+        ),
+        (
+            "share.isolation.level",
+            "read_uncommitted",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(
+                "share.isolation.level",
+                "read_uncommitted",
+                CONFIG_SOURCE_DEFAULT,
+            )],
+        ),
+    ];
+    for (key, value, source, synonyms) in cases {
+        let entry = entry_named(result, key);
+        check!(
+            (
+                entry.value.as_deref(),
+                entry.config_source,
+                entry.is_sensitive,
+                &entry.synonyms
+            ) == (Some(value), source, false, &synonyms),
+            "{key}"
+        );
+    }
+}
+
+rstest_bdd_macros::scenarios!("tests/features/handler_describe_config_resources",fixtures=[config_description:ConfigDescriptionScenario]);
 
 #[test]
 fn a_client_metrics_subscription_reports_all_three_keys_typed() {
@@ -1351,52 +1616,6 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
         check!(entry.value.is_some(), "{} has no value", entry.name);
         check!(entry.documentation.is_some(), "{} has no doc", entry.name);
     }
-}
-
-/// #784: with `unstable.api.versions.enable` off a group resource lists
-/// exactly Kafka 4.3.1's 17 `GroupConfig` keys, none of trunk's.
-#[test]
-fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
-    let image = MetadataImage::new(Uuid::nil());
-    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
-    let group = describe_one(
-        &image,
-        &resource_request(RESOURCE_TYPE_GROUP, "streams-1", None),
-        ServingBroker {
-            node: krabka_metadata::NodeId(1),
-            static_broker: untuned(),
-            loggers: BrokerLoggers {
-                node_id: 1,
-                levels: &levels,
-            },
-            unstable_api_versions: UnstableApiVersions::Disabled,
-        },
-        300_000,
-        EVERYTHING,
-    );
-    let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
-    check!(
-        reported
-            == vec![
-                "consumer.assignment.interval.ms",
-                "consumer.heartbeat.interval.ms",
-                "consumer.session.timeout.ms",
-                "share.assignment.interval.ms",
-                "share.auto.offset.reset",
-                "share.delivery.count.limit",
-                "share.heartbeat.interval.ms",
-                "share.isolation.level",
-                "share.partition.max.record.locks",
-                "share.record.lock.duration.ms",
-                "share.renew.acknowledge.enable",
-                "share.session.timeout.ms",
-                "streams.assignment.interval.ms",
-                "streams.heartbeat.interval.ms",
-                "streams.initial.rebalance.delay.ms",
-                "streams.num.standby.replicas",
-                "streams.session.timeout.ms",
-            ]
-    );
 }
 
 /// #1345: Kafka 4.3.1's `GroupCoordinatorConfig` defines no
@@ -2018,168 +2237,6 @@ fn a_broker_reports_its_topic_default_keys_typed() {
     }
 }
 
-/// Kafka's `createBrokerConfigEntry` types a stored key by `KafkaConfig`'s own
-/// `ConfigDef`, and withholds a value only for a `PASSWORD` key or a name Kafka
-/// does not define (`KafkaConfig.maybeSensitive`). `readOnly` is
-/// `!ALL_DYNAMIC_CONFIGS.contains(name)`, so a listener override and a name
-/// Kafka does not define both read back read-only.
-#[test]
-fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
-    /// The key, its stored value, and the value, sensitivity, wire type and
-    /// read-only flag the entry carries.
-    struct StoredKeyCase {
-        name: &'static str,
-        stored: &'static str,
-        value: Option<&'static str>,
-        sensitive: bool,
-        wire_type: i8,
-        read_only: bool,
-    }
-
-    let cases: [StoredKeyCase; 7] = [
-        StoredKeyCase {
-            name: "num.io.threads",
-            stored: "8",
-            value: Some("8"),
-            sensitive: false,
-            wire_type: 3,
-            read_only: false,
-        },
-        StoredKeyCase {
-            name: "max.connections",
-            stored: "100",
-            value: Some("100"),
-            sensitive: false,
-            wire_type: 3,
-            read_only: false,
-        },
-        StoredKeyCase {
-            name: "follower.fetch.last.tiered.offset.enable",
-            stored: "true",
-            value: Some("true"),
-            sensitive: false,
-            wire_type: 1,
-            read_only: false,
-        },
-        StoredKeyCase {
-            name: "listener.name.external.ssl.keystore.location",
-            stored: "/keys/external.jks",
-            value: Some("/keys/external.jks"),
-            sensitive: false,
-            wire_type: 2,
-            read_only: true,
-        },
-        StoredKeyCase {
-            name: "listener.name.external.ssl.keystore.password",
-            stored: "hunter2",
-            value: None,
-            sensitive: true,
-            wire_type: 9,
-            read_only: true,
-        },
-        // The mechanism-prefixed JAAS config is typed by the key it ends in.
-        StoredKeyCase {
-            name: "listener.name.external.plain.sasl.jaas.config",
-            stored: "secret",
-            value: None,
-            sensitive: true,
-            wire_type: 9,
-            read_only: true,
-        },
-        // A name `KafkaConfig` does not define: untyped, so withheld.
-        StoredKeyCase {
-            name: "plugin.custom.key",
-            stored: "x",
-            value: None,
-            sensitive: true,
-            wire_type: 0,
-            read_only: true,
-        },
-    ];
-    for StoredKeyCase {
-        name,
-        stored,
-        value,
-        sensitive,
-        wire_type,
-        read_only,
-    } in cases
-    {
-        for (resource_name, node) in [("", DEFAULT_BROKER_CONFIG_NODE_ID), ("1", SERVING_NODE)] {
-            let image = image_with_broker_config(node, &[ConfigPair {
-                name,
-                value: stored,
-            }]);
-            let result = describe(
-                &image,
-                RESOURCE_TYPE_BROKER,
-                resource_name,
-                Some(vec![name.to_owned()]),
-                VALUES_ONLY,
-            );
-            let entry = entry_named(&result, name);
-            check!(
-                (
-                    entry.value.as_deref(),
-                    entry.is_sensitive,
-                    entry.config_type,
-                    entry.read_only,
-                ) == (value, sensitive, wire_type, read_only),
-                "{name} on {resource_name:?}"
-            );
-        }
-    }
-}
-
-/// Kafka's `ConfigHelperUtils.createResponseConfig` walks
-/// `config.nonInternalValues()` for a named broker, so tools that read
-/// `KafkaConfig` through `DescribeConfigs` find every non-internal key, at its
-/// default unless the process holds a value.
-#[test]
-fn a_named_broker_reports_every_kafka_config_key() {
-    let image = MetadataImage::new(Uuid::nil());
-    let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
-
-    for row in KAFKA_BROKER_CONFIGS {
-        let count = result
-            .configs
-            .iter()
-            .filter(|entry| entry.name == row.name)
-            .count();
-        check!(count == usize::from(!row.internal), "{}", row.name);
-    }
-
-    // `num.network.threads` is not one krabka holds a static value of: it is
-    // the built-in default, typed, at `DEFAULT_CONFIG`.
-    let entry = entry_named(&result, "num.network.threads");
-    check!(
-        (
-            entry.value.as_deref(),
-            entry.config_source,
-            entry.config_type,
-            entry.read_only,
-            entry.synonyms.clone(),
-        ) == (
-            Some("3"),
-            CONFIG_SOURCE_DEFAULT,
-            ConfigType::Int.wire(),
-            false,
-            vec![synonym("num.network.threads", "3", CONFIG_SOURCE_DEFAULT)],
-        )
-    );
-    // A `PASSWORD` key is typed and withheld, and a read-only key says so.
-    let entry = entry_named(&result, "ssl.keystore.password");
-    check!((entry.value.clone(), entry.is_sensitive, entry.config_type) == (None, true, 9));
-    check!(entry_named(&result, "auto.leader.rebalance.enable").read_only);
-    // An internal key is not listed.
-    check!(
-        !result
-            .configs
-            .iter()
-            .any(|entry| entry.name == "unstable.api.versions.enable")
-    );
-}
-
 /// A key this process holds a static value of reports it at
 /// `STATIC_BROKER_CONFIG`, with the built-in default beneath it, as Kafka
 /// reports a key that `server.properties` names.
@@ -2665,74 +2722,6 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
             == named("socket.send.buffer.bytes", "1048576", "102400")
     );
     check!(chain(&broker, "queued.max.requests") == untouched("queued.max.requests", "500"));
-}
-
-/// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
-/// override above the broker synonym, or a `DEFAULT_CONFIG` entry under the
-/// group key's own name for a key with no broker synonym.
-#[test]
-fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
-    let image = group_config_image("streams.session.timeout.ms", "60000");
-    let result = describe(&image, RESOURCE_TYPE_GROUP, "g", None, EVERYTHING);
-    let names: Vec<&str> = result
-        .configs
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect();
-    let kafka: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
-    check!(names == kafka);
-
-    let cases = [
-        (
-            "consumer.session.timeout.ms",
-            "45000",
-            CONFIG_SOURCE_DEFAULT,
-            vec![synonym(
-                "group.consumer.session.timeout.ms",
-                "45000",
-                CONFIG_SOURCE_DEFAULT,
-            )],
-        ),
-        (
-            "streams.session.timeout.ms",
-            "60000",
-            CONFIG_SOURCE_DYNAMIC_GROUP,
-            vec![
-                synonym(
-                    "streams.session.timeout.ms",
-                    "60000",
-                    CONFIG_SOURCE_DYNAMIC_GROUP,
-                ),
-                synonym(
-                    "group.streams.session.timeout.ms",
-                    "45000",
-                    CONFIG_SOURCE_DEFAULT,
-                ),
-            ],
-        ),
-        (
-            "share.isolation.level",
-            "read_uncommitted",
-            CONFIG_SOURCE_DEFAULT,
-            vec![synonym(
-                "share.isolation.level",
-                "read_uncommitted",
-                CONFIG_SOURCE_DEFAULT,
-            )],
-        ),
-    ];
-    for (key, value, source, synonyms) in cases {
-        let entry = entry_named(&result, key);
-        check!(
-            (
-                entry.value.as_deref(),
-                entry.config_source,
-                entry.is_sensitive,
-                &entry.synonyms
-            ) == (Some(value), source, false, &synonyms),
-            "{key}"
-        );
-    }
 }
 
 /// `transaction.partition.verification.enable` is a dynamic broker config with

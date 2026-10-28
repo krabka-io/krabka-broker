@@ -265,7 +265,11 @@ pub fn short_name(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest_bdd::{Slot, datatable::Rows},
+    };
 
     fn map(specs: &[&str], principal: &str, default_realm: &str) -> Option<String> {
         let rules: Vec<_> = specs
@@ -275,151 +279,74 @@ mod tests {
         short_name(&rules, principal, default_realm).ok()
     }
 
-    /// Kafka's `KerberosNameTest`, plus the rules the audit called out.
-    #[test]
-    fn rules_map_principals_as_kafka_does() {
-        /// A principal mapped under some rules to a short name, or to none.
-        struct Mapping<'a> {
-            specs: &'a [&'a str],
-            principal: &'a str,
-            expected: Option<&'a str>,
-        }
-        let realm = "REALM.COM";
-        let cases: [Mapping<'_>; 22] = [
-            // DEFAULT takes the first component whatever their number.
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "user@REALM.COM",
-                expected: Some("user"),
-            },
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "user/host@REALM.COM",
-                expected: Some("user"),
-            },
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "kafka/host.example.com@REALM.COM",
-                expected: Some("kafka"),
-            },
-            // ... but only in the default realm.
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "user@OTHER.REALM",
-                expected: None,
-            },
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "user/host@OTHER.REALM",
-                expected: None,
-            },
-            // A principal with no realm is already a short name.
-            Mapping {
-                specs: &["RULE:[1:$1]s/x/y/"],
-                principal: "user",
-                expected: Some("user"),
-            },
-            Mapping {
-                specs: &[],
-                principal: "user",
-                expected: Some("user"),
-            },
-            // `(match)` is a whole-string match.
-            Mapping {
-                specs: &["RULE:[1:$1](ali)s/^/x/", "DEFAULT"],
-                principal: "alice@REALM.COM",
-                expected: Some("alice"),
-            },
-            Mapping {
-                specs: &["RULE:[1:$1](ali.*)s/^/x/"],
-                principal: "alice@REALM.COM",
-                expected: Some("xalice"),
-            },
-            Mapping {
-                specs: &["RULE:[1:$1](a|al)s/^/x/"],
-                principal: "al@REALM.COM",
-                expected: Some("xal"),
-            },
-            // /L and /U change the case of the result.
-            Mapping {
-                specs: &["RULE:[1:$1]/L"],
-                principal: "Alice@REALM.COM",
-                expected: Some("alice"),
-            },
-            Mapping {
-                specs: &["RULE:[1:$1]/U"],
-                principal: "Alice@REALM.COM",
-                expected: Some("ALICE"),
-            },
-            Mapping {
-                specs: &["RULE:[1:$1](.*)s/A/a/g/U"],
-                principal: "BANANA@REALM.COM",
-                expected: Some("BANANA"),
-            },
-            Mapping {
-                specs: &["RULE:[1:$1]s/A/a/L"],
-                principal: "Alice@REALM.COM",
-                expected: Some("alice"),
-            },
-            // The parameters: `$0` is the realm.
-            Mapping {
-                specs: &["RULE:[2:$1@$0](.*@REALM.COM)s/@.*//"],
-                principal: "user/host@REALM.COM",
-                expected: Some("user"),
-            },
-            Mapping {
-                specs: &["RULE:[2:$1.$2@$0]s/^(.*)\\.(.*)@.*$/$2-$1/"],
-                principal: "user/host@REALM.COM",
-                expected: Some("host-user"),
-            },
-            // First match wins, and a component count that differs is a skip.
-            Mapping {
-                specs: &["RULE:[2:$1]s/^/two-/", "RULE:[1:$1]s/^/one-/"],
-                principal: "alice@REALM.COM",
-                expected: Some("one-alice"),
-            },
-            // A result that keeps a `/` or `@` is an error, not a fall-through.
-            Mapping {
-                specs: &["RULE:[2:$1/$2]", "DEFAULT"],
-                principal: "user/host@REALM.COM",
-                expected: None,
-            },
-            Mapping {
-                specs: &["RULE:[1:$1@$0]", "DEFAULT"],
-                principal: "user@REALM.COM",
-                expected: None,
-            },
-            // No rule matches.
-            Mapping {
-                specs: &["RULE:[1:$1](nope)s/a/b/"],
-                principal: "alice@REALM.COM",
-                expected: None,
-            },
-            // A component with a `/` past the second is malformed.
-            Mapping {
-                specs: &["DEFAULT"],
-                principal: "a/b/c@REALM.COM",
-                expected: None,
-            },
-            // A `$` with no number in the format is an error.
-            Mapping {
-                specs: &["RULE:[1:$x]"],
-                principal: "alice@REALM.COM",
-                expected: None,
-            },
-        ];
-        for Mapping {
-            specs,
-            principal,
-            expected,
-        } in cases
-        {
-            check!(
-                map(specs, principal, realm).as_deref() == expected,
-                "{specs:?} on {principal}"
-            );
-        }
+    #[derive(Default)]
+    struct KerberosPrincipalScenario {
+        rules: Vec<String>,
+        principal: String,
+        realm: String,
+        short_name: Slot<Option<String>>,
     }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct LocalNameRule {
+        rule: String,
+    }
+
+    #[rstest::fixture]
+    fn kerberos_principal() -> KerberosPrincipalScenario {
+        // Keep kerberos principal inputs and observations fresh for each scenario.
+        KerberosPrincipalScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("the Kerberos default realm is {realm}")]
+    fn kerberos_default_realm(kerberos_principal: &mut KerberosPrincipalScenario, realm: String) {
+        kerberos_principal.realm = realm;
+    }
+
+    #[rstest_bdd_macros::given("the ordered Kerberos short-name rules are:")]
+    fn kerberos_mapping_rules(
+        kerberos_principal: &mut KerberosPrincipalScenario,
+        #[datatable] rows: Rows<LocalNameRule>,
+    ) {
+        kerberos_principal.rules = rows.into_iter().map(|row| row.rule).collect();
+    }
+
+    #[rstest_bdd_macros::given("the authenticated Kerberos principal is {principal}")]
+    fn authenticated_kerberos_principal(
+        kerberos_principal: &mut KerberosPrincipalScenario,
+        principal: String,
+    ) {
+        kerberos_principal.principal = principal;
+    }
+
+    #[rstest_bdd_macros::when("the broker derives the Kerberos principal's ACL short name")]
+    fn map_kerberos_principal(kerberos_principal: &mut KerberosPrincipalScenario) {
+        let rules: Vec<_> = kerberos_principal
+            .rules
+            .iter()
+            .map(String::as_str)
+            .collect();
+        kerberos_principal.short_name.set(map(
+            &rules,
+            &kerberos_principal.principal,
+            &kerberos_principal.realm,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the Kerberos ACL short name is {expected}")]
+    fn kerberos_short_name(kerberos_principal: &KerberosPrincipalScenario, expected: String) {
+        check!(kerberos_principal.short_name.get() == Some(Some(expected)));
+    }
+
+    #[rstest_bdd_macros::then("the Kerberos principal cannot be mapped to an ACL short name")]
+    fn unmapped_kerberos_principal(kerberos_principal: &KerberosPrincipalScenario) {
+        check!(kerberos_principal.short_name.get() == Some(None));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/network/auth/kerberos_name.feature",
+        fixtures = [kerberos_principal: KerberosPrincipalScenario]
+    );
 
     /// Kafka does not know the default realm on a host with no krb5 config,
     /// and `DEFAULT` then maps nothing.

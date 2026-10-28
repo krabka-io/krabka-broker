@@ -128,25 +128,21 @@ pub fn reauth_config(
     config
 }
 
-/// A running broker and the address it listens on.
+/// A running broker.
 pub struct ListeningBroker {
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: SocketAddr,
 }
 
-/// A running broker, the address it listens on, and the log directory that
-/// backs it.
+/// A running broker and the log directory that backs it.
 pub struct RetainedBroker {
     pub log_dir: tempfile::TempDir,
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: SocketAddr,
 }
 
 /// A [`RetainedBroker`] with the first socket opened to it.
 pub struct BrokerSocket {
     pub log_dir: tempfile::TempDir,
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: SocketAddr,
     pub stream: TcpStream,
 }
 
@@ -164,11 +160,7 @@ pub async fn start_scram_admin(
     let broker = krabka_broker::Broker::start(config)
         .await
         .expect("broker must start");
-    let addr = broker.listen_addr();
-    ListeningBroker {
-        handle: broker,
-        addr,
-    }
+    ListeningBroker { handle: broker }
 }
 
 pub fn alice_plain_config(log_dir: PathBuf, password: String) -> krabka_broker::BrokerConfig {
@@ -211,14 +203,11 @@ pub async fn scram_admin_fixture(
     mechanisms: Vec<krabka_security::SaslMechanism>,
 ) -> RetainedBroker {
     let dir = tempfile::tempdir().unwrap();
-    let ListeningBroker {
-        handle: broker,
-        addr,
-    } = start_scram_admin(dir.path(), &admin_plain_password(), mechanisms).await;
+    let ListeningBroker { handle: broker } =
+        start_scram_admin(dir.path(), &admin_plain_password(), mechanisms).await;
     RetainedBroker {
         log_dir: dir,
         handle: broker,
-        addr,
     }
 }
 
@@ -232,7 +221,6 @@ pub async fn alice_plain_socket(password: String) -> BrokerSocket {
     BrokerSocket {
         log_dir: dir,
         handle: broker,
-        addr,
         stream,
     }
 }

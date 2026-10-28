@@ -45,22 +45,57 @@ fn self_check() -> Contract {
     Contract::from_file(&manifest_dir().join("../../bench/soak/self-check.yaml")).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
-    let (_dir, broker) = standalone_broker().await;
-    let bootstrap = broker.listen_addr().to_string();
-    let admin = connect_client(&bootstrap, None).await;
-    let mut contract = self_check();
-    // A compacted path needs a compacted topic and a cleaner pass to say
-    // anything. The idempotent and transactional paths are what is under test.
-    contract
+struct SoakLoad {
+    broker: Option<krabka_broker::BrokerHandle>,
+    directory: Option<tempfile::TempDir>,
+    contract: Contract,
+    bootstrap: String,
+    evidence: Option<Evidence>,
+    reader: Option<ReaderLedger>,
+}
+
+#[rstest::fixture]
+fn soak_load() -> SoakLoad {
+    // Each workload gets an isolated broker and ledger.
+    SoakLoad {
+        contract: self_check(),
+        broker: None,
+        directory: None,
+        bootstrap: String::new(),
+        evidence: None,
+        reader: None,
+    }
+}
+
+impl SoakLoad {
+    fn endpoint(&self) -> Endpoint { Endpoint::plaintext(self.bootstrap.clone()) }
+}
+
+#[rstest_bdd_macros::given(
+    "the self-check idempotent and transactional paths have matching topics on an undisturbed broker"
+)]
+async fn soak_load_topics(soak_load: &mut SoakLoad) {
+    let (directory, broker) = standalone_broker().await;
+    soak_load.bootstrap = broker.listen_addr().to_string();
+    soak_load.directory = Some(directory);
+    soak_load.broker = Some(broker);
+    soak_load
+        .contract
         .paths
         .retain(|path| path.semantics != Semantics::Compacted);
-    for path in &contract.paths {
+    let admin = connect_client(&soak_load.bootstrap, None).await;
+    for path in &soak_load.contract.paths {
         create_topic(&admin, &path.name, path.partitions).await;
     }
-    let endpoint = Endpoint::plaintext(bootstrap);
+    admin.close();
+}
 
+#[rstest_bdd_macros::when(
+    "the workload runs for 12 seconds, stops, settles transactions and reads all declared isolation levels and acknowledged group commits"
+)]
+async fn run_soak_load(soak_load: &mut SoakLoad) {
+    let contract = soak_load.contract.clone();
+    let endpoint = soak_load.endpoint();
     let prepared = prepare(&contract, &endpoint).await.unwrap();
     let ctx = Arc::new(
         LoadContext::builder()
@@ -90,7 +125,7 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
             commit_checks(&endpoint, tracker, FINAL_COMMIT_CHECK, &tracker.snapshot()).await,
         );
     }
-    let evidence = Evidence {
+    soak_load.evidence = Some(Evidence {
         producers: outcome
             .producers
             .into_iter()
@@ -99,9 +134,16 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
         readers,
         commits,
         ..Evidence::default()
-    };
+    });
+}
 
-    check!(reconcile(&contract, &[], &evidence).findings == []);
+#[rstest_bdd_macros::then(
+    "reconciliation has no findings, committed and aborted transactions both occurred and group commits were checked"
+)]
+fn reconciled_soak_load(soak_load: &SoakLoad) {
+    let contract = &soak_load.contract;
+    let evidence = soak_load.evidence.as_ref().expect("load read back");
+    check!(reconcile(contract, &[], evidence).findings == []);
     // Both outcomes happened, so the hidden aborts above were really tested.
     let transactional = producer_name("classic-transactional");
     let ledger = evidence
@@ -121,20 +163,17 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
     check!(!evidence.commits.is_empty());
 }
 
-/// A record its producer sent once but that sits at two offsets is reported
-/// with both, and a record no soak producer wrote is left out of the ledger.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_skipped() {
-    let (_dir, broker) = standalone_broker().await;
-    let bootstrap = broker.listen_addr().to_string();
-    let admin = connect_client(&bootstrap, None).await;
-    let contract = self_check();
-    let path = contract
+#[rstest_bdd_macros::when(
+    "the idempotent path stores sequence 0 twice and an unrelated probe record at offset 2"
+)]
+async fn duplicate_soak_records(soak_load: &SoakLoad) {
+    let bootstrap = soak_load.bootstrap.clone();
+    let path = soak_load
+        .contract
         .paths
         .iter()
         .find(|path| path.semantics == Semantics::Idempotent)
-        .unwrap();
-    create_topic(&admin, &path.name, path.partitions).await;
+        .expect("idempotent path");
     let producer = producer_name(&path.name);
     {
         let sender = default_producer(bootstrap.clone()).await;
@@ -154,15 +193,47 @@ async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_sk
         sender.close().await
     }
     .unwrap();
-    let endpoint = Endpoint::plaintext(bootstrap);
+    let endpoint = soak_load.endpoint();
     // The drill's probe: a value no soak producer writes.
     check!(round_trip(&endpoint, &path.name, 0).await == Ok(2));
+}
 
-    let reader = read_back(&endpoint, path, Isolation::ReadUncommitted, &producer).await;
+#[rstest_bdd_macros::when("the uncommitted reader reads the idempotent producer's ledger")]
+async fn read_duplicate_soak_records(soak_load: &mut SoakLoad) {
+    let path = soak_load
+        .contract
+        .paths
+        .iter()
+        .find(|path| path.semantics == Semantics::Idempotent)
+        .expect("idempotent path");
+    let producer = producer_name(&path.name);
+    soak_load.reader = Some(
+        read_back(
+            &soak_load.endpoint(),
+            path,
+            Isolation::ReadUncommitted,
+            &producer,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the ledger contains sequence 0 at offsets 0 and 1, reports that duplicate and excludes the unrelated probe record"
+)]
+fn duplicated_load_ledger(soak_load: &SoakLoad) {
+    let path = soak_load
+        .contract
+        .paths
+        .iter()
+        .find(|path| path.semantics == Semantics::Idempotent)
+        .expect("idempotent path");
+    let producer = producer_name(&path.name);
+    let reader = soak_load.reader.as_ref().expect("duplicate read back");
 
     assert!(
         reader
-            == ReaderLedger {
+            == &ReaderLedger {
                 path: path.name.clone(),
                 isolation: Isolation::ReadUncommitted,
                 producer,
@@ -174,4 +245,34 @@ async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_sk
                 latest_by_key: BTreeMap::new(),
             }
     );
+}
+
+impl SoakLoad {
+    async fn shutdown(self) {
+        let Self {
+            broker, directory, ..
+        } = self;
+        broker.expect("workload broker").shutdown().await;
+        drop(directory);
+    }
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_load.feature",
+    name = "an undisturbed load reads back once and hides what it aborted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted(soak_load: SoakLoad) {
+    soak_load.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_load.feature",
+    name = "a record stored twice is read back at both offsets and a stranger is skipped"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_skipped(
+    soak_load: SoakLoad,
+) {
+    soak_load.shutdown().await;
 }

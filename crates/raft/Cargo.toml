@@ -55,6 +55,10 @@ uuid = { workspace = true }
 krabka-security = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 bon = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }

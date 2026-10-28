@@ -62,38 +62,6 @@ async fn produce_one(p: &support::InProcess, topic: &str, topic_id: Uuid) {
     assert2::check!(resp.responses[0].partition_responses[0].error_code == 0);
 }
 
-/// Fill partition 0 and send the same `DeleteRecords` twice.
-///
-/// A trim only deletes something when the partition holds records below the
-/// requested offset, and only the first of two identical requests moves the
-/// log start: the second is the idempotent retry that must audit nothing.
-async fn trim_twice(p: &support::InProcess, topic: &str) {
-    let topic_id = p
-        .client
-        .send(named_topic_metadata(topic))
-        .await
-        .expect("Metadata")
-        .topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(topic))
-        .map(|t| t.topic_id)
-        .expect("topic in Metadata response");
-    for _ in 0..2 {
-        produce_one(p, topic, topic_id).await;
-    }
-
-    let request = delete_records_request(
-        vec![delete_records_topic(topic, vec![delete_records_partition(
-            0, 2,
-        )])],
-        5_000,
-    );
-    for what in ["DeleteRecords", "DeleteRecords (retry)"] {
-        let resp = p.client.send(request.clone()).await.expect(what);
-        assert2::check!(resp.topics[0].partitions[0].error_code == 0, "{what}");
-    }
-}
-
 /// The audit records that name one admin operation.
 fn records_for(records: &[serde_json::Value], operation: &str) -> usize {
     records
@@ -102,19 +70,76 @@ fn records_for(records: &[serde_json::Value], operation: &str) -> usize {
         .count()
 }
 
-#[tokio::test]
-async fn audit_topic_exists_after_startup() {
-    let p = support::start().await;
-    p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
+use {
+    krabka_broker::BrokerHandle,
+    krabka_client_core::{Client, ClientError},
+    krabka_protocol::owned::metadata_response::MetadataResponse,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::DataTableRow,
+    serde_json::Value,
+    tempfile::TempDir,
+};
+struct AdminMutationOutcome {
+    operation: &'static str,
+    error: i16,
+}
+struct AuditEmission {
+    plain: Option<support::InProcess>,
+    topic: String,
+    user: String,
+    metadata: Option<MetadataResponse>,
+    mutations: Vec<AdminMutationOutcome>,
+    records: Option<Vec<Value>>,
+    sasl_broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    bootstrap: String,
+    reader: Option<Client>,
+    bad_login: Option<Result<(), ClientError>>,
+}
+#[rstest::fixture]
+fn emission() -> AuditEmission {
+    // Start this scenario with fresh inputs and observations.
 
-    // Send a Metadata request for `__krabka_audit` and assert the broker
-    // returns it with `error_code == 0` and at least one partition.
+    AuditEmission {
+        plain: None,
+        topic: String::new(),
+        user: String::new(),
+        metadata: None,
+        mutations: Vec::new(),
+        records: None,
+        sasl_broker: None,
+        directory: None,
+        bootstrap: String::new(),
+        reader: None,
+        bad_login: None,
+    }
+}
+#[rstest_bdd_macros::given("a fresh broker with its audit partition initialized")]
+async fn audit_emission_broker(emission: &mut AuditEmission) {
+    let broker = support::start().await;
+    broker
+        .broker
+        .wait_until_partition_present(AUDIT_TOPIC, 0)
+        .await;
+    emission.plain = Some(broker);
+}
+#[rstest_bdd_macros::when("a client requests Metadata for the audit topic")]
+async fn audit_topic_metadata(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
     let resp = p
         .client
         .send(named_topic_metadata(AUDIT_TOPIC))
         .await
         .expect("MetadataRequest failed");
 
+    emission.metadata = Some(resp);
+}
+#[rstest_bdd_macros::then("the audit topic is listed without error and has at least one partition")]
+fn audit_topic_initialized(emission: &AuditEmission) {
+    let resp = emission
+        .metadata
+        .as_ref()
+        .expect("audit Metadata requested");
     let topic = resp
         .topics
         .iter()
@@ -130,14 +155,10 @@ async fn audit_topic_exists_after_startup() {
         !topic.partitions.is_empty(),
         "__krabka_audit has no partitions"
     );
-
-    p.broker.shutdown().await;
 }
-
-#[tokio::test]
-async fn broker_started_event_is_written_to_audit_topic() {
-    let p = support::start().await;
-
+#[rstest_bdd_macros::when("a client fetches the durable startup audit record")]
+async fn read_broker_start_event(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
     // Wait for the BrokerStarted event to be durably written to the audit topic
     // (the sink increments `audit_events` on each successful produce).
     p.broker
@@ -146,37 +167,33 @@ async fn broker_started_event_is_written_to_audit_topic() {
 
     // Fetch visibility (the high watermark) can lag the durable write, so retry
     // until the record is consumable rather than single-shot fetching.
-    support::wait_for_audit_record(&p.client, "BrokerStarted", |j| {
+    let records = support::wait_for_audit_record(&p.client, "BrokerStarted", |j| {
         j["class_uid"] == 6002 && j["activity_name"] == "BrokerStarted"
     })
     .await;
 
-    p.broker.shutdown().await;
+    emission.records = Some(records);
 }
-
-/// Every admin mutation this fixture can drive emits one OCSF `ApiActivity`
-/// record naming the api and the resource it changed.
-///
-/// The requests run in order because they build on each other: the topic has
-/// to exist before its partitions grow, and it has to go away last. The
-/// expectations are then checked as a table. `wait_for_audit_record` reads the
-/// whole topic back on each call, so the order the records land in does not
-/// matter to the assertions.
-///
-/// Four apis are out of this fixture's reach. `AlterPartitionReassignments`,
-/// `UnregisterBroker`, `AddRaftVoter` and `RemoveRaftVoter` need more than one
-/// broker, and the three delegation-token apis need a SASL listener with a
-/// master key. `ElectLeaders` is reachable but moves nothing here: a preferred
-/// election on a one-broker cluster is already at its preferred leader, and an
-/// election that changed no partition is not an audited mutation.
-#[tokio::test]
-async fn every_admin_mutation_is_audited() {
-    let p = support::start().await;
-    p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
-
-    let topic = "audited-orders";
-    let user = "audited-user";
-
+#[rstest_bdd_macros::then("the audit topic contains a BrokerStarted activity of class 6002")]
+fn broker_start_event_audited(emission: &AuditEmission) {
+    assert2::check!(
+        emission
+            .records
+            .as_ref()
+            .expect("audit records fetched")
+            .iter()
+            .any(|row| row["class_uid"] == 6002 && row["activity_name"] == "BrokerStarted")
+    );
+}
+#[rstest_bdd_macros::given("admin mutation inputs name topic {topic} and user {user}")]
+fn audit_mutation_inputs(emission: &mut AuditEmission, topic: String, user: String) {
+    emission.topic = topic;
+    emission.user = user;
+}
+#[rstest_bdd_macros::when("the admin creates the audit example topic")]
+async fn audited_created(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let created = p
         .client
         .send(create_topic_request(
@@ -184,8 +201,15 @@ async fn every_admin_mutation_is_audited() {
         ))
         .await
         .expect("CreateTopics");
-    assert2::check!(created.topics[0].error_code == 0);
-
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "CreateTopics",
+        error: created.topics[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin grows the audit example topic to two partitions")]
+async fn audited_grown(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let grown = p
         .client
         .send(CreatePartitionsRequest {
@@ -200,8 +224,15 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("CreatePartitions");
-    assert2::check!(grown.results[0].error_code == 0);
-
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "CreatePartitions",
+        error: grown.results[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin sets retention to 604800000")]
+async fn audited_altered(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let altered = p
         .client
         .send(AlterConfigsRequest {
@@ -219,12 +250,15 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("AlterConfigs");
-    assert2::check!(altered.responses[0].error_code == 0);
-
-    // The complete replacement below drops both keys the two requests above
-    // stored, and the audit trail has to say so.
-    let dropped = ["retention.ms", "max.message.bytes"];
-
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "AlterConfigs",
+        error: altered.responses[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin incrementally sets maximum message bytes to 1048576")]
+async fn audited_incremental(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let incremental = p
         .client
         .send(IncrementalAlterConfigsRequest {
@@ -243,10 +277,15 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("IncrementalAlterConfigs");
-    assert2::check!(incremental.responses[0].error_code == 0);
-
-    // A topic `AlterConfigs` replaces the whole override map, so this request
-    // deletes both stored keys by omitting them. The record has to name them.
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "IncrementalAlterConfigs",
+        error: incremental.responses[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin replaces all overrides with cleanup policy delete")]
+async fn audited_replaced(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let replaced = p
         .client
         .send(AlterConfigsRequest {
@@ -264,8 +303,15 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("AlterConfigs (replacement)");
-    assert2::check!(replaced.responses[0].error_code == 0);
-
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "AlterConfigs replacement",
+        error: replaced.responses[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin sets the audit user producer byte quota to {rate}")]
+async fn audited_quotas(emission: &mut AuditEmission, rate: f64) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let user = emission.user.as_str();
     let quotas = p
         .client
         .send(AlterClientQuotasRequest {
@@ -277,7 +323,7 @@ async fn every_admin_mutation_is_audited() {
                 }],
                 ops: vec![QuotaOp {
                     key: "producer_byte_rate".into(),
-                    value: 1_048_576.0,
+                    value: rate,
                     remove: false,
                     ..Default::default()
                 }],
@@ -287,11 +333,17 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("AlterClientQuotas");
-    assert2::check!(quotas.entries[0].error_code == 0);
-
-    // KIP-554 puts PBKDF2 on the client, so these bytes stand in for a
-    // client-stretched password. The audit record names the user and nothing
-    // else: no salt, no salted password, no derived key.
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "AlterClientQuotas",
+        error: quotas.entries[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when(
+    "the admin provisions audit user SCRAM SHA 256 with salt {salt} and salted password {password}"
+)]
+async fn audited_scram(emission: &mut AuditEmission, salt: String, password: String) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let user = emission.user.as_str();
     let scram = p
         .client
         .send(AlterUserScramCredentialsRequest {
@@ -299,20 +351,23 @@ async fn every_admin_mutation_is_audited() {
                 scram_upsertion()
                     .name((user).into())
                     .mechanism(ScramAlgorithm::Sha256)
-                    .salt(bytes::Bytes::from_static(b"audited-salt"))
-                    .salted_password(bytes::Bytes::from_static(
-                        b"audited-salted-password-32-byte",
-                    ))
+                    .salt(bytes::Bytes::from(salt))
+                    .salted_password(bytes::Bytes::from(password))
                     .call(),
             ],
             ..Default::default()
         })
         .await
         .expect("AlterUserScramCredentials");
-    assert2::check!(scram.results[0].error_code == 0);
-
-    trim_twice(&p, topic).await;
-
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "AlterUserScramCredentials",
+        error: scram.results[0].error_code,
+    });
+}
+#[rstest_bdd_macros::when("the admin deletes the audit example topic")]
+async fn audited_deleted(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
     let deleted = p
         .client
         .send(DeleteTopicsRequest {
@@ -325,30 +380,81 @@ async fn every_admin_mutation_is_audited() {
         })
         .await
         .expect("DeleteTopics");
-    assert2::check!(deleted.responses[0].error_code == 0);
-
-    // One row per audited api: the OCSF operation name, and the resource the
-    // record has to name first.
-    let expected = [
-        ("CreateTopics", topic.to_owned()),
-        ("CreatePartitions", topic.to_owned()),
-        ("AlterConfigs", topic.to_owned()),
-        ("IncrementalAlterConfigs", topic.to_owned()),
-        ("AlterClientQuotas", format!("user={user}")),
-        ("AlterUserScramCredentials", user.to_owned()),
-        ("DeleteRecords", format!("{topic}-0")),
-        ("DeleteTopics", topic.to_owned()),
-    ];
-    for (operation, resource) in expected {
-        support::wait_for_audit_record(&p.client, operation, |j| {
-            j["class_uid"] == 6003
-                && j["api"]["operation"] == operation
-                && j["status_id"] == 1
-                && j["resources"][0]["name"] == resource
+    emission.mutations.push(AdminMutationOutcome {
+        operation: "DeleteTopics",
+        error: deleted.responses[0].error_code,
+    });
+}
+#[rstest_bdd_macros::then("the {operation} admin mutation succeeds")]
+fn audited_mutation_succeeded(emission: &AuditEmission, operation: String) {
+    let result = emission
+        .mutations
+        .iter()
+        .rev()
+        .find(|result| result.operation == operation)
+        .expect("the named mutation was attempted");
+    assert2::check!(
+        result.error == 0,
+        "{} failed with {}",
+        result.operation,
+        result.error
+    );
+}
+#[rstest_bdd_macros::given("the audit example topic has two records eligible for trimming")]
+async fn audit_trim_input(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let topic = emission.topic.as_str();
+    let topic_id = support::topic_id_for(&p.client, topic).await;
+    for _ in 0..2 {
+        produce_one(p, topic, topic_id).await;
+    }
+}
+#[rstest_bdd_macros::when("the admin trims the topic before offset 2 and retries the same trim")]
+async fn audit_retried_trim(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let request = delete_records_request(
+        vec![delete_records_topic(&emission.topic, vec![
+            delete_records_partition(0, 2),
+        ])],
+        5_000,
+    );
+    for operation in ["DeleteRecords", "DeleteRecords retry"] {
+        let response = p.client.send(request.clone()).await.expect(operation);
+        emission.mutations.push(AdminMutationOutcome {
+            operation,
+            error: response.topics[0].partitions[0].error_code,
+        });
+    }
+}
+#[derive(DataTableRow)]
+struct ExpectedMutationAudit {
+    operation: String,
+    resource: String,
+}
+#[rstest_bdd_macros::then(
+    "each successful admin mutation has audit evidence naming its changed resource:"
+)]
+async fn audit_all_mutations(
+    emission: &AuditEmission,
+    #[datatable] rows: Rows<ExpectedMutationAudit>,
+) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    for row in rows {
+        support::wait_for_audit_record(&p.client, &row.operation, |record| {
+            record["class_uid"] == 6003
+                && record["api"]["operation"] == row.operation
+                && record["status_id"] == 1
+                && record["resources"][0]["name"] == row.resource
         })
         .await;
     }
-
+}
+#[rstest_bdd_macros::then(
+    "the replacement audit row names cleanup policy and both removed override keys"
+)]
+async fn audit_replacement_keys(emission: &AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    let dropped = ["retention.ms", "max.message.bytes"];
     // A replacement deletes every stored key it omits, so the record for it
     // names the keys that disappeared beside the one it set.
     support::wait_for_audit_record(&p.client, "AlterConfigs replacement", |j| {
@@ -359,18 +465,27 @@ async fn every_admin_mutation_is_audited() {
             })
     })
     .await;
-
-    // Redaction: nothing the SCRAM request carried reaches the audit topic,
-    // and neither do the config values.
-    let records = support::consume_audit_records(&p.client).await;
-
+}
+#[rstest_bdd_macros::when("the client consumes the full audit topic after all mutations")]
+async fn read_all_mutation_audits(emission: &mut AuditEmission) {
+    let p = emission.plain.as_ref().expect("audit broker started");
+    emission.records = Some(support::consume_audit_records(&p.client).await);
+}
+#[rstest_bdd_macros::then(
+    "the trim is audited once and secrets are redacted while changed config keys remain visible"
+)]
+fn audit_redaction_and_retry(emission: &AuditEmission) {
+    let records = emission
+        .records
+        .as_ref()
+        .expect("full audit topic consumed");
     // The retried trim deleted nothing, and an audit record claiming it did
     // would be false evidence of a second deletion.
     assert2::check!(
-        records_for(&records, "DeleteRecords") == 1,
+        records_for(records, "DeleteRecords") == 1,
         "an idempotent DeleteRecords retry must audit nothing"
     );
-    let dump = serde_json::to_string(&records).expect("audit records serialize");
+    let dump = serde_json::to_string(records).expect("audit records serialize");
     for secret in [
         "audited-salt",
         "audited-salted-password-32-byte",
@@ -383,21 +498,9 @@ async fn every_admin_mutation_is_audited() {
     // retention or a message-size limit moved.
     assert2::check!(dump.contains("retention.ms"));
     assert2::check!(dump.contains("max.message.bytes"));
-
-    p.broker.shutdown().await;
 }
-
-/// A SASL/PLAIN exchange writes one OCSF `Authentication` row per completed
-/// attempt, whichever way it ended.
-///
-/// Both halves run on one broker because each half is one connection, and the
-/// row an auditor needs is the one that says which credential the connection
-/// presented and from where. The success row is written by the reading
-/// client's own login; the failure row by a second connection whose password
-/// is wrong, which the broker answers with `SASL_AUTHENTICATION_FAILED` and
-/// closes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_logins_are_audited_either_way() {
+#[rstest_bdd_macros::given("a SASL audit broker accepts alice password alice-secret")]
+async fn audit_login_broker(emission: &mut AuditEmission) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl()
         .dir(&dir.path().join("data"))
@@ -410,26 +513,47 @@ async fn sasl_plain_logins_are_audited_either_way() {
         .await;
     broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
-    let client = support::sasl_client(&bootstrap, "alice", "alice-secret").await;
-
-    // A wrong password never gets past the SaslAuthenticate frame, so the
-    // failed login is all this client ever leaves behind.
-    let refused = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
+    emission.directory = Some(dir);
+    emission.sasl_broker = Some(broker);
+    emission.bootstrap = bootstrap;
+}
+#[rstest_bdd_macros::when("alice authenticates successfully to read the audit topic")]
+async fn audit_login_success(emission: &mut AuditEmission) {
+    emission.reader =
+        Some(support::sasl_client(&emission.bootstrap, "alice", "alice-secret").await);
+}
+#[rstest_bdd_macros::when("another alice connection uses the wrong password and requests Metadata")]
+async fn audit_login_failure(emission: &mut AuditEmission) {
+    let connection = Client::builder()
+        .bootstrap(&emission.bootstrap)
         .client_id("krabka-broker-test")
         .security(support::sasl_plain_security("alice", "not-the-password"))
         .build()
         .await;
-    let served = match refused {
-        Ok(client) => client.send(MetadataRequest::default()).await.is_ok(),
-        Err(_) => false,
-    };
-    assert2::check!(!served, "a wrong PLAIN password must serve no request");
-
+    emission.bad_login = Some(match connection {
+        Ok(client) => client.send(MetadataRequest::default()).await.map(|_| ()),
+        Err(error) => Err(error),
+    });
+}
+#[rstest_bdd_macros::then("the wrong password connection serves no request")]
+fn audit_bad_login_rejected(emission: &AuditEmission) {
+    assert2::check!(
+        emission
+            .bad_login
+            .as_ref()
+            .expect("wrong-password request attempted")
+            .is_err()
+    );
+}
+#[rstest_bdd_macros::then(
+    "both successful and refused PLAIN logins name User alice and the loopback peer"
+)]
+async fn audit_both_login_results(emission: &AuditEmission) {
+    let client = emission.reader.as_ref().expect("alice authenticated");
     // Both rows name the same principal in the `User:<name>` form the
     // privileged-action rows use, and carry the peer they came from.
     for (what, status_id) in [("the successful login", 1), ("the refused login", 2)] {
-        support::wait_for_audit_record(&client, what, |j| {
+        support::wait_for_audit_record(client, what, |j| {
             j["class_uid"] == 3002
                 && j["status_id"] == status_id
                 && j["auth_protocol"] == "PLAIN"
@@ -438,6 +562,59 @@ async fn sasl_plain_logins_are_audited_either_way() {
         })
         .await;
     }
+}
 
-    broker.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "audit topic exists after startup"
+)]
+#[tokio::test]
+async fn audit_topic_exists_after_startup(emission: AuditEmission) {
+    emission
+        .plain
+        .expect("audit broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "broker started event is written to audit topic"
+)]
+#[tokio::test]
+async fn broker_started_event_is_written_to_audit_topic(emission: AuditEmission) {
+    emission
+        .plain
+        .expect("audit broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "every admin mutation is audited"
+)]
+#[tokio::test]
+async fn every_admin_mutation_is_audited(emission: AuditEmission) {
+    emission
+        .plain
+        .expect("audit broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "sasl plain logins are audited either way"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_plain_logins_are_audited_either_way(emission: AuditEmission) {
+    emission
+        .sasl_broker
+        .expect("SASL broker started")
+        .shutdown()
+        .await;
 }

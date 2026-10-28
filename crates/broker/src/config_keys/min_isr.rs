@@ -157,27 +157,45 @@ mod tests {
         image
     }
 
-    #[yare::parameterized(
-        nothing_published = { None, None, 3, 1 },
-        cluster_default = { None, Some("2"), 3, 2 },
-        topic_override = { Some("3"), Some("2"), 3, 3 },
-        unparseable_value = { Some("many"), None, 3, 1 },
-        replication_factor_caps_topic = { Some("5"), None, 3, 3 },
-        replication_factor_caps_cluster = { None, Some("9"), 2, 2 },
+    #[derive(Default)]
+    struct MinimumIsrScenario {
+        topic: Option<String>,
+        cluster: Option<String>,
+        replicas: usize,
+        resolved: Option<usize>,
+    }
+
+    #[rstest::fixture]
+    fn minimum_isr() -> MinimumIsrScenario {
+        // Keep minimum isr inputs and observations fresh for each scenario.
+        MinimumIsrScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "topic min.insync.replicas is {topic} and the cluster default is {cluster}"
     )]
-    fn the_topic_override_wins_then_the_cluster_default_then_kafkas_own(
-        topic_override: Option<&'static str>,
-        cluster_default: Option<&'static str>,
-        replication_factor: usize,
-        expected: usize,
-    ) {
-        check!(
-            effective_min_insync_replicas(
-                &image(topic_override, cluster_default),
-                "t",
-                replication_factor,
-            ) == expected
-        );
+    fn minimum_isr_overrides(minimum_isr: &mut MinimumIsrScenario, topic: String, cluster: String) {
+        minimum_isr.topic = (topic != "unset").then_some(topic);
+        minimum_isr.cluster = (cluster != "unset").then_some(cluster);
+    }
+
+    #[rstest_bdd_macros::given("the topic's replication factor is {replicas}")]
+    fn minimum_isr_replication(minimum_isr: &mut MinimumIsrScenario, replicas: usize) {
+        minimum_isr.replicas = replicas;
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves the topic's effective minimum ISR")]
+    fn resolve_minimum_isr(minimum_isr: &mut MinimumIsrScenario) {
+        minimum_isr.resolved = Some(effective_min_insync_replicas(
+            &image(minimum_isr.topic.as_deref(), minimum_isr.cluster.as_deref()),
+            "t",
+            minimum_isr.replicas,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the effective minimum ISR is {expected}")]
+    fn effective_minimum_isr(minimum_isr: &MinimumIsrScenario, expected: usize) {
+        check!(minimum_isr.resolved == Some(expected));
     }
 
     /// Node 2 carries a per-node `min.insync.replicas` where node 3 carries
@@ -240,4 +258,6 @@ mod tests {
         );
         check!(clear_elr_records(&image, None).len() == 2);
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config_keys/min_isr.feature", fixtures = [minimum_isr: MinimumIsrScenario]);
 }

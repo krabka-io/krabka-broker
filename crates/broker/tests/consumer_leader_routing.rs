@@ -36,6 +36,7 @@ use {
     krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch},
     std::{
         collections::{HashMap, HashSet, hash_map::Entry},
+        mem,
         time::Duration,
     },
     support::cluster_lock,
@@ -86,77 +87,115 @@ async fn produce_one(client: &Client, topic: &str, topic_id: Uuid, partition: i3
     }
 }
 
-/// A native `Consumer` against a 3-broker rf=1 cluster must fetch records from
-/// every partition. This includes partitions whose leader, and sole replica, is
-/// NOT the broker it bootstrapped at.
-///
-/// With rf=1 the bootstrap broker holds no replica for partitions led by other
-/// nodes. A bootstrap-only consumer gets no records for those partitions. The
-/// consumer MUST route each Fetch to the actual partition leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn consumer_fetches_from_non_bootstrap_leaders() {
-    let _g = cluster_lock().lock().await;
-    let topic = "routing-rf1";
-    let (cluster, bootstrap, topic_id, n_partitions) = start_leader_routing_cluster(topic).await;
+use {
+    krabka_broker::{BrokerConfig, BrokerHandle},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
+};
 
-    // Discriminating guard: assert at least one partition is led by a
-    // non-bootstrap broker. If the controller puts every leader on node 1 the
-    // test would be vacuous (no cross-broker routing exercised). With 6
-    // partitions on 3 brokers at rf=1 this is virtually impossible, but we
-    // verify explicitly.
+#[derive(Default)]
+struct LeaderRouting {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    bootstrap: String,
+    topic: String,
+    non_bootstrap_partitions: Vec<i32>,
+    seen: Option<HashSet<String>>,
+}
+
+#[fixture]
+fn routing() -> LeaderRouting {
+    // Start this scenario with fresh inputs and observations.
+
+    LeaderRouting {
+        guard: None,
+        cluster: Vec::new(),
+        bootstrap: String::new(),
+        topic: String::new(),
+        non_bootstrap_partitions: Vec::new(),
+        seen: None,
+    }
+}
+
+#[given(
+    "a three-broker topic {topic} with six sole-replica partitions containing their pPARTITION values"
+)]
+async fn distributed_records(routing: &mut LeaderRouting, topic: String) {
+    routing.guard = Some(cluster_lock().lock().await);
+    let (cluster, bootstrap, topic_id, n_partitions) = start_leader_routing_cluster(&topic).await;
     let non_bootstrap_partitions =
-        require_non_bootstrap_partitions(&cluster[0].0, topic, n_partitions);
-
-    // Produce one record per partition, sending each Produce to that
-    // partition's leader. With rf=1, only the leader holds the partition at all;
-    // we therefore bootstrap a producer per broker and use the one that owns the
-    // partition's leader.
-    let producer_for = |node: u64| {
-        let addr = cluster
-            .iter()
-            .find(|(h, _, _)| h.node_id() == node)
-            .map(|(_, c, _)| c.listen_addr.to_string())
-            .expect("leader node is in the cluster");
-        async move { connect_with_context(addr, None, "producer client").await }
-    };
+        require_non_bootstrap_partitions(&cluster[0].0, &topic, n_partitions);
     let mut producers: HashMap<u64, Client> = HashMap::new();
-    let mut expected: HashSet<String> = HashSet::new();
-    for p in 0..n_partitions {
+    for partition in 0..n_partitions {
         let leader = cluster[0]
             .0
-            .partition_leader_for_test(topic, p)
+            .partition_leader_for_test(&topic, partition)
             .expect("partition has a leader");
-        if let Entry::Vacant(e) = producers.entry(leader) {
-            e.insert(producer_for(leader).await);
+        if let Entry::Vacant(entry) = producers.entry(leader) {
+            let addr = cluster
+                .iter()
+                .find(|(handle, _, _)| handle.node_id() == leader)
+                .map(|(_, config, _)| config.listen_addr.to_string())
+                .expect("leader node is in cluster");
+            entry.insert(connect_with_context(addr, None, "producer client").await);
         }
-        let v = format!("p{p}");
-        produce_one(&producers[&leader], topic, topic_id, p, &v).await;
-        expected.insert(v);
+        produce_one(
+            &producers[&leader],
+            &topic,
+            topic_id,
+            partition,
+            &format!("p{partition}"),
+        )
+        .await;
     }
+    routing.cluster = cluster;
+    routing.bootstrap = bootstrap;
+    routing.topic = topic;
+    routing.non_bootstrap_partitions = non_bootstrap_partitions;
+}
 
-    // Subscribe a native consumer bootstrapped at node 1. It must deliver
-    // EVERY partition's record. For partitions led by nodes 2 and 3, the
-    // consumer must route the Fetch to the actual leader — the bootstrap broker
-    // has NO replica of those partitions (rf=1), so a bootstrap-only consumer
-    // would return nothing for them.
+#[when("an earliest-offset native consumer subscribes through broker one with group {group}")]
+async fn consume(routing: &mut LeaderRouting, group: String) {
     let mut consumer = routing_consumer(
-        &bootstrap,
+        &routing.bootstrap,
         "routing-consumer-rf1",
-        "routing-grp-rf1",
-        topic,
+        &group,
+        &routing.topic,
         AutoOffsetReset::Earliest,
     )
     .await;
-
-    let seen = collect_routing_values(&mut consumer, expected.len(), |_, _| {}).await;
-    assert!(
-        seen == expected,
-        "consumer must deliver every partition's record (incl. those on non-bootstrap leaders);\n\
-         missing: {:?}\n\
-         non-bootstrap partitions: {non_bootstrap_partitions:?}",
-        expected.difference(&seen).collect::<Vec<_>>()
-    );
-
+    routing.seen = Some(collect_routing_values(&mut consumer, 6, |_, _| {}).await);
     consumer.close().await.unwrap();
-    shutdown_cluster(cluster).await;
+}
+
+#[then("records {values} arrive, including a partition with no replica on the bootstrap broker")]
+fn every_leader(routing: &LeaderRouting, values: String) {
+    assert!(!routing.non_bootstrap_partitions.is_empty());
+    let expected: HashSet<String> = values.split(',').map(str::to_owned).collect();
+    let seen = routing.seen.as_ref().unwrap();
+    assert!(
+        *seen == expected,
+        "missing: {:?}; non-bootstrap partitions: {:?}",
+        expected.difference(seen).collect::<Vec<_>>(),
+        routing.non_bootstrap_partitions
+    );
+}
+
+impl LeaderRouting {
+    async fn shutdown(&mut self) {
+        shutdown_cluster(mem::take(&mut self.cluster)).await;
+        drop(self.guard.take());
+    }
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/consumer_leader_routing.feature",
+    name = "consumer fetches from non bootstrap leaders"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn consumer_fetches_from_non_bootstrap_leaders(routing: LeaderRouting) {
+    routing.shutdown().await;
+    drop(routing);
 }

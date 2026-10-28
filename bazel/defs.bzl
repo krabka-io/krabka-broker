@@ -187,7 +187,7 @@ def _crate(rule, name, srcs, clippy = True, **kwargs):
         rustdoc_flags = ["-Dwarnings"],
     )
 
-def crate_binary(name, crate_root, lib, tests = True, **kwargs):
+def crate_binary(name, crate_root, lib, tests = True, compile_data = None, **kwargs):
     """`rust_binary` for a `[[bin]]` target that links its own crate's library.
 
     Args:
@@ -196,6 +196,8 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
       lib: the `crate_library` target in this package that it links.
       tests: emit a `rust_test` over the binary's own `#[cfg(test)]` module.
         `cargo test` runs those; without this they are simply not run.
+      compile_data: compile-time inputs for both the binary and its tests,
+        including manifests and BDD feature files read by procedural macros.
       **kwargs: passed through to `rust_binary`.
     """
 
@@ -211,6 +213,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
 
     rust_binary(
         name = name,
+        compile_data = compile_data,
         srcs = [crate_root] + module_srcs,
         aliases = _aliases(["deps"]),
         crate_features = _features(),
@@ -226,6 +229,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
     if tests:
         rust_test(
             name = name + "_test",
+            compile_data = compile_data,
             aliases = _aliases(["deps", "dev_deps"]),
             crate = ":" + name,
             crate_features = _features(),

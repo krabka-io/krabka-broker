@@ -8,38 +8,41 @@
 
 use {
     crate::jvm_acceptance::{
-        ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, add_console_acl, assert_console_produced,
-        broker0_advertised, docker_run_kafka_tool_with_image_and_mount, numbered_payload,
-        plain_jaas, produce_console, start_plain_acl_topic_with_ops, write_client_props,
+        ALICE, ALICE_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, add_console_acl,
+        assert_console_produced, assert_numbered_console_values, broker0_advertised,
+        docker_run_kafka_tool_with_image_and_mount, numbered_payload, plain_jaas, produce_console,
+        start_plain_acl_topic_with_ops, write_client_props,
     },
-    assert2::assert,
+    krabka_broker::BrokerHandle,
+    std::process::Output,
+    tempfile::TempDir,
 };
+const TOPIC: &str = "foo";
+const GROUP: &str = "cg-foo";
+struct AuthorizedRecords {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<ClientPropsFile>,
+    produced: Option<Output>,
+    consumed: Option<Output>,
+}
+#[rstest::fixture]
+fn authorized() -> AuthorizedRecords {
+    // Start this scenario with fresh inputs and observations.
 
-/// JVM acceptance: authorized produce + consume round-trip.
-///
-/// Admin (PLAIN super-user) provisions alice with:
-/// - `Allow Read+Write Topic LITERAL "foo"`
-/// - `Allow Read Group LITERAL "cg-foo"`
-///
-/// ACL implications grant Describe from Read/Write on the same resource, so
-/// the test seeds no explicit Describe ACL. The Metadata per-topic check
-/// relies on the implication path.
-///
-/// Alice (PLAIN, no super-user, no cluster perms) then drives
-/// `kafka-console-producer` and `kafka-console-consumer --group cg-foo`
-/// against the broker. This exercises the full `Produce`/`Fetch`/
-/// `JoinGroup`/`OffsetFetch`/`OffsetCommit` authorize preambles end-to-end.
-///
-/// The test deliberately avoids topic auto-creation. Admin creates `foo`
-/// before it grants alice access, so the Produce path does not have to
-/// short-circuit on a missing topic.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_authorized_produce_consume() {
-    const TOPIC: &str = "foo";
-    const GROUP: &str = "cg-foo";
-
-    let (broker, _dir, admin_props) =
+    AuthorizedRecords {
+        broker: None,
+        directory: None,
+        client: None,
+        produced: None,
+        consumed: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "ordinary user alice has literal Read Write on topic foo and Read on group cg foo"
+)]
+async fn grants(authorized: &mut AuthorizedRecords) {
+    let (broker, directory, admin_props) =
         start_plain_acl_topic_with_ops(TOPIC, ALICE, ALICE_PASS, &["Read", "Write"]).await;
     let admin_mount = admin_props.mount_str();
 
@@ -71,10 +74,17 @@ async fn jvm_authorized_produce_consume() {
          acks=1\n",
         plain_jaas(ALICE, ALICE_PASS),
     ));
-    let alice_mount = alice_props.mount_str();
-
-    // Produce 10 records via stdin.
-
+    authorized.broker = Some(broker);
+    authorized.directory = Some(directory);
+    authorized.client = Some(alice_props);
+}
+#[rstest_bdd_macros::when("alice's non idempotent stock producer writes ten records to foo")]
+fn write(authorized: &mut AuthorizedRecords) {
+    let alice_mount = authorized
+        .client
+        .as_ref()
+        .expect("alice properties configured")
+        .mount_str();
     let payload = numbered_payload("msg", 10);
     let producer_out = produce_console(
         KAFKA_IMAGE_TXN,
@@ -83,10 +93,19 @@ async fn jvm_authorized_produce_consume() {
         false,
         payload.as_bytes(),
     );
-    assert_console_produced(&producer_out);
-
-    // Consume via `--group cg-foo --from-beginning` (the group-coordinator
-    // path; exercises JoinGroup/OffsetFetch/OffsetCommit authorize).
+    authorized.produced = Some(producer_out);
+}
+#[rstest_bdd_macros::then("alice's authorized producer succeeds")]
+fn acknowledged(authorized: &AuthorizedRecords) {
+    assert_console_produced(authorized.produced.as_ref().expect("producer completed"));
+}
+#[rstest_bdd_macros::when("alice's stock consumer joins cg foo and reads ten records")]
+fn read(authorized: &mut AuthorizedRecords) {
+    let alice_mount = authorized
+        .client
+        .as_ref()
+        .expect("alice properties configured")
+        .mount_str();
     let consumer_out =
         docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &alice_mount, &[
             "kafka-console-consumer",
@@ -104,11 +123,23 @@ async fn jvm_authorized_produce_consume() {
             "--consumer.config",
             "/client.properties",
         ]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for i in 0..10 {
-        let needle = format!("msg-{i}");
-        assert!(s.contains(&needle), "consumer missing {needle}: {s:?}");
-    }
-
-    broker.shutdown().await;
+    authorized.consumed = Some(consumer_out);
+}
+#[rstest_bdd_macros::then("the authorized group consumer emits every numbered record")]
+fn decoded(authorized: &AuthorizedRecords) {
+    let output = authorized.consumed.as_ref().expect("consumer completed");
+    assert_numbered_console_values(output, "msg-", 10);
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_authorized.feature",
+    name = "Literal topic and group grants permit the complete client record workflow"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_authorized_produce_consume(authorized: AuthorizedRecords) {
+    authorized
+        .broker
+        .expect("ACL broker started")
+        .shutdown()
+        .await;
 }

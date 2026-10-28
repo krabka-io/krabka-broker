@@ -14,134 +14,130 @@ use {
         support,
     },
     assert2::check,
+    krabka_broker::{BrokerHandle, NodeId},
     std::time::{Duration, Instant},
+    tempfile::TempDir,
     tokio::time,
     uuid::Uuid,
 };
 
 const CONTAINER: &str = "krabka-kip595-slice5-spike";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + a published controller port (throwaway spike)"]
-async fn static_mixed_jvm_krabka_quorum() {
+struct MixedReplication {
+    controllers: Option<[BrokerHandle; 2]>,
+    dirs: Option<[TempDir; 2]>,
+    properties: Option<TempDir>,
+    ports: [u16; 3],
+    cluster_id: Uuid,
+    leaders: Vec<(Option<NodeId>, Option<NodeId>)>,
+    logs: String,
+}
+#[rstest::fixture]
+fn mixed() -> MixedReplication {
+    // Start this scenario with fresh inputs and observations.
+
+    MixedReplication {
+        controllers: None,
+        dirs: None,
+        properties: None,
+        ports: [0; 3],
+        cluster_id: Uuid::nil(),
+        leaders: Vec::new(),
+        logs: String::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "two Krabka voters reserve a three-voter static quorum with shared cluster id {id}"
+)]
+async fn static_voters(mixed: &mut MixedReplication, id: String) {
     support::init_tracing();
     docker_rm(CONTAINER);
-
-    // ── shared cluster id ──────────────────────────────────────────────────
-    let cluster_id = Uuid::from_u128(0x4d6b_5533_4f45_5642_4e54_6377_4e54_4a45);
-    let cid_str = kafka_cluster_id_string(cluster_id);
-    eprintln!("shared cluster_id uuid={cluster_id} kafka_str={cid_str}");
-
-    // ── pre-bind 3 controller ports on the host ────────────────────────────
-    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) = MixedQuorum::start(cluster_id, None).await;
-
-    eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
-
-    // ── format + start the JVM controller (id 3) ───────────────────────────
-    // The JVM's controller.quorum.voters lists addresses reachable FROM the
-    // container: the Krabka voters at host.docker.internal, itself on localhost.
-    let props = jvm_controller_properties([p1, p2, p3], "");
-    let _propdir = start_jvm_controller(CONTAINER, p3, &cid_str, &props);
-
-    eprintln!("JVM controller (id 3) container started");
-
-    // ── observe for ~40s ────────────────────────────────────────────────────
-    // Success criterion 1: a single leader emerges across all three voters and
-    // the two Krabka nodes agree on it. Success criterion 2: a follower's image
-    // reflects the leader's committed records.
+    mixed.cluster_id = Uuid::parse_str(&id).expect("cluster UUID");
+    let (ports, controllers, dirs) = MixedQuorum::start(mixed.cluster_id, None).await;
+    mixed.ports = ports;
+    mixed.controllers = Some(controllers);
+    mixed.dirs = Some(dirs);
+}
+#[rstest_bdd_macros::when(
+    "Kafka JVM voter 3 starts and the mixed quorum is observed for 50 seconds"
+)]
+async fn jvm_replication(mixed: &mut MixedReplication) {
+    let props = jvm_controller_properties(mixed.ports, "");
+    mixed.properties = Some(start_jvm_controller(
+        CONTAINER,
+        mixed.ports[2],
+        &kafka_cluster_id_string(mixed.cluster_id),
+        &props,
+    ));
+    let [c1, c2] = mixed.controllers.as_ref().expect("controllers");
     let deadline = Instant::now() + Duration::from_secs(50);
-    let mut elected = false;
-    let mut last_l1 = None;
-    let mut last_l2 = None;
     let mut tick = 0u32;
     while Instant::now() < deadline {
-        let l1 = c1.controller_leader_id();
-        let l2 = c2.controller_leader_id();
-        last_l1 = l1;
-        last_l2 = l2;
-        if l1.is_some() && l1 == l2 {
-            elected = true;
-        }
-        // Krabka-side telemetry every ~2s: leader epoch, HWM, and per-voter
-        // matched index (does the JVM voter id=3 show up as fetching?).
+        mixed
+            .leaders
+            .push((c1.controller_leader_id(), c2.controller_leader_id()));
         if tick.is_multiple_of(4) {
             let qs = c1.controller_quorum_state_for_test();
             eprintln!(
-                "[t={}s] krabka n1 view: leader={:?} epoch={} hwm={} matched={:?}",
+                "[t={}s] leader={:?} epoch={} hwm={} matched={:?}",
                 tick / 2,
                 qs.current_leader,
                 qs.current_term,
                 qs.last_applied_index,
-                qs.per_voter_matched_index,
+                qs.per_voter_matched_index
             );
         }
         tick += 1;
-        // intentional: paces the fixed ~50s observation window; the loop
-        // deliberately never breaks so the external JVM container has time to
-        // boot, join, and produce the logs/telemetry this test greps below.
         time::sleep(Duration::from_millis(500)).await;
     }
-
-    // Capture JVM logs regardless of outcome — they ARE the finding.
-    let log_text = support::save_jvm_logs(CONTAINER, "/tmp/jvm_spike.log");
-    eprintln!("==== JVM controller logs (tail) ====");
-    support::print_log_tail(&log_text, 40);
-
-    // Krabka-side observations.
+    mixed.logs = support::save_jvm_logs(CONTAINER, "/tmp/jvm_spike.log");
+    support::print_log_tail(&mixed.logs, 40);
     eprintln!(
-        "Krabka leader view: node1={last_l1:?} node2={last_l2:?}  \
-         voter_count(n1)={} voter_count(n2)={}",
+        "voter counts: {}, {}",
         c1.voter_count_for_test(),
-        c2.voter_count_for_test(),
+        c2.voter_count_for_test()
     );
-
-    // Did the JVM successfully join the quorum cross-impl? Success looks like
-    // the JVM transitioning to Follower of the Krabka leader (or, less likely,
-    // winning leadership itself). The dominant *failure* signal is the JVM
-    // declaring `UNSUPPORTED_VERSION` ("The node does not support VOTE") because
-    // Krabka's controller-listener ApiVersions handshake advertises no APIs —
-    // so the JVM's NetworkClient refuses to even send Vote/Fetch on the wire.
-    let jvm_joined = log_text.contains("Completed transition to FollowerState")
-        || log_text.contains("Completed transition to LeaderState");
-    let jvm_unsupported_version =
-        log_text.contains("does not support VOTE") || log_text.contains("UNSUPPORTED_VERSION");
-    let jvm_fatal_fault = log_text.contains("Encountered fatal fault");
-    // The done bar: the JVM follower replicated the Krabka leader's committed
-    // log and built its FeaturesImage from it — proving cross-impl metadata
-    // replication, not just election.
-    let jvm_replicated = log_text.contains("finished catching up to the current high water mark")
-        && log_text.contains("metadata.version=25");
-    eprintln!(
-        "JVM cross-impl: joined={jvm_joined} unsupported={jvm_unsupported_version} \
-         fatal_fault={jvm_fatal_fault} replicated={jvm_replicated}"
+}
+#[rstest_bdd_macros::then("the two Krabka voters observe a shared elected leader")]
+fn common_leader(mixed: &MixedReplication) {
+    check!(
+        mixed.leaders.iter().any(|(a, b)| a.is_some() && a == b),
+        "leader observations: {:?}",
+        mixed.leaders
     );
-
+}
+#[rstest_bdd_macros::then(
+    "the JVM joins as follower or leader and reports these replication signals without protocol failures"
+)]
+fn jvm_signals(mixed: &MixedReplication, datatable: Vec<Vec<String>>) {
+    check!(
+        mixed.logs.contains("Completed transition to FollowerState")
+            || mixed.logs.contains("Completed transition to LeaderState"),
+        "JVM did not join"
+    );
+    for row in datatable.into_iter().skip(1) {
+        let [presence, signal]: [String; 2] = row.try_into().expect("presence and log signal");
+        match presence.as_str() {
+            "present" => {
+                check!(mixed.logs.contains(&signal), "missing {signal}");
+            }
+            "absent" => {
+                check!(!mixed.logs.contains(&signal), "unexpected {signal}");
+            }
+            _ => panic!("presence must be present or absent"),
+        }
+    }
+}
+#[ignore = "requires Docker + a published controller port (throwaway spike)"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_static_quorum_spike/mixed_quorum.feature",
+    name = "A JVM voter joins and replicates a Krabka-led static quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn static_mixed_jvm_krabka_quorum(mixed: MixedReplication) {
     docker_rm(CONTAINER);
-    c1.shutdown().await;
-    c2.shutdown().await;
-
-    // The two Krabka voters MUST elect among themselves regardless of the JVM.
-    check!(
-        elected,
-        "Krabka 2/3 majority failed to elect a stable shared leader \
-         (n1={last_l1:?} n2={last_l2:?})"
-    );
-
-    // The JVM mixed-quorum acceptance bar: the JVM controller joins the Krabka-led
-    // static quorum as a follower, never fatal-faults, and replicates the
-    // leader's committed metadata (HWM catch-up + a FeaturesImage carrying
-    // metadata.version=25).
-    check!(
-        jvm_joined && !jvm_unsupported_version,
-        "JVM did not join cross-impl: joined={jvm_joined}, unsupported={jvm_unsupported_version}"
-    );
-    check!(
-        !jvm_fatal_fault,
-        "JVM raft thread fatal-faulted (a wire/record inconsistency); see logs"
-    );
-    check!(
-        jvm_replicated,
-        "JVM did not replicate the Krabka leader's committed metadata (no HWM catch-up / \
-         metadata.version not loaded); see JVM logs"
-    );
+    for controller in mixed.controllers.take().expect("controllers") {
+        controller.shutdown().await;
+    }
+    drop(mixed);
 }

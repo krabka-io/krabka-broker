@@ -465,8 +465,6 @@ mod tests {
     };
 
     const T1: Uuid = Uuid([1; 16]);
-    const T2: Uuid = Uuid([2; 16]);
-    const T3: Uuid = Uuid([3; 16]);
 
     /// The partition count of a topic.
     struct TopicCount {
@@ -486,28 +484,6 @@ mod tests {
         }
     }
 
-    /// The partitions of one topic.
-    struct AssignedTopic<'a> {
-        topic: Uuid,
-        partitions: &'a [i32],
-    }
-
-    fn at(topic: Uuid, partitions: &[i32]) -> AssignedTopic<'_> {
-        AssignedTopic { topic, partitions }
-    }
-
-    fn member(id: &str, subs: &[Uuid], assigned: &[AssignedTopic<'_>]) -> MemberSubscription {
-        MemberSubscription {
-            member_id: id.into(),
-            rack_id: None,
-            subscribed_topic_ids: subs.to_vec(),
-            assigned_partitions: assigned
-                .iter()
-                .map(|assigned| (assigned.topic, assigned.partitions.to_vec()))
-                .collect(),
-        }
-    }
-
     fn spec(members: Vec<MemberSubscription>, subscription_type: SubscriptionType) -> GroupSpec {
         GroupSpec {
             members,
@@ -515,224 +491,9 @@ mod tests {
         }
     }
 
-    /// One member's expected topics and partitions.
-    struct ExpectedMember<'a> {
-        member: &'a str,
-        topics: &'a [AssignedTopic<'a>],
-    }
-
-    fn exp<'a>(member: &'a str, topics: &'a [AssignedTopic<'a>]) -> ExpectedMember<'a> {
-        ExpectedMember { member, topics }
-    }
-
-    fn expected(rows: &[ExpectedMember<'_>]) -> Assignment {
-        rows.iter()
-            .map(|row| {
-                (
-                    row.member.to_owned(),
-                    row.topics
-                        .iter()
-                        .map(|assigned| (assigned.topic, assigned.partitions.to_vec()))
-                        .collect(),
-                )
-            })
-            .collect()
-    }
-
-    fn expected_with_fixed_first_two_members(third_member: &[AssignedTopic<'_>]) -> Assignment {
-        let mut assignment = expected(&[exp("A", &[at(T1, &[0])]), exp("B", &[at(T2, &[0])])]);
-        assignment.insert(
-            "C".to_owned(),
-            third_member
-                .iter()
-                .map(|assigned| (assigned.topic, assigned.partitions.to_vec()))
-                .collect(),
-        );
-        assignment
-    }
-
-    fn overshared_first_partition(c_subscriptions: &[Uuid]) -> Vec<MemberSubscription> {
-        vec![
-            member("A", &[T1], &[at(T1, &[0])]),
-            member("B", &[T1], &[at(T1, &[0])]),
-            member("C", c_subscriptions, &[at(T1, &[0])]),
-        ]
-    }
-
-    fn repeated_member_expected(c_partitions: &[AssignedTopic<'_>]) -> Assignment {
-        expected(&[
-            exp("A", &[at(T1, &[1])]),
-            exp("B", &[at(T1, &[0])]),
-            exp("C", c_partitions),
-        ])
-    }
-
     /// The whole assignment for inputs from Kafka's `SimpleAssignorTest` and
     /// from the issue: balance over the group, sharing when members outnumber
     /// partitions, and stickiness.
-    #[test]
-    fn assignments_match_kafka_simple_assignor() {
-        use SubscriptionType::{Heterogeneous, Homogeneous};
-        struct Row {
-            name: &'static str,
-            group: GroupSpec,
-            topics: TopicMetadata,
-            assignable: Option<HashMap<Uuid, HashSet<i32>>>,
-            want: Assignment,
-        }
-        let rows: Vec<Row> = vec![
-            Row {
-                name: "no members",
-                group: spec(vec![], Homogeneous),
-                topics: topics(&[count(T1, 3)]),
-                assignable: None,
-                want: Assignment::new(),
-            },
-            Row {
-                name: "no subscribed topic",
-                group: spec(vec![member("A", &[], &[])], Homogeneous),
-                topics: topics(&[count(T1, 3)]),
-                assignable: None,
-                want: expected(&[exp("A", &[])]),
-            },
-            Row {
-                name: "three single-partition topics balance over three members",
-                group: spec(
-                    vec![
-                        member("A", &[T1, T2, T3], &[]),
-                        member("B", &[T1, T2, T3], &[]),
-                        member("C", &[T1, T2, T3], &[]),
-                    ],
-                    Homogeneous,
-                ),
-                topics: topics(&[count(T1, 1), count(T2, 1), count(T3, 1)]),
-                assignable: None,
-                want: expected_with_fixed_first_two_members(&[at(T3, &[0])]),
-            },
-            Row {
-                name: "more members than partitions share",
-                group: spec(
-                    vec![
-                        member("A", &[T1], &[]),
-                        member("B", &[T1], &[]),
-                        member("C", &[T1], &[]),
-                    ],
-                    Homogeneous,
-                ),
-                topics: topics(&[count(T1, 1)]),
-                assignable: None,
-                want: expected(&[
-                    exp("A", &[at(T1, &[0])]),
-                    exp("B", &[at(T1, &[0])]),
-                    exp("C", &[at(T1, &[0])]),
-                ]),
-            },
-            Row {
-                name: "a joining member takes partitions and the rest stay",
-                group: spec(
-                    vec![
-                        member("A", &[T1], &[at(T1, &[0, 1, 2])]),
-                        member("B", &[T1], &[at(T1, &[3, 4, 5])]),
-                        member("C", &[T1], &[]),
-                    ],
-                    Homogeneous,
-                ),
-                topics: topics(&[count(T1, 6)]),
-                assignable: None,
-                want: expected(&[
-                    exp("A", &[at(T1, &[1, 2])]),
-                    exp("B", &[at(T1, &[4, 5])]),
-                    exp("C", &[at(T1, &[0, 3])]),
-                ]),
-            },
-            Row {
-                name: "an unsubscribed topic leaves the assignment",
-                group: spec(
-                    vec![member("A", &[T2], &[at(T1, &[0]), at(T2, &[0])])],
-                    Homogeneous,
-                ),
-                topics: topics(&[count(T1, 1), count(T2, 1)]),
-                assignable: None,
-                want: expected(&[exp("A", &[at(T2, &[0])])]),
-            },
-            Row {
-                name: "only assignable partitions are assigned",
-                group: spec(
-                    vec![member("A", &[T1, T3], &[]), member("B", &[T1, T3], &[])],
-                    Homogeneous,
-                ),
-                topics: topics(&[count(T1, 3), count(T3, 2)]),
-                assignable: Some(HashMap::from([(T1, HashSet::from([0, 2]))])),
-                want: expected(&[exp("A", &[at(T1, &[0])]), exp("B", &[at(T1, &[2])])]),
-            },
-            Row {
-                name: "Kafka's heterogeneous case with a non-assignable topic",
-                group: spec(
-                    vec![
-                        member("A", &[T1, T2], &[]),
-                        member("B", &[T3], &[]),
-                        member("C", &[T2, T3], &[]),
-                    ],
-                    Heterogeneous,
-                ),
-                topics: topics(&[count(T1, 3), count(T2, 3), count(T3, 2)]),
-                assignable: Some(HashMap::from([
-                    (T1, HashSet::from([0, 1, 2])),
-                    (T2, HashSet::from([0, 1, 2])),
-                ])),
-                want: expected(&[
-                    exp("A", &[at(T1, &[0, 1, 2]), at(T2, &[0, 2])]),
-                    exp("B", &[]),
-                    exp("C", &[at(T2, &[1])]),
-                ]),
-            },
-            Row {
-                name: "a heterogeneous group balances each topic by itself",
-                group: spec(
-                    vec![
-                        member("A", &[T1], &[]),
-                        member("B", &[T2], &[]),
-                        member("C", &[T1, T2], &[]),
-                    ],
-                    Heterogeneous,
-                ),
-                topics: topics(&[count(T1, 2), count(T2, 2)]),
-                assignable: None,
-                want: expected_with_fixed_first_two_members(&[at(T1, &[1]), at(T2, &[1])]),
-            },
-            // Kafka's assignRemainingPartitions does not add a member it just
-            // assigned to the partition's holders. After the overshare on
-            // partition 0 is revoked from A, A is the only unfilled member and
-            // comes round twice for partition 1, which Kafka counts as two
-            // assignments: partition 1 ends with one member, not two.
-            Row {
-                name: "a repeated member counts twice, as in Kafka (homogeneous)",
-                group: spec(overshared_first_partition(&[T1]), Homogeneous),
-                topics: topics(&[count(T1, 2)]),
-                assignable: None,
-                want: repeated_member_expected(&[at(T1, &[0])]),
-            },
-            Row {
-                name: "a repeated member counts twice, as in Kafka (heterogeneous)",
-                group: spec(overshared_first_partition(&[T1, T2]), Heterogeneous),
-                topics: topics(&[count(T1, 2), count(T2, 1)]),
-                assignable: None,
-                want: repeated_member_expected(&[at(T1, &[0]), at(T2, &[0])]),
-            },
-        ];
-        for Row {
-            name,
-            group,
-            topics,
-            assignable,
-            want,
-        } in rows
-        {
-            let got = ShareGroupAssignor.assign(&group, &topics, assignable.as_ref());
-            check!(got == want, "{name}");
-        }
-    }
-
     /// Kafka's `testIncrementalAssignment*MembersHomogeneous`: members join one
     /// at a time and then leave one at a time, every partition stays assigned,
     /// and the member counts stay balanced.
@@ -779,4 +540,104 @@ mod tests {
         }
         assert!(current["M00"][&T1] == (0..24).collect::<Vec<_>>());
     }
+    use {
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    struct ShareAssignmentInput {
+        group: GroupSpec,
+        topics: TopicMetadata,
+        assignable: Option<HashMap<Uuid, HashSet<i32>>>,
+    }
+    #[derive(Default)]
+    struct SharedPlacement {
+        source: Option<ShareAssignmentInput>,
+        assignment: Option<Assignment>,
+    }
+    #[rstest::fixture]
+    fn shared_placement() -> SharedPlacement {
+        // Start this scenario with fresh inputs and observations.
+        SharedPlacement::default()
+    }
+
+    #[when("the Share simple assignor balances eligible partitions and retains prior ownership")]
+    fn assign_share_partitions(shared_placement: &mut SharedPlacement) {
+        let source = shared_placement
+            .source
+            .as_ref()
+            .expect("group and topics prepared");
+        shared_placement.assignment = Some(ShareGroupAssignor.assign(
+            &source.group,
+            &source.topics,
+            source.assignable.as_ref(),
+        ));
+    }
+
+    use crate::coordinator::unified::test_support::partition_assignments::{
+        self, ExpectedMemberPartitions, MemberAssignmentInput, TopicPartitionsInput,
+    };
+    #[given("the Share subscription builder is {builder}")]
+    fn subscription_policy(shared_placement: &mut SharedPlacement, builder: String) {
+        shared_placement.source = Some(ShareAssignmentInput {
+            group: GroupSpec {
+                members: vec![],
+                subscription_type: partition_assignments::subscription_type(&builder),
+            },
+            topics: TopicMetadata::default(),
+            assignable: None,
+        });
+    }
+    #[given("the Share topic partitions and replica racks are")]
+    fn assignment_topic_metadata(
+        shared_placement: &mut SharedPlacement,
+        #[datatable] rows: Rows<TopicPartitionsInput>,
+    ) {
+        shared_placement
+            .source
+            .as_mut()
+            .expect("subscription builder given")
+            .topics = partition_assignments::topic_metadata(rows);
+    }
+    #[given("the Share members have these subscriptions and previous assignments")]
+    fn assignment_member_subscriptions(
+        shared_placement: &mut SharedPlacement,
+        #[datatable] rows: Rows<MemberAssignmentInput>,
+    ) {
+        shared_placement
+            .source
+            .as_mut()
+            .expect("subscription builder given")
+            .group
+            .members = partition_assignments::member_subscriptions(rows);
+    }
+    #[then("the complete Share assignment is")]
+    fn complete_assignment(
+        shared_placement: &SharedPlacement,
+        #[datatable] rows: Rows<ExpectedMemberPartitions>,
+    ) {
+        let expected = partition_assignments::expected_assignment(rows);
+        check!(shared_placement.assignment.as_ref() == Some(&expected));
+    }
+
+    #[given("the Share assignable partition set is {partitions}")]
+    fn share_eligible_partitions(shared_placement: &mut SharedPlacement, partitions: String) {
+        let eligible = serde_json::from_str::<Option<HashMap<String, Vec<i32>>>>(&partitions)
+            .expect("eligible partitions object or null");
+        shared_placement
+            .source
+            .as_mut()
+            .expect("group and topics prepared")
+            .assignable = eligible.map(|topics| {
+            topics
+                .into_iter()
+                .map(|(topic, partitions)| {
+                    (
+                        Uuid([topic.parse::<u8>().expect("topic rank"); 16]),
+                        partitions.into_iter().collect(),
+                    )
+                })
+                .collect()
+        });
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/share/assignor.feature",fixtures=[shared_placement:SharedPlacement]);
 }

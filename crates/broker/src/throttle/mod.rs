@@ -306,19 +306,63 @@ mod tests {
         assert2::assert!(ThrottledReplicas::parse(input).is_err(), "{input}");
     }
 
-    #[yare::parameterized(
-        whitespace_means_none = { " ", ThrottledReplicas::None },
-        trimmed_wildcard_means_all = { " * ", ThrottledReplicas::All },
-        spaced_pairs = {
-            " 0:1 , 2:3 ",
-            ThrottledReplicas::List(vec![replica(0, 1), replica(2, 3)])
-        },
-        empty_segments_are_ignored = {
-            "0:1,,1:2",
-            ThrottledReplicas::List(vec![replica(0, 1), replica(1, 2)])
-        },
-    )]
-    fn kafka_list_spellings_parse_as_kafka_reads_them(input: &str, want: ThrottledReplicas) {
-        assert2::assert!(ThrottledReplicas::parse(input) == Ok(want), "{input:?}");
+    #[derive(Default)]
+    struct ThrottledReplicaSelection {
+        input: String,
+        selected: Option<Result<ThrottledReplicas, String>>,
     }
+
+    #[rstest::fixture]
+    fn throttled_replica_selection() -> ThrottledReplicaSelection {
+        // Each throttle list has its own parser input and resolved selection.
+        ThrottledReplicaSelection::default()
+    }
+
+    #[rstest_bdd_macros::given("the throttled replica configuration is JSON {value}")]
+    fn supplied_throttled_replica_selection(
+        throttled_replica_selection: &mut ThrottledReplicaSelection,
+        value: String,
+    ) {
+        throttled_replica_selection.input =
+            serde_json::from_str(&value).expect("JSON preserves Kafka list whitespace");
+    }
+
+    #[rstest_bdd_macros::when("the broker parses the throttled replica list")]
+    fn parse_throttled_replica_selection(
+        throttled_replica_selection: &mut ThrottledReplicaSelection,
+    ) {
+        throttled_replica_selection.selected =
+            Some(ThrottledReplicas::parse(&throttled_replica_selection.input));
+    }
+
+    #[rstest_bdd_macros::then("the throttled replica selection is empty")]
+    fn no_throttled_replicas(throttled_replica_selection: &ThrottledReplicaSelection) {
+        assert2::assert!(throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::None)));
+    }
+
+    #[rstest_bdd_macros::then("the throttled replica selection includes every replica")]
+    fn all_throttled_replicas(throttled_replica_selection: &ThrottledReplicaSelection) {
+        assert2::assert!(throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::All)));
+    }
+
+    #[rstest_bdd_macros::then("the selected partition and broker pairs are JSON {pairs}")]
+    fn listed_throttled_replicas(
+        throttled_replica_selection: &ThrottledReplicaSelection,
+        pairs: String,
+    ) {
+        let expected: Vec<(i32, u64)> =
+            serde_json::from_str(&pairs).expect("independent expected replica pairs");
+        let replicas = expected
+            .into_iter()
+            .map(|(partition, broker)| replica(partition, broker))
+            .collect();
+        assert2::assert!(
+            throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::List(replicas)))
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/throttle/mod.feature",
+        fixtures = [throttled_replica_selection: ThrottledReplicaSelection]
+    );
 }

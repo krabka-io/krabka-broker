@@ -101,65 +101,117 @@ fn unify_collision_byte(byte: u8) -> u8 { if byte == b'.' { b'_' } else { byte }
 mod tests {
     use {super::*, assert2::check, std::collections::BTreeSet};
 
-    #[yare::parameterized(
-        ordinary = { "orders".to_owned(), Ok(()) },
-        allowed_punctuation = { "a.b_c-D9".to_owned(), Ok(()) },
-        max_utf16_length = { "a".repeat(MAX_TOPIC_NAME_LENGTH), Ok(()) },
-        empty = { String::new(), Err(InvalidTopicName::Empty) },
-        dot = { ".".to_owned(), Err(InvalidTopicName::Dot) },
-        dot_dot = { "..".to_owned(), Err(InvalidTopicName::DotDot) },
-        multiple_dots = { "...".to_owned(), Ok(()) },
-        too_long = {
-            "a".repeat(MAX_TOPIC_NAME_LENGTH + 1),
-            Err(InvalidTopicName::TooLong("a".repeat(MAX_TOPIC_NAME_LENGTH + 1))),
-        },
-        slash = { "a/b".to_owned(), Err(InvalidTopicName::IllegalCharacter("a/b".to_owned())) },
-        parent_path = {
-            "../x".to_owned(),
-            Err(InvalidTopicName::IllegalCharacter("../x".to_owned())),
-        },
-        absolute_path = {
-            "/tmp/x".to_owned(),
-            Err(InvalidTopicName::IllegalCharacter("/tmp/x".to_owned())),
-        },
-        space = { "a b".to_owned(), Err(InvalidTopicName::IllegalCharacter("a b".to_owned())) },
-        non_ascii = { "é".repeat(200), Err(InvalidTopicName::IllegalCharacter("é".repeat(200))) },
-        too_long_before_illegal = {
-            "a/".repeat(125),
-            Err(InvalidTopicName::TooLong("a/".repeat(125))),
-        },
-        astral_utf16_too_long = {
-            "\u{1F600}".repeat(125),
-            Err(InvalidTopicName::TooLong("\u{1F600}".repeat(125))),
-        },
-        astral_utf16_at_limit = {
-            format!("a{}", "\u{1F600}".repeat(124)),
-            Err(InvalidTopicName::IllegalCharacter(format!("a{}", "\u{1F600}".repeat(124)))),
-        },
-    )]
-    fn validate_topic_name_matches_kafka(name: String, expected: Result<(), InvalidTopicName>) {
-        check!(validate_topic_name(&name) == expected, "{name:?}");
+    #[derive(Default)]
+    struct TopicNameScenario {
+        name: String,
+        checked: Option<Result<(), InvalidTopicName>>,
+        error: Option<InvalidTopicName>,
+        rendered: String,
+        bytes: Vec<u8>,
+        legal: Option<BTreeSet<u8>>,
     }
-
-    #[yare::parameterized(
-        empty = {
-            InvalidTopicName::Empty,
-            "Topic name is invalid: the empty string is not allowed",
-        },
-        dot = { InvalidTopicName::Dot, "Topic name is invalid: '.' is not allowed" },
-        dot_dot = { InvalidTopicName::DotDot, "Topic name is invalid: '..' is not allowed" },
-        too_long = {
-            InvalidTopicName::TooLong("x".to_owned()),
-            "Topic name is invalid: the length of 'x' is longer than the max allowed length 249",
-        },
-        illegal_character = {
-            InvalidTopicName::IllegalCharacter("a/b".to_owned()),
-            "Topic name is invalid: 'a/b' contains one or more characters other than ASCII alphanumerics, '.', '_' and '-'",
-        },
-    )]
-    fn invalid_topic_name_messages_are_kafka_text(error: InvalidTopicName, message: &str) {
-        check!(error.to_string() == message);
+    #[rstest::fixture]
+    fn topic_name() -> TopicNameScenario {
+        let name = String::new();
+        TopicNameScenario {
+            name,
+            ..TopicNameScenario::default()
+        }
     }
+    #[rstest_bdd_macros::given("log topic name {name}")]
+    fn log_topic_text(topic_name: &mut TopicNameScenario, name: String) { topic_name.name = name; }
+    #[rstest_bdd_macros::given("an empty log topic name")]
+    fn empty_log_topic(topic_name: &mut TopicNameScenario) { topic_name.name.clear(); }
+    #[rstest_bdd_macros::given(
+        "a log topic name repeating {fragment} {count} times with prefix {prefix}"
+    )]
+    fn repeated_log_topic(
+        topic_name: &mut TopicNameScenario,
+        fragment: String,
+        count: usize,
+        prefix: String,
+    ) {
+        topic_name.name = format!(
+            "{}{}",
+            if prefix == "none" { "" } else { &prefix },
+            fragment.repeat(count)
+        );
+    }
+    #[rstest_bdd_macros::when("the log topic name is validated")]
+    fn validate_log_topic(topic_name: &mut TopicNameScenario) {
+        topic_name.checked = Some(validate_topic_name(&topic_name.name));
+    }
+    #[rstest_bdd_macros::then("the log topic name is accepted")]
+    fn accepted_log_topic(topic_name: &TopicNameScenario) {
+        check!(topic_name.checked == Some(Ok(())), "{:?}", topic_name.name);
+    }
+    #[rstest_bdd_macros::then("the log topic name is refused as {reason}")]
+    fn rejected_log_topic(topic_name: &TopicNameScenario, reason: String) {
+        let expected = match reason.as_str() {
+            "empty" => InvalidTopicName::Empty,
+            "dot" => InvalidTopicName::Dot,
+            "dot-dot" => InvalidTopicName::DotDot,
+            "too-long" => InvalidTopicName::TooLong(topic_name.name.clone()),
+            "illegal-character" => InvalidTopicName::IllegalCharacter(topic_name.name.clone()),
+            _ => panic!("unknown topic name refusal {reason}"),
+        };
+        check!(
+            topic_name.checked == Some(Err(expected)),
+            "{:?}",
+            topic_name.name
+        );
+    }
+    #[rstest_bdd_macros::given("topic-name error {kind} for text {name}")]
+    fn log_topic_error(topic_name: &mut TopicNameScenario, kind: String, name: String) {
+        topic_name.error = Some(match kind.as_str() {
+            "empty" => InvalidTopicName::Empty,
+            "dot" => InvalidTopicName::Dot,
+            "dot-dot" => InvalidTopicName::DotDot,
+            "too-long" => InvalidTopicName::TooLong(name),
+            "illegal-character" => InvalidTopicName::IllegalCharacter(name),
+            _ => panic!("unknown topic name error {kind}"),
+        });
+    }
+    #[rstest_bdd_macros::when("the topic-name error is displayed")]
+    fn render_log_topic_error(topic_name: &mut TopicNameScenario) {
+        topic_name.rendered = topic_name
+            .error
+            .as_ref()
+            .expect("topic name error given")
+            .to_string();
+    }
+    #[rstest_bdd_macros::then("the Kafka topic diagnostic is {message}")]
+    fn kafka_topic_diagnostic(topic_name: &TopicNameScenario, message: String) {
+        check!(topic_name.rendered == message);
+    }
+    #[rstest_bdd_macros::given("all 256 possible topic-name byte values")]
+    fn log_topic_bytes(topic_name: &mut TopicNameScenario) {
+        topic_name.bytes = (0..=u8::MAX).collect();
+    }
+    #[rstest_bdd_macros::when("the topic-name byte lookup table classifies them")]
+    fn classify_topic_bytes(topic_name: &mut TopicNameScenario) {
+        topic_name.legal = Some(
+            topic_name
+                .bytes
+                .iter()
+                .copied()
+                .filter(|byte| LEGAL_BYTES[usize::from(*byte)] == 1)
+                .collect(),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "only ASCII letters digits dot underscore and hyphen are legal topic bytes"
+    )]
+    fn legal_kafka_topic_bytes(topic_name: &TopicNameScenario) {
+        let expected: BTreeSet<u8> = (b'a'..=b'z')
+            .chain(b'A'..=b'Z')
+            .chain(b'0'..=b'9')
+            .chain(*b"._-")
+            .collect();
+        check!(topic_name.bytes.len() == 256);
+        check!(topic_name.legal == Some(expected));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/log_topic_names", fixtures = [topic_name: TopicNameScenario]);
 
     #[yare::parameterized(
         dot_to_underscore = { "a.b", "a_b", true },
@@ -171,20 +223,5 @@ mod tests {
     )]
     fn topic_names_collide_unifies_dot_and_underscore(a: &str, b: &str, expected: bool) {
         check!(topic_names_collide(a, b) == expected, "{a} {b}");
-    }
-
-    /// The lookup table accepts exactly the bytes Kafka's legal pattern
-    /// `[a-zA-Z0-9._-]` accepts.
-    #[test]
-    fn every_byte_is_legal_exactly_when_kafka_allows_it() {
-        let expected: BTreeSet<u8> = (b'a'..=b'z')
-            .chain(b'A'..=b'Z')
-            .chain(b'0'..=b'9')
-            .chain(*b"._-")
-            .collect();
-        let actual: BTreeSet<u8> = (0..=u8::MAX)
-            .filter(|&byte| LEGAL_BYTES[usize::from(byte)] == 1)
-            .collect();
-        check!(actual == expected);
     }
 }

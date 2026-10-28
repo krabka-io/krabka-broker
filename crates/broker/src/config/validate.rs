@@ -553,25 +553,49 @@ mod tests {
         }
     }
 
-    /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
-    /// included. A cluster with a `PLAINTEXT` controller listener and a
-    /// deny-capable authorizer needs it: the controllers and the node's own
-    /// broker heartbeats reach that listener as `ANONYMOUS`, and every request
-    /// there needs `ClusterAction`.
-    #[test]
-    fn accepts_every_super_user_set_kafka_accepts() {
-        let cases: [&[&str]; 4] = [&[], &["operator"], &["ANONYMOUS"], &[
-            "ANONYMOUS",
-            "operator",
-        ]];
-        for super_users in cases {
-            let mut config = BrokerConfig::default();
-            config
-                .super_users
-                .extend(super_users.iter().map(|user| (*user).to_owned()));
-            assert!(config.validate().is_ok(), "{super_users:?}");
-        }
+    #[derive(Default)]
+    struct SuperUserScenario {
+        config: Option<BrokerConfig>,
+        validation: Option<Result<(), BrokerError>>,
     }
+
+    #[rstest::fixture]
+    fn super_users() -> SuperUserScenario {
+        // Keep super users inputs and observations fresh for each scenario.
+        SuperUserScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("the broker super-user principals are {principals}")]
+    fn super_user_principals(super_users: &mut SuperUserScenario, principals: String) {
+        let principals: Vec<String> =
+            serde_json::from_str(&principals).expect("principals are a string array");
+        let mut config = BrokerConfig::default();
+        config.super_users.extend(principals);
+        super_users.config = Some(config);
+    }
+
+    #[rstest_bdd_macros::when("the broker startup configuration is validated for those principals")]
+    fn validate_super_users(super_users: &mut SuperUserScenario) {
+        let config = super_users
+            .config
+            .as_ref()
+            .expect("super-user principals were configured");
+        super_users.validation = Some(config.validate());
+    }
+
+    #[rstest_bdd_macros::then("the super-user set is accepted without excluding ANONYMOUS")]
+    fn accepted_super_users(super_users: &SuperUserScenario) {
+        let validation = super_users
+            .validation
+            .as_ref()
+            .expect("startup validation ran");
+        assert!(validation.is_ok(), "{validation:?}");
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config/validate.feature",
+        fixtures = [super_users: SuperUserScenario]
+    );
 
     /// PLAIN has no dynamic credential path, so an enabled-but-empty table is
     /// a startup error rather than a run of `SASL_AUTHENTICATION_FAILED`.

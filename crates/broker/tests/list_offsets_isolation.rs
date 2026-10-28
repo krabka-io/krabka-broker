@@ -67,3 +67,6 @@ mod open_transaction;
 mod timestamp_sentinels;
 #[path = "list_offsets_isolation/wire.rs"]
 mod wire;
+
+#[path = "list_offsets_isolation/isolation_scenarios.rs"]
+mod isolation_scenarios;

@@ -79,11 +79,43 @@ pub fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bo
 mod tests {
     use {super::*, crate::internal_topics::INTERNAL_TOPICS, assert2::check};
 
-    #[test]
-    fn a_pattern_type_names_itself_as_kafka_acls_spell_it() {
-        check!(pattern_type_name(PatternType::Literal) == "literal");
-        check!(pattern_type_name(PatternType::Prefixed) == "prefixed");
+    #[derive(Default)]
+    struct FreezeScopeVocabulary {
+        pattern: Option<PatternType>,
+        name: Option<&'static str>,
     }
+
+    #[rstest::fixture]
+    fn freeze_scope() -> FreezeScopeVocabulary {
+        // Scope type and its rendered operator vocabulary are scenario-local.
+        FreezeScopeVocabulary::default()
+    }
+
+    #[rstest_bdd_macros::given("a freeze scope uses Kafka ACL pattern type {pattern}")]
+    fn freeze_scope_pattern(freeze_scope: &mut FreezeScopeVocabulary, pattern: String) {
+        freeze_scope.pattern = Some(match pattern.as_str() {
+            "Literal" => PatternType::Literal,
+            "Prefixed" => PatternType::Prefixed,
+            other => panic!("unknown Kafka pattern type {other}"),
+        });
+    }
+
+    #[rstest_bdd_macros::when("the scope's pattern type is rendered for an operator")]
+    fn render_freeze_scope_pattern(freeze_scope: &mut FreezeScopeVocabulary) {
+        freeze_scope.name = Some(pattern_type_name(
+            freeze_scope.pattern.expect("a pattern type was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the operator-facing pattern type is {name}")]
+    fn operator_freeze_scope_pattern(freeze_scope: &FreezeScopeVocabulary, name: String) {
+        check!(freeze_scope.name == Some(name.as_str()));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/freeze/mod.feature",
+        fixtures = [freeze_scope: FreezeScopeVocabulary]
+    );
 
     #[test]
     fn a_target_joins_the_pattern_type_to_the_scope() {

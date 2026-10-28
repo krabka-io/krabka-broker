@@ -67,21 +67,6 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The `/metrics` body of a registry in which every family carries one label
-/// set, encoded exactly as `metrics_server::metrics` encodes it.
-///
-/// `prometheus-client` writes no `# TYPE` line for a family with no live
-/// label set, so a fresh broker exports only its label-free series. One
-/// placeholder label set per family makes every registered name appear.
-async fn fresh_body() -> String {
-    let metrics = BrokerMetrics::new();
-    seed_grouped_families(&metrics);
-    seed_single_families(&metrics);
-
-    krabka_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
-    canonical(&body)
-}
-
 /// `body` with the sample lines of every counter and gauge family sorted.
 ///
 /// A `Family` keeps its label sets in a hash map, so a family with more than
@@ -631,22 +616,77 @@ fn referenced_names(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn every_dashboard_and_rule_series_is_one_the_registry_exports() {
-    let exported = exported_sample_names(&fresh_body().await);
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, scenarios, then, when},
+};
+struct RegistryContract {
+    metrics: Option<BrokerMetrics>,
+    body: Option<String>,
+    documents: Vec<(String, String)>,
+    checked_in: Option<String>,
+    snapshot_path: Option<PathBuf>,
+}
+#[fixture]
+fn contract() -> RegistryContract {
+    // Start this scenario with fresh inputs and observations.
+
+    RegistryContract {
+        metrics: None,
+        body: None,
+        documents: Vec::new(),
+        checked_in: None,
+        snapshot_path: None,
+    }
+}
+#[given("a fresh broker metric registry has one placeholder label set in every registered family")]
+fn registry(contract: &mut RegistryContract) {
+    let metrics = BrokerMetrics::new();
+    seed_grouped_families(&metrics);
+    seed_single_families(&metrics);
+    contract.metrics = Some(metrics);
+}
+#[given("the checked in Grafana dashboard and alert rules define the operational series contract")]
+fn dashboards(contract: &mut RegistryContract) {
+    contract.documents = CONTRACT_FILES
+        .into_iter()
+        .map(|file| {
+            (
+                file.to_owned(),
+                fs::read_to_string(repo_root().join(file))
+                    .unwrap_or_else(|error| panic!("read {file}: {error}")),
+            )
+        })
+        .collect();
+}
+#[given("the checked in metrics body defines the complete encoded registry contract")]
+fn snapshot(contract: &mut RegistryContract) {
+    contract.snapshot_path = Some(repo_root().join(BODY_FILE));
+}
+#[when("the metric registry encodes its complete canonical exposition")]
+async fn expose(contract: &mut RegistryContract) {
+    let metrics = contract
+        .metrics
+        .as_ref()
+        .expect("all metric families seeded");
+    krabka_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
+    contract.body = Some(canonical(&body));
+}
+#[then(
+    "every referenced dashboard and alert series is actually exported and each document names at least ten series"
+)]
+fn references_exist(contract: &RegistryContract) {
+    let exported = exported_sample_names(contract.body.as_ref().expect("registry encoded"));
     assert!(
         exported.contains("krabka_broker_api_requests_total"),
-        "the registry exports the request counter"
+        "registry exports request counter"
     );
-
-    let root = repo_root();
-    for file in CONTRACT_FILES {
-        let text = fs::read_to_string(root.join(file))
-            .unwrap_or_else(|error| panic!("read {file}: {error}"));
-        let referenced = referenced_names(&text);
+    assert!(contract.documents.len() == 2);
+    for (file, text) in &contract.documents {
+        let referenced = referenced_names(text);
         assert!(
             referenced.len() >= 10,
-            "{file} names too few series to be the contract: {referenced:?}"
+            "{file} names too few series: {referenced:?}"
         );
         let missing: Vec<&String> = referenced
             .iter()
@@ -654,96 +694,98 @@ async fn every_dashboard_and_rule_series_is_one_the_registry_exports() {
             .collect();
         assert!(
             missing.is_empty(),
-            "{file} names series the registry does not export: {missing:?}"
+            "{file} names unexported series: {missing:?}"
         );
     }
 }
-
-#[tokio::test]
-async fn checked_in_body_matches_a_fresh_registry() {
-    let body = fresh_body().await;
+#[when("the checked in metrics body is read after any requested regeneration")]
+fn regenerate(contract: &mut RegistryContract) {
     if let Ok(out) = env::var(BODY_OUT_ENV) {
-        fs::write(&out, &body).unwrap_or_else(|error| panic!("write {out}: {error}"));
+        fs::write(&out, contract.body.as_ref().expect("registry encoded"))
+            .unwrap_or_else(|error| panic!("write {out}: {error}"));
     }
-
-    let checked_in = fs::read_to_string(repo_root().join(BODY_FILE))
-        .unwrap_or_else(|error| panic!("read {BODY_FILE}: {error}"));
+    let path = contract
+        .snapshot_path
+        .as_ref()
+        .expect("snapshot path configured");
+    contract.checked_in =
+        Some(fs::read_to_string(path).unwrap_or_else(|error| panic!("read {BODY_FILE}: {error}")));
+}
+#[then("the checked in body exactly matches the fresh canonical registry exposition")]
+fn body_matches(contract: &RegistryContract) {
     assert!(
-        checked_in == body,
+        contract
+            .checked_in
+            .as_ref()
+            .expect("checked in body loaded")
+            == contract.body.as_ref().expect("registry encoded"),
         "{BODY_FILE} is stale; regenerate it with {BODY_OUT_ENV}={BODY_FILE}"
     );
 }
-
-/// The name expansion is what the Python check repeats, so its rules are
-/// pinned here on a body small enough to read.
-#[test]
-fn sample_names_expand_by_metric_type() {
-    let body = "\
-# HELP krabka_broker_a A counter.
-# TYPE krabka_broker_a counter
-krabka_broker_a_total 1
-# HELP krabka_broker_b A gauge.
-# TYPE krabka_broker_b gauge
-# HELP krabka_broker_c A histogram.
-# TYPE krabka_broker_c histogram
-# EOF
-";
-    let expected: BTreeSet<String> = [
-        "krabka_broker_a_total",
-        "krabka_broker_b",
-        "krabka_broker_c_bucket",
-        "krabka_broker_c_sum",
-        "krabka_broker_c_count",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    assert!(exported_sample_names(body) == expected);
+#[scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "Operational dashboards and alert rules reference real exported samples"
+)]
+#[tokio::test]
+async fn every_dashboard_and_rule_series_is_one_the_registry_exports(contract: RegistryContract) {
+    drop(contract);
 }
+#[scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "The checked in exposition stays synchronized with the complete registry"
+)]
+#[tokio::test]
+async fn checked_in_body_matches_a_fresh_registry(contract: RegistryContract) { drop(contract); }
 
-/// Counter and gauge samples take one order whatever the encoder's hash map
-/// produced; histogram buckets keep the order the encoder wrote.
-#[test]
-fn canonical_body_sorts_counter_samples_and_keeps_bucket_order() {
-    let body = "\
-# HELP krabka_broker_a A counter.
-# TYPE krabka_broker_a counter
-krabka_broker_a_total{path=\"vectored\"} 0
-krabka_broker_a_total{path=\"pread\"} 0
-# HELP krabka_broker_c A histogram.
-# TYPE krabka_broker_c histogram
-krabka_broker_c_bucket{le=\"0.5\"} 0
-krabka_broker_c_bucket{le=\"+Inf\"} 0
-krabka_broker_c_sum 0.0
-krabka_broker_c_count 0
-# EOF
-";
-    let expected = "\
-# HELP krabka_broker_a A counter.
-# TYPE krabka_broker_a counter
-krabka_broker_a_total{path=\"pread\"} 0
-krabka_broker_a_total{path=\"vectored\"} 0
-# HELP krabka_broker_c A histogram.
-# TYPE krabka_broker_c histogram
-krabka_broker_c_bucket{le=\"0.5\"} 0
-krabka_broker_c_bucket{le=\"+Inf\"} 0
-krabka_broker_c_sum 0.0
-krabka_broker_c_count 0
-# EOF
-";
-    assert!(canonical(body) == expected);
+struct MetricReading {
+    input: String,
+    names: Option<BTreeSet<String>>,
+    canonical: Option<String>,
 }
+#[fixture]
+fn reading() -> MetricReading {
+    // Start this scenario with fresh inputs and observations.
 
-#[test]
-fn referenced_names_are_metric_tokens_only() {
-    let text = r#"sum by (topic) (rate(krabka_broker_topic_bytes_in_total{topic!="__x"}[5m]))
-        / histogram_quantile(0.99, rate(krabka_broker_request_duration_seconds_bucket[5m]))"#;
-    let expected: BTreeSet<String> = [
-        "krabka_broker_topic_bytes_in_total",
-        "krabka_broker_request_duration_seconds_bucket",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    assert!(referenced_names(text) == expected);
+    MetricReading {
+        input: String::new(),
+        names: None,
+        canonical: None,
+    }
 }
+#[given("a metric exposition or query has the text")]
+fn metric_text(reading: &mut MetricReading, docstring: String) {
+    reading.input = format!("{}\n", docstring.trim_matches('\n'));
+}
+#[when("the exposition reader expands sample names according to metric type")]
+fn sample_names(reading: &mut MetricReading) {
+    reading.names = Some(exported_sample_names(&reading.input));
+}
+#[when("the query reader extracts referenced metric tokens")]
+fn query_names(reading: &mut MetricReading) {
+    reading.names = Some(referenced_names(&reading.input));
+}
+#[then("the extracted metric names are exactly")]
+fn expected_names(reading: &MetricReading, datatable: Vec<Vec<String>>) {
+    let expected: BTreeSet<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.into_iter().next().expect("expected sample name"))
+        .collect();
+    assert!(reading.names.as_ref().expect("names extracted") == &expected);
+}
+#[when("the exposition is canonicalized for a stable snapshot")]
+fn canonicalize(reading: &mut MetricReading) {
+    reading.canonical = Some(canonical(&reading.input));
+}
+#[then("counter samples sort while histogram buckets retain their encoded order")]
+fn ordered(reading: &MetricReading, docstring: String) {
+    let expected = format!("{}\n", docstring.trim_matches('\n'));
+    assert!(
+        reading
+            .canonical
+            .as_ref()
+            .expect("exposition canonicalized")
+            == &expected
+    );
+}
+scenarios!("tests/features/migrated/tests/metrics_contract_readings.feature", fixtures=[reading:MetricReading]);

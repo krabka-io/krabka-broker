@@ -476,15 +476,6 @@ mod tests {
 
     /// Kafka's `newConsumerGroupMemberSubscriptionRecord` sorts the topic
     /// names and writes the empty string for a member without a pattern.
-    #[test]
-    fn the_member_subscription_record_is_kafkas() {
-        let mut member = joined("m1");
-        member.subscribed_topic_names = ["b".to_owned(), "a".to_owned(), "c".to_owned()].into();
-        let value = member_metadata_value(&member);
-        check!(value.subscribed_topic_names == vec!["a", "b", "c"]);
-        check!(value.subscribed_topic_regex.as_deref() == Some(""));
-    }
-
     /// The group metadata record writes each member id with an `INT16` length.
     /// A group whose member id has 32768 bytes cannot write it: the flush is an
     /// error that appends nothing, and the actor that flushes does not panic. A
@@ -639,4 +630,40 @@ mod tests {
                 .has_subscription_metadata_record
         );
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct MemberSubscriptionRecord {
+        member: Option<MemberState>,
+        record: Option<MemberMetadataValue>,
+    }
+    #[rstest::fixture]
+    fn subscription_record() -> MemberSubscriptionRecord {
+        // Start this scenario with fresh inputs and observations.
+        MemberSubscriptionRecord::default()
+    }
+    #[given("member m1 subscribes by name to b a and c without a regex")]
+    fn unordered_member_topics(subscription_record: &mut MemberSubscriptionRecord) {
+        let mut member = joined("m1");
+        member.subscribed_topic_names = ["b".to_owned(), "a".to_owned(), "c".to_owned()].into();
+        subscription_record.member = Some(member);
+    }
+    #[when("the coordinator builds the member subscription log record")]
+    fn persist_member_topics(subscription_record: &mut MemberSubscriptionRecord) {
+        subscription_record.record = Some(member_metadata_value(
+            subscription_record
+                .member
+                .as_ref()
+                .expect("member prepared"),
+        ));
+    }
+    #[then("the persisted names are sorted a b c and the absent regex is an explicit empty string")]
+    fn kafka_member_subscription(subscription_record: &MemberSubscriptionRecord) {
+        let record = subscription_record
+            .record
+            .as_ref()
+            .expect("member record built");
+        check!(record.subscribed_topic_names == vec!["a", "b", "c"]);
+        check!(record.subscribed_topic_regex.as_deref() == Some(""));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/persistence.feature",fixtures=[subscription_record:MemberSubscriptionRecord]);
 }

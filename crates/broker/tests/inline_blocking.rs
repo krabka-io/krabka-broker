@@ -18,12 +18,14 @@ use {
         produce::{SinglePartitionProduceSetup, send_batch},
         records::{batch_from_records, value_record},
     },
-    assert2::{assert, check},
+    assert2::check,
     bytes::Bytes,
     krabka_protocol::{
         owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
         records::RecordBatch,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
     std::{
         sync::{
             Arc,
@@ -56,8 +58,13 @@ fn batch_of(values: &[&str]) -> RecordBatch {
 }
 
 /// Create the topic, produce three records to it and fetch them back.
-/// Returns how many records the fetch served.
-async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
+/// Returns the three RPC error codes and how many records the fetch served.
+struct ProtocolRun {
+    served: usize,
+    reply_codes: [i16; 3],
+}
+
+async fn produce_and_fetch(client: &krabka_client_core::Client) -> ProtocolRun {
     let created = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -71,7 +78,6 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
         })
         .await
         .expect("CreateTopics");
-    assert!(created.topics[0].error_code == 0);
     let topic_id = support::topic_id_for(client, TOPIC).await;
 
     let produced = send_batch(
@@ -84,7 +90,6 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
         },
     )
     .await;
-    assert!(produced.responses[0].partition_responses[0].error_code == 0);
 
     let fetched = client
         .send(
@@ -97,19 +102,25 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
         .await
         .expect("Fetch");
     let partition = &fetched.responses[0].partitions[0];
-    assert!(partition.error_code == 0);
     let mut total_records = 0;
     if let Some(v2_batches) = partition.records.as_ref().and_then(|r| r.as_v2()) {
         for b in v2_batches {
             total_records += b.records.len();
         }
     }
-    total_records
+    ProtocolRun {
+        served: total_records,
+        reply_codes: [
+            created.topics[0].error_code,
+            produced.responses[0].partition_responses[0].error_code,
+            partition.error_code,
+        ],
+    }
 }
 
 /// The records a fetch served and the threads the runtime started.
 struct NodeRun {
-    served: usize,
+    protocol: ProtocolRun,
     started: usize,
 }
 
@@ -141,21 +152,66 @@ fn run_node(inline: bool) -> NodeRun {
     .join()
     .expect("the node's thread");
     NodeRun {
-        served,
+        protocol: served,
         started: started.load(Ordering::SeqCst),
     }
 }
 
-#[test]
-fn a_node_with_its_blocking_work_inline_starts_no_thread() {
-    // (inline, whether the runtime starts a thread)
-    let cases = [(true, false), (false, true)];
-    for (inline, starts_a_thread) in cases {
-        let NodeRun { served, started } = run_node(inline);
-        check!(served == 3, "inline={inline}");
-        check!(
-            (started > 0) == starts_a_thread,
-            "inline={inline}: the runtime started {started} thread(s)"
-        );
+struct BlockingScenario {
+    inline: Option<bool>,
+    observed: Option<NodeRun>,
+}
+
+#[fixture]
+fn blocking() -> BlockingScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    BlockingScenario {
+        inline: None,
+        observed: None,
     }
 }
+
+#[given("blocking work uses {mode}")]
+fn blocking_executor(blocking: &mut BlockingScenario, mode: String) {
+    blocking.inline = Some(match mode.as_str() {
+        "the runtime thread" => true,
+        "the blocking pool" => false,
+        _ => panic!("unknown blocking executor: {mode}"),
+    });
+}
+
+#[when("a current-thread broker creates produces and fetches records")]
+fn exercise_runtime(blocking: &mut BlockingScenario) {
+    blocking.observed = Some(run_node(
+        blocking.inline.expect("a blocking executor was selected"),
+    ));
+}
+
+#[then("the broker serves three records and starts {threads} extra threads")]
+fn runtime_observations(blocking: &BlockingScenario, threads: String) {
+    let run = blocking
+        .observed
+        .as_ref()
+        .expect("the current-thread broker was exercised");
+    check!(
+        run.protocol.reply_codes == [0, 0, 0],
+        "create, produce and fetch must all succeed"
+    );
+    check!(run.protocol.served == 3);
+    match threads.as_str() {
+        "no" => {
+            check!(
+                run.started == 0,
+                "the runtime started {} extra threads",
+                run.started
+            );
+        }
+        "some" => {
+            check!(run.started > 0, "the blocking pool should start a worker");
+        }
+        _ => panic!("unknown thread expectation: {threads}"),
+    }
+}
+
+scenarios!("tests/features/migrated/tests/inline_blocking.feature", fixtures = [blocking: BlockingScenario]);

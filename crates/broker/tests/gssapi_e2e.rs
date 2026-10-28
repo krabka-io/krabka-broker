@@ -157,7 +157,7 @@ fn gssapi_docker_prefix() -> Vec<String> {
     ]
 }
 
-/// Run a cp-kafka GSSAPI tool to completion and assert that it succeeds.
+/// Run a cp-kafka GSSAPI tool and retain its status and output.
 fn run_gssapi_tool(tool_args: &[&str]) -> Output {
     let mut args = gssapi_docker_prefix();
     args.push(KAFKA_IMAGE.to_owned());
@@ -173,33 +173,45 @@ fn run_gssapi_tool(tool_args: &[&str]) -> Output {
         out.status,
         out.stderr.len()
     );
-    assert!(
-        out.status.success(),
-        "gssapi tool {tool_args:?} failed:\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
     out
 }
 
-// `flavor = "multi_thread"` is essential: the test body makes blocking
-// `Command::output()` calls per `docker run`. On a single-threaded runtime
-// those block the only worker, which also drives the broker accept loop, and
-// the Java client times out. (Same caveat as `jvm_acceptance.rs`.)
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker + the KDC fixture (docker compose up) + KRB5_CONFIG/SSPI_KDC_URL"]
-async fn cp_kafka_gssapi_client_round_trip() {
-    const TOPIC: &str = "krabka-gssapi-itest";
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    let HostGssapiBroker { broker, dir: _dir } = start_host_gssapi_broker().await;
+#[derive(Default)]
+struct KerberosRoundTrip {
+    broker: Option<HostGssapiBroker>,
+    topic: String,
+    tool: Option<Output>,
+}
 
-    // 1. Create the topic over a GSSAPI-authenticated AdminClient.
-    run_gssapi_tool(&[
+#[fixture]
+fn kerberos() -> KerberosRoundTrip {
+    // Start this scenario with fresh inputs and observations.
+
+    KerberosRoundTrip {
+        broker: None,
+        topic: String::new(),
+        tool: None,
+    }
+}
+
+#[given("a GSSAPI broker backed by the MIT KDC kafka.keytab and the alice keytab JVM client")]
+async fn kerberos_broker(kerberos: &mut KerberosRoundTrip) {
+    kerberos.broker = Some(start_host_gssapi_broker().await);
+}
+
+#[when("the authenticated JVM admin creates topic {topic} with one sole-replica partition")]
+fn create(kerberos: &mut KerberosRoundTrip, topic: String) {
+    kerberos.tool = Some(run_gssapi_tool(&[
         "kafka-topics",
         "--create",
         "--if-not-exists",
         "--topic",
-        TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
@@ -208,11 +220,24 @@ async fn cp_kafka_gssapi_client_round_trip() {
         BOOTSTRAP,
         "--command-config",
         "/gssapi/client.properties",
-    ]);
+    ]));
+    kerberos.topic = topic;
+}
 
-    // 2. Produce 3 records via a GSSAPI-authenticated producer (stdin).
+#[then("the authenticated JVM command succeeds")]
+fn success(kerberos: &KerberosRoundTrip) {
+    let out = kerberos.tool.as_ref().unwrap();
+    assert!(
+        out.status.success(),
+        "GSSAPI command failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[when("the authenticated JVM producer writes records {records}")]
+fn produce(kerberos: &mut KerberosRoundTrip, records: String) {
     let mut prefix = gssapi_docker_prefix();
-    // Need an interactive stdin for the producer.
     prefix.insert(2, "-i".to_owned());
     let mut child = Command::new("docker")
         .args(&prefix)
@@ -222,7 +247,7 @@ async fn cp_kafka_gssapi_client_round_trip() {
             "--bootstrap-server",
             BOOTSTRAP,
             "--topic",
-            TOPIC,
+            &kerberos.topic,
             "--producer.config",
             "/gssapi/client.properties",
         ])
@@ -231,42 +256,61 @@ async fn cp_kafka_gssapi_client_round_trip() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn producer");
+    let mut input = records.replace(',', "\n");
+    input.push('\n');
     child
         .stdin
         .as_mut()
         .expect("stdin")
-        .write_all(b"alpha\nbravo\ncharlie\n")
+        .write_all(input.as_bytes())
         .expect("write stdin");
     drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
-    assert!(
-        producer_out.status.success(),
-        "gssapi producer failed:\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr),
-    );
+    kerberos.tool = Some(child.wait_with_output().expect("wait producer"));
+}
 
-    // 3. Consume them back over a GSSAPI-authenticated consumer.
-    let consumer_out = run_gssapi_tool(&[
+#[when(
+    "the authenticated JVM consumer reads {count} records from partition zero with timeout {timeout} ms"
+)]
+fn consume(kerberos: &mut KerberosRoundTrip, count: String, timeout: String) {
+    kerberos.tool = Some(run_gssapi_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
         BOOTSTRAP,
         "--topic",
-        TOPIC,
+        &kerberos.topic,
         "--partition",
         "0",
         "--from-beginning",
         "--max-messages",
-        "3",
+        &count,
         "--timeout-ms",
-        "15000",
+        &timeout,
         "--consumer.config",
         "/gssapi/client.properties",
-    ]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["alpha", "bravo", "charlie"] {
-        assert!(s.contains(needle), "consumer didn't emit {needle}: {s:?}");
-    }
+    ]));
+}
 
+#[then("the consumer output contains records {records}")]
+fn received(kerberos: &KerberosRoundTrip, records: String) {
+    let stdout = String::from_utf8_lossy(&kerberos.tool.as_ref().unwrap().stdout);
+    for needle in records.split(',') {
+        assert!(
+            stdout.contains(needle),
+            "consumer did not emit {needle}: {stdout:?}"
+        );
+    }
+}
+
+#[ignore = "requires Docker + the KDC fixture (docker compose up) + KRB5_CONFIG/SSPI_KDC_URL"]
+#[scenario(
+    path = "tests/features/migrated/tests/gssapi_e2e.feature",
+    name = "cp kafka gssapi client round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cp_kafka_gssapi_client_round_trip(kerberos: KerberosRoundTrip) {
+    let HostGssapiBroker {
+        broker,
+        dir: _directory,
+    } = kerberos.broker.unwrap();
     broker.shutdown().await;
 }

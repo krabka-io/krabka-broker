@@ -3,10 +3,9 @@
 
 use {
     crate::support::{
-        InProcess,
         client::produce_batch as client_produce_batch,
         records::{batch_from_records, value_record},
-        start, topic_id_for,
+        topic_id_for,
         topics::configured_topic_request,
     },
     assert2::assert,
@@ -36,11 +35,6 @@ pub const COMPRESSION_TYPE: &str = "compression.type";
 /// runs at.
 pub const COMPRESSION_LZ4_LEVEL: &str = "compression.lz4.level";
 
-/// Kafka's default for both keys: 1 MiB of records plus the 12-byte
-/// `Records.LOG_OVERHEAD`. Read out of `apache/kafka:4.1.0` as the
-/// `DEFAULT_CONFIG` synonym of an unset `max.message.bytes`.
-pub const KAFKA_DEFAULT: usize = 1_048_588;
-
 /// Create a one-partition topic with `configs` and wait for its partition to
 /// exist locally.
 ///
@@ -69,13 +63,6 @@ pub async fn create_topic(
     );
     broker.wait_until_partition_present(name, 0).await;
     topic_id_for(client, name).await
-}
-
-/// Start the boundary-test topic while keeping the broker's directory alive.
-pub async fn orders_fixture(configs: &[(&str, &str)]) -> (InProcess, WireUuid) {
-    let process = Box::pin(start()).await;
-    let topic = create_topic(&process.broker, &process.client, "orders", configs).await;
-    (process, topic)
 }
 
 /// A single-record batch whose complete v2 wire encoding is exactly

@@ -410,56 +410,74 @@ mod authorize_by_resource_type {
         }
     }
 
-    #[yare::parameterized(
-        literal_denies_same_name = {
-            "orders",
-            PatternType::Literal,
-            "orders",
-            AuthorizationResult::Deny,
-        },
-        prefix_denies_within_range = {
-            "orders",
-            PatternType::Prefixed,
-            "ord",
-            AuthorizationResult::Deny,
-        },
-        prefix_denies_outside_range = {
-            "orders",
-            PatternType::Prefixed,
-            "orders-",
-            AuthorizationResult::Allow,
-        },
-        wildcard_grant_literal_deny = {
-            "*",
-            PatternType::Literal,
-            "hardcode",
-            AuthorizationResult::Allow,
-        },
-        wildcard_grant_prefix_deny = {
-            "*",
-            PatternType::Prefixed,
-            "hard",
-            AuthorizationResult::Allow,
-        },
-        wildcard_denies_wildcard = { "*", PatternType::Literal, "*", AuthorizationResult::Deny },
-    )]
-    fn literal_and_wildcard_grants_follow_kafka_pattern_dominance(
-        grant: &'static str,
-        denied_pattern: PatternType,
-        denied_name: &'static str,
-        expected: AuthorizationResult,
-    ) {
-        let image = acl_image([
-            topic_acl().op(AclOperation::Write).name(grant).call(),
-            topic_acl()
-                .permission(PermissionType::Deny)
-                .op(AclOperation::Write)
-                .pattern(denied_pattern)
-                .name(denied_name)
-                .call(),
-        ]);
-        check_resource_type_access(&image, ResourceType::Topic, AclOperation::Write, expected);
+    struct ResourceAuthorizationScenario {
+        image: krabka_metadata::MetadataImage,
+        decision: Option<AuthorizationResult>,
     }
+
+    #[rstest::fixture]
+    fn resource_authorization() -> ResourceAuthorizationScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        ResourceAuthorizationScenario {
+            image: img(),
+            decision: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("a WRITE allow ACL for topic {grant}")]
+    fn resource_grant(resource_authorization: &mut ResourceAuthorizationScenario, grant: String) {
+        resource_authorization
+            .image
+            .apply(&MetadataRecord::V1AccessControlEntry(
+                topic_acl().op(AclOperation::Write).name(&grant).call(),
+            ));
+    }
+
+    #[rstest_bdd_macros::given("a WRITE deny ACL with {pattern} topic pattern {name}")]
+    fn resource_denial(
+        resource_authorization: &mut ResourceAuthorizationScenario,
+        pattern: String,
+        name: String,
+    ) {
+        let pattern = match pattern.as_str() {
+            "literal" => PatternType::Literal,
+            "prefixed" => PatternType::Prefixed,
+            _ => panic!("unknown ACL pattern {pattern}"),
+        };
+        resource_authorization
+            .image
+            .apply(&MetadataRecord::V1AccessControlEntry(
+                topic_acl()
+                    .permission(PermissionType::Deny)
+                    .op(AclOperation::Write)
+                    .pattern(pattern)
+                    .name(&name)
+                    .call(),
+            ));
+    }
+
+    #[rstest_bdd_macros::when("Alice requests WRITE authorization by topic resource type")]
+    fn authorize_topic_type(resource_authorization: &mut ResourceAuthorizationScenario) {
+        resource_authorization.decision =
+            Some(AliceAuthorizer::default().authorize_by_resource_type(
+                &resource_authorization.image,
+                ResourceType::Topic,
+                AclOperation::Write,
+            ));
+    }
+
+    #[rstest_bdd_macros::then("topic resource authorization is {decision}")]
+    fn resource_decision(resource_authorization: &ResourceAuthorizationScenario, decision: String) {
+        let expected = match decision.as_str() {
+            "allowed" => AuthorizationResult::Allow,
+            "denied" => AuthorizationResult::Deny,
+            _ => panic!("unknown ACL decision {decision}"),
+        };
+        assert2::assert!(resource_authorization.decision == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/resource_authorization", fixtures = [resource_authorization: ResourceAuthorizationScenario]);
 
     #[yare::parameterized(
         different_principal = {

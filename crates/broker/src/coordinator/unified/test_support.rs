@@ -22,7 +22,7 @@ use {
             config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
             persister_client::SharePersister,
         },
-        test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs},
+        test_support::{FakeMetadataSource, KafkaErrorCode, string_pairs},
     },
     bytes::Bytes,
     krabka_protocol::{
@@ -42,6 +42,9 @@ use {
     },
     tokio::{sync::oneshot, time::sleep},
 };
+
+pub mod partition_assignments;
+pub mod persisted_snapshots;
 
 pub type AppendedRecords = Vec<(Option<Bytes>, Option<Bytes>)>;
 
@@ -630,215 +633,6 @@ impl AssignmentIntervalResults {
     }
 }
 
-/// The recovered seed, absence, or failure reported by a replay case.
-pub type ReplayOutcome<S> = Result<Option<S>, String>;
-
-/// The explicit mutations a case applies to its expected seed.
-pub type SeedUpdate<'a, S> = &'a dyn Fn(&mut S);
-
-/// Expected successful replay, built only from the fixture's explicitly supplied changes.
-pub fn expected_seed<S>(seed: impl Fn() -> S) -> impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S> {
-    move |update| Ok(Some(updated_seed(seed(), update)))
-}
-
-#[derive(Clone, Copy, Default)]
-pub enum AssignmentDeletionProtocol {
-    #[default]
-    Share,
-    Streams,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct AssignmentDeletionSetup<'a> {
-    #[default("m")]
-    pub member: &'a str,
-    pub protocol: AssignmentDeletionProtocol,
-}
-
-/// Kafka removes current and target assignments before member metadata.
-#[bon::builder]
-pub fn assignment_tombstones<R>(
-    mut tombstone: impl FnMut(&str, &str) -> R,
-    #[builder(default = "m")] member: &'_ str,
-    #[builder(default)] protocol: AssignmentDeletionProtocol,
-) -> Vec<R> {
-    let setup = AssignmentDeletionSetup { member, protocol };
-    let mut records: Vec<R> = [
-        ("current", setup.member),
-        ("target", setup.member),
-        ("target-epoch", ""),
-        ("member", setup.member),
-    ]
-    .into_iter()
-    .map(|(kind, id)| tombstone(kind, id))
-    .collect();
-    let suffix = match setup.protocol {
-        AssignmentDeletionProtocol::Share => ["state", "group"],
-        AssignmentDeletionProtocol::Streams => ["group", "topology"],
-    };
-    records.extend(suffix.iter().map(|kind| tombstone(kind, "")));
-    records
-}
-
-/// The replay oracle and ordered Kafka deletion records for one protocol.
-pub struct ReplayFixtures<Expected, Deletion> {
-    /// Builds the expected outcome of a replay from a seed update.
-    pub(crate) expected_seed: Expected,
-    /// Makes the records that delete a whole group, in Kafka's order.
-    pub(crate) deletion: Deletion,
-}
-
-/// The replay oracle and ordered Kafka deletion records for one protocol.
-#[bon::builder]
-pub fn replay_fixtures<S, R>(
-    seed: impl Fn() -> S,
-    tombstone: impl Fn(&str, &str) -> R,
-    #[builder(default = "m")] member: &'_ str,
-    #[builder(default)] protocol: AssignmentDeletionProtocol,
-) -> ReplayFixtures<impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S>, impl Fn() -> Vec<R>> {
-    let setup = AssignmentDeletionSetup { member, protocol };
-    ReplayFixtures {
-        expected_seed: expected_seed(seed),
-        deletion: move || {
-            assignment_tombstones()
-                .tombstone(&tombstone)
-                .member(setup.member)
-                .protocol(setup.protocol)
-                .call()
-        },
-    }
-}
-
-/// A member deletion that leaves its target assignment behind.
-pub fn undeleted_target_records<R>(
-    member: R,
-    target: R,
-    mut tombstone: impl FnMut(&str, &str) -> R,
-) -> Vec<R> {
-    vec![
-        member,
-        target,
-        tombstone("current", "m"),
-        tombstone("member", "m"),
-    ]
-}
-
-/// Bind protocol-specific keys to a test record without sharing the replay implementation.
-pub fn replay_tombstone_constructor<K, R>(
-    key: fn(&str, &str) -> K,
-    record: fn(K) -> R,
-) -> impl Fn(&str, &str) -> R + Copy {
-    move |kind, id| record(key(kind, id))
-}
-
-/// Independent rejection case when a member tombstone leaves its target assignment behind.
-pub fn member_deletion_with_target_case<R, S>(
-    member: R,
-    target: R,
-    tombstone: impl FnMut(&str, &str) -> R,
-    error: &str,
-) -> ReplayCase<'static, R, S> {
-    ReplayCase {
-        case: "a member tombstone while the member has a target",
-        records: undeleted_target_records(member, target, tombstone),
-        expected: Err(error.into()),
-    }
-}
-
-/// Independent Kafka expectation for deleting a group while its member remains.
-pub fn group_deletion_with_member_case<R, S>(
-    member: R,
-    mut tombstone: impl FnMut(&str, &str) -> R,
-) -> ReplayCase<'static, R, S> {
-    ReplayCase {
-        case: "a group tombstone with a member left",
-        records: vec![
-            member,
-            tombstone("target-epoch", ""),
-            tombstone("group", ""),
-        ],
-        expected: Err(
-            "Received a tombstone record to delete group g but the group still has 1 members."
-                .into(),
-        ),
-    }
-}
-
-/// Build the expected seed after applying a case's changes.
-pub fn updated_seed<S>(mut seed: S, update: &dyn Fn(&mut S)) -> S {
-    update(&mut seed);
-    seed
-}
-
-/// Replay a complete case, observing the seed only after successful replay.
-pub fn replay_outcome<R, S>(
-    records: &[R],
-    replay: impl FnMut(&R) -> Result<(), BrokerError>,
-    seed: impl FnOnce() -> Option<S>,
-) -> Result<Option<S>, String> {
-    records
-        .iter()
-        .try_for_each(replay)
-        .map(|()| seed())
-        .map_err(|error| match error {
-            BrokerError::Startup(message) => message,
-            other => other.to_string(),
-        })
-}
-
-/// Independently supplied records and expected replay results for one protocol.
-pub struct ReplayCase<'a, R, S> {
-    pub(crate) case: &'a str,
-    pub(crate) records: Vec<R>,
-    pub(crate) expected: ReplayOutcome<S>,
-}
-
-/// The independent absence expectations shared by every modern protocol's deletion replay.
-pub fn deletion_replay_cases<R: Clone, S>(
-    mut full_group: Vec<R>,
-    deletion: Vec<R>,
-) -> [ReplayCase<'static, R, S>; 2] {
-    full_group.extend(deletion.iter().cloned());
-    [
-        ReplayCase {
-            case: "Kafka's deletion order removes the whole group",
-            records: full_group,
-            expected: Ok(None),
-        },
-        ReplayCase {
-            case: "tombstones of a group the log does not hold are ignored",
-            records: deletion,
-            expected: Ok(None),
-        },
-    ]
-}
-
-/// Each protocol checks both its replay result and the cache populated by replay.
-pub fn check_replay_cases<R, S: PartialEq + Debug>(
-    rows: &[ReplayCase<'_, R, S>],
-    replay: impl Fn(&GroupCoordinator, &R) -> Result<(), BrokerError>,
-    seed: impl Fn(&GroupCoordinator) -> Option<S>,
-    cached: impl Fn(&GroupCoordinator) -> Option<S>,
-) {
-    for ReplayCase {
-        case,
-        records,
-        expected,
-    } in rows
-    {
-        let coordinator = make_coord();
-        let outcome = replay_outcome(
-            records,
-            |record| replay(&coordinator, record),
-            || seed(&coordinator),
-        );
-        assert2::check!(&outcome == expected, "{case}");
-        if let Ok(seed) = outcome {
-            assert2::check!(cached(&coordinator) == seed, "{case}");
-        }
-    }
-}
-
 /// Seeds the streams group `group_id` with member `m1` at `member_epoch`, and
 /// `topology` when given, the way the bootstrap replay hydrates one from
 /// `__consumer_offsets` records.
@@ -949,44 +743,4 @@ pub fn expired_session_last_seen() -> Instant {
 /// Independent tombstone rows for a fenced member, parameterized by record family.
 pub fn member_tombstones<T>(member_id: &str) -> Vec<(String, Option<T>)> {
     vec![(member_id.into(), None)]
-}
-
-#[derive(Clone, Copy)]
-pub struct TargetAssignmentEpoch(pub i32);
-
-/// Independent Kafka bytes for the default and tagged assignment timestamps.
-pub struct AssignmentMetadataGoldenCase {
-    pub description: &'static str,
-    pub epoch: TargetAssignmentEpoch,
-    pub timestamp: UnixMillis,
-    pub bytes: &'static [u8],
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct AssignmentMetadataGoldenSetup {
-    #[default("the time is unknown")]
-    pub unknown_time_description: &'static str,
-}
-
-#[bon::builder]
-pub fn assignment_metadata_golden_cases(
-    #[builder(default = "the time is unknown")] unknown_time_description: &'static str,
-) -> [AssignmentMetadataGoldenCase; 2] {
-    let setup = AssignmentMetadataGoldenSetup {
-        unknown_time_description,
-    };
-    [
-        AssignmentMetadataGoldenCase {
-            description: setup.unknown_time_description,
-            epoch: TargetAssignmentEpoch(12),
-            timestamp: UnixMillis(0),
-            bytes: b"\x00\x00\x00\x00\x00\x0c\x00",
-        },
-        AssignmentMetadataGoldenCase {
-            description: "an assignment that finished at 2026-10-07T00:00:00Z",
-            epoch: TargetAssignmentEpoch(12),
-            timestamp: UnixMillis(1_791_331_200_000),
-            bytes: b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
-        },
-    ]
 }

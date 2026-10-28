@@ -6,6 +6,8 @@
 //! pair that an `OffsetForLeaderEpoch` row carries and that a `Fetch` row's
 //! `diverging_epoch` is built from.
 
+#[cfg(test)]
+use std::vec;
 use {
     creusot_std::prelude::*,
     krabka_ids::{LeaderEpoch, Offset},
@@ -193,86 +195,56 @@ mod tests {
         }
     }
 
-    /// One row per `endOffsetFor` branch, plus the gap-epoch variants.
-    #[yare::parameterized(
-        empty_cache = { "empty cache", &[][..], 0, 9, (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET) },
-        undefined_requested_empty = {
-            "undefined requested epoch, empty cache",
-            &[][..],
-            -1,
-            9,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        undefined_requested = {
-            "undefined requested epoch",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            -1,
-            200,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        latest_epoch = {
-            "latest epoch answers the log end offset",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            5,
-            200,
-            (LeaderEpoch(5), Offset(200)),
-        },
-        above_latest = {
-            "requested epoch above the latest",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            7,
-            200,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        below_first = {
-            "below the first epoch: requested epoch, first start",
-            &[entry(3, 30), entry(4, 40)][..],
-            1,
-            200,
-            (LeaderEpoch(1), Offset(30)),
-        },
-        exact_older = {
-            "exact older epoch: that epoch, next start",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            2,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_epoch = {
-            "gap epoch: floor epoch, next start",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            3,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_below_latest = {
-            "gap epoch below the latest: floor epoch 2, start of 5",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            4,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_above_first = {
-            "gap epoch just above the first: floor epoch 0, start of 2",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            1,
-            200,
-            (LeaderEpoch(0), Offset(50)),
-        },
-    )]
-    fn lookup_matches_kafka_end_offset_for_rows(
-        name: &str,
-        entries: &[EpochEntry],
-        requested: i32,
-        log_end: i64,
-        expected: (LeaderEpoch, Offset),
-    ) {
-        assert2::check!(
-            epoch_and_offset_for_entries(entries, LeaderEpoch(requested), Offset(log_end))
-                == expected,
-            "case {name}"
-        );
+    struct EpochLookup {
+        entries: Vec<EpochEntry>,
+        answer: Option<(LeaderEpoch, Offset)>,
     }
+
+    #[rstest::fixture]
+    fn checkpoint() -> EpochLookup {
+        // Start this scenario with fresh inputs and observations.
+
+        EpochLookup {
+            entries: Vec::new(),
+            answer: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("leader epoch checkpoint entries {entries}")]
+    fn epoch_checkpoint(checkpoint: &mut EpochLookup, entries: String) {
+        checkpoint.entries = if entries == "empty" {
+            Vec::new()
+        } else {
+            entries
+                .split(',')
+                .map(|row| {
+                    let (epoch, start) = row
+                        .split_once(':')
+                        .expect("checkpoint row is epoch:start-offset");
+                    entry(
+                        epoch.parse().expect("leader epoch is an integer"),
+                        start.parse().expect("start offset is an integer"),
+                    )
+                })
+                .collect()
+        };
+    }
+
+    #[rstest_bdd_macros::when("epoch {requested} is looked up at log end {log_end}")]
+    fn lookup_epoch(checkpoint: &mut EpochLookup, requested: i32, log_end: i64) {
+        checkpoint.answer = Some(epoch_and_offset_for_entries(
+            &checkpoint.entries,
+            LeaderEpoch(requested),
+            Offset(log_end),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the epoch lookup answers epoch {found} and end offset {end}")]
+    fn epoch_answer(checkpoint: &EpochLookup, found: i32, end: i64) {
+        assert2::check!(checkpoint.answer == Some((LeaderEpoch(found), Offset(end))));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/leader_epoch.feature", fixtures = [checkpoint: EpochLookup]);
 
     proptest! {
         #[test]

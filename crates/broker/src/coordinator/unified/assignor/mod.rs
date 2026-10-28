@@ -136,104 +136,77 @@ mod tests {
     use {
         super::{SubscriptionShape, SubscriptionType, subscription_type},
         assert2::assert,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
         std::collections::HashSet,
     };
-
-    struct Row<'a> {
-        name: &'static str,
-        members: Vec<SubscriptionShape<'a>>,
-        expected: SubscriptionType,
+    struct MemberTopics {
+        names: HashSet<String>,
+        expression: Option<String>,
+        resolved: Vec<String>,
     }
-
-    fn names(list: &[&str]) -> HashSet<String> {
-        list.iter().map(|name| (*name).to_owned()).collect()
+    #[derive(Default)]
+    struct SubscriptionClassification {
+        members: Vec<MemberTopics>,
+        classification: Option<SubscriptionType>,
     }
-
-    #[test]
-    fn subscription_type_matches_kafka_consumer_group_rule() {
-        let ab = names(&["a", "b"]);
-        let a = names(&["a"]);
-        let missing = names(&["a", "b", "missing"]);
-        let none = names(&[]);
-        let by_names = |topic_names| SubscriptionShape {
-            topic_names,
-            topic_regex: None,
-            regex_topic_names: Vec::new(),
-        };
-        let by_regex = |topic_names, regex, resolved: &[&'static str]| SubscriptionShape {
-            topic_names,
-            topic_regex: Some(regex),
-            regex_topic_names: resolved.to_vec(),
-        };
-        let rows: Vec<Row<'_>> = vec![
-            Row {
-                name: "no members",
-                members: vec![],
-                expected: SubscriptionType::Homogeneous,
-            },
-            Row {
-                name: "no subscriptions",
-                members: vec![by_names(&none), by_names(&none)],
-                expected: SubscriptionType::Homogeneous,
-            },
-            Row {
-                name: "same names",
-                members: vec![by_names(&ab), by_names(&ab)],
-                expected: SubscriptionType::Homogeneous,
-            },
-            Row {
-                name: "different names",
-                members: vec![by_names(&ab), by_names(&a)],
-                expected: SubscriptionType::Heterogeneous,
-            },
-            Row {
-                // Kafka counts names, so a missing topic still splits the group.
-                name: "one member also names a missing topic",
-                members: vec![by_names(&ab), by_names(&missing)],
-                expected: SubscriptionType::Heterogeneous,
-            },
-            Row {
-                name: "one shared regex",
-                members: vec![
-                    by_regex(&none, "t.*", &["a", "b"]),
-                    by_regex(&none, "t.*", &["a", "b"]),
-                ],
-                expected: SubscriptionType::Homogeneous,
-            },
-            Row {
-                name: "unresolved shared regex",
-                members: vec![by_regex(&none, "t.*", &[]), by_regex(&none, "t.*", &[])],
-                expected: SubscriptionType::Homogeneous,
-            },
-            Row {
-                name: "two regexes that resolve alike",
-                members: vec![
-                    by_regex(&none, "t.*", &["a", "b"]),
-                    by_regex(&none, "[ab]", &["a", "b"]),
-                ],
-                expected: SubscriptionType::Heterogeneous,
-            },
-            Row {
-                name: "regex and names that resolve alike",
-                members: vec![by_regex(&none, "t.*", &["a", "b"]), by_names(&ab)],
-                expected: SubscriptionType::Heterogeneous,
-            },
-            Row {
-                name: "shared regex plus a name",
-                members: vec![
-                    by_regex(&a, "t.*", &["a", "b"]),
-                    by_regex(&none, "t.*", &["a", "b"]),
-                ],
-                expected: SubscriptionType::Heterogeneous,
-            },
-        ];
-        for Row {
-            name,
-            members,
-            expected,
-        } in rows
-        {
-            assert!(subscription_type(&members) == expected, "{name}");
+    #[derive(DataTableRow)]
+    struct SubscriptionRow {
+        names: String,
+        expression: String,
+        resolved: String,
+    }
+    #[rstest::fixture]
+    fn subscriptions() -> SubscriptionClassification {
+        // Start this scenario with fresh inputs and observations.
+        SubscriptionClassification::default()
+    }
+    fn topic_names(value: &str) -> Vec<String> {
+        if value == "none" {
+            vec![]
+        } else {
+            value.split(',').map(str::to_owned).collect()
         }
     }
+    #[given("consumer members subscribe by names and regular expressions")]
+    fn member_subscriptions(
+        subscriptions: &mut SubscriptionClassification,
+        #[datatable] rows: Rows<SubscriptionRow>,
+    ) {
+        subscriptions.members = rows
+            .into_iter()
+            .map(|row| MemberTopics {
+                names: topic_names(&row.names).into_iter().collect(),
+                expression: if row.expression == "absent" {
+                    None
+                } else {
+                    Some(row.expression)
+                },
+                resolved: topic_names(&row.resolved),
+            })
+            .collect();
+    }
+    #[when("the coordinator classifies the group subscription shape")]
+    fn classify_subscriptions(subscriptions: &mut SubscriptionClassification) {
+        let shapes = subscriptions
+            .members
+            .iter()
+            .map(|member| SubscriptionShape {
+                topic_names: &member.names,
+                topic_regex: member.expression.as_deref(),
+                regex_topic_names: member.resolved.iter().map(String::as_str).collect(),
+            })
+            .collect::<Vec<_>>();
+        subscriptions.classification = Some(subscription_type(&shapes));
+    }
+    #[then("the group uses the {builder} assignment builder")]
+    fn subscription_builder(subscriptions: &SubscriptionClassification, builder: String) {
+        let expected = match builder.as_str() {
+            "homogeneous" => SubscriptionType::Homogeneous,
+            "heterogeneous" => SubscriptionType::Heterogeneous,
+            _ => panic!("unknown subscription builder"),
+        };
+        assert!(subscriptions.classification == Some(expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/assignor/mod.feature",fixtures=[subscriptions:SubscriptionClassification]);
 }

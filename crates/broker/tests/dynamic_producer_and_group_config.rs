@@ -42,12 +42,6 @@ use {
     tokio::time,
 };
 
-/// Kafka's `TransactionLogConfig.PRODUCER_ID_EXPIRATION_MS_CONFIG`.
-const PRODUCER_ID_EXPIRATION_MS: &str = "producer.id.expiration.ms";
-
-/// Kafka's `GroupCoordinatorConfig.CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG`.
-const CONSUMER_ASSIGNMENT_INTERVAL_MS: &str = "group.consumer.assignment.interval.ms";
-
 /// How long a change may take to show on the wire.
 const PROPAGATION: Duration = Duration::from_secs(10);
 
@@ -161,79 +155,6 @@ async fn active_producer_ids(client: &Client, topic: &str) -> Vec<i64> {
         .collect()
 }
 
-/// A dynamic `producer.id.expiration.ms`, on either resource, shortens the
-/// window of the producer-expiry sweep that is already running: the sweep
-/// removes a producer that went idle under the static day-long window, and
-/// `DescribeProducers` no longer reports it. Kafka's
-/// `DynamicProducerStateManagerConfig` reconfigures the window of every log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
-    let p = support::start_configured(|config: &mut BrokerConfig| {
-        // The sweep runs every 50 ms instead of every ten minutes, so the
-        // test sees several sweeps under each window.
-        config.producer_id_expiration_scan_interval = krabka_units::millis(50);
-    })
-    .await;
-    for scope in [Scope::ClusterDefault, Scope::ThisBroker] {
-        let topic = format!("expiring-{scope:?}").to_lowercase();
-        create_topic_named(&p.client, CreateTopicSetup {
-            topic: &topic,
-            ..Default::default()
-        })
-        .await;
-        let topic_id = topic_id_for(&p.client, &topic).await;
-        let producer = claim_idempotent_producer(&p.client).await;
-        let appended = send_batch(
-            &p.client,
-            current_batch(producer.producer_id, producer.producer_epoch),
-            SinglePartitionProduceSetup {
-                topic: topic.clone(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
-        .await;
-        assert!(appended.responses[0].partition_responses[0].error_code == 0);
-
-        // Several sweeps under the static day-long window keep the producer.
-        time::sleep(Duration::from_millis(300)).await;
-        let kept = active_producer_ids(&p.client, &topic).await;
-        check!(kept == [producer.producer_id], "{scope:?}");
-
-        let altered = alter_broker()
-            .client(&p.client)
-            .broker(&p.broker)
-            .scope(scope)
-            .key(PRODUCER_ID_EXPIRATION_MS)
-            .value("1")
-            .call()
-            .await;
-        assert!(altered == accepted(&p.broker, scope));
-        let deadline = Instant::now() + PROPAGATION;
-        let remaining = loop {
-            let remaining = active_producer_ids(&p.client, &topic).await;
-            if remaining.is_empty() || Instant::now() >= deadline {
-                break remaining;
-            }
-            time::sleep(Duration::from_millis(50)).await;
-        };
-        check!(
-            remaining == Vec::<i64>::new(),
-            "{scope:?}: producer.id.expiration.ms=1 must expire the idle producer"
-        );
-
-        let deleted = alter_broker()
-            .client(&p.client)
-            .broker(&p.broker)
-            .scope(scope)
-            .key(PRODUCER_ID_EXPIRATION_MS)
-            .call()
-            .await;
-        assert!(deleted == accepted(&p.broker, scope));
-    }
-    p.broker.shutdown().await;
-}
-
 /// A consumer heartbeat at `epoch` of the member `member_id`, subscribed to
 /// `topics`.
 fn subscribed(member_id: &str, epoch: i32, topics: &[&str]) -> ConsumerGroupHeartbeatRequest {
@@ -293,119 +214,352 @@ fn partition_zero(topic_id: Uuid) -> TopicPartitions {
     }
 }
 
-/// A broker-level `group.consumer.assignment.interval.ms` reaches a running
-/// group: with the static interval at zero, a cluster-wide 2 s holds back the
-/// target assignment of a subscription change until the interval since the
-/// group's last assignment has passed, as Kafka's
-/// `GroupMetadataManager.maybeUpdateTargetAssignment` holds it back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment() {
-    const INTERVAL: Duration = Duration::from_secs(2);
+struct DynamicRuntime {
+    broker: Option<support::InProcess>,
+    client: Option<Client>,
+    scope: Option<Scope>,
+    altered: Option<AlterConfigsResourceResponse>,
+    topic: String,
+    producer: Option<i64>,
+    producer_ids: Option<Vec<i64>>,
+    first_topic: Option<Uuid>,
+    second_topic: Option<Uuid>,
+    member: String,
+    heartbeat: Option<ConsumerGroupHeartbeatResponse>,
+    joined_at: Option<Instant>,
+    elapsed: Option<Duration>,
+}
+impl DynamicRuntime {
+    async fn alter_key(&mut self, key: &str, scope: &str, value: Option<&str>) {
+        let scope = match scope {
+            "default" => Scope::ClusterDefault,
+            "this-broker" => Scope::ThisBroker,
+            other => panic!("unknown broker resource scope {other}"),
+        };
+        let broker = &self.broker.as_ref().expect("runtime broker started").broker;
+        self.altered = Some(
+            alter_broker()
+                .client(self.client())
+                .broker(broker)
+                .scope(scope)
+                .key(key)
+                .maybe_value(value)
+                .call()
+                .await,
+        );
+        self.scope = Some(scope);
+    }
+
+    fn client(&self) -> &Client {
+        self.client
+            .as_ref()
+            .unwrap_or_else(|| &self.broker.as_ref().expect("runtime broker started").client)
+    }
+
+    async fn shutdown(self) {
+        drop(self.client);
+        self.broker
+            .expect("runtime broker started")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+fn runtime_config() -> DynamicRuntime {
+    // Start this scenario with fresh inputs and observations.
+
+    DynamicRuntime {
+        broker: None,
+        client: None,
+        scope: None,
+        altered: None,
+        topic: String::new(),
+        producer: None,
+        producer_ids: None,
+        first_topic: None,
+        second_topic: None,
+        member: String::new(),
+        heartbeat: None,
+        joined_at: None,
+        elapsed: None,
+    }
+}
+#[rstest_bdd_macros::given("a broker sweeps expired producers every 50 milliseconds")]
+async fn runtime_expiry_sweep(runtime_config: &mut DynamicRuntime) {
+    runtime_config.broker = Some(
+        support::start_configured(|config: &mut BrokerConfig| {
+            config.producer_id_expiration_scan_interval = krabka_units::millis(50);
+        })
+        .await,
+    );
+}
+#[rstest_bdd_macros::given("topic {topic} contains a current timestamped idempotent batch")]
+async fn runtime_idle_producer(runtime_config: &mut DynamicRuntime, topic: String) {
+    let p = runtime_config
+        .broker
+        .as_ref()
+        .expect("runtime broker started");
+    create_topic_named(&p.client, CreateTopicSetup {
+        topic: &topic,
+        ..Default::default()
+    })
+    .await;
+    let topic_id = topic_id_for(&p.client, &topic).await;
+    let producer = claim_idempotent_producer(&p.client).await;
+    let appended = send_batch(
+        &p.client,
+        current_batch(producer.producer_id, producer.producer_epoch),
+        SinglePartitionProduceSetup {
+            topic: topic.clone(),
+            topic_id,
+            ..SinglePartitionProduceSetup::replicated()
+        },
+    )
+    .await;
+    assert!(appended.responses[0].partition_responses[0].error_code == 0);
+    runtime_config.topic = topic;
+    runtime_config.producer = Some(producer.producer_id);
+}
+#[rstest_bdd_macros::when(
+    "DescribeProducers is read after 300 milliseconds of static-window sweeps"
+)]
+async fn runtime_retained_producer(runtime_config: &mut DynamicRuntime) {
+    time::sleep(Duration::from_millis(300)).await;
+    runtime_config.producer_ids =
+        Some(active_producer_ids(runtime_config.client(), &runtime_config.topic).await);
+}
+#[rstest_bdd_macros::then("the only active producer is the one that appended the batch")]
+fn runtime_producer_retained(runtime_config: &DynamicRuntime) {
+    check!(
+        runtime_config
+            .producer_ids
+            .as_ref()
+            .expect("producer snapshot read")
+            .as_slice()
+            == [runtime_config.producer.expect("producer initialized")]
+    );
+}
+#[rstest_bdd_macros::when("runtime config {key} on {scope} is set to {value}")]
+async fn runtime_config_changed(
+    runtime_config: &mut DynamicRuntime,
+    key: String,
+    scope: String,
+    value: String,
+) {
+    runtime_config.alter_key(&key, &scope, Some(&value)).await;
+}
+#[rstest_bdd_macros::when("runtime config {key} on {scope} is deleted")]
+async fn runtime_config_deleted(runtime_config: &mut DynamicRuntime, key: String, scope: String) {
+    runtime_config.alter_key(&key, &scope, None).await;
+}
+#[rstest_bdd_macros::then("the full runtime config alteration response is successful")]
+fn runtime_config_accepted(runtime_config: &DynamicRuntime) {
+    let broker = &runtime_config
+        .broker
+        .as_ref()
+        .expect("runtime broker started")
+        .broker;
+    assert!(
+        runtime_config
+            .altered
+            .as_ref()
+            .expect("runtime config altered")
+            == &accepted(broker, runtime_config.scope.expect("resource selected"))
+    );
+}
+#[rstest_bdd_macros::when("DescribeProducers is polled until the shortened expiry window applies")]
+async fn runtime_expiry_applied(runtime_config: &mut DynamicRuntime) {
+    let deadline = Instant::now() + PROPAGATION;
+    loop {
+        let remaining = active_producer_ids(runtime_config.client(), &runtime_config.topic).await;
+        let finished = remaining.is_empty() || Instant::now() >= deadline;
+        runtime_config.producer_ids = Some(remaining);
+        if finished {
+            break;
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+}
+#[rstest_bdd_macros::then("the active producer list is empty")]
+fn runtime_producer_expired(runtime_config: &DynamicRuntime) {
+    check!(
+        runtime_config
+            .producer_ids
+            .as_ref()
+            .expect("producer snapshot read")
+            .is_empty()
+    );
+}
+#[rstest_bdd_macros::given(
+    "a ready consumer group broker has interval-first and interval-second single partition topics"
+)]
+async fn runtime_assignment_topics(runtime_config: &mut DynamicRuntime) {
     let p = support::start_ready_group().await;
     let client = connect_client(p.broker.listen_addr().to_string(), Some("c-interval")).await;
-    let first = one_partition_topic(&client, "interval-first").await;
-    let second = one_partition_topic(&client, "interval-second").await;
-
-    let altered = alter_broker()
-        .client(&client)
-        .broker(&p.broker)
-        .scope(Scope::ClusterDefault)
-        .key(CONSUMER_ASSIGNMENT_INTERVAL_MS)
-        .value("2000")
-        .call()
-        .await;
-    assert!(altered == accepted(&p.broker, Scope::ClusterDefault));
-
-    let member_id = uuid::Uuid::new_v4().to_string();
-    // The group's first target assignment is not held back: there is no
-    // earlier one to wait from. It is computed after this instant.
-    let joined_at = Instant::now();
-    let joined = client
-        .send(subscribed(&member_id, 0, &["interval-first"]))
-        .await
-        .expect("join");
-    check!(joined == assigned(&member_id, 2, Some(vec![partition_zero(first)])));
-
-    let resubscribed = client
-        .send(subscribed(&member_id, 2, &[
-            "interval-first",
-            "interval-second",
-        ]))
-        .await
-        .expect("subscription change");
-    check!(
-        resubscribed == assigned(&member_id, 2, None),
-        "the subscription change must wait for the 2 s interval"
+    runtime_config.first_topic = Some(one_partition_topic(&client, "interval-first").await);
+    runtime_config.second_topic = Some(one_partition_topic(&client, "interval-second").await);
+    runtime_config.member = uuid::Uuid::new_v4().to_string();
+    runtime_config.client = Some(client);
+    runtime_config.broker = Some(p);
+}
+#[rstest_bdd_macros::when("the member joins g-interval at epoch 0 subscribed to interval-first")]
+async fn runtime_assignment_join(runtime_config: &mut DynamicRuntime) {
+    runtime_config.joined_at = Some(Instant::now());
+    runtime_config.heartbeat = Some(
+        runtime_config
+            .client()
+            .send(subscribed(&runtime_config.member, 0, &["interval-first"]))
+            .await
+            .expect("join"),
     );
-
+}
+#[rstest_bdd_macros::then(
+    "the complete first heartbeat assigns interval-first partition 0 at epoch 2 and interval 5000"
+)]
+fn runtime_first_assignment(runtime_config: &DynamicRuntime) {
+    check!(
+        runtime_config.heartbeat.as_ref().expect("member joined")
+            == &assigned(
+                &runtime_config.member,
+                2,
+                Some(vec![partition_zero(
+                    runtime_config.first_topic.expect("first topic created")
+                )])
+            )
+    );
+}
+#[rstest_bdd_macros::when("the member at epoch 2 subscribes to both interval topics")]
+async fn runtime_assignment_resubscribe(runtime_config: &mut DynamicRuntime) {
+    runtime_config.heartbeat = Some(
+        runtime_config
+            .client()
+            .send(subscribed(&runtime_config.member, 2, &[
+                "interval-first",
+                "interval-second",
+            ]))
+            .await
+            .expect("subscription change"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete heartbeat remains at epoch 2 with no assignment and interval 5000"
+)]
+fn runtime_assignment_deferred(runtime_config: &DynamicRuntime) {
+    check!(
+        runtime_config
+            .heartbeat
+            .as_ref()
+            .expect("subscription changed")
+            == &assigned(&runtime_config.member, 2, None)
+    );
+}
+#[rstest_bdd_macros::when("heartbeats continue until the deferred target assignment is released")]
+async fn runtime_assignment_release(runtime_config: &mut DynamicRuntime) {
     let deadline = Instant::now() + PROPAGATION;
-    let released = loop {
-        let answer = client
-            .send(subscribed(&member_id, 2, &[
+    loop {
+        let answer = runtime_config
+            .client()
+            .send(subscribed(&runtime_config.member, 2, &[
                 "interval-first",
                 "interval-second",
             ]))
             .await
             .expect("heartbeat");
-        if answer.assignment.is_some() || Instant::now() >= deadline {
-            break answer;
+        let finished = answer.assignment.is_some() || Instant::now() >= deadline;
+        runtime_config.heartbeat = Some(answer);
+        if finished {
+            break;
         }
         time::sleep(Duration::from_millis(100)).await;
-    };
-    check!(joined_at.elapsed() >= INTERVAL);
-    check!(
-        in_topic_order(released)
-            == in_topic_order(assigned(
-                &member_id,
-                3,
-                Some(vec![partition_zero(first), partition_zero(second)])
-            ))
+    }
+    runtime_config.elapsed = Some(
+        runtime_config
+            .joined_at
+            .expect("first join timed")
+            .elapsed(),
     );
-    p.broker.shutdown().await;
+}
+#[rstest_bdd_macros::then(
+    "at least 2000 milliseconds elapsed and the complete epoch 3 heartbeat assigns both partition 0 topics"
+)]
+fn runtime_assignment_released(runtime_config: &DynamicRuntime) {
+    check!(runtime_config.elapsed.expect("assignment release measured") >= Duration::from_secs(2));
+    let actual = runtime_config
+        .heartbeat
+        .as_ref()
+        .expect("assignment polled")
+        .clone();
+    let expected = assigned(
+        &runtime_config.member,
+        3,
+        Some(vec![
+            partition_zero(runtime_config.first_topic.expect("first topic created")),
+            partition_zero(runtime_config.second_topic.expect("second topic created")),
+        ]),
+    );
+    check!(in_topic_order(actual) == in_topic_order(expected));
+}
+#[rstest_bdd_macros::given("a default broker is ready for assignment interval validation")]
+async fn runtime_assignment_validation_broker(runtime_config: &mut DynamicRuntime) {
+    runtime_config.broker = Some(support::start().await);
+}
+#[rstest_bdd_macros::then("the full alteration response is error 42 with message {message}")]
+fn runtime_assignment_out_of_range(runtime_config: &DynamicRuntime, message: String) {
+    let broker = &runtime_config
+        .broker
+        .as_ref()
+        .expect("runtime broker started")
+        .broker;
+    check!(
+        runtime_config
+            .altered
+            .as_ref()
+            .expect("runtime config altered")
+            == &AlterConfigsResourceResponse {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(message),
+                ..accepted(broker, runtime_config.scope.expect("resource selected"))
+            }
+    );
 }
 
-/// Kafka's `GroupCoordinatorConfig` refuses a broker-level assignment interval
-/// outside the broker's bounds when the alter builds the new `KafkaConfig`,
-/// and the refusal reaches the client as `INVALID_REQUEST` with the
-/// `require` message (KAFKA-13609).
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "a dynamic producer id expiration reaches the running expiry sweep"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_assignment_interval_above_the_broker_maximum_is_refused() {
-    let p = support::start().await;
-    let mut refusals = Vec::new();
-    for (scope, protocol) in [
-        (Scope::ClusterDefault, "consumer"),
-        (Scope::ThisBroker, "share"),
-        (Scope::ClusterDefault, "streams"),
-    ] {
-        let key = format!("group.{protocol}.assignment.interval.ms");
-        let refused = alter_broker()
-            .client(&p.client)
-            .broker(&p.broker)
-            .scope(scope)
-            .key(&key)
-            .value("15001")
-            .call()
-            .await;
-        refusals.push(refused);
-    }
+async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep(
+    runtime_config: DynamicRuntime,
+    scope: String,
+    topic: String,
+) {
+    let _ = (scope, topic);
+    runtime_config.shutdown().await;
+}
 
-    let refusal = |scope: Scope, protocol: &str| AlterConfigsResourceResponse {
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some(format!(
-            "group.{protocol}.assignment.interval.ms must be less than or equal to \
-             group.{protocol}.max.assignment.interval.ms"
-        )),
-        resource_type: BROKER_RESOURCE,
-        resource_name: scope.resource_name(&p.broker),
-        ..Default::default()
-    };
-    check!(
-        refusals
-            == [
-                refusal(Scope::ClusterDefault, "consumer"),
-                refusal(Scope::ThisBroker, "share"),
-                refusal(Scope::ClusterDefault, "streams"),
-            ]
-    );
-    p.broker.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "a dynamic consumer assignment interval holds back the next assignment"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment(
+    runtime_config: DynamicRuntime,
+) {
+    runtime_config.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "an assignment interval above the broker maximum is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_assignment_interval_above_the_broker_maximum_is_refused(
+    runtime_config: DynamicRuntime,
+    scope: String,
+    protocol: String,
+    message: String,
+) {
+    let _ = (scope, protocol, message);
+    runtime_config.shutdown().await;
 }

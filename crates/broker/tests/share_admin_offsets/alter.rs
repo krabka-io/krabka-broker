@@ -7,10 +7,7 @@
 use {
     crate::{
         describe::describe_until,
-        harness::{
-            NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, seeded_empty_group,
-            wait_for_share_init,
-        },
+        harness::{NON_EMPTY_GROUP, NONE, fetch_until_acquired, join, wait_for_share_init},
         support::share::{MemberSession, ShareSessionSetup},
     },
     assert2::assert,
@@ -38,87 +35,191 @@ fn alter_request(start_offset: i64) -> AlterShareGroupOffsetsRequest {
     }
 }
 
-/// Alter resets the SPSO of an empty group.
-///
-/// The persister re-initializes its state at the requested offset, the broker
-/// invalidates the leader cache, and a later `ShareFetch` acquires from the new
-/// offset.
-///
-/// The group has *no members* when Alter runs, so the membership lifecycle has
-/// never seeded the share-state. Alter thus initializes from absent at the
-/// group's current epoch, 1, with `start_offset = 5`, and records the
-/// partition as initialized, as Kafka's `alterShareGroupOffsets` does. A later
-/// first join finds the partition initialized and does not initialize it
-/// again, so the SPSO from Alter survives and the first `ShareFetch` acquires
-/// from offset 5. The test thus exercises the real acquire path against the
-/// reset and invalidated leader cache.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_resets_empty_group() {
-    let (_permit, _broker, client, _dir, tid) =
-        Box::pin(seeded_empty_group().count(6).call()).await;
+use {
+    crate::harness::AdminOffsetSession,
+    krabka_protocol::owned::{
+        alter_share_group_offsets_response::AlterShareGroupOffsetsResponse,
+        share_fetch_response::PartitionData,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    // Alter: reset SPSO to 5 on the empty (never-joined) group. This
-    // initializes-from-absent at the group epoch 1, and invalidates the
-    // (empty) leader cache. Retry while the persister leadership is still
-    // settling.
-    let mut altered = false;
+#[derive(Default)]
+struct ShareOffsetAlteration {
+    session: Option<AdminOffsetSession>,
+    response: Option<AlterShareGroupOffsetsResponse>,
+    described: Option<i64>,
+    fetched: Option<PartitionData>,
+}
+
+#[fixture]
+fn share_offset_alteration() -> ShareOffsetAlteration {
+    // Keep the mutation response distinct from described and acquired offsets.
+    ShareOffsetAlteration::default()
+}
+
+#[given("an empty share group g1 with {records} records on t partition 0")]
+async fn empty_alter_group(share_offset_alteration: &mut ShareOffsetAlteration, records: i64) {
+    share_offset_alteration.session = Some(AdminOffsetSession::seeded(records).await);
+}
+
+#[given("a live share member has joined g1 and initialized its state")]
+async fn occupied_alter_group(share_offset_alteration: &mut ShareOffsetAlteration) {
+    share_offset_alteration
+        .session
+        .as_mut()
+        .expect("seeded group")
+        .member = Some(
+        join(&share_offset_alteration.session().client, "g1", "t")
+            .await
+            .member,
+    );
+    wait_for_share_init(
+        share_offset_alteration.session().broker(),
+        "g1",
+        share_offset_alteration.session().topic,
+        0,
+    )
+    .await;
+}
+
+#[when("an administrator resets empty g1 to offset 5, retrying while its persister settles")]
+async fn reset_empty_share_group(share_offset_alteration: &mut ShareOffsetAlteration) {
     for _ in 0..40 {
-        let resp = client
+        let response = share_offset_alteration
+            .session()
+            .client
             .send(alter_request(5))
             .await
             .expect("AlterShareGroupOffsets");
-        if resp.error_code == NONE && resp.responses[0].partitions[0].error_code == NONE {
-            altered = true;
+        let accepted =
+            response.error_code == NONE && response.responses[0].partitions[0].error_code == NONE;
+        share_offset_alteration.response = Some(response);
+        if accepted {
             break;
         }
-        // intentional: bounded retry of the Alter mutation RPC while the share
-        // persister leadership settles; coordinator-local state with no
-        // metadata-image signal or awaiter.
         time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(altered, "AlterShareGroupOffsets never succeeded");
+}
 
-    // Describe now reports the new SPSO.
-    let group = describe_until(&client, "g1", "t", vec![0], 5).await;
+#[then("both the group and partition offset-reset responses succeed")]
+fn share_offset_reset(share_offset_alteration: &ShareOffsetAlteration) {
+    let response = share_offset_alteration
+        .response
+        .as_ref()
+        .expect("offset reset attempted");
     assert!(
-        group.topics[0].partitions[0].start_offset == 5,
-        "SPSO must be 5 after Alter, got {}",
-        group.topics[0].partitions[0].start_offset
-    );
-
-    // Join and ShareFetch: must acquire starting at offset 5 (the reset SPSO).
-    // The first join does not initialize the already-initialized partition
-    // again, so the acquire reads the reset SPSO 5 via the invalidated leader
-    // cache.
-    let MemberSession { member, .. } = join(&client, "g1", "t").await;
-    let row = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
-    assert!(
-        row.acquired_records[0].first_offset == 5,
-        "fetch after Alter must acquire from offset 5, got {:?}",
-        row.acquired_records
+        response.error_code == NONE && response.responses[0].partitions[0].error_code == NONE,
+        "AlterShareGroupOffsets never succeeded: {response:?}"
     );
 }
 
-/// Alter on a non-empty group is rejected at the top level.
-///
-/// The group has a live member, so the response carries `NON_EMPTY_GROUP`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_non_empty_group_fenced() {
-    let (_permit, broker, client, _dir, tid) = Box::pin(seeded_empty_group().call()).await;
-
-    // Live member present (steady-state heartbeat), never leaves.
-    let MemberSession {
-        member: _member, ..
-    } = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, "g1", tid, 0).await;
-
-    let resp = client
-        .send(alter_request(1))
+#[when("DescribeShareGroupOffsets observes the reset start offset")]
+async fn describe_reset_share_group(share_offset_alteration: &mut ShareOffsetAlteration) {
+    share_offset_alteration.described = Some(
+        describe_until(
+            &share_offset_alteration.session().client,
+            "g1",
+            "t",
+            vec![0],
+            5,
+        )
         .await
-        .expect("AlterShareGroupOffsets");
-    assert!(
-        resp.error_code == NON_EMPTY_GROUP,
-        "alter on non-empty group must be NON_EMPTY_GROUP (68), got {}",
-        resp.error_code
+        .topics[0]
+            .partitions[0]
+            .start_offset,
     );
+}
+
+#[then("the described share start offset is 5")]
+fn reset_share_start(share_offset_alteration: &ShareOffsetAlteration) {
+    assert!(share_offset_alteration.described == Some(5));
+}
+
+#[when("a member joins reset g1 and acquires its first available records")]
+async fn acquire_reset_share_group(share_offset_alteration: &mut ShareOffsetAlteration) {
+    let session = share_offset_alteration
+        .session
+        .as_mut()
+        .expect("seeded group");
+    let MemberSession { member, .. } = join(&session.client, "g1", "t").await;
+    share_offset_alteration.fetched = Some(
+        fetch_until_acquired(
+            &session.client,
+            ShareSessionSetup::opening(&member, session.topic),
+        )
+        .await,
+    );
+    session.member = Some(member);
+}
+
+#[then("the member first acquires offset 5")]
+fn reset_acquisition(share_offset_alteration: &ShareOffsetAlteration) {
+    let response = share_offset_alteration
+        .fetched
+        .as_ref()
+        .expect("share records acquired");
+    assert!(
+        response.acquired_records[0].first_offset == 5,
+        "{:?}",
+        response.acquired_records
+    );
+}
+
+#[when("an administrator tries to reset occupied g1 to offset 1")]
+async fn reset_occupied_share_group(share_offset_alteration: &mut ShareOffsetAlteration) {
+    share_offset_alteration.response = Some(
+        share_offset_alteration
+            .session()
+            .client
+            .send(alter_request(1))
+            .await
+            .expect("AlterShareGroupOffsets"),
+    );
+}
+
+#[then("the offset reset is refused at group level with NON_EMPTY_GROUP")]
+fn occupied_reset_refused(share_offset_alteration: &ShareOffsetAlteration) {
+    let response = share_offset_alteration
+        .response
+        .as_ref()
+        .expect("offset reset attempted");
+    assert!(response.error_code == NON_EMPTY_GROUP, "{response:?}");
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/alter.feature",
+    name = "alter resets empty group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_resets_empty_group(share_offset_alteration: ShareOffsetAlteration) {
+    share_offset_alteration
+        .session
+        .take()
+        .expect("share fixture")
+        .shutdown()
+        .await;
+    drop(share_offset_alteration);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/alter.feature",
+    name = "alter non empty group fenced"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_non_empty_group_fenced(share_offset_alteration: ShareOffsetAlteration) {
+    share_offset_alteration
+        .session
+        .take()
+        .expect("share fixture")
+        .shutdown()
+        .await;
+    drop(share_offset_alteration);
+}
+
+impl ShareOffsetAlteration {
+    fn session(&self) -> &AdminOffsetSession {
+        self.session.as_ref().expect("live scenario session")
+    }
 }

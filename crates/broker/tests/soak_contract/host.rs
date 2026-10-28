@@ -187,47 +187,92 @@ pub fn environment(data_dir: &Path, image: &str) -> BTreeMap<String, String> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{chosen_evidence_dir, df_available_bytes, mem_total_bytes},
         assert2::check,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
         std::path::PathBuf,
     };
 
-    #[yare::parameterized(
-        explicit_wins = { Some("/e"), Some("/b"), Some("/e") },
-        bazel_outputs = { None, Some("/b"), Some("/b") },
-        neither = { None, None, None },
-        empty_is_unset = { Some(""), None, None },
-        empty_does_not_hide_bazel_outputs = { Some(""), Some("/b"), Some("/b") },
-        empty_bazel_outputs_is_unset = { None, Some(""), None },
-    )]
-    fn the_evidence_goes_where_the_runner_asks(
-        explicit: Option<&str>,
-        bazel: Option<&str>,
-        chosen: Option<&str>,
-    ) {
-        check!(
-            chosen_evidence_dir(explicit.map(str::to_owned), bazel.map(str::to_owned))
-                == chosen.map(PathBuf::from)
-        );
+    #[derive(Default)]
+    struct HostProbe {
+        explicit: Option<String>,
+        bazel: Option<String>,
+        chosen: Slot<Option<PathBuf>>,
+        body: String,
+        bytes: Slot<Option<u64>>,
     }
 
-    #[yare::parameterized(
-        kibibytes = { "MemTotal:       16384 kB\nMemFree: 1 kB\n", Some(16_384 * 1024) },
-        absent = { "MemFree: 1 kB\n", None },
-        other_unit = { "MemTotal: 16 MB\n", None },
-    )]
-    fn memory_is_read_in_kibibytes(meminfo: &str, bytes: Option<u64>) {
-        check!(mem_total_bytes(meminfo) == bytes);
+    #[fixture]
+    fn host() -> HostProbe {
+        // Host readings and environment inputs are private to each example.
+        HostProbe {
+            body: String::new(),
+            ..Default::default()
+        }
     }
 
-    #[yare::parameterized(
-        plain = { "   Avail\n25769803776\n", Some(25_769_803_776) },
-        header_only = { "Avail\n", None },
-        garbage = { "Avail\nlots\n", None },
-    )]
-    fn free_space_is_the_number_under_the_header(output: &str, bytes: Option<u64>) {
-        check!(df_available_bytes(output) == bytes);
+    fn environment_value(value: String) -> Option<String> {
+        match value.as_str() {
+            "unset" => None,
+            "empty" => Some(String::new()),
+            _ => Some(value),
+        }
     }
+
+    #[given("explicit evidence output is {explicit} and Bazel output is {bazel}")]
+    fn evidence_locations(host: &mut HostProbe, explicit: String, bazel: String) {
+        host.explicit = environment_value(explicit);
+        host.bazel = environment_value(bazel);
+    }
+
+    #[when("the runner chooses its evidence directory")]
+    fn choose_evidence_location(host: &HostProbe) {
+        host.chosen.set(chosen_evidence_dir(
+            host.explicit.clone(),
+            host.bazel.clone(),
+        ));
+    }
+
+    #[then("the chosen evidence directory is {chosen}")]
+    fn evidence_location_chosen(host: &HostProbe, chosen: String) {
+        let expected = if chosen == "unset" {
+            None
+        } else {
+            Some(PathBuf::from(chosen))
+        };
+        check!(host.chosen.get() == Some(expected));
+    }
+
+    #[given("the host memory report is:")]
+    fn memory_report(host: &mut HostProbe, docstring: String) {
+        host.body = format!("{}\n", docstring.trim_matches('\n'));
+    }
+
+    #[when("the runner reads host total memory in bytes")]
+    fn read_total_memory(host: &HostProbe) { host.bytes.set(mem_total_bytes(&host.body)); }
+
+    #[then("the host byte reading is {bytes}")]
+    fn host_byte_reading(host: &HostProbe, bytes: String) {
+        let expected = if bytes == "absent" {
+            None
+        } else {
+            Some(bytes.parse().expect("an expected host byte count"))
+        };
+        check!(host.bytes.get() == Some(expected));
+    }
+
+    #[given("the df availability report is:")]
+    fn df_report(host: &mut HostProbe, docstring: String) {
+        host.body = format!("{}\n", docstring.trim_matches('\n'));
+    }
+
+    #[when("the runner reads the free bytes below the df header")]
+    fn read_free_space(host: &HostProbe) { host.bytes.set(df_available_bytes(&host.body)); }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/host.feature", fixtures = [host: HostProbe]);
 }

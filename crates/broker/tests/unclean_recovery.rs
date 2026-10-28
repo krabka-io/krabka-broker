@@ -9,7 +9,7 @@
 //! `tests/elect_leaders.rs`. A 3-node raft quorum survives one dead node, and
 //! the authorizer compat shim lets the wire path through without SASL.
 //!
-//! Both cases run the same scenario, in `run_unclean_recovery`, and differ
+//! The cases share the same divergent-log precondition and differ
 //! only in the eligible-leader-replica set the partition carries and the
 //! leader that must win:
 //!
@@ -115,39 +115,6 @@ fn topic_config(topic: &str) -> MetadataRecord {
         ))
         .collect(),
     })
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// The offset-aware unclean-recovery path elects the survivor with the
-/// **highest LEO** when nothing better is known about any of them. That result
-/// is different from a simple "first alive replica" pick.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_elects_longest_log_replica() {
-    run_unclean_recovery(None, None, 2).await;
-}
-
-/// KIP-966: a surviving eligible leader replica outranks a longer log that is
-/// not one. Broker 3 is in the published ELR and holds fewer records than
-/// broker 2, and broker 3 must still win: it is known to hold every committed
-/// record, and broker 2's longer log is only the longest one that answered.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_prefers_an_eligible_leader_replica() {
-    run_unclean_recovery(Some("3"), None, 3).await;
-}
-
-/// A witness replicates the partition and can be published as an eligible
-/// leader replica, and it must still never lead: `broker.witness` means the
-/// node serves no client, so a partition it leads is as unusable as the
-/// offline one. Broker 3 is partition 0's only ELR member here and carries the
-/// role, so recovery has to fall back to broker 2's longest surviving log --
-/// the answer that is reported as data-losing rather than the one that is
-/// reported as free.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_never_elects_a_witness_from_the_elr() {
-    run_unclean_recovery(Some("3"), Some(3), 2).await;
 }
 
 /// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
@@ -273,115 +240,160 @@ async fn offline_partition_with_diverged_logs(
     );
 }
 
-/// A 3-broker PLAINTEXT cluster with an RF=3 topic, whose replicas are
-/// `[1, 2, 3]`. It runs the scenario the module docs describe with `elr`
-/// published as partition 0's eligible-leader-replica set, and asserts that
-/// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
-async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_leader: u64) {
-    let _g = support::cluster_lock().lock().await;
+use {
+    krabka_broker::BrokerConfig,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::mem::take,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
+};
 
-    let cluster = registered_cluster(3).await;
+#[derive(Default)]
+struct UncleanRecovery {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    guard: Option<MutexGuard<'static, ()>>,
+    result: Option<Vec<(i32, i16)>>,
+}
 
-    let topic = "t";
-    let addr = cluster[0].1.listen_addr;
-    let h1 = &cluster[0].0; // broker_id 1
-    let h2 = &cluster[1].0; // broker_id 2
-    let h3 = &cluster[2].0; // broker_id 3
+#[fixture]
+fn unclean_recovery() -> UncleanRecovery {
+    // Preserve the actual divergent replica logs while the controller ranks them.
+    UncleanRecovery::default()
+}
 
-    offline_partition_with_diverged_logs(addr, topic, [h1, h2, h3]).await;
+#[given(
+    "an offline aggressive-recovery partition whose broker 2 log is longest and broker 3 log is shorter"
+)]
+async fn divergent_surviving_replicas(unclean_recovery: &mut UncleanRecovery) {
+    unclean_recovery.guard = Some(support::cluster_lock().lock().await);
+    unclean_recovery.cluster = registered_cluster(3).await;
+    offline_partition_with_diverged_logs(unclean_recovery.cluster[0].1.listen_addr, "t", [
+        &unclean_recovery.cluster[0].0,
+        &unclean_recovery.cluster[1].0,
+        &unclean_recovery.cluster[2].0,
+    ])
+    .await;
+}
 
-    // ── Publish `broker.witness=true` for the node this case makes a witness,
-    //    which is the path a witness node's own registration takes. It goes in
-    //    before the ELR value below: a broker-config record carries no
-    //    partition change, so no controller path recomputes the ELR from it,
-    //    and this keeps the last write the one the URM reads. ──
-    if let Some(id) = witness {
-        h1.submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: krabka_broker::NodeId(id),
+#[given("broker {node} is published as a witness before the eligible-replica set")]
+async fn recovery_witness(unclean_recovery: &UncleanRecovery, node: u64) {
+    let broker = &unclean_recovery.cluster[0].0;
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_broker::NodeId(node),
             config_name: WITNESS_CONFIG_KEY.to_owned(),
             config_value: Some("true".to_owned()),
         }))
         .await
-        .expect("publish broker.witness for the witness node");
-        // Event-driven: await the role in the image the URM reads.
-        h1.wait_for_image(|img| {
-            img.broker_config(krabka_broker::NodeId(id))
-                .and_then(|configs| configs.get(WITNESS_CONFIG_KEY))
+        .expect("publish witness role");
+    broker
+        .wait_for_image(|image| {
+            image
+                .broker_config(krabka_broker::NodeId(node))
+                .and_then(|config| config.get(WITNESS_CONFIG_KEY))
                 .is_some_and(|value| value == "true")
         })
         .await;
-    }
+}
 
-    // ── Publish the eligible-leader-replica set, if this case has one. ──
-    if let Some(elr) = elr {
-        let eligible_leader_replicas = elr
-            .split(',')
-            .map(|id| krabka_broker::NodeId(id.parse().expect("ELR broker id")))
-            .collect();
-        h1.submit_metadata_record_for_test(MetadataRecord::V1PartitionElr(PartitionElrRecord {
-            topic: topic.to_owned(),
+#[given("the partition's eligible-leader-replica set contains broker {node}")]
+async fn recovery_eligible_replica(unclean_recovery: &UncleanRecovery, node: u64) {
+    let broker = &unclean_recovery.cluster[0].0;
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: "t".to_owned(),
             partition: 0,
-            eligible_leader_replicas,
+            eligible_leader_replicas: vec![krabka_broker::NodeId(node)],
             last_known_elr: vec![],
         }))
         .await
-        .expect("publish the eligible leader replicas");
-        h1.wait_for_image(|img| {
-            img.partition_elr(topic, 0)
+        .expect("publish eligible leader replica");
+    broker
+        .wait_for_image(|image| {
+            image
+                .partition_elr("t", 0)
                 .0
                 .iter()
-                .map(|id| id.get().to_string())
+                .map(|id| id.get())
                 .collect::<Vec<_>>()
-                .join(",")
-                == elr
+                == vec![node]
         })
         .await;
-    }
+}
 
-    // ── ElectLeaders(UNCLEAN) must reach the raft leader, the only node that
-    //    runs the URM and has authoritative liveness state. Discover it. ──
-    // Event-driven: await a non-zero elected controller leader (same watch channel
-    // `controller_leader_id` reads), then resolve its listen address.
-    let elect_addr = {
-        let leader = h1.wait_until_controller_leader().await.unwrap();
-        let pos = cluster
-            .iter()
-            .position(|(_, cfg, _)| cfg.node_id == leader)
-            .expect("elected raft leader must be one of the cluster nodes");
-        cluster[pos].1.listen_addr
-    };
-    eprintln!("sending ElectLeaders UNCLEAN to raft leader at {elect_addr}");
-
-    // ── Trigger offset-aware recovery (election_type = 1 = UNCLEAN). ──
-    let result = drive_elect_leaders()
-        .addr(elect_addr)
-        .client_id(CLIENT_ID)
-        .election(ElectionSetup {
-            topic: (topic).to_owned(),
-            kind: ElectionKind::Unclean,
-            ..Default::default()
-        })
-        .call()
-        .await;
-    assert!(
-        result == vec![(0, 0)],
-        "expected error_code=0 for UNCLEAN election; got {result:?}"
+#[when("the active metadata controller receives an UNCLEAN election for t partition 0")]
+async fn elect_recovery_replica(unclean_recovery: &mut UncleanRecovery) {
+    let leader = unclean_recovery.cluster[0]
+        .0
+        .wait_until_controller_leader()
+        .await
+        .unwrap();
+    let address = unclean_recovery
+        .cluster
+        .iter()
+        .find(|(_, config, _)| config.node_id == leader)
+        .expect("active controller")
+        .1
+        .listen_addr;
+    unclean_recovery.result = Some(
+        drive_elect_leaders()
+            .addr(address)
+            .client_id(CLIENT_ID)
+            .election(ElectionSetup {
+                topic: "t".to_owned(),
+                kind: ElectionKind::Unclean,
+                ..Default::default()
+            })
+            .call()
+            .await,
     );
+}
 
-    // ── The load-bearing assertion: the URM elected the replica the rules
-    //    name, and not merely the first alive one. ──
-    wait_partition_leader(h1, topic, 0, expected_leader).await;
-    let final_leader = h1
-        .partition_leader_for_test(topic, 0)
-        .expect("leader present");
+#[then("the unclean election succeeds for exactly partition zero")]
+fn recovery_election_response(unclean_recovery: &UncleanRecovery) {
+    assert!(unclean_recovery.result.as_ref().expect("election answered") == &vec![(0, 0)]);
+}
+
+#[then("broker {node} becomes the recovered partition's only ISR member and leader")]
+async fn recovery_elected_replica(unclean_recovery: &UncleanRecovery, node: u64) {
+    let broker = &unclean_recovery.cluster[0].0;
+    wait_partition_leader(broker, "t", 0, node).await;
     assert!(
-        final_leader == expected_leader,
-        "URM must elect broker {expected_leader} with elr={elr:?}; got \
-         leader={final_leader}"
+        broker
+            .partition_leader_for_test("t", 0)
+            .expect("leader present")
+            == node
     );
-    // ISR collapses to the singleton elected leader.
-    wait_partition_isr_only(h1, topic, 0, &[expected_leader]).await;
+    wait_partition_isr_only(broker, "t", 0, &[node]).await;
+}
 
-    // Clean up.
-    shutdown_cluster(cluster).await;
+#[scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery elects longest log replica"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_recovery_elects_longest_log_replica(unclean_recovery: UncleanRecovery) {
+    shutdown_cluster(take(&mut unclean_recovery.cluster)).await;
+    drop(unclean_recovery);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery prefers an eligible leader replica"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_recovery_prefers_an_eligible_leader_replica(unclean_recovery: UncleanRecovery) {
+    shutdown_cluster(take(&mut unclean_recovery.cluster)).await;
+    drop(unclean_recovery);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery never elects a witness from the elr"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_recovery_never_elects_a_witness_from_the_elr(unclean_recovery: UncleanRecovery) {
+    shutdown_cluster(take(&mut unclean_recovery.cluster)).await;
+    drop(unclean_recovery);
 }

@@ -15,7 +15,6 @@ mod support;
 use {
     crate::support::{client::connect_owned, shutdown_cluster, start_n_node_with_retry},
     assert2::{assert, check},
-    std::net::SocketAddr,
 };
 
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
@@ -32,56 +31,88 @@ async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
 
 use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
-/// A follower whose leader hint just went dead answers `DescribeQuorum` with
-/// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
-/// follower still believes the crashed node is the leader (it only learns
-/// otherwise from its own fetch timeout, which this test outruns), so
-/// `ControllerHandle::forward_raw`'s dial to it fails with
-/// `RaftError::Network`, exactly the "dial itself failed" case the fix
-/// catches and answers instead of propagating.
-///
-/// The leader crashes rather than stopping gracefully: a graceful stop resigns
-/// and sends `EndQuorumEpoch`, so the follower would elect itself at once and
-/// answer as the leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing() {
-    let mut cluster = start_n_node_with_retry(2).await;
-
-    let node0_client = build_client(cluster[0].1.listen_addr).await;
-    let first_resp = node0_client
-        .send(describe_quorum_request())
-        .await
-        .expect("describe_quorum from node 0");
-    check!(first_resp.error_code == 0, "top-level error_code");
-    let leader_id = first_resp.topics[0].partitions[0].leader_id;
-    assert!(
-        leader_id == 1 || leader_id == 2,
-        "a 2-node cluster has an elected leader; got {leader_id}"
-    );
-    node0_client.close();
-
-    let leader_index = cluster
-        .iter()
-        .position(|(_, cfg, _)| cfg.broker_id == leader_id)
-        .expect("the leader broker");
-    let (leader_handle, _, _leader_dir) = cluster.remove(leader_index);
-    // Crash the leader and ask the follower right away: it still holds the
-    // now-dead leader as its hint (only its own fetch timeout would change
-    // that), so the forward's dial fails immediately.
-    leader_handle.crash_for_test().await;
-
-    let (_, follower_cfg, _dir1) = &cluster[0];
-    let follower_client = build_client(follower_cfg.listen_addr).await;
-    let follower_resp = follower_client
-        .send(describe_quorum_request())
-        .await
-        .expect("describe_quorum must get a typed response, not a dropped connection");
-
-    check!(
-        follower_resp.error_code == NOT_LEADER_OR_FOLLOWER,
-        "expected the typed top-level NOT_LEADER_OR_FOLLOWER once the leader \
-         hint is dead, not a dropped connection; got {follower_resp:?}"
-    );
-
-    shutdown_cluster(cluster).await;
+#[derive(Default)]
+struct DeadLeaderForwarding {
+    cluster: Vec<(
+        krabka_broker::BrokerHandle,
+        krabka_broker::BrokerConfig,
+        tempfile::TempDir,
+    )>,
+    leader: i32,
+    response: Option<DescribeQuorumResponse>,
 }
+#[rstest::fixture]
+fn dead_leader_forwarding() -> DeadLeaderForwarding {
+    let cluster = Vec::new();
+    DeadLeaderForwarding {
+        cluster,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "two controller voters have an elected leader and the follower knows its identity"
+)]
+async fn elected_two_voter_quorum(dead_leader_forwarding: &mut DeadLeaderForwarding) {
+    let cluster = start_n_node_with_retry(2).await;
+    let client = build_client(cluster[0].1.listen_addr).await;
+    let first = client
+        .send(describe_quorum_request())
+        .await
+        .expect("initial DescribeQuorum");
+    check!(first.error_code == 0, "top-level error_code");
+    let leader = first.topics[0].partitions[0].leader_id;
+    assert!(
+        leader == 1 || leader == 2,
+        "two-voter elected leader: {leader}"
+    );
+    client.close();
+    dead_leader_forwarding.cluster = cluster;
+    dead_leader_forwarding.leader = leader;
+}
+#[rstest_bdd_macros::when(
+    "the leader crashes and a client immediately sends DescribeQuorum to the surviving follower"
+)]
+async fn describe_quorum_after_leader_crash(dead_leader_forwarding: &mut DeadLeaderForwarding) {
+    let index = dead_leader_forwarding
+        .cluster
+        .iter()
+        .position(|(_, config, _)| config.broker_id == dead_leader_forwarding.leader)
+        .expect("leader broker");
+    let (leader, _, _directory) = dead_leader_forwarding.cluster.remove(index);
+    leader.crash_for_test().await;
+    let client = build_client(dead_leader_forwarding.cluster[0].1.listen_addr).await;
+    dead_leader_forwarding.response = Some(
+        client
+            .send(describe_quorum_request())
+            .await
+            .expect("typed DescribeQuorum response rather than dropped connection"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the follower returns a typed NOT_LEADER_OR_FOLLOWER response instead of closing the client connection"
+)]
+async fn failed_quorum_forward_response(dead_leader_forwarding: &mut DeadLeaderForwarding) {
+    let response = dead_leader_forwarding
+        .response
+        .as_ref()
+        .expect("typed response");
+    check!(
+        response.error_code == NOT_LEADER_OR_FOLLOWER,
+        "{response:?}"
+    );
+    shutdown_cluster(mem::take(&mut dead_leader_forwarding.cluster)).await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/failed_quorum_forward.feature",
+    name = "A dead leader hint produces a typed quorum error"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing(
+    dead_leader_forwarding: DeadLeaderForwarding,
+) {
+}
+
+use {
+    krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse,
+    std::{mem, net::SocketAddr},
+};

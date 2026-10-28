@@ -125,6 +125,7 @@ mod tests {
         crate::{
             authorizer::{AuthorizationRequest, opa::OpaAuthorizer},
             config::BrokerConfig,
+            error::BrokerError,
             file_config::{FileConfigError, test_support::configured_unwrap_parse},
             test_support::{peer, sasl_principal},
         },
@@ -133,37 +134,64 @@ mod tests {
         tokio::runtime::Runtime,
     };
 
-    /// Both `super_users` lists take Kafka's `User:<name>` form, and
-    /// `User:ANONYMOUS` is a super user as in Kafka.
-    #[test]
-    fn super_users_take_the_kafka_principal_form() {
-        let cases = [
-            (
-                "top level",
-                r#"super_users = ["User:admin", "User:ANONYMOUS", "operator"]"#,
-            ),
-            (
-                "[authorization]",
-                r#"
-[authorization]
-type = "simple"
-super_users = ["User:admin", "User:ANONYMOUS", "operator"]
-"#,
-            ),
-        ];
-        for (case, toml) in cases {
-            let cfg = configured_unwrap_parse(toml).unwrap();
-
-            let expected: HashSet<String> = [
-                "admin".to_owned(),
-                "ANONYMOUS".to_owned(),
-                "operator".to_owned(),
-            ]
-            .into();
-            assert2::assert!(cfg.super_users == expected, "{case}");
-            assert2::assert!(cfg.validate().is_ok(), "{case}");
-        }
+    #[derive(Default)]
+    struct SuperUserFile {
+        source: String,
+        applied: Option<BrokerConfig>,
+        validation: Option<Result<(), BrokerError>>,
     }
+
+    #[rstest::fixture]
+    fn super_user_file() -> SuperUserFile {
+        // Each principal list is loaded into an independent broker configuration.
+        SuperUserFile::default()
+    }
+
+    #[rstest_bdd_macros::given("a super-user configuration file contains:")]
+    fn supplied_super_user_file(super_user_file: &mut SuperUserFile, docstring: String) {
+        super_user_file.source = docstring;
+    }
+
+    #[rstest_bdd_macros::when(
+        "the super-user file is applied and the broker configuration is validated"
+    )]
+    fn apply_super_user_file(super_user_file: &mut SuperUserFile) {
+        let config = configured_unwrap_parse(&super_user_file.source).expect("apply super users");
+        super_user_file.validation = Some(config.validate());
+        super_user_file.applied = Some(config);
+    }
+
+    #[rstest_bdd_macros::then(
+        "the broker accepts super users admin, ANONYMOUS and operator as local principal names"
+    )]
+    fn expected_super_user_file(super_user_file: &SuperUserFile) {
+        let expected: HashSet<String> = [
+            "admin".to_owned(),
+            "ANONYMOUS".to_owned(),
+            "operator".to_owned(),
+        ]
+        .into();
+        assert2::assert!(
+            super_user_file
+                .applied
+                .as_ref()
+                .expect("file was applied")
+                .super_users
+                == expected
+        );
+        assert2::assert!(
+            super_user_file
+                .validation
+                .as_ref()
+                .expect("broker was validated")
+                .is_ok()
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/authorization.feature",
+        fixtures = [super_user_file: SuperUserFile]
+    );
 
     #[test]
     fn super_users_toml_populates_broker_config_set() {

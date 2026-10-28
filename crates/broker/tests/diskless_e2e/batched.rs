@@ -257,10 +257,37 @@ async fn high_watermarks(cluster: &DisklessCluster) -> BTreeMap<i32, i64> {
     ends
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
+/// Let the load run for a few flush ticks.
+async fn produce_settle() { time::sleep(Duration::from_secs(3)).await; }
+
+#[derive(Default)]
+struct BatchedDiskless {
+    observer: Option<NodeId>,
+    cluster: Option<DisklessCluster>,
+    topic: Option<uuid::Uuid>,
+    acknowledged: Option<usize>,
+    ends: BTreeMap<i32, i64>,
+    read: Option<BTreeMap<i32, Vec<i64>>>,
+}
+#[rstest::fixture]
+fn batched_diskless() -> BatchedDiskless {
+    // Three partition logs and their shared object tier belong to each batching case.
+    BatchedDiskless::default()
+}
+#[rstest_bdd_macros::given(
+    "a three-partition diskless topic with 50 millisecond flushing and 512 byte batched payloads"
+)]
+async fn batched_diskless_topic(batched_diskless: &mut BatchedDiskless) {
     let cluster = trimming_cluster().await;
-    let topic_id = create_topic(&cluster).await;
+    let topic = create_topic(&cluster).await;
+    batched_diskless.cluster = Some(cluster);
+    batched_diskless.topic = Some(topic);
+}
+#[rstest_bdd_macros::when(
+    "the idempotent producer writes 600 records per partition in bursts of 60 and closes"
+)]
+async fn write_batched_diskless(batched_diskless: &mut BatchedDiskless) {
+    let cluster = batched_diskless.cluster.as_ref().expect("cluster");
     let acknowledged = {
         let producer = batching_producer(cluster.bootstrap_for_node(cluster.node_ids()[0])).await;
 
@@ -268,16 +295,22 @@ async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
         producer.close().await.map(|()| acknowledged)
     }
     .expect("close the producer");
-    let partitions = usize::try_from(PARTITIONS).expect("small topic");
-    let total = RECORDS_PER_PARTITION.div_ceil(BURST) * BURST * partitions;
-    assert!(acknowledged == total);
 
-    // Wait until each leader has trimmed past its first batch, so the
-    // read-back below starts in the object store and not in the local log.
-    let ends = high_watermarks(&cluster).await;
+    batched_diskless.acknowledged = Some(acknowledged);
+}
+#[rstest_bdd_macros::then("the batching producer acknowledges exactly {count} records")]
+fn batched_acknowledgments(batched_diskless: &BatchedDiskless, count: usize) {
+    assert!(batched_diskless.acknowledged.expect("producer closed") == count);
+}
+#[rstest_bdd_macros::when(
+    "every leader trims its first batch and the earliest-offset consumer reads through each high watermark"
+)]
+async fn read_trimmed_batches(batched_diskless: &mut BatchedDiskless) {
+    let cluster = batched_diskless.cluster.as_ref().expect("cluster");
+    let ends = high_watermarks(cluster).await;
     for partition in 0..PARTITIONS {
         let leader = cluster
-            .handle_for_node(partition_leader(&cluster, partition))
+            .handle_for_node(partition_leader(cluster, partition))
             .expect("the leader is up");
         wait_for(
             &format!("the trim of partition {partition}"),
@@ -292,21 +325,31 @@ async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
     }
 
     let read = read_back(cluster.bootstrap_for_node(cluster.node_ids()[0]), &ends).await;
-    for (partition, end) in &ends {
+
+    batched_diskless.ends = ends;
+    batched_diskless.read = Some(read);
+}
+#[rstest_bdd_macros::then(
+    "all {count} consumed offsets are contiguous from zero through each partition's recorded end"
+)]
+fn batched_contiguous_offsets(batched_diskless: &BatchedDiskless, count: usize) {
+    let read = batched_diskless.read.as_ref().expect("consumer readback");
+    for (partition, end) in &batched_diskless.ends {
         let expected: Vec<i64> = (0..*end).collect();
         let observed = read.get(partition).cloned().unwrap_or_default();
-        assert!(
-            observed == expected,
-            "partition {partition}: read {} of {end} offsets",
-            observed.len()
-        );
+        assert!(observed == expected, "partition {partition} offsets differ");
     }
-    let observed_total: usize = read.values().map(Vec::len).sum();
-    assert!(observed_total == total);
-
-    // Every voter fsyncs every partition up to its leader's end.
+    assert!(read.values().map(Vec::len).sum::<usize>() == count);
+}
+#[rstest_bdd_macros::when(
+    "every nonleader WAL voter catches up to each partition's recorded high watermark within one minute"
+)]
+async fn await_batched_voters(batched_diskless: &mut BatchedDiskless) {
+    let cluster = batched_diskless.cluster.as_ref().expect("cluster");
+    let topic_id = batched_diskless.topic.expect("topic");
+    let ends = &batched_diskless.ends;
     for partition in 0..PARTITIONS {
-        let leader = partition_leader(&cluster, partition);
+        let leader = partition_leader(cluster, partition);
         for node in cluster
             .node_ids()
             .into_iter()
@@ -322,15 +365,29 @@ async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
             .await;
         }
     }
-
-    cluster.shutdown().await;
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_restarted_under_load_rejoins_the_isr() {
-    let mut cluster = trimming_cluster().await;
-    create_topic(&cluster).await;
-    let leader = partition_leader(&cluster, 0);
+#[rstest_bdd_macros::then("every nonleader durable checkpoint covers its partition's recorded end")]
+fn batched_voter_checkpoint_ranges(batched_diskless: &BatchedDiskless) {
+    let cluster = batched_diskless.cluster.as_ref().expect("cluster");
+    let topic = batched_diskless.topic.expect("topic");
+    for (partition, end) in &batched_diskless.ends {
+        let leader = partition_leader(cluster, *partition);
+        for node in cluster
+            .node_ids()
+            .into_iter()
+            .filter(|node| *node != leader)
+        {
+            let dir = voter_dir(cluster.log_dir_for_node(node), topic, *partition, node);
+            assert!(durable_range(&dir).expect("checkpoint").end >= *end);
+        }
+    }
+}
+#[rstest_bdd_macros::when(
+    "continuous batched load spans a follower stop, ISR removal and restart with three-second settling periods"
+)]
+async fn restart_batched_follower(batched_diskless: &mut BatchedDiskless) {
+    let cluster = batched_diskless.cluster.as_mut().expect("cluster");
+    let leader = partition_leader(cluster, 0);
     let follower = cluster
         .node_ids()
         .into_iter()
@@ -395,8 +452,52 @@ async fn a_follower_restarted_under_load_rejoins_the_isr() {
 
     stop.cancel();
     load.await.expect("the load task");
-    cluster.shutdown().await;
+    batched_diskless.observer = Some(survivor);
+}
+#[rstest_bdd_macros::then("every partition's ISR contains all {count} voters after the restart")]
+fn batched_rejoined_isr(batched_diskless: &BatchedDiskless, count: usize) {
+    let cluster = batched_diskless.cluster.as_ref().expect("cluster");
+    let observer = cluster
+        .handle_for_node(
+            batched_diskless
+                .observer
+                .expect("surviving metadata observer"),
+        )
+        .expect("survivor is up");
+    for partition in 0..PARTITIONS {
+        assert!(
+            observer
+                .partition_isr_for_test(TOPIC, partition)
+                .is_some_and(|isr| isr.len() == count)
+        );
+    }
+}
+#[rstest_bdd_macros::then("the batched diskless cluster is shut down")]
+async fn finish_batched_diskless(batched_diskless: &mut BatchedDiskless) {
+    batched_diskless
+        .cluster
+        .take()
+        .expect("cluster")
+        .shutdown()
+        .await;
 }
 
-/// Let the load run for a few flush ticks.
-async fn produce_settle() { time::sleep(Duration::from_secs(3)).await; }
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/batched.feature",
+    name = "the krabka consumer reads every batched record from earliest"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_krabka_consumer_reads_every_batched_record_from_earliest(
+    batched_diskless: BatchedDiskless,
+) {
+    let _ = batched_diskless;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/batched.feature",
+    name = "a follower restarted under load rejoins the isr"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_restarted_under_load_rejoins_the_isr(batched_diskless: BatchedDiskless) {
+    let _ = batched_diskless;
+}

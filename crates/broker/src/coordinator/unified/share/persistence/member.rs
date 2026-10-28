@@ -60,8 +60,9 @@ impl ShareGroupMemberMetadataValue {
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::share::persistence::{
-            KEY_SHARE_MEMBER_METADATA, ShareGroupKey,
+        crate::coordinator::unified::{
+            codec_observations::EncodedRecord,
+            share::persistence::{KEY_SHARE_MEMBER_METADATA, ShareGroupKey},
         },
         assert2::assert,
     };
@@ -87,17 +88,6 @@ mod tests {
     }
 
     #[test]
-    fn member_metadata_bytes_match_kafka_schema() {
-        let v = ShareGroupMemberMetadataValue {
-            rack_id: Some("r".into()),
-            client_id: "c".into(),
-            client_host: "h".into(),
-            subscribed_topic_names: vec!["a".into()],
-        };
-        assert!(&v.encode()[..] == b"\x00\x00\x02r\x02c\x02h\x02\x02a\x00");
-    }
-
-    #[test]
     fn member_metadata_rejects_a_missing_tagged_trailer() {
         let v = ShareGroupMemberMetadataValue {
             rack_id: None,
@@ -118,5 +108,48 @@ mod tests {
             subscribed_topic_names: vec![],
         };
         assert!(ShareGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+    }
+    mod bdd_member_metadata {
+        use {
+            super::*,
+            assert2::assert,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type EncodedValue = EncodedRecord<ShareGroupMemberMetadataValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given("a Share member c at host h in rack r subscribes to topic a")]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = ShareGroupMemberMetadataValue {
+                rack_id: Some("r".into()),
+                client_id: "c".into(),
+                client_host: "h".into(),
+                subscribed_topic_names: vec!["a".into()],
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when("the coordinator persists the Share member metadata in the compacted group log")]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Share member metadata matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = b"\x00\x00\x02r\x02c\x02h\x02\x02a\x00";
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/member.feature",tags="@member_metadata",fixtures=[stored_value: EncodedValue]);
     }
 }

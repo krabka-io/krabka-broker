@@ -574,11 +574,81 @@ mod tests {
         assert_corrupt(&path, 102);
     }
 
-    #[test]
-    fn kafka_v1_snapshot_round_trips() {
-        let TempPath { dir: _dir, path } = sample_file();
-        assert2::assert!(read(&path, Offset(102)).unwrap() == sample());
+    #[derive(Default)]
+    struct ProducerSnapshotScenario {
+        entries: HashMap<ProducerId, ProducerSnapshotEntry>,
+        file: Option<TempPath>,
+        decoded: Option<Result<HashMap<ProducerId, ProducerSnapshotEntry>, LogError>>,
+        producer: Option<(ProducerId, i16)>,
+        marker: Option<ProducerSnapshotEntry>,
     }
+    #[rstest::fixture]
+    fn producer_snapshot() -> ProducerSnapshotScenario {
+        let entries = HashMap::new();
+        ProducerSnapshotScenario {
+            entries,
+            ..ProducerSnapshotScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("producer snapshot entries")]
+    fn producer_snapshot_entries(
+        producer_snapshot: &mut ProducerSnapshotScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        producer_snapshot.entries = datatable.into_iter().skip(1).map(|row| {
+        let [producer, epoch, sequence, offset, delta, timestamp, coordinator, transaction] = row.as_slice() else { panic!("producer epoch sequence offset delta timestamp coordinator and transaction columns required") };
+        let producer_id = ProducerId(producer.parse().expect("producer ID"));
+        (producer_id, ProducerSnapshotEntry { producer_id, producer_epoch: epoch.parse().expect("producer epoch"), last_sequence: sequence.parse().expect("last sequence"), last_offset: Offset(offset.parse().expect("last offset")), offset_delta: delta.parse().expect("offset delta"), timestamp: timestamp.parse().expect("timestamp"), coordinator_epoch: coordinator.parse().expect("coordinator epoch"), current_txn_first_offset: (transaction != "none").then(|| Offset(transaction.parse().expect("first transaction offset"))) })
+    }).collect();
+    }
+    #[rstest_bdd_macros::when("the Kafka v1 snapshot is written and read at exclusive offset 102")]
+    fn round_trip_producer_snapshot(producer_snapshot: &mut ProducerSnapshotScenario) {
+        let file = snapshot_file(&producer_snapshot.entries, 102);
+        producer_snapshot.decoded = Some(read(&file.path, Offset(102)));
+        producer_snapshot.file = Some(file);
+    }
+    #[rstest_bdd_macros::then("every producer snapshot field survives the Kafka v1 round trip")]
+    fn decoded_producer_snapshot(producer_snapshot: &ProducerSnapshotScenario) {
+        let decoded = producer_snapshot
+            .decoded
+            .as_ref()
+            .expect("snapshot read")
+            .as_ref()
+            .expect("Kafka v1 snapshot accepted");
+        assert2::assert!(*decoded == producer_snapshot.entries);
+    }
+    #[rstest_bdd_macros::given("producer {producer} at epoch {epoch} has only a marker")]
+    fn marker_only_producer(
+        producer_snapshot: &mut ProducerSnapshotScenario,
+        producer: i64,
+        epoch: i16,
+    ) {
+        producer_snapshot.producer = Some((ProducerId(producer), epoch));
+    }
+    #[rstest_bdd_macros::when("an empty producer snapshot entry is created")]
+    fn empty_producer_snapshot_entry(producer_snapshot: &mut ProducerSnapshotScenario) {
+        let (producer, epoch) = producer_snapshot.producer.expect("marker producer given");
+        producer_snapshot.marker = Some(ProducerSnapshotEntry::empty(producer, epoch));
+    }
+    #[rstest_bdd_macros::then(
+        "the marker-only entry uses Kafka's unknown-offset sequence and timestamp sentinels"
+    )]
+    fn marker_only_snapshot_fields(producer_snapshot: &ProducerSnapshotScenario) {
+        assert2::assert!(
+            producer_snapshot.marker
+                == Some(ProducerSnapshotEntry {
+                    producer_id: ProducerId(7),
+                    producer_epoch: 0,
+                    last_sequence: -1,
+                    last_offset: Offset(-1),
+                    offset_delta: 0,
+                    timestamp: -1,
+                    coordinator_epoch: -1,
+                    current_txn_first_offset: None
+                })
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/producer_snapshot_contract", fixtures = [producer_snapshot: ProducerSnapshotScenario]);
 
     #[test]
     fn zero_producer_id_snapshot_round_trips() {
@@ -587,24 +657,6 @@ mod tests {
         let entries = maplit::hashmap! {entry.producer_id => entry};
         let TempPath { dir: _dir, path } = snapshot_file(&entries, 102);
         assert2::assert!(read(&path, Offset(102)).unwrap() == entries);
-    }
-
-    #[test]
-    fn empty_entry_uses_kafka_marker_sentinels() {
-        let entry = ProducerSnapshotEntry::empty(ProducerId(7), 0);
-        assert2::assert!(
-            entry
-                == ProducerSnapshotEntry {
-                    producer_id: ProducerId(7),
-                    producer_epoch: 0,
-                    last_sequence: -1,
-                    last_offset: Offset(-1),
-                    offset_delta: 0,
-                    timestamp: -1,
-                    coordinator_epoch: -1,
-                    current_txn_first_offset: None,
-                }
-        );
     }
 
     #[test]

@@ -41,6 +41,7 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::time,
 };
 
@@ -191,79 +192,181 @@ fn coverage_and_redundancy(segments: &[RemoteSegment]) -> TierCoverage {
     }
 }
 
-/// The tier a new leader inherits is a set of offset ranges, not a set of
-/// segment boundaries, and this is the test that says so.
-///
-/// One replica rolls at 1 KiB and the other at 1.5 KiB, so their segments
-/// cover the same offsets with different boundaries. The elected leader
-/// produces and tiers; it is then shut down, the survivor is elected, and it
-/// produces and tiers over its own boundaries. What the store then holds must
-/// be one unbroken run of offsets with no object that merely repeats offsets
-/// another object already holds -- which is what a resume point taken from the
-/// tier's coverage produces and what a base-offset skip set does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
+#[derive(Default)]
+struct MisalignedTier {
+    brokers: [Option<BrokerHandle>; 3],
+    log_dirs: Vec<TempDir>,
+    remote_dir: Option<TempDir>,
+    admin: Option<Client>,
+    producer: Option<Client>,
+    survivor_client: Option<Client>,
+    topic_id: Option<WireUuid>,
+    leader_bases: Vec<i64>,
+    survivor_bases: Vec<i64>,
+    before: Vec<RemoteSegment>,
+}
+
+#[rstest::fixture]
+fn tiered_misaligned() -> MisalignedTier {
+    // Both boundary layouts and the pre-election archive belong to this run.
+    MisalignedTier::default()
+}
+
+impl MisalignedTier {
+    fn broker(&self, index: usize) -> &BrokerHandle {
+        self.brokers[index].as_ref().expect("live tiered broker")
+    }
+
+    fn producer(&self) -> &Client { self.producer.as_ref().expect("old leader client") }
+
+    fn topic_id(&self) -> WireUuid { self.topic_id.expect("misaligned topic") }
+
+    async fn shutdown(self) {
+        let Self {
+            brokers,
+            admin,
+            producer,
+            survivor_client,
+            log_dirs,
+            remote_dir,
+            ..
+        } = self;
+        drop((admin, producer, survivor_client));
+        for broker in brokers.into_iter().flatten() {
+            broker.shutdown().await;
+        }
+        drop((log_dirs, remote_dir));
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three tiered brokers roll at 1024,1536,1024 bytes and the data partition is assigned to replicas 2,1 without a segment-size override"
+)]
+async fn misaligned_tiered_partition(tiered_misaligned: &mut MisalignedTier) {
     let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers_with_segment_sizes([
         krabka_units::kibibytes(1),
         krabka_units::bytes(1536),
         krabka_units::kibibytes(1),
     ])
     .await;
-    let admin = ready_admin([&b1, &b2, &b3], "tiered-misaligned-admin").await;
-    create_misaligned_topic(&admin, &b1, &b2).await;
-
-    // With 3 registered brokers and rf=2 the partition sits on brokers 1 and
-    // 2; wait until the image names one of them and read which.
-    let (b1_id, b2_id) = await_pair_leader(&b1, &b2, TOPIC, 0).await;
-    let leader_is_b1 = b1.partition_leader_for_test(TOPIC, 0) == Some(b1_id);
-    assert!(
-        !leader_is_b1,
-        "the manual assignment makes broker 2 the preferred leader; broker 1 has to survive \
-         the kill because every broker's RLMM bootstraps against its address"
+    tiered_misaligned.brokers = [Some(b1), Some(b2), Some(b3)];
+    tiered_misaligned.log_dirs = log_dirs;
+    tiered_misaligned.remote_dir = Some(remote_dir);
+    tiered_misaligned.admin = Some(
+        ready_admin(
+            [
+                tiered_misaligned.broker(0),
+                tiered_misaligned.broker(1),
+                tiered_misaligned.broker(2),
+            ],
+            "tiered-misaligned-admin",
+        )
+        .await,
     );
-    let (leader_index, survivor_index) = if leader_is_b1 { (0, 1) } else { (1, 0) };
-
-    let topic_id = topic_id_for(&admin, TOPIC).await;
-    // Produce through the leader's own listener. `admin` bootstraps against
-    // broker 1, which the manual assignment makes the follower.
-    let leader_addr = if leader_is_b1 {
-        format!("127.0.0.1:{}", b1.listen_addr().port())
-    } else {
-        format!("127.0.0.1:{}", b2.listen_addr().port())
-    };
-    let producer = connect_owned(
-        &leader_addr,
-        "tiered-misaligned-producer",
-        "producer client",
+    create_misaligned_topic(
+        tiered_misaligned.admin.as_ref().expect("tiered admin"),
+        tiered_misaligned.broker(0),
+        tiered_misaligned.broker(1),
     )
     .await;
-    let leader_dir = log_dirs[leader_index].path().join(format!("{TOPIC}-0"));
-    let survivor_dir = log_dirs[survivor_index].path().join(format!("{TOPIC}-0"));
-
-    // Produce in two halves and read both replicas' boundaries in between.
-    // They must differ: that is the condition this test exists for, and if a
-    // future change made the two replicas roll at the same offsets the
-    // failover below would prove nothing. The sample is taken mid-produce,
-    // while both replicas still hold sealed segments to compare.
-    produce_records(&producer, topic_id, "before", RECORDS / 2).await;
-    let leader_bases = local_segment_bases(&leader_dir);
-    let survivor_bases = local_segment_bases(&survivor_dir);
+    let (b1_id, _) = await_pair_leader(
+        tiered_misaligned.broker(0),
+        tiered_misaligned.broker(1),
+        TOPIC,
+        0,
+    )
+    .await;
     assert!(
-        leader_bases != survivor_bases,
-        "the replicas rolled at the same offsets ({leader_bases:?} vs {survivor_bases:?}); \
-         this test needs misaligned segment boundaries"
+        tiered_misaligned
+            .broker(0)
+            .partition_leader_for_test(TOPIC, 0)
+            != Some(b1_id),
+        "the manual assignment makes broker 2 the preferred leader; broker 1 has to survive the kill because every broker's RLMM bootstraps against its address"
     );
-    produce_records(&producer, topic_id, "before-more", RECORDS - RECORDS / 2).await;
+    tiered_misaligned.topic_id = Some(
+        topic_id_for(
+            tiered_misaligned.admin.as_ref().expect("tiered admin"),
+            TOPIC,
+        )
+        .await,
+    );
+    tiered_misaligned.producer = Some(
+        connect_owned(
+            format!(
+                "127.0.0.1:{}",
+                tiered_misaligned.broker(1).listen_addr().port()
+            ),
+            "tiered-misaligned-producer",
+            "producer client",
+        )
+        .await,
+    );
+}
 
-    let before = await_remote_segments(remote_dir.path(), 2, "the first leader's copy").await;
-    eprintln!("ITEST: the first leader tiered {before:?}");
+#[rstest_bdd_macros::when(
+    "broker 2 appends seventy before records and both replicas' segment boundaries are sampled"
+)]
+async fn sample_misaligned_boundaries(tiered_misaligned: &mut MisalignedTier) {
+    produce_records(
+        tiered_misaligned.producer(),
+        tiered_misaligned.topic_id(),
+        "before",
+        RECORDS / 2,
+    )
+    .await;
+    tiered_misaligned.leader_bases = local_segment_bases(
+        &tiered_misaligned.log_dirs[1]
+            .path()
+            .join(format!("{TOPIC}-0")),
+    );
+    tiered_misaligned.survivor_bases = local_segment_bases(
+        &tiered_misaligned.log_dirs[0]
+            .path()
+            .join(format!("{TOPIC}-0")),
+    );
+}
 
-    // The survivor has to hold the copy metadata before it is elected, or its
-    // first copy pass as leader would resume from its own log start over a
-    // tier it cannot see. Its own local retention says it does: a follower
-    // evicts only what the shared RLMM reports copied, so its oldest local
-    // segment moving off zero is that metadata having arrived.
-    let propagation_deadline = Instant::now() + Duration::from_mins(2);
+#[rstest_bdd_macros::then("the two replicas have different local segment boundaries")]
+fn distinct_misaligned_boundaries(tiered_misaligned: &MisalignedTier) {
+    assert!(
+        tiered_misaligned.leader_bases != tiered_misaligned.survivor_bases,
+        "the replicas rolled at the same offsets ({:?} vs {:?}); this test needs misaligned segment boundaries",
+        tiered_misaligned.leader_bases,
+        tiered_misaligned.survivor_bases
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "broker 2 appends seventy before-more records and copies at least two segments"
+)]
+async fn archive_misaligned_source(tiered_misaligned: &mut MisalignedTier) {
+    produce_records(
+        tiered_misaligned.producer(),
+        tiered_misaligned.topic_id(),
+        "before-more",
+        RECORDS - RECORDS / 2,
+    )
+    .await;
+    tiered_misaligned.before = await_remote_segments(
+        tiered_misaligned
+            .remote_dir
+            .as_ref()
+            .expect("shared archive")
+            .path(),
+        2,
+        "the first leader's copy",
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::then(
+    "broker 1 evicts a copied segment before becoming leader, proving its metadata has arrived"
+)]
+async fn learned_misaligned_archive(tiered_misaligned: &MisalignedTier) {
+    let survivor_dir = tiered_misaligned.log_dirs[0]
+        .path()
+        .join(format!("{TOPIC}-0"));
+    let deadline = Instant::now() + Duration::from_mins(2);
     loop {
         if local_segment_bases(&survivor_dir)
             .first()
@@ -272,53 +375,73 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
             break;
         }
         assert!(
-            Instant::now() <= propagation_deadline,
+            Instant::now() <= deadline,
             "the follower never evicted a copied segment, so it never saw the copy metadata"
         );
-        // intentional: the follower's RLMM consumer and its retention pass
-        // both run on the broker's own 1s interval; no in-process signal.
         time::sleep(Duration::from_millis(300)).await;
     }
+}
 
-    drop(admin);
-    drop(producer);
-    let mut opt_b1 = Some(b1);
-    let mut opt_b2 = Some(b2);
-    let (leader, leader_id) = if leader_is_b1 {
-        (opt_b1.take().expect("broker 1 handle"), b1_id)
-    } else {
-        (opt_b2.take().expect("broker 2 handle"), b2_id)
-    };
-    leader.shutdown().await;
-    eprintln!("ITEST: the first leader is down; waiting for the failover");
-    let survivor = opt_b1
-        .as_ref()
-        .or(opt_b2.as_ref())
-        .expect("one of the two replicas survives");
-    survivor
-        .wait_until_partition_leader_changed(TOPIC, 0, NodeId(leader_id))
+#[rstest_bdd_macros::when(
+    "broker 2 shuts down, broker 1 becomes writable leader and appends 140 after records"
+)]
+async fn fail_over_misaligned_tier(tiered_misaligned: &mut MisalignedTier) {
+    drop(tiered_misaligned.admin.take());
+    drop(tiered_misaligned.producer.take());
+    tiered_misaligned.brokers[1]
+        .take()
+        .expect("old leader")
+        .shutdown()
         .await;
-    // The image names the new leader before the survivor's partition runtime
-    // installs it. A Produce in that gap gets NOT_LEADER_OR_FOLLOWER, which a
-    // loaded runner hits, so wait until the survivor itself accepts writes.
-    survivor
-        .wait_until_local_partition_leader(TOPIC, 0, NodeId(survivor.node_id()))
+    tiered_misaligned
+        .broker(0)
+        .wait_until_partition_leader_changed(TOPIC, 0, NodeId(2))
         .await;
-
-    let survivor_bootstrap = format!("127.0.0.1:{}", survivor.listen_addr().port());
-    let survivor_client = connect_owned(
-        &survivor_bootstrap,
-        "tiered-misaligned-survivor",
-        "survivor client",
+    tiered_misaligned
+        .broker(0)
+        .wait_until_local_partition_leader(TOPIC, 0, NodeId(tiered_misaligned.broker(0).node_id()))
+        .await;
+    tiered_misaligned.survivor_client = Some(
+        connect_owned(
+            format!(
+                "127.0.0.1:{}",
+                tiered_misaligned.broker(0).listen_addr().port()
+            ),
+            "tiered-misaligned-survivor",
+            "survivor client",
+        )
+        .await,
+    );
+    produce_records(
+        tiered_misaligned
+            .survivor_client
+            .as_ref()
+            .expect("survivor client"),
+        tiered_misaligned.topic_id(),
+        "after",
+        RECORDS,
     )
     .await;
-    produce_records(&survivor_client, topic_id, "after", RECORDS).await;
+}
 
+#[rstest_bdd_macros::then(
+    "the survivor copies more segments, reports uncopied lag, evicts sealed local segments and the archive has gapless coverage through its sealed range without redundant objects"
+)]
+async fn resumed_misaligned_tier(tiered_misaligned: &MisalignedTier) {
+    let survivor_dir = tiered_misaligned.log_dirs[0]
+        .path()
+        .join(format!("{TOPIC}-0"));
     // The new leader's copy pass has to reach past what the old one tiered.
     let deadline = Instant::now() + Duration::from_mins(4);
     let after = loop {
-        let segments = remote_segments(remote_dir.path());
-        if segments.len() > before.len() {
+        let segments = remote_segments(
+            tiered_misaligned
+                .remote_dir
+                .as_ref()
+                .expect("shared archive")
+                .path(),
+        );
+        if segments.len() > tiered_misaligned.before.len() {
             break segments;
         }
         assert!(
@@ -332,8 +455,12 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
              log_start={:?}",
             segments.len(),
             local_segment_bases(&survivor_dir),
-            survivor.partition_leader_for_test(TOPIC, 0),
-            survivor.partition_log_start_for_test(TOPIC, 0),
+            tiered_misaligned
+                .broker(0)
+                .partition_leader_for_test(TOPIC, 0),
+            tiered_misaligned
+                .broker(0)
+                .partition_log_start_for_test(TOPIC, 0),
         );
         // intentional: the copy task runs on the broker's own 1s interval.
         time::sleep(Duration::from_secs(5)).await;
@@ -348,7 +475,8 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     let lag_label = TopicLabel {
         topic: Arc::from(TOPIC),
     };
-    survivor
+    tiered_misaligned
+        .broker(0)
         .wait_for_metrics(
             "the survivor counts its uncopied segments as lag",
             move |m| m.remote_copy_lag_segments.get_or_create(&lag_label).get() >= 1,
@@ -375,7 +503,13 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         time::sleep(Duration::from_millis(300)).await;
     }
 
-    let segments = remote_segments(remote_dir.path());
+    let segments = remote_segments(
+        tiered_misaligned
+            .remote_dir
+            .as_ref()
+            .expect("shared archive")
+            .path(),
+    );
     let TierCoverage {
         covered_through,
         redundant,
@@ -415,13 +549,13 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         "the tier covers only through {covered_through} while the survivor's active segment \
          starts at {active_base}"
     );
+}
 
-    drop(survivor_client);
-    if let Some(handle) = opt_b1.take() {
-        handle.shutdown().await;
-    }
-    if let Some(handle) = opt_b2.take() {
-        handle.shutdown().await;
-    }
-    b3.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_misaligned.feature",
+    name = "a new leader resumes the copy from the tiers coverage"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage(tiered_misaligned: MisalignedTier) {
+    tiered_misaligned.shutdown().await;
 }

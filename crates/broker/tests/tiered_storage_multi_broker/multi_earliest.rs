@@ -169,34 +169,6 @@ impl Archived {
         end
     }
 
-    /// Stop broker 2 so that broker 3 leads, check that every record up to
-    /// `end` reads back from the earliest offset, and shut the cluster down.
-    async fn read_back_from_the_follower(mut self, end: i64) {
-        self.stop(LEADER).await;
-        await_leader(self.anchor(), 3).await;
-        self.reads_back_everything(end).await;
-        Box::pin(self.shutdown()).await;
-    }
-
-    /// Every record up to `end` reads back from the earliest offset, at both
-    /// isolation levels.
-    async fn reads_back_everything(&self, end: i64) {
-        let expected: Vec<i64> = (0..end).collect();
-        for isolation in [
-            IsolationLevel::ReadUncommitted,
-            IsolationLevel::ReadCommitted,
-        ] {
-            let offsets = read_from_earliest(&self.bootstrap, isolation, end).await;
-            assert!(
-                offsets == expected,
-                "{isolation:?} read {} of {end} acknowledged records back from the earliest \
-                 offset, starting at {:?}",
-                offsets.len(),
-                offsets.first()
-            );
-        }
-    }
-
     async fn shutdown(self) {
         drop(self.admin);
         for broker in self.brokers.into_iter().flatten() {
@@ -205,42 +177,120 @@ impl Archived {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {
-    let mut cluster = Box::pin(Archived::start().evicted(LEADER).call()).await;
-
-    // Restart the preferred leader on the log it left: it opens a log whose
-    // first local segment sits above everything the archive holds.
-    cluster.stop(LEADER).await;
-    await_leader(cluster.anchor(), 3).await;
-    cluster.restart(LEADER).await;
-
-    // Lead from the restarted broker, and make both followers fetch from it.
-    elect_preferred(&cluster.admin).await;
-    await_leader(cluster.anchor(), 2).await;
-    let end = cluster
-        .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
-        .await;
-
-    // Move leadership off the restarted broker again.
-    Box::pin(cluster.read_back_from_the_follower(end)).await;
+#[derive(Default)]
+struct TieredEarliest {
+    cluster: Option<Archived>,
+    reads: Vec<(IsolationLevel, Vec<i64>)>,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
-    let mut cluster = Box::pin(Archived::start().evicted(FOLLOWER).call()).await;
+#[rstest::fixture]
+fn tiered_earliest() -> TieredEarliest {
+    // Reads and leadership changes share one concrete acknowledged archive.
+    TieredEarliest::default()
+}
 
+impl TieredEarliest {
+    fn cluster(&self) -> &Archived { self.cluster.as_ref().expect("archived cluster") }
+
+    async fn shutdown(&mut self) {
+        Box::pin(self.cluster.take().expect("archived cluster").shutdown()).await;
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "an RF3 tiered partition led by broker 2 archives 120 records of 200 bytes using {codec} and broker {evicted} evicts offset zero locally"
+)]
+async fn archived_earliest_workload(
+    tiered_earliest: &mut TieredEarliest,
+    codec: String,
+    evicted: usize,
+) {
+    let compression = match codec.as_str() {
+        "none" => Compression::default(),
+        "lz4" => Compression::Lz4,
+        _ => panic!("unsupported compression: {codec}"),
+    };
+    tiered_earliest.cluster = Some(
+        Box::pin(
+            Archived::start()
+                .evicted(evicted.checked_sub(1).expect("positive broker id"))
+                .compression(compression)
+                .call(),
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "broker 2 stops, broker 3 takes leadership and broker 2 restarts from its retained local log"
+)]
+async fn restart_archived_leader(tiered_earliest: &mut TieredEarliest) {
+    tiered_earliest
+        .cluster
+        .as_mut()
+        .expect("archived cluster")
+        .stop(LEADER)
+        .await;
+    await_leader(tiered_earliest.cluster().anchor(), 3).await;
+    tiered_earliest
+        .cluster
+        .as_mut()
+        .expect("archived cluster")
+        .restart(LEADER)
+        .await;
+}
+
+#[rstest_bdd_macros::when("preferred election returns leadership to broker 2")]
+async fn reelect_archived_leader(tiered_earliest: &TieredEarliest) {
+    elect_preferred(&tiered_earliest.cluster().admin).await;
+    await_leader(tiered_earliest.cluster().anchor(), 2).await;
+}
+
+#[rstest_bdd_macros::when(
+    "twenty more records at offsets 120 through 139 are acknowledged and replicated everywhere"
+)]
+async fn append_archived_tail(tiered_earliest: &TieredEarliest) {
+    tiered_earliest
+        .cluster()
+        .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
+        .await;
+}
+
+#[rstest_bdd_macros::when("broker 2 stops again and broker 3 takes leadership")]
+async fn follow_archived_leader(tiered_earliest: &mut TieredEarliest) {
+    tiered_earliest
+        .cluster
+        .as_mut()
+        .expect("archived cluster")
+        .stop(LEADER)
+        .await;
+    await_leader(tiered_earliest.cluster().anchor(), 3).await;
+}
+
+#[rstest_bdd_macros::when(
+    "broker 3 stops and its persisted global floor is raised to its first remaining local segment"
+)]
+async fn raise_archived_follower_floor(tiered_earliest: &mut TieredEarliest) {
     // Leave the follower's log on the floor an older broker established: the
     // first segment its disk still holds, which every archived offset below
     // it is under.
-    cluster.stop(FOLLOWER).await;
-    let partition_dir = cluster.log_dirs[FOLLOWER].path().join(format!("{TOPIC}-0"));
+    tiered_earliest
+        .cluster
+        .as_mut()
+        .expect("archived cluster")
+        .stop(FOLLOWER)
+        .await;
+    let partition_dir = tiered_earliest.cluster().log_dirs[FOLLOWER]
+        .path()
+        .join(format!("{TOPIC}-0"));
     let raised = *local_segment_bases(&partition_dir)
         .first()
         .expect("the follower holds its active segment");
     let config = krabka_log::LogConfig {
         remote_storage_enable: true,
-        ..cluster.configs[FOLLOWER].log_config.clone()
+        ..tiered_earliest.cluster().configs[FOLLOWER]
+            .log_config
+            .clone()
     };
     let mut log = krabka_log::Log::open(&partition_dir, config.clone()).expect("open the log");
     log.set_log_start_offset(krabka_log::Offset(raised))
@@ -249,47 +299,57 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
     let reopened = krabka_log::Log::open(&partition_dir, config).expect("reopen the log");
     assert!(reopened.established_log_start() == Some(krabka_log::Offset(raised)));
     drop(reopened);
+}
 
-    // The follower comes back and fetches from broker 2, which reports the
-    // real global start. The archive still holds every segment below the
-    // raised floor, so nobody deleted up to it, and the follower takes the
-    // leader's start back once its RLMM can say so.
-    cluster.restart(FOLLOWER).await;
-    let end = cluster
-        .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
+#[rstest_bdd_macros::when("broker 3 restarts and follows broker 2")]
+async fn restart_archived_follower(tiered_earliest: &mut TieredEarliest) {
+    tiered_earliest
+        .cluster
+        .as_mut()
+        .expect("archived cluster")
+        .restart(FOLLOWER)
         .await;
+}
+
+#[rstest_bdd_macros::then("broker 3 lowers its global log start back to 0")]
+async fn restored_archived_floor(tiered_earliest: &TieredEarliest) {
     await_log_start(
-        cluster.brokers[FOLLOWER]
+        tiered_earliest.cluster().brokers[FOLLOWER]
             .as_ref()
             .expect("the follower runs"),
         0,
     )
     .await;
-
-    Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
-/// An archive an lz4 producer wrote reads back from the earliest offset
-/// (#1448).
-///
-/// Broker 2 leads and has evicted the first archived segments, so the read
-/// starts in the remote band. Before the fix the remote read decoded the
-/// archived batch and the response writer framed it by its uncompressed
-/// length, so the frame announced more bytes than it carried: the consumer
-/// waited on a fetch that was never answered and read nothing back, as the
-/// soak's lz4 read-back did. Kafka serves the segment's own bytes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_compressed_archive_reads_back_from_earliest() {
-    let cluster = Box::pin(
-        Archived::start()
-            .evicted(LEADER)
-            .compression(Compression::Lz4)
-            .call(),
-    )
-    .await;
-    let end = i64::try_from(ARCHIVED).expect("small count");
-    cluster.reads_back_everything(end).await;
-    Box::pin(cluster.shutdown()).await;
+#[rstest_bdd_macros::when(
+    "fresh consumers seek to earliest and read toward offset {end} at both isolation levels"
+)]
+async fn read_archived_earliest(tiered_earliest: &mut TieredEarliest, end: i64) {
+    tiered_earliest.reads.clear();
+    for isolation in [
+        IsolationLevel::ReadUncommitted,
+        IsolationLevel::ReadCommitted,
+    ] {
+        let offsets =
+            read_from_earliest(&tiered_earliest.cluster().bootstrap, isolation, end).await;
+        tiered_earliest.reads.push((isolation, offsets));
+    }
+}
+
+#[rstest_bdd_macros::then("each consumer returns every offset from 0 through {last} exactly once")]
+fn complete_archived_earliest(tiered_earliest: &TieredEarliest, last: i64) {
+    assert!(tiered_earliest.reads.len() == 2);
+    let expected: Vec<i64> = (0..=last).collect();
+    for (isolation, offsets) in &tiered_earliest.reads {
+        assert!(
+            *offsets == expected,
+            "{isolation:?} read {} of {} acknowledged records back from the earliest offset, starting at {:?}",
+            offsets.len(),
+            last + 1,
+            offsets.first()
+        );
+    }
 }
 
 /// Produce one acknowledged record per index, each its own batch, compressed
@@ -431,4 +491,38 @@ async fn read_from_earliest(bootstrap: &str, isolation: IsolationLevel, end: i64
     }
     consumer.close().await.expect("consumer close");
     offsets
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a tiered partition reads back from earliest after its leader restarts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts(
+    tiered_earliest: TieredEarliest,
+) {
+    tiered_earliest.shutdown().await;
+    drop(tiered_earliest);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a follower left with a raised floor takes its leaders back"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back(
+    tiered_earliest: TieredEarliest,
+) {
+    tiered_earliest.shutdown().await;
+    drop(tiered_earliest);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a compressed archive reads back from earliest"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_compressed_archive_reads_back_from_earliest(tiered_earliest: TieredEarliest) {
+    tiered_earliest.shutdown().await;
+    drop(tiered_earliest);
 }

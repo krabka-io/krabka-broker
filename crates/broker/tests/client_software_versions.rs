@@ -24,11 +24,12 @@ use {
     bytes::BytesMut,
     krabka_broker::Broker,
     krabka_protocol::{Encode, owned::api_versions_response::ApiVersionsResponse},
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
     std::{io, net::SocketAddr},
     tokio::net::TcpStream,
 };
-
-const INVALID_REQUEST: i16 = 42;
 
 /// The Kafka listener address, the metrics endpoint address, the `BrokerHandle`
 /// and the directory that backs it.
@@ -36,7 +37,7 @@ struct BootedBroker {
     kafka_addr: SocketAddr,
     metrics_addr: SocketAddr,
     handle: krabka_broker::BrokerHandle,
-    tempdir: tempfile::TempDir,
+    _tempdir: tempfile::TempDir,
 }
 
 /// Builds a broker with the metrics endpoint enabled. It returns the Kafka
@@ -55,7 +56,7 @@ async fn boot() -> BootedBroker {
         kafka_addr,
         metrics_addr,
         handle,
-        tempdir,
+        _tempdir: tempdir,
     }
 }
 
@@ -97,168 +98,305 @@ async fn send_api_versions(
 
 async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
-// ── KIP-511 validation paths ────────────────────────────────────────────────
+struct SoftwareIdentity {
+    broker: Option<BootedBroker>,
+    name: String,
+    version: String,
+    response: Option<ApiVersionsResponse>,
+    metrics: Option<String>,
+}
 
-#[yare::parameterized(
-    valid = { "krabka-client-core", "0.1.1", 0, Some(true) },
-    empty_name = { "", "1.0.0", INVALID_REQUEST, Some(false) },
-    empty_version = { "krabka", "", INVALID_REQUEST, None::<bool> },
-    invalid_name = { "has space", "1.0.0", INVALID_REQUEST, None::<bool> },
-    leading_dash_version = { "krabka", "-1.0.0", INVALID_REQUEST, None::<bool> },
-)]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn v3_client_info_validation(
-    software_name: &'static str,
-    software_version: &'static str,
-    expected_error: i16,
-    api_list_nonempty: Option<bool>,
-) {
-    let BootedBroker {
-        kafka_addr,
-        metrics_addr: _metrics_addr,
-        handle,
-        tempdir: _td,
-    } = boot().await;
+#[fixture]
+fn software() -> SoftwareIdentity {
+    // Start this scenario with fresh inputs and observations.
 
-    let resp = send_api_versions(kafka_addr, 3, software_name, software_version)
-        .await
-        .expect("ApiVersions");
-    assert2::assert!(resp.error_code == expected_error, "{resp:?}");
-    if let Some(expected) = api_list_nonempty {
-        assert2::assert!((!resp.api_keys.is_empty()) == expected, "{resp:?}");
+    SoftwareIdentity {
+        broker: None,
+        name: String::new(),
+        version: String::new(),
+        response: None,
+        metrics: None,
     }
-
-    handle.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_v3_does_not_validate_client_info() {
-    // v0-2 don't carry the fields. The codegen leaves them as default
-    // empty strings on the wire — KIP-511 says don't validate. Apache
-    // Kafka brokers happily accept v0/v1/v2 calls from old clients that
-    // don't know about ClientSoftwareName at all.
-    let BootedBroker {
-        kafka_addr,
-        metrics_addr: _metrics_addr,
-        handle,
-        tempdir: _td,
-    } = boot().await;
+#[given("a plaintext broker with client software metrics enabled")]
+async fn metrics_broker(software: &mut SoftwareIdentity) { software.broker = Some(boot().await); }
 
-    let resp = send_api_versions(kafka_addr, 0, "", "")
-        .await
-        .expect("ApiVersions");
-    assert!(
-        resp.error_code == 0,
-        "v0 ApiVersions must not validate KIP-511 fields: {resp:?}"
-    );
-    assert!(!resp.api_keys.is_empty());
+#[given(r#"client software name is "{name}""#)]
+fn software_name(software: &mut SoftwareIdentity, name: String) { software.name = name; }
 
-    handle.shutdown().await;
+#[given("client software name is empty")]
+fn empty_software_name(software: &mut SoftwareIdentity) { software.name.clear(); }
+
+#[given(r#"client software version is "{version}""#)]
+fn software_version(software: &mut SoftwareIdentity, version: String) {
+    software.version = version;
 }
 
-// ── Prometheus metric ──────────────────────────────────────────────────────
+#[given("client software version is empty")]
+fn empty_software_version(software: &mut SoftwareIdentity) { software.version.clear(); }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn accepted_v3_handshake_bumps_client_software_versions_counter() {
-    let BootedBroker {
-        kafka_addr,
-        metrics_addr,
-        handle,
-        tempdir: _td,
-    } = boot().await;
-
-    // Drive two distinct (name, version) tuples + one repeat so the
-    // expected sample emits with three series, one of them at count 2.
-    for _ in 0..2 {
-        send_api_versions(kafka_addr, 3, "krabka-it", "1.0.0")
+#[when("ApiVersions version {version} is sent with that client identity")]
+async fn send_identity(software: &mut SoftwareIdentity, version: i16) {
+    let addr = software
+        .broker
+        .as_ref()
+        .expect("a client-metrics broker")
+        .kafka_addr;
+    software.response = Some(
+        send_api_versions(addr, version, &software.name, &software.version)
             .await
-            .expect("ApiVersions");
+            .expect("ApiVersions"),
+    );
+}
+
+#[then("ApiVersions returns error code {code}")]
+fn handshake_error(software: &SoftwareIdentity, code: i16) {
+    let response = software
+        .response
+        .as_ref()
+        .expect("a client identity was submitted");
+    assert!(response.error_code == code, "{response:?}");
+}
+
+#[then("the advertised API list is nonempty")]
+fn supported_apis(software: &SoftwareIdentity) {
+    let response = software
+        .response
+        .as_ref()
+        .expect("a client identity was submitted");
+    assert!(!response.api_keys.is_empty(), "{response:?}");
+}
+
+#[then("the advertised API list is empty")]
+fn no_supported_apis(software: &SoftwareIdentity) {
+    let response = software
+        .response
+        .as_ref()
+        .expect("a client identity was submitted");
+    assert!(response.api_keys.is_empty(), "{response:?}");
+}
+
+#[derive(DataTableRow)]
+struct HandshakeSeries {
+    name: String,
+    version: String,
+    repetitions: usize,
+}
+
+#[when("these ApiVersions v3 handshakes are sent:")]
+async fn send_handshakes(software: &SoftwareIdentity, #[datatable] rows: Rows<HandshakeSeries>) {
+    let addr = software
+        .broker
+        .as_ref()
+        .expect("a client-metrics broker")
+        .kafka_addr;
+    for row in rows {
+        for _ in 0..row.repetitions {
+            send_api_versions(addr, 3, &row.name, &row.version)
+                .await
+                .expect("ApiVersions");
+        }
     }
-    send_api_versions(kafka_addr, 3, "krabka-it", "1.0.1")
-        .await
-        .expect("ApiVersions");
-    send_api_versions(kafka_addr, 3, "another-lib", "9.9.9")
-        .await
-        .expect("ApiVersions");
+}
 
-    let body = scrape(metrics_addr).await;
+#[when("the client software metrics are scraped")]
+async fn read_software_metrics(software: &mut SoftwareIdentity) {
+    let addr = software
+        .broker
+        .as_ref()
+        .expect("a client-metrics broker")
+        .metrics_addr;
+    software.metrics = Some(scrape(addr).await);
+}
 
-    // Three series, one count, plus the family HELP/TYPE lines.
+#[derive(DataTableRow)]
+struct ExpectedCounter {
+    name: String,
+    version: String,
+    count: u64,
+}
+
+#[then("the exported client software family is a counter with these samples:")]
+fn software_counters(software: &SoftwareIdentity, #[datatable] rows: Rows<ExpectedCounter>) {
+    let body = software
+        .metrics
+        .as_ref()
+        .expect("client software metrics were scraped");
     assert!(
         body.contains("# TYPE krabka_broker_client_software_versions counter"),
-        "TYPE line missing in:\n{body}",
+        "TYPE line missing in:\n{body}"
     );
-    let needle_repeat = "krabka_broker_client_software_versions_total{software_name=\"krabka-it\",software_version=\"1.0.0\"} 2";
-    let needle_new = "krabka_broker_client_software_versions_total{software_name=\"krabka-it\",software_version=\"1.0.1\"} 1";
-    let needle_other = "krabka_broker_client_software_versions_total{software_name=\"another-lib\",software_version=\"9.9.9\"} 1";
-    for needle in [needle_repeat, needle_new, needle_other] {
+    for row in rows {
+        let needle = format!(
+            "krabka_broker_client_software_versions_total{{software_name=\"{}\",software_version=\"{}\"}} {}",
+            row.name, row.version, row.count
+        );
         assert!(
-            body.contains(needle),
-            "expected sample {needle:?} not found in:\n{body}",
+            body.contains(&needle),
+            "expected sample {needle:?} not found in:\n{body}"
         );
     }
-
-    handle.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejected_v3_handshake_does_not_bump_counter() {
-    let BootedBroker {
-        kafka_addr,
-        metrics_addr,
-        handle,
-        tempdir: _td,
-    } = boot().await;
-
-    // First send a valid one so the family has at least one series and
-    // the metric appears in the scrape — otherwise an empty Family of
-    // Counters renders no samples at all.
-    send_api_versions(kafka_addr, 3, "valid-client", "1.0.0")
-        .await
-        .expect("ApiVersions");
-    // Now an invalid one. The counter must not gain a row labelled with
-    // the rejected name/version.
-    send_api_versions(kafka_addr, 3, "bad client", "1.0.0")
-        .await
-        .expect("ApiVersions");
-
-    let body = scrape(metrics_addr).await;
-    assert!(
-        !body.contains("software_name=\"bad client\""),
-        "rejected handshake must not be recorded:\n{body}",
-    );
-    // Spot-check the valid one is recorded.
+#[then("a client software metric is labelled with valid-client")]
+fn accepted_identity_recorded(software: &SoftwareIdentity) {
+    let body = software
+        .metrics
+        .as_ref()
+        .expect("client software metrics were scraped");
     assert!(
         body.contains("software_name=\"valid-client\""),
-        "valid handshake must be recorded:\n{body}",
+        "valid handshake must be recorded:\n{body}"
     );
-
-    handle.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_v3_handshake_does_not_bump_counter() {
-    let BootedBroker {
-        kafka_addr,
-        metrics_addr,
-        handle,
-        tempdir: _td,
-    } = boot().await;
+#[then("no client software metric is labelled with bad client")]
+fn rejected_identity_not_recorded(software: &SoftwareIdentity) {
+    let body = software
+        .metrics
+        .as_ref()
+        .expect("client software metrics were scraped");
+    assert!(
+        !body.contains("software_name=\"bad client\""),
+        "rejected handshake must not be recorded:\n{body}"
+    );
+}
 
-    // v0 ApiVersions has no client-info fields, so the counter (which
-    // would label series with empty strings) must not increment.
-    send_api_versions(kafka_addr, 0, "", "")
-        .await
-        .expect("ApiVersions");
-
-    let body = scrape(metrics_addr).await;
-    // The metric *family* may still appear in the scrape registration
-    // (HELP/TYPE lines emit even with no series), so just check no
-    // sample row with software_name="" was emitted.
+#[then("no client software counter sample has an empty software name")]
+fn legacy_identity_not_recorded(software: &SoftwareIdentity) {
+    let body = software
+        .metrics
+        .as_ref()
+        .expect("client software metrics were scraped");
     assert!(
         !body.contains("krabka_broker_client_software_versions_total{software_name=\"\""),
-        "v0 handshake must not be recorded:\n{body}",
+        "v0 handshake must not be recorded:\n{body}"
     );
+}
 
-    handle.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation: valid"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_client_info_validation_valid(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation: empty name"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_client_info_validation_empty_name(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation: empty version"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_client_info_validation_empty_version(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation: invalid name"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_client_info_validation_invalid_name(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation: leading dash version"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_client_info_validation_leading_dash_version(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "pre v3 does not validate client info"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_v3_does_not_validate_client_info(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "accepted v3 handshake bumps client software versions counter"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_v3_handshake_bumps_client_software_versions_counter(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "rejected v3 handshake does not bump counter"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_v3_handshake_does_not_bump_counter(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "pre v3 handshake does not bump counter"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_v3_handshake_does_not_bump_counter(software: SoftwareIdentity) {
+    software
+        .broker
+        .expect("a client-metrics broker")
+        .handle
+        .shutdown()
+        .await;
 }

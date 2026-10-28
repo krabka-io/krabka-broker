@@ -3,31 +3,51 @@
 
 use {
     crate::jvm_acceptance::{
-        ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised, describe_console_entity,
-        docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity,
+        ADMIN, ADMIN_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, SaslCluster, broker0_advertised,
+        describe_console_entity, docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity,
         start_three_broker_sasl_plaintext_jvm_cluster, write_plain_props,
     },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+    tokio::sync::MutexGuard,
 };
 
-/// JVM acceptance: `kafka-configs --describe --entity-type users` round-trip for
-/// SCRAM credentials (KIP-554 read half, `api_key` 50).
-///
-/// Three-broker SASL/PLAINTEXT cluster. The test provisions alice's
-/// SCRAM-SHA-512 credential with `kafka-configs --alter --add-config
-/// SCRAM-SHA-512=[...]`, then describes it and asserts exit 0 and
-/// `SCRAM-SHA-512` in stdout.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
-    let (h1, _h2, _h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        Box::pin(start_three_broker_sasl_plaintext_jvm_cluster().call()).await;
+struct CredentialInspection {
+    port_ownership: Option<MutexGuard<'static, ()>>,
+    cluster: Option<SaslCluster>,
+    admin: Option<ClientPropsFile>,
+    altered: Option<Output>,
+    described: Option<Output>,
+}
+#[fixture]
+fn credentials() -> CredentialInspection {
+    // Start this scenario with fresh inputs and observations.
+
+    CredentialInspection {
+        port_ownership: None,
+        cluster: None,
+        admin: None,
+        altered: None,
+        described: None,
+    }
+}
+#[given("a three broker SASL cluster accepts the administrator's PLAIN identity")]
+async fn secured_cluster(credentials: &mut CredentialInspection) {
+    credentials.port_ownership = Some(crate::claim_broker_ports().await);
+    credentials.cluster =
+        Some(Box::pin(start_three_broker_sasl_plaintext_jvm_cluster().call()).await);
     nc_check_connectivity();
-
-    let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
-    let admin_mount = admin_props.mount_str();
-
-    // Provision a SCRAM user via kafka-configs --alter (hits AlterUserScramCredentials, api_key 51).
+    credentials.admin = Some(write_plain_props(ADMIN, ADMIN_PASS));
+}
+#[when("the administrator provisions alice with SCRAM SHA 512 and 4096 iterations")]
+fn provision(credentials: &mut CredentialInspection) {
+    let admin_mount = credentials
+        .admin
+        .as_ref()
+        .expect("administrator configured")
+        .mount_str();
     let alter = docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &admin_mount, &[
         "kafka-configs",
         "--alter",
@@ -42,19 +62,65 @@ async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
         "--command-config",
         "/client.properties",
     ]);
+    credentials.altered = Some(alter);
+}
+#[then("the credential alteration succeeds")]
+fn provisioned(credentials: &CredentialInspection) {
+    let alter = credentials
+        .altered
+        .as_ref()
+        .expect("alter command completed");
     assert!(
         alter.status.success(),
         "alter SCRAM failed: {}",
         String::from_utf8_lossy(&alter.stderr)
     );
-
-    // Describe — should exit 0 cleanly (api_key 50 now implemented).
-    let desc = describe_console_entity(&admin_mount, "users", "alice");
+}
+#[when("the administrator describes alice's credentials with the stock config tool")]
+fn describe(credentials: &mut CredentialInspection) {
+    let admin_mount = credentials
+        .admin
+        .as_ref()
+        .expect("administrator configured")
+        .mount_str();
+    credentials.described = Some(describe_console_entity(&admin_mount, "users", "alice"));
+}
+#[then("the credential report includes SCRAM SHA 512")]
+fn mechanism(credentials: &CredentialInspection) {
+    let desc = credentials
+        .described
+        .as_ref()
+        .expect("describe command completed");
     let stdout = String::from_utf8_lossy(&desc.stdout);
     assert!(
         stdout.contains("SCRAM-SHA-512"),
         "expected SCRAM-SHA-512 in describe output: {stdout}"
     );
+}
 
-    let _ = h1; // keep alive
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/scram_credentials.feature",
+    name = "Administrators inspect a provisioned SCRAM credential"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end(
+    credentials: CredentialInspection,
+) {
+    credentials.shutdown().await;
+    drop(credentials);
+}
+
+impl CredentialInspection {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) = self
+            .cluster
+            .take()
+            .expect("SCRAM credential cluster started");
+        h1.shutdown().await;
+        h2.shutdown().await;
+        h3.shutdown().await;
+        drop(port_ownership);
+    }
 }

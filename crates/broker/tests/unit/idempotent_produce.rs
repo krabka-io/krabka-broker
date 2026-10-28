@@ -1,88 +1,151 @@
-//! The idempotent-producer sequence checks on the produce path.
-//!
-//! A batch that carries a producer id and a base sequence is deduplicated when
-//! it repeats, and it is rejected when its sequence skips ahead, so both cases
-//! drive the produce path with a producer-stamped batch.
+//! Retrying and skipping sequences for an idempotent producer.
 
 use {
     crate::{
         harness::{create_topic, topic_id_for},
         support::{
-            self,
+            self, InProcess,
             produce::{SinglePartitionProduceSetup, batch_request},
-            records::producer_values_batch as one_batch_with_producer,
+            records::producer_values_batch,
             transactions::claim_idempotent_producer,
         },
     },
     assert2::assert,
+    krabka_protocol::{
+        owned::{produce_request::ProduceRequest, produce_response::ProduceResponse},
+        primitives::uuid::Uuid,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
-#[tokio::test]
-async fn idempotent_produce_dedups_duplicate_batch() {
-    let p = support::start().await;
+#[derive(Default)]
+struct IdempotentScenario {
+    broker: Option<InProcess>,
+    topic: String,
+    topic_id: Uuid,
+    producer_id: i64,
+    request: Option<ProduceRequest>,
+    responses: Vec<ProduceResponse>,
+}
 
-    create_topic(&p, "idem", 1).await;
-    let idem_id = topic_id_for(&p.client, "idem").await;
+impl IdempotentScenario {
+    fn broker(&self) -> &InProcess {
+        self.broker
+            .as_ref()
+            .expect("the idempotent producer broker is running")
+    }
 
-    let init = claim_idempotent_producer(&p.client).await;
-    let pid = init.producer_id;
+    async fn shutdown(self) {
+        self.broker
+            .expect("the idempotent producer broker is running")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
 
-    let req = batch_request(
-        one_batch_with_producer()
-            .pid(pid)
-            .values(&["a", "b", "c"])
+#[fixture]
+fn idempotence() -> IdempotentScenario {
+    // Each scenario owns fresh services and observations.
+    IdempotentScenario {
+        broker: None,
+        ..Default::default()
+    }
+}
+
+#[given("an idempotent producer for topic {topic} with records {values}")]
+async fn producer_batch(idempotence: &mut IdempotentScenario, topic: String, values: String) {
+    let broker = support::start().await;
+    create_topic(&broker, &topic, 1).await;
+    let topic_id = topic_id_for(&broker.client, &topic).await;
+    let producer_id = claim_idempotent_producer(&broker.client).await.producer_id;
+    let values: Vec<_> = values.split(',').collect();
+    let request = batch_request(
+        producer_values_batch()
+            .pid(producer_id)
+            .values(&values)
             .call(),
         SinglePartitionProduceSetup {
-            topic: ("idem").into(),
-            topic_id: idem_id,
+            topic: topic.clone(),
+            topic_id,
             ..SinglePartitionProduceSetup::replicated()
         },
     );
-
-    let r1 = p.client.send(req.clone()).await.expect("Produce 1");
-    assert!(r1.responses[0].partition_responses[0].error_code == 0);
-    assert!(r1.responses[0].partition_responses[0].base_offset == 0);
-
-    // Send the same batch again — must be deduped (error 0, base_offset 0).
-    let r2 = p.client.send(req).await.expect("Produce 2 (dup)");
-    assert!(r2.responses[0].partition_responses[0].error_code == 0);
-    assert!(r2.responses[0].partition_responses[0].base_offset == 0);
-
-    p.broker.shutdown().await;
+    idempotence.broker = Some(broker);
+    idempotence.topic = topic;
+    idempotence.topic_id = topic_id;
+    idempotence.producer_id = producer_id;
+    idempotence.request = Some(request);
 }
 
+#[when("the producer sends its initial sequence-zero batch")]
+async fn send_producer_batch(idempotence: &mut IdempotentScenario) {
+    let request = idempotence
+        .request
+        .clone()
+        .expect("a producer batch was prepared");
+    let response = idempotence
+        .broker()
+        .client
+        .send(request)
+        .await
+        .expect("Produce");
+    idempotence.responses.push(response);
+}
+
+#[when("the identical producer batch is retried")]
+async fn retry_producer_batch(idempotence: &mut IdempotentScenario) {
+    send_producer_batch(idempotence).await;
+}
+
+#[when("the producer skips to sequence ten with records x and y")]
+async fn skip_sequences(idempotence: &mut IdempotentScenario) {
+    let request = batch_request(
+        producer_values_batch()
+            .pid(idempotence.producer_id)
+            .base_seq(10)
+            .values(&["x", "y"])
+            .call(),
+        SinglePartitionProduceSetup {
+            topic: idempotence.topic.clone(),
+            topic_id: idempotence.topic_id,
+            ..SinglePartitionProduceSetup::replicated()
+        },
+    );
+    let response = idempotence
+        .broker()
+        .client
+        .send(request)
+        .await
+        .expect("Produce seq=10");
+    idempotence.responses.push(response);
+}
+
+#[then("produce response {number} succeeds at base offset {offset}")]
+fn acknowledged_offset(idempotence: &IdempotentScenario, number: usize, offset: i64) {
+    let partition = &idempotence.responses[number - 1].responses[0].partition_responses[0];
+    assert!(partition.error_code == 0);
+    assert!(partition.base_offset == offset);
+}
+
+#[then("the sequence gap returns OUT_OF_ORDER_SEQUENCE_NUMBER")]
+fn rejected_sequence_gap(idempotence: &IdempotentScenario) {
+    assert!(idempotence.responses[1].responses[0].partition_responses[0].error_code == 45);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/idempotent_produce.feature",
+    name = "idempotent produce dedups duplicate batch"
+)]
 #[tokio::test]
-async fn out_of_order_returns_45() {
-    let p = support::start().await;
-
-    create_topic(&p, "ooo", 1).await;
-    let ooo_id = topic_id_for(&p.client, "ooo").await;
-
-    let init = claim_idempotent_producer(&p.client).await;
-    let pid = init.producer_id;
-
-    let mk = |base_seq: i32| {
-        batch_request(
-            one_batch_with_producer()
-                .pid(pid)
-                .base_seq(base_seq)
-                .values(&["x", "y"])
-                .call(),
-            SinglePartitionProduceSetup {
-                topic: ("ooo").into(),
-                topic_id: ooo_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
-    };
-
-    // First batch (base_seq=0, 2 records → last_seq=1). Must succeed.
-    let r1 = p.client.send(mk(0)).await.expect("Produce seq=0");
-    assert!(r1.responses[0].partition_responses[0].error_code == 0);
-
-    // Skip to base_seq=10 — gap → OUT_OF_ORDER_SEQUENCE_NUMBER (45).
-    let r2 = p.client.send(mk(10)).await.expect("Produce seq=10");
-    assert!(r2.responses[0].partition_responses[0].error_code == 45);
-
-    p.broker.shutdown().await;
+async fn idempotent_produce_dedups_duplicate_batch(idempotence: IdempotentScenario) {
+    idempotence.shutdown().await;
 }
+
+#[scenario(
+    path = "tests/features/migrated/tests/unit/idempotent_produce.feature",
+    name = "out of order returns 45"
+)]
+#[tokio::test]
+async fn out_of_order_returns_45(idempotence: IdempotentScenario) { idempotence.shutdown().await; }

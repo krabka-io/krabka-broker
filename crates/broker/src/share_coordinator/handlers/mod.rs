@@ -84,12 +84,10 @@ pub mod test_support {
                 },
                 persistence::StateBatch,
             },
-            test_support::KafkaErrorCode,
             topic_creator::TopicCreator,
         },
         krabka_ids::{NodeId, PartitionIndex},
         krabka_log::Offset,
-        krabka_metadata::MetadataImage,
         krabka_protocol::{
             UnknownTaggedFields,
             owned::{
@@ -99,7 +97,8 @@ pub mod test_support {
             },
             primitives::uuid::Uuid as ProtoUuid,
         },
-        std::{fmt::Debug, ops::RangeInclusive, path::Path, sync::Arc, time::Duration},
+        rstest_bdd::datatable::Rows,
+        std::{ops::RangeInclusive, path::Path, sync::Arc, time::Duration},
         tokio::time::{sleep, timeout},
     };
 
@@ -235,94 +234,44 @@ pub mod test_support {
         read_share_group_state_summary_response::ReadShareGroupStateSummaryResponse => read_share_group_state_summary_response::ReadStateSummaryResult, read_share_group_state_summary_response::PartitionResult;
     }
 
+    /// A group ID in steps may be a plain name or a JSON string (including "").
+    pub fn group_name_literal(text: String) -> String {
+        if text.starts_with('"') {
+            serde_json::from_str(&text).expect("JSON group ID literal")
+        } else {
+            text
+        }
+    }
+
+    /// One complete expected share-state reply row, including its topic identity.
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    pub struct StateResponseRow {
+        topic: uuid::Uuid,
+        partition: i32,
+        code: i16,
+        message: String,
+    }
+
+    /// Construct explicit per-topic reply rows with the wire schema's default tags.
+    pub fn state_response_rows<R: StateReply>(rows: Rows<StateResponseRow>) -> R {
+        R::from_results(
+            rows.into_iter()
+                .map(|row| {
+                    let message = (row.message != "null").then_some(row.message);
+                    R::topic(ProtoUuid(*row.topic.as_bytes()), vec![R::error_row(
+                        row.partition,
+                        row.code,
+                        message.as_deref(),
+                    )])
+                })
+                .collect(),
+        )
+    }
+
     pub fn state_response<R: StateReply>(topic: ProtoUuid, partitions: Vec<R::Partition>) -> R {
         R::from_results(vec![R::topic(topic, partitions)])
     }
 
-    /// The keyed write-RPC response fields, with explicit caller-selected default topic.
-    #[derive(Clone, Copy, Default)]
-    pub struct StateResponseSetup<'a> {
-        pub(crate) topic: uuid::Uuid,
-        pub(crate) partition: PartitionIndex,
-        pub(crate) code: KafkaErrorCode,
-        pub(crate) message: Option<&'a str>,
-    }
-
-    impl StateResponseSetup<'_> {
-        pub(crate) fn for_topic(topic: uuid::Uuid) -> Self {
-            Self {
-                topic,
-                ..Self::default()
-            }
-        }
-
-        pub(crate) fn response<R: StateReply>(self) -> R {
-            state_response::<R>(ProtoUuid(*self.topic.as_bytes()), vec![R::error_row(
-                self.partition.0,
-                self.code.0,
-                self.message,
-            )])
-        }
-    }
-
-    pub struct StoredStateRow<Q, R> {
-        pub(crate) led: bool,
-        pub(crate) request: Q,
-        pub(crate) expected: R,
-    }
-
-    /// The three empty request shapes that every read RPC answers with no rows.
-    pub struct EmptyStateRequests<Q> {
-        pub(crate) group: Q,
-        pub(crate) partitions: Q,
-        pub(crate) topics: Q,
-    }
-
-    impl<Q> EmptyStateRequests<Q> {
-        pub(crate) fn into_rows<R: Clone>(self, empty: R) -> [StoredStateRow<Q, R>; 3] {
-            [
-                StoredStateRow {
-                    led: true,
-                    request: self.group,
-                    expected: empty.clone(),
-                },
-                StoredStateRow {
-                    led: true,
-                    request: self.partitions,
-                    expected: empty.clone(),
-                },
-                StoredStateRow {
-                    led: true,
-                    request: self.topics,
-                    expected: empty,
-                },
-            ]
-        }
-    }
-
-    /// Check read operations sequentially against each independently supplied complete response.
-    pub async fn check_stored_rows<Q, R: PartialEq + Debug>(
-        rows: impl IntoIterator<Item = StoredStateRow<Q, R>>,
-        topic: uuid::Uuid,
-        partitions: i32,
-        partition: i32,
-        serve: impl AsyncFn(&ShareCoordinator, &MetadataImage, Q) -> R,
-    ) {
-        for (index, row) in rows.into_iter().enumerate() {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            let StateFixture { coordinator, image } = initialized_state()
-                .log_dir(dir.path())
-                .topic(topic)
-                .partitions(partitions)
-                .partition(partition)
-                .stored_data(true)
-                .call()
-                .await;
-            retain_leadership(&coordinator, row.led).await;
-            let response = serve(&coordinator, &image, row.request).await;
-            assert2::check!(response == row.expected, "row {index}");
-        }
-    }
     /// Creates the real `__share_group_state` topic through the active
     /// controller, with its configured shape, and waits until the share
     /// coordinator of `broker` has loaded every partition of it. A topic that

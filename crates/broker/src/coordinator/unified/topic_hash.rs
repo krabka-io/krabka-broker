@@ -169,160 +169,78 @@ pub fn image_metadata_hash<'a>(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::{NamedTopicHash, group_hash, topic_hash},
+        assert2::check,
+        uuid::Uuid,
+    };
 
-    /// The topic id `0123456789abcdef-fedcba9876543210`.
-    const ID: [u8; 16] = [
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
-        0x10,
-    ];
-
-    fn racks<'a>(partitions: &[&[&'a str]]) -> Vec<Vec<&'a str>> {
-        partitions.iter().map(|racks| racks.to_vec()).collect()
-    }
-
-    /// One topic of the golden table.
-    struct TopicCase {
-        case: &'static str,
+    #[derive(Default)]
+    struct MetadataHashScenario {
         topic_id: [u8; 16],
-        name: &'static str,
-        racks: Vec<Vec<&'static str>>,
-        kafka: i64,
+        name: String,
+        racks: Vec<Vec<String>>,
+        topics: Vec<(String, i64)>,
+        topic_hash: Option<i64>,
+        group_hash: Option<i64>,
     }
 
-    /// One group of the golden table: its topic hashes, by name.
-    struct GroupCase {
-        case: &'static str,
-        topics: Vec<NamedTopicHash<'static>>,
-        kafka: i64,
+    #[rstest::fixture]
+    fn metadata_hash() -> MetadataHashScenario {
+        // Keep metadata hash inputs and observations fresh for each scenario.
+        MetadataHashScenario::default()
     }
 
-    /// Golden values from hash4j 0.22.0, the version Kafka 4.3.1 pins in
-    /// `gradle/dependencies.gradle`. Each was computed by running a line by
-    /// line transcription of `Utils.computeTopicHash` and
-    /// `Utils.computeGroupHash` against the published jar (SHA-1
-    /// `2d61bfb5b38469cb76141b06dc68d36a9007e9ad`), with the metadata image
-    /// lookups replaced by the arguments below.
-    #[test]
-    fn topic_hashes_match_kafka() {
-        let mut ids = [0x11; 16];
-        ids[8..].fill(0x22);
-        let rows = [
-            TopicCase {
-                case: "UtilsTest.testComputeTopicHash's layout: two partitions, two racks each",
-                topic_id: ID,
-                name: "foo",
-                racks: racks(&[&["rack1", "rack0"], &["rack2", "rack1"]]),
-                kafka: 4_231_092_367_357_902_416,
-            },
-            TopicCase {
-                case: "one partition without racks",
-                topic_id: ids,
-                name: "bar",
-                racks: racks(&[&[]]),
-                kafka: 8_733_119_781_167_439_863,
-            },
-            TopicCase {
-                case: "no partitions",
-                topic_id: [0; 16],
-                name: "empty",
-                racks: racks(&[]),
-                kafka: 728_769_691_835_767_132,
-            },
-            TopicCase {
-                case: "two replicas on one rack",
-                topic_id: ID,
-                name: "foo",
-                racks: racks(&[&["r", "r"]]),
-                kafka: 2_883_780_561_648_472_600,
-            },
-            TopicCase {
-                case: "racks in UTF-16 order, a supplementary character first",
-                topic_id: ID,
-                name: "foo",
-                racks: racks(&[&["\u{e000}", "\u{1f600}"]]),
-                kafka: 4_767_223_826_197_171_634,
-            },
-            TopicCase {
-                case: "a name and a rack outside ASCII",
-                topic_id: ID,
-                name: "t\u{e9}",
-                racks: racks(&[&["\u{e9}"]]),
-                kafka: 480_043_309_326_700_168,
-            },
-        ];
-        for row in rows {
-            check!(
-                topic_hash(row.topic_id, row.name, row.racks.into_iter()) == row.kafka,
-                "{}",
-                row.case
-            );
-        }
+    #[rstest_bdd_macros::given("topic {name} with UUID {id} has replica racks {racks}")]
+    fn topic_metadata(
+        metadata_hash: &mut MetadataHashScenario,
+        name: String,
+        id: Uuid,
+        racks: String,
+    ) {
+        metadata_hash.topic_id = *id.as_bytes();
+        metadata_hash.name = name;
+        metadata_hash.racks =
+            serde_json::from_str(&racks).expect("rack lists are arrays of strings");
     }
 
-    #[test]
-    fn group_hashes_match_kafka() {
-        let foo = 4_231_092_367_357_902_416;
-        let bar = 8_733_119_781_167_439_863;
-        let rows = [
-            GroupCase {
-                case: "no topic",
-                topics: vec![],
-                kafka: 0,
-            },
-            GroupCase {
-                case: "one topic",
-                topics: vec![NamedTopicHash {
-                    name: "foo",
-                    hash: foo,
-                }],
-                kafka: -3_651_539_661_068_893_492,
-            },
-            GroupCase {
-                case: "two topics, sorted by name",
-                topics: vec![
-                    NamedTopicHash {
-                        name: "foo",
-                        hash: foo,
-                    },
-                    NamedTopicHash {
-                        name: "bar",
-                        hash: bar,
-                    },
-                ],
-                kafka: -556_879_919_459_959_918,
-            },
-            GroupCase {
-                case: "the same topics in the other order",
-                topics: vec![
-                    NamedTopicHash {
-                        name: "bar",
-                        hash: bar,
-                    },
-                    NamedTopicHash {
-                        name: "foo",
-                        hash: foo,
-                    },
-                ],
-                kafka: -556_879_919_459_959_918,
-            },
-            GroupCase {
-                case: "UtilsTest's literal hashes",
-                topics: vec![
-                    NamedTopicHash {
-                        name: "foo",
-                        hash: 456,
-                    },
-                    NamedTopicHash {
-                        name: "bar",
-                        hash: 123,
-                    },
-                ],
-                kafka: 1_482_712_172_080_382_793,
-            },
-        ];
-        for row in rows {
-            check!(group_hash(row.topics) == row.kafka, "{}", row.case);
-        }
+    #[rstest_bdd_macros::given("the group topic hashes are {topics}")]
+    fn group_topic_hashes(metadata_hash: &mut MetadataHashScenario, topics: String) {
+        metadata_hash.topics =
+            serde_json::from_str(&topics).expect("topic hashes are name/hash pairs");
     }
+
+    #[rstest_bdd_macros::when("the coordinator computes the topic metadata hash")]
+    fn compute_topic_metadata_hash(metadata_hash: &mut MetadataHashScenario) {
+        let racks = metadata_hash
+            .racks
+            .iter()
+            .map(|partition| partition.iter().map(String::as_str).collect());
+        metadata_hash.topic_hash = Some(topic_hash(
+            metadata_hash.topic_id,
+            &metadata_hash.name,
+            racks,
+        ));
+    }
+
+    #[rstest_bdd_macros::when("the coordinator computes the group metadata hash")]
+    fn compute_group_metadata_hash(metadata_hash: &mut MetadataHashScenario) {
+        let topics = metadata_hash
+            .topics
+            .iter()
+            .map(|(name, hash)| NamedTopicHash { name, hash: *hash });
+        metadata_hash.group_hash = Some(group_hash(topics));
+    }
+
+    #[rstest_bdd_macros::then("the topic hash equals Kafka's reference value {hash}")]
+    fn kafka_topic_hash(metadata_hash: &MetadataHashScenario, hash: i64) {
+        check!(metadata_hash.topic_hash == Some(hash));
+    }
+
+    #[rstest_bdd_macros::then("the group hash equals Kafka's reference value {hash}")]
+    fn kafka_group_hash(metadata_hash: &MetadataHashScenario, hash: i64) {
+        check!(metadata_hash.group_hash == Some(hash));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/coordinator/unified/topic_hash.feature", fixtures = [metadata_hash: MetadataHashScenario]);
 }

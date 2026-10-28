@@ -64,102 +64,196 @@ async fn handle_denies_cluster_alter_with_top_level_error() {
     broker_handle.shutdown().await;
 }
 
-/// A self-bootstrapped broker finalizes `metadata.version` 30 (4.3-IV0),
-/// `group.version` 1 and `transaction.version` 2, and leaves
-/// `share.version`, `streams.version` and ELR off.
-#[tokio::test]
-async fn requests_apply_atomically_with_kafkas_response_shape() {
-    let group = "group.version";
-    let share = "share.version";
-    let failing_case = |version: i16, case| {
-        (
-            case,
-            version,
-            vec![named_update(group, 0, 2), named_update(share, 9, 1)],
-            false,
-            refused(
-                "Invalid update version 9 for feature share.version. Local controller 1 only \
-                 supports versions 0-1",
-            ),
-            Some(1),
-        )
-    };
-    let cases = [
-        failing_case(1, "a failing row fails the request, v1"),
-        failing_case(2, "a failing row fails the request, v2"),
-        (
-            "success, v0",
-            0,
-            vec![named_update(group, 1, 1)],
-            false,
-            accepted(&[group]),
-            Some(1),
-        ),
-        (
-            "success, v1",
-            1,
-            vec![named_update(group, 0, 2)],
-            false,
-            accepted(&[group]),
-            None,
-        ),
-        (
-            "success, v2",
-            2,
-            vec![named_update(group, 0, 2)],
-            false,
-            accepted(&[]),
-            None,
-        ),
-        (
-            "validate_only, v2",
-            2,
-            vec![named_update(group, 0, 2)],
-            true,
-            accepted(&[]),
-            Some(1),
-        ),
-        (
-            "an empty request is a no-op",
-            1,
-            vec![],
-            false,
-            accepted(&[]),
-            Some(1),
-        ),
-        (
-            "a repeated name keeps its last row",
-            1,
-            vec![named_update(group, 9, 1), named_update(group, 0, 2)],
-            false,
-            accepted(&[group, group]),
-            None,
-        ),
-    ];
-    for (case, version, updates, validate, expected, group_after) in cases {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        let req = UpdateFeaturesRequest {
-            feature_updates: updates,
-            validate_only: validate,
-            ..Default::default()
-        };
-        let resp = Box::pin(call(&broker_handle, req, version)).await;
-        assert!(resp == expected, "{case}");
-        // A write that lands turns group.version off, so wait for it before
-        // reading the level back; a refusal or a no-op has nothing to wait on.
-        let broker = broker_handle.broker_arc_for_test();
-        if group_after.is_none() {
-            wait_for_group_version_off(&broker).await;
-        }
-        assert!(
-            broker.controller.current_image().finalized_feature(group) == group_after,
-            "{case}"
-        );
-        broker_handle.shutdown().await;
+#[derive(Default)]
+struct UpdateFeatureScenario {
+    started: Option<HandlerStartedBroker>,
+    request: Option<UpdateFeaturesRequest>,
+    version: i16,
+    response: Option<UpdateFeaturesResponse>,
+}
+#[rstest::fixture]
+fn feature_update() -> UpdateFeatureScenario {
+    let started = None;
+    UpdateFeatureScenario {
+        started,
+        ..Default::default()
     }
+}
+#[rstest_bdd_macros::given("a broker starts with finalized group.version 1")]
+async fn default_feature_broker(feature_update: &mut UpdateFeatureScenario) {
+    feature_update.started = Some(start_broker(Arc::new(AllowAllAuthorizer)).await);
+}
+#[rstest_bdd_macros::given(
+    "an UpdateFeatures version {version} request has updates {updates} and validate-only {validate}"
+)]
+fn requested_feature_updates(
+    feature_update: &mut UpdateFeatureScenario,
+    version: i16,
+    updates: String,
+    validate: bool,
+) {
+    feature_update.version = version;
+    let feature_updates = if updates == "none" {
+        Vec::new()
+    } else {
+        updates
+            .split(';')
+            .map(|update| {
+                let mut columns = update.split(':');
+                let name = columns.next().unwrap();
+                let level = columns.next().unwrap().parse().unwrap();
+                let mode = columns.next().unwrap().parse().unwrap();
+                assert!(columns.next().is_none());
+                named_update(name, level, mode)
+            })
+            .collect()
+    };
+    feature_update.request = Some(UpdateFeaturesRequest {
+        feature_updates,
+        validate_only: validate,
+        ..Default::default()
+    });
+}
+#[rstest_bdd_macros::when("the broker applies the feature update request")]
+async fn apply_feature_update(feature_update: &mut UpdateFeatureScenario) {
+    feature_update.response = Some(
+        Box::pin(call(
+            &feature_update.started.as_ref().unwrap().broker,
+            feature_update.request.take().unwrap(),
+            feature_update.version,
+        ))
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the feature response is {outcome} with successful feature rows {rows}")]
+fn check_feature_update_response(
+    feature_update: &UpdateFeatureScenario,
+    outcome: String,
+    rows: String,
+) {
+    let expected = match outcome.as_str() {
+        "accepted" => {
+            let names: Vec<_> = if rows == "none" {
+                Vec::new()
+            } else {
+                rows.split(',').collect()
+            };
+            accepted(&names)
+        }
+        "atomically refused" => refused(
+            "Invalid update version 9 for feature share.version. Local controller 1 only supports versions 0-1",
+        ),
+        _ => panic!("unknown feature outcome: {outcome}"),
+    };
+    assert!(feature_update.response.as_ref().unwrap() == &expected);
+}
+#[rstest_bdd_macros::then("group.version is {level} after the request")]
+async fn check_feature_update_state(feature_update: &mut UpdateFeatureScenario, level: String) {
+    let expected = if level == "disabled" {
+        None
+    } else {
+        Some(level.parse::<i16>().unwrap())
+    };
+    let started = feature_update.started.take().unwrap();
+    let broker = started.broker.broker_arc_for_test();
+    if expected.is_none() {
+        wait_for_group_version_off(&broker).await;
+    }
+    assert!(
+        broker
+            .controller
+            .current_image()
+            .finalized_feature("group.version")
+            == expected
+    );
+    started.broker.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=1, updates=group.version:0:2;share.version:9:1, validate=false (1)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=2, updates=group.version:0:2;share.version:9:1, validate=false (2)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_2(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=0, updates=group.version:1:1, validate=false (3)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_3(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=1, updates=group.version:0:2, validate=false (4)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_4(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=2, updates=group.version:0:2, validate=false (5)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_5(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=2, updates=group.version:0:2, validate=true (6)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_6(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=1, updates=none, validate=false (7)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_7(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_update_feature_atomicity/update.feature",
+    name = "Whole requests update features atomically and respect protocol result shape: version=1, updates=group.version:9:1;group.version:0:2, validate=false (8)"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape_case_8(
+    feature_update: UpdateFeatureScenario,
+) {
+    let _ = (feature_update,);
 }
 
 async fn wait_for_group_version_off(broker: &Broker) {

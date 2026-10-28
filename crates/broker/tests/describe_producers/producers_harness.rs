@@ -84,3 +84,136 @@ pub fn transactional(batch: RecordBatch) -> RecordBatch {
         ..batch
     }
 }
+
+use {
+    crate::support::{
+        admin::describe_producers_request,
+        produce::{SinglePartitionProduceSetup, send_batch},
+    },
+    krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::{
+            describe_producers_response::DescribeProducersResponse,
+            produce_response::ProduceResponse, write_txn_markers_response::WriteTxnMarkersResponse,
+        },
+        primitives::uuid::Uuid,
+    },
+    tempfile::TempDir,
+};
+pub struct ProducerSnapshot {
+    pub process: Option<support::InProcess>,
+    pub cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    pub connection: Option<Client>,
+    pub response: Option<DescribeProducersResponse>,
+    pub identities: Vec<(i64, i16)>,
+    pub transactional: Option<ProducerIdentity>,
+    pub topic_id: Option<Uuid>,
+    pub produced: Option<ProduceResponse>,
+    pub marker: Option<WriteTxnMarkersResponse>,
+}
+impl ProducerSnapshot {
+    pub fn client(&self) -> &Client {
+        self.connection.as_ref().unwrap_or_else(|| {
+            &self
+                .process
+                .as_ref()
+                .expect("standalone broker started")
+                .client
+        })
+    }
+
+    pub async fn shutdown(self) {
+        drop(self.connection);
+        if let Some(process) = self.process {
+            process.broker.shutdown().await;
+        }
+        support::shutdown_cluster(self.cluster).await;
+    }
+}
+#[rstest::fixture]
+pub fn snapshot() -> ProducerSnapshot {
+    // Start this scenario with fresh inputs and observations.
+
+    ProducerSnapshot {
+        process: None,
+        cluster: Vec::new(),
+        connection: None,
+        response: None,
+        identities: Vec::new(),
+        transactional: None,
+        topic_id: None,
+        produced: None,
+        marker: None,
+    }
+}
+#[rstest_bdd_macros::given("a standalone broker is ready to inspect producer state")]
+async fn producer_snapshot_broker(snapshot: &mut ProducerSnapshot) {
+    snapshot.process = Some(support::start().await);
+}
+#[rstest_bdd_macros::given("producer topic {topic} exists with one partition")]
+async fn producer_snapshot_topic(snapshot: &mut ProducerSnapshot, topic: String) {
+    create_topic(snapshot.client(), &topic).await;
+}
+#[rstest_bdd_macros::given("{count} idempotent producer identities have been claimed")]
+async fn producer_snapshot_identities(snapshot: &mut ProducerSnapshot, count: usize) {
+    let process = snapshot
+        .process
+        .as_ref()
+        .expect("standalone broker started");
+    for _ in 0..count {
+        snapshot.identities.push(init_producer(process).await);
+    }
+    for (id, _) in &snapshot.identities {
+        assert!(*id >= 0);
+    }
+    if count == 2 {
+        assert!(
+            snapshot.identities[0].0 != snapshot.identities[1].0,
+            "InitProducerId must return distinct ids on back-to-back calls"
+        );
+    }
+}
+#[rstest_bdd_macros::given(
+    "each claimed producer appended values {values} to {topic} starting at sequence 0"
+)]
+async fn producer_snapshot_history(snapshot: &mut ProducerSnapshot, values: String, topic: String) {
+    let topic_id = topic_id_for(snapshot.client(), &topic).await;
+    let values: Vec<_> = values.split(',').collect();
+    for (pid, epoch) in &snapshot.identities {
+        let response = send_batch(
+            snapshot.client(),
+            batch()
+                .pid(*pid)
+                .epoch(*epoch)
+                .base_seq(0)
+                .values(&values)
+                .call(),
+            SinglePartitionProduceSetup {
+                topic: topic.clone(),
+                topic_id,
+                ..SinglePartitionProduceSetup::replicated()
+            },
+        )
+        .await;
+        assert!(response.responses[0].partition_responses[0].error_code == 0);
+    }
+}
+#[rstest_bdd_macros::when("the client describes producers for topic {topic} partitions {indexes}")]
+async fn describe_snapshot_producers(
+    snapshot: &mut ProducerSnapshot,
+    topic: String,
+    indexes: String,
+) {
+    let indexes = indexes
+        .split(',')
+        .map(|index| index.parse().expect("partition index"))
+        .collect();
+    snapshot.response = Some(
+        snapshot
+            .client()
+            .send(describe_producers_request(topic, indexes))
+            .await
+            .expect("DescribeProducers"),
+    );
+}

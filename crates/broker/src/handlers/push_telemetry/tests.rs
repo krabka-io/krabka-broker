@@ -27,9 +27,10 @@ use {
     bytes::Bytes,
     krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid},
+    krabka_security::Principal,
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
     prost::Message as _,
-    std::sync::Arc,
+    std::{net::SocketAddr, sync::Arc},
     uuid::Uuid,
 };
 
@@ -204,125 +205,127 @@ impl Client<'_> {
     }
 }
 
-/// One push after a `GetTelemetrySubscriptions`, with `telemetry.max.bytes`
-/// at 1024. Kafka's `CompressionType.forId` takes 0 to 4 only. A payload that
-/// decompresses past `telemetry.max.bytes` is `INVALID_RECORD` on 4.3.1, which
-/// stops the Java client's telemetry, and the retriable `TELEMETRY_TOO_LARGE`
-/// on trunk (KAFKA-21076), which `unstable.api.versions.enable` selects
-/// (#693, #1246).
-#[tokio::test]
-async fn push_after_get_follows_kafkas_payload_checks() {
-    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
-        push_after_get_checks(unstable).await;
+#[derive(Default)]
+struct TelemetryPushScenario {
+    started: Option<HandlerStartedBroker>,
+    broker: Option<Arc<Broker>>,
+    identity: Option<(Principal, SocketAddr)>,
+    instance: Uuid,
+    subscription: Option<SubscriptionId>,
+    compression: TelemetryCompression,
+    payload: Bytes,
+    payload_shape: String,
+    response: Option<PushTelemetryResponse>,
+}
+#[rstest::fixture]
+fn telemetry_push() -> TelemetryPushScenario {
+    let started = None;
+    TelemetryPushScenario {
+        started,
+        ..Default::default()
     }
 }
-
-async fn push_after_get_checks(unstable: UnstableApiVersions) {
-    let HandlerStartedBroker {
-        broker: broker_handle,
-        dir: _dir,
-    } = start_broker_with(|cfg| {
+impl TelemetryPushScenario {
+    fn client(&self) -> Client<'_> {
+        let (principal, peer) = self.identity.as_ref().unwrap();
+        Client {
+            broker: self.broker.as_deref().unwrap(),
+            ctx: TelemetryContext {
+                principal,
+                connection_id: "connection-a",
+                client_id: "client-a",
+                peer,
+                software_name: "test-client",
+                software_version: "1.0.0",
+            },
+        }
+    }
+}
+#[rstest_bdd_macros::given(
+    "a telemetry client has obtained a subscription with a 1024-byte limit and unstable API versions {unstable}"
+)]
+async fn subscribed_telemetry_client(telemetry_push: &mut TelemetryPushScenario, unstable: bool) {
+    let unstable = if unstable {
+        UnstableApiVersions::Enabled
+    } else {
+        UnstableApiVersions::Disabled
+    };
+    let started = start_broker_with(|cfg| {
         cfg.client_metrics_telemetry_max = krabka_units::kibibytes(1);
         cfg.client_metrics_enable = true;
         cfg.features.unstable_api_versions = unstable;
     })
     .await;
-    let broker = broker_handle.broker_arc_for_test();
-    let peer = peer();
-    let principal = broker_fixture_support::principal("telemetry-client");
-    let client = Client {
-        broker: &broker,
-        ctx: TelemetryContext {
-            principal: &principal,
-            connection_id: "connection-a",
-            client_id: "client-a",
-            peer: &peer,
-            software_name: "test-client",
-            software_version: "1.0.0",
-        },
+    telemetry_push.broker = Some(started.broker.broker_arc_for_test());
+    telemetry_push.started = Some(started);
+    telemetry_push.identity = Some((
+        broker_fixture_support::principal("telemetry-client"),
+        peer(),
+    ));
+    telemetry_push.instance = Uuid::from_u128(100);
+    telemetry_push.subscription = Some(telemetry_push.client().get(telemetry_push.instance));
+}
+#[rstest_bdd_macros::given(
+    "the telemetry push carries {payload} using compression ID {compression}"
+)]
+fn telemetry_push_payload(
+    telemetry_push: &mut TelemetryPushScenario,
+    payload: String,
+    compression: i8,
+) {
+    telemetry_push.compression = match compression {
+        0 => TelemetryCompression::Uncompressed,
+        1 => TelemetryCompression::Gzip,
+        code => TelemetryCompression::Malformed(TelemetryCompressionCode(code)),
     };
-    let bomb = gzip(&vec![0; 64 * 1024]);
-    assert!(bomb.len() <= 1024);
-    let decompressed_too_large = match unstable {
-        UnstableApiVersions::Disabled => codes::INVALID_RECORD,
-        UnstableApiVersions::Enabled => codes::TELEMETRY_TOO_LARGE,
+    telemetry_push.payload = match payload.as_str() {
+        "gzip OTLP" => gzip(&otlp()),
+        "uncompressed OTLP" => Bytes::from(otlp()),
+        "empty bytes" => Bytes::new(),
+        "1025 uncompressed bytes" => Bytes::from(vec![0; 1025]),
+        "65536 zero bytes compressed with gzip" => gzip(&vec![0; 64 * 1024]),
+        "gzip bytes that are not OTLP" => gzip(b"not-otlp"),
+        "bytes that are not gzip" => Bytes::from_static(b"not-gzip"),
+        _ => panic!("unknown telemetry payload: {payload}"),
     };
-    let rows = [
-        (
-            "gzip OTLP",
-            TelemetryCompression::Gzip,
-            gzip(&otlp()),
-            KafkaErrorCode(codes::INVALID_RECORD),
-        ),
-        (
-            "uncompressed OTLP",
-            TelemetryCompression::Uncompressed,
-            Bytes::from(otlp()),
-            KafkaErrorCode(codes::INVALID_RECORD),
-        ),
-        (
-            "empty payload",
-            TelemetryCompression::Gzip,
-            Bytes::new(),
-            KafkaErrorCode(codes::NONE),
-        ),
-        (
-            "id 9 masks to gzip",
-            TelemetryCompression::Malformed(TelemetryCompressionCode(9)),
-            gzip(&otlp()),
-            KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE),
-        ),
-        (
-            "id 12 masks to zstd",
-            TelemetryCompression::Malformed(TelemetryCompressionCode(12)),
-            gzip(&otlp()),
-            KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE),
-        ),
-        (
-            "negative id",
-            TelemetryCompression::Malformed(TelemetryCompressionCode(-1)),
-            gzip(&otlp()),
-            KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE),
-        ),
-        (
-            "compressed payload over telemetry.max.bytes",
-            TelemetryCompression::Uncompressed,
-            Bytes::from(vec![0; 1025]),
-            KafkaErrorCode(codes::TELEMETRY_TOO_LARGE),
-        ),
-        (
-            "decompressed payload over telemetry.max.bytes",
-            TelemetryCompression::Gzip,
-            bomb,
-            KafkaErrorCode(decompressed_too_large),
-        ),
-        (
-            "payload that is not OTLP",
-            TelemetryCompression::Gzip,
-            gzip(b"not-otlp"),
-            KafkaErrorCode(codes::INVALID_RECORD),
-        ),
-        (
-            "payload that is not gzip",
-            TelemetryCompression::Gzip,
-            Bytes::from_static(b"not-gzip"),
-            KafkaErrorCode(codes::INVALID_RECORD),
-        ),
-    ];
-    for (row, (name, compression, payload, expected)) in (100u128..).zip(rows) {
-        let instance = Uuid::from_u128(row);
-        let subscription_id = client.get(instance);
-        assert!(
-            client.push(PushSetup {
-                instance,
-                subscription: subscription_id,
-                compression,
-                metrics: payload
-            }) == response(expected),
-            "row {name} with {unstable:?}"
-        );
+    telemetry_push.payload_shape = payload;
+}
+#[rstest_bdd_macros::when("the client pushes telemetry using its assigned subscription")]
+fn push_subscribed_telemetry(telemetry_push: &mut TelemetryPushScenario) {
+    telemetry_push.response = Some(telemetry_push.client().push(PushSetup {
+        instance: telemetry_push.instance,
+        subscription: telemetry_push.subscription.unwrap(),
+        compression: telemetry_push.compression,
+        metrics: telemetry_push.payload.clone(),
+    }));
+}
+#[rstest_bdd_macros::then("the complete telemetry response has error {code}")]
+async fn check_subscribed_telemetry(telemetry_push: &mut TelemetryPushScenario, code: i16) {
+    assert!(telemetry_push.response.as_ref().unwrap() == &response(KafkaErrorCode(code)));
+    if telemetry_push.payload_shape == "65536 zero bytes compressed with gzip" {
+        assert!(telemetry_push.payload.len() <= 1024);
     }
-    broker_handle.shutdown().await;
+    telemetry_push
+        .started
+        .take()
+        .unwrap()
+        .broker
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_push_telemetry/payload.feature",
+    name = "Telemetry payload framing compression decoding and size limits follow the selected Kafka version"
+)]
+#[tokio::test]
+async fn push_after_get_follows_kafkas_payload_checks(
+    telemetry_push: TelemetryPushScenario,
+    unstable: bool,
+    payload: String,
+    compression: i8,
+    code: i16,
+) {
+    let _ = (telemetry_push, unstable, payload, compression, code);
 }
 
 /// A push for an instance this broker does not hold: Kafka builds the

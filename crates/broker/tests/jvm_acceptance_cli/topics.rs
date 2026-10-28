@@ -1,5 +1,4 @@
-//! The `kafka-topics` tool: `--create` followed by `--describe`, and an
-//! `--alter --partitions` growth through `CreatePartitions`.
+//! Topic administration through Kafka's own command-line tools.
 
 use {
     crate::jvm_acceptance::{
@@ -7,176 +6,175 @@ use {
         start_host_broker,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-// `flavor = "multi_thread"` is essential here. The test bodies make
-// synchronous blocking `Command::output()` calls for each `docker run`.
-// On a single-threaded runtime those calls block the only worker — which
-// is also driving the broker's accept loop. Incoming TCP connections then
-// complete the kernel-level handshake but the broker never reads them,
-// and the Java AdminClient times out. A multi-thread runtime puts the
-// broker on a separate worker so the test's blocking calls don't starve it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_describe_smokes_metadata() {
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
+struct TopicAdministration {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    topic: String,
+    description: String,
+    configuration: String,
+    listing: String,
+}
 
+#[fixture]
+fn topics() -> TopicAdministration {
+    // Start this scenario with fresh inputs and observations.
+
+    TopicAdministration {
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        description: String::new(),
+        configuration: String::new(),
+        listing: String::new(),
+    }
+}
+
+#[given("a host broker is reachable by the Kafka topic administration tools")]
+async fn reachable_broker(topics: &mut TopicAdministration) {
+    let (broker, directory) = start_host_broker().await;
+    nc_check_connectivity();
+    topics.broker = Some(broker);
+    topics.directory = Some(directory);
+}
+
+#[given("the existing topic {topic} has one partition")]
+async fn existing_topic(topics: &mut TopicAdministration, topic: String) {
+    let (broker, directory) = start_console_broker(&topic, 1).await;
+    topics.broker = Some(broker);
+    topics.directory = Some(directory);
+    topics.topic = topic;
+}
+
+#[when("kafka-topics creates topic {topic} with {partitions} partitions")]
+fn create_topic(topics: &mut TopicAdministration, topic: String, partitions: i32) {
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
         "--topic",
-        "described",
+        &topic,
         "--partitions",
-        "2",
+        &partitions.to_string(),
         "--replication-factor",
         "1",
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-
-    let out = docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--describe",
-        "--topic",
-        "described",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("Topic: described"),
-        "describe missing topic line: {stdout}"
-    );
-    assert!(
-        stdout.contains("PartitionCount: 2"),
-        "describe missing partition count: {stdout}"
-    );
-
-    broker.shutdown().await;
+    topics.topic = topic;
 }
 
-/// `kafka-topics --alter --topic t --partitions 3` then `--describe`
-/// shows 3 partitions. Exercises `CreatePartitions` (`api_key` 37) +
-/// `V1Topic` partition-count update.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_alter_partitions() {
-    const TOPIC: &str = "krabka-alter-parts-itest";
-
-    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
-
+#[when("kafka-topics increases the topic to three partitions")]
+fn grow_topic(topics: &TopicAdministration) {
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--alter",
         "--topic",
-        TOPIC,
+        &topics.topic,
         "--partitions",
         "3",
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+}
 
-    let out = docker_run_kafka_tool(&[
+#[when("kafka-topics describes the administered topic")]
+fn describe_topic(topics: &mut TopicAdministration) {
+    let output = docker_run_kafka_tool(&[
         "kafka-topics",
         "--describe",
         "--topic",
-        TOPIC,
+        &topics.topic,
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let s = String::from_utf8_lossy(&out.stdout);
+    topics.description = String::from_utf8_lossy(&output.stdout).into_owned();
+}
+
+#[then("the topic description names {topic} with PartitionCount {partitions}")]
+fn described_identity(topics: &TopicAdministration, topic: String, partitions: i32) {
     assert!(
-        s.contains("PartitionCount: 3") || s.contains("Partitions: 3"),
-        "describe missing PartitionCount: 3 — got: {s}"
+        topics.description.contains(&format!("Topic: {topic}")),
+        "describe missing topic line: {}",
+        topics.description
+    );
+    assert!(
+        topics
+            .description
+            .contains(&format!("PartitionCount: {partitions}")),
+        "describe missing partition count: {}",
+        topics.description
     );
 }
 
-/// `kafka-topics --create`, `--list` (present), `--delete`, `--list` (gone).
-///
-/// The epic's criterion says create/describe/**delete**, and the only
-/// `--delete` any container suite ran was
-/// `jvm_acceptance_freeze/break_glass_delete.rs`, which asserts the two-person
-/// rule REFUSES one. A refusal does not evidence that the ordinary path works,
-/// so this pins the success case: `DeleteTopics` (`api_key` 20) over the broker
-/// listener, with `--list` on both sides so the assertion is the topic's
-/// disappearance rather than the tool's exit status.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_delete_removes_the_topic() {
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
+#[then("the topic description reports three partitions")]
+fn described_growth(topics: &TopicAdministration) {
+    assert!(
+        topics.description.contains("PartitionCount: 3")
+            || topics.description.contains("Partitions: 3"),
+        "describe missing PartitionCount: 3: {}",
+        topics.description
+    );
+}
 
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--topic",
-        "deleted-by-cli",
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-
-    let before = docker_run_kafka_tool(&[
+#[when("kafka-topics lists the current topics")]
+fn list_topics(topics: &mut TopicAdministration) {
+    let output = docker_run_kafka_tool(&[
         "kafka-topics",
         "--list",
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let listed = String::from_utf8_lossy(&before.stdout);
-    assert!(
-        listed.lines().any(|line| line.trim() == "deleted-by-cli"),
-        "topic missing before the delete: {listed}"
-    );
+    topics.listing = String::from_utf8_lossy(&output.stdout).into_owned();
+}
 
+#[then("the administered topic appears in the topic listing")]
+fn listed_topic(topics: &TopicAdministration) {
+    assert!(
+        topics
+            .listing
+            .lines()
+            .any(|line| line.trim() == topics.topic),
+        "topic missing before deletion: {}",
+        topics.listing
+    );
+}
+
+#[when("kafka-topics deletes the administered topic")]
+fn delete_topic(topics: &TopicAdministration) {
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--delete",
         "--topic",
-        "deleted-by-cli",
+        &topics.topic,
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-
-    let after = docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--list",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-    let remaining = String::from_utf8_lossy(&after.stdout);
-    assert!(
-        !remaining
-            .lines()
-            .any(|line| line.trim() == "deleted-by-cli"),
-        "topic still listed after the delete: {remaining}"
-    );
-
-    broker.shutdown().await;
 }
 
-/// `kafka-topics --create --config cleanup.policy=compact,delete`, then
-/// `--describe` and `kafka-configs --describe`.
-///
-/// Kafka types `cleanup.policy` as a LIST, and Kafka Streams' windowed-store
-/// changelogs carry exactly this value, so the broker has to accept the list,
-/// store it as written, and echo it back through both tools.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
-    const TOPIC: &str = "krabka-compact-delete-itest";
+#[then("the administered topic is absent from the topic listing")]
+fn unlisted_topic(topics: &TopicAdministration) {
+    assert!(
+        !topics
+            .listing
+            .lines()
+            .any(|line| line.trim() == topics.topic),
+        "topic still listed after deletion: {}",
+        topics.listing
+    );
+}
 
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
+#[when("kafka-topics creates topic {topic} with compact and delete cleanup")]
+fn create_compact_delete(topics: &mut TopicAdministration, topic: String) {
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
         "--topic",
-        TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
@@ -186,36 +184,87 @@ async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+    topics.topic = topic;
+}
 
-    let described = docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--describe",
-        "--topic",
-        TOPIC,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-    let stdout = String::from_utf8_lossy(&described.stdout);
-    assert!(
-        stdout.contains("cleanup.policy=compact,delete"),
-        "kafka-topics --describe missing the list value: {stdout}"
-    );
-
-    let configs = docker_run_kafka_tool(&[
+#[when("kafka-configs describes the topic configuration")]
+fn describe_configuration(topics: &mut TopicAdministration) {
+    let output = docker_run_kafka_tool(&[
         "kafka-configs",
         "--describe",
         "--entity-type",
         "topics",
         "--entity-name",
-        TOPIC,
+        &topics.topic,
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let rendered = String::from_utf8_lossy(&configs.stdout);
-    assert!(
-        rendered.contains("cleanup.policy=compact,delete"),
-        "kafka-configs --describe missing the list value: {rendered}"
-    );
+    topics.configuration = String::from_utf8_lossy(&output.stdout).into_owned();
+}
 
-    broker.shutdown().await;
+#[then("both administrative tools preserve cleanup.policy as compact,delete")]
+fn preserved_list_policy(topics: &TopicAdministration) {
+    assert!(
+        topics.description.contains("cleanup.policy=compact,delete"),
+        "kafka-topics --describe missing the list value: {}",
+        topics.description
+    );
+    assert!(
+        topics
+            .configuration
+            .contains("cleanup.policy=compact,delete"),
+        "kafka-configs --describe missing the list value: {}",
+        topics.configuration
+    );
+}
+
+async fn stop_topic_broker(topics: TopicAdministration) {
+    topics
+        .broker
+        .expect("a host broker was started")
+        .shutdown()
+        .await;
+}
+
+// Blocking Docker commands require another Tokio worker to serve the broker.
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "Creating a topic exposes its name and partition count to Kafka tools"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_describe_smokes_metadata(topics: TopicAdministration) {
+    stop_topic_broker(topics).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "Increasing topic partitions is visible in a subsequent description"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_alter_partitions(topics: TopicAdministration) {
+    stop_topic_broker(topics).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "Deleting a topic removes it from the Kafka tool listing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_delete_removes_the_topic(topics: TopicAdministration) {
+    stop_topic_broker(topics).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "A compact and delete cleanup list survives creation and both describe tools"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy(
+    topics: TopicAdministration,
+) {
+    stop_topic_broker(topics).await;
 }

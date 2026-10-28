@@ -19,13 +19,6 @@ pub const POLICY_VIOLATION_EXCEPTION: &str =
 pub const INVALID_CONFIG_EXCEPTION: &str =
     "org.apache.kafka.common.errors.InvalidConfigurationException";
 
-/// The break-glass action name that `break_glass.signed_actions`, the audit
-/// event, the metric label and the refusal message all spell one way.
-pub const ACTION_DELETE_TOPIC: &str = "delete_topic";
-
-/// The action name of an unclean `ElectLeaders`.
-pub const ACTION_UNCLEAN_ELECT_LEADERS: &str = "unclean_elect_leaders";
-
 /// The wire value of `BreakGlassAction::UncleanElectLeaders` on the
 /// krabka-private `ProposeBreakGlass` request (api key 1017).
 ///
@@ -44,27 +37,6 @@ pub const CONTAINER_PROPS: &str = "/client.properties";
 pub const SASL_LISTENER: &str = "SASL_PLAINTEXT";
 
 // ── Topics, scopes and the operators ─────────────────────────────────────────
-
-/// The topic that a literal-scope freeze covers.
-pub const LITERAL_TOPIC: &str = "kfc9-orders";
-/// What the operator typed when they froze [`LITERAL_TOPIC`]. It rides in the
-/// refusal, so the JVM producer must print it back.
-pub const LITERAL_REASON: &str = "DR cutover";
-
-/// The namespace a prefixed-scope freeze covers.
-pub const PREFIX_SCOPE: &str = "kfc9-tenant-a.";
-/// A topic inside [`PREFIX_SCOPE`]. Its own name is in no registry entry, so
-/// refusing it exercises the prefix index rather than the literal one.
-pub const PREFIX_TOPIC: &str = "kfc9-tenant-a.events";
-/// What the operator typed when they froze [`PREFIX_SCOPE`].
-pub const PREFIX_REASON: &str = "tenant offboarding";
-
-/// The unfrozen control topic. It exists so that a refusal is shown to be the
-/// freeze rather than a produce path that stopped working.
-pub const CONTROL_TOPIC: &str = "kfc9-control";
-
-/// The topic the `kafka-topics --delete` case creates and fails to delete.
-pub const DOOMED_TOPIC: &str = "kfc9-doomed";
 
 /// The topic the `kafka-leader-election` case elects a leader for.
 pub const ELECT_TOPIC: &str = "kfc9-elect";
@@ -97,27 +69,6 @@ pub fn approver_set() -> Vec<String> {
 }
 
 // ── The refusals the broker words, rebuilt on this side ──────────────────────
-
-/// The `error_message` that rides beside `POLICY_VIOLATION` on a produce to a
-/// frozen topic.
-///
-/// `pattern` is `literal` or `prefixed`, and the scope is quoted because the
-/// broker renders it with its `Debug` form. The quotes are part of what the
-/// operator reads, so they are part of the assertion.
-pub fn freeze_refusal(pattern: &str, scope: &str, reason: &str) -> String {
-    format!("a write freeze on the {pattern} scope {scope:?} refuses this write: {reason}")
-}
-
-/// The `error_message` that rides beside `POLICY_VIOLATION` when the
-/// two-person rule finds no approval at all.
-///
-/// This is the `NoProposal` wording specifically. A proposal that exists but
-/// is short of approvals, withdrawn, expired or already spent gets a different
-/// sentence, and asserting this one is what shows the tool reached the gate
-/// with an empty registry rather than tripping over a half-built proposal.
-pub fn no_proposal_refusal(action: &str, target: &str) -> String {
-    format!("break-glass refused {action} on {target}: no approved proposal covers the request")
-}
 
 /// The refusal both alter paths give for the read-only `write.freeze` key.
 ///

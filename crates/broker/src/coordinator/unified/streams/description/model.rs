@@ -281,8 +281,27 @@ mod tests {
     /// A push round-trips to the describe response Kafka builds from the
     /// plugin's copy: each node keeps the fields of its type, and every list
     /// keeps its first occurrences in wire order.
-    #[test]
-    fn a_push_describes_as_kafka_stores_it() {
+    /// The pushes Kafka's converter refuses with `InvalidRequestException`,
+    /// and its messages.
+    use {
+        describe::topology_description::TopologyDescription as DescribedTopology,
+        push::topology_description::TopologyDescription as PushTopology,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct TopologyPush {
+        wire: Option<PushTopology>,
+        description: Option<Result<DescribedTopology, String>>,
+    }
+    #[rstest::fixture]
+    fn topology_push() -> TopologyPush {
+        // Start this scenario with fresh inputs and observations.
+        TopologyPush::default()
+    }
+    #[given(
+        "a topology push has source processor and sink nodes plus a source-processor global store"
+    )]
+    fn valid_topology_push(topology_push: &mut TopologyPush) {
         let wire = push::topology_description::TopologyDescription {
             subtopologies: vec![
                 push::topology_description_subtopology::TopologyDescriptionSubtopology {
@@ -305,10 +324,49 @@ mod tests {
             ..Default::default()
         };
 
-        let described = TopologyDescription::from_push(&wire)
-            .expect("a valid description")
-            .to_describe();
-
+        topology_push.wire = Some(wire);
+    }
+    #[given(
+        "a topology push has subtopology node type {node} global source type {source} and global processor type {processor}"
+    )]
+    fn invalid_topology_push(
+        topology_push: &mut TopologyPush,
+        node: String,
+        source: String,
+        processor: String,
+    ) {
+        let mut wire = PushTopology::default();
+        if node != "absent" {
+            wire.subtopologies = vec![
+                push::topology_description_subtopology::TopologyDescriptionSubtopology {
+                    subtopology_id: "0".into(),
+                    nodes: vec![push_node("n", node.parse().expect("node type"))],
+                    ..Default::default()
+                },
+            ];
+        }
+        if source != "absent" {
+            wire.global_stores = vec![
+                push::topology_description_global_store::TopologyDescriptionGlobalStore {
+                    source: push_node("s", source.parse().expect("source type")),
+                    processor: push_node("p", processor.parse().expect("processor type")),
+                    ..Default::default()
+                },
+            ];
+        }
+        topology_push.wire = Some(wire);
+    }
+    #[when("the coordinator validates the pushed topology and renders its describe response")]
+    fn describe_pushed_topology(topology_push: &mut TopologyPush) {
+        topology_push.description = Some(
+            TopologyDescription::from_push(topology_push.wire.as_ref().expect("push prepared"))
+                .map(|description| description.to_describe()),
+        );
+    }
+    #[then(
+        "the describe response preserves every node field and deduplicates each list in original order"
+    )]
+    fn described_topology(topology_push: &TopologyPush) {
         let expected = describe::topology_description::TopologyDescription {
             subtopologies: vec![
                 describe::topology_description_subtopology::TopologyDescriptionSubtopology {
@@ -348,80 +406,28 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert!(described == expected);
-    }
 
-    /// The pushes Kafka's converter refuses with `InvalidRequestException`,
-    /// and its messages.
-    #[test]
-    fn malformed_pushes_are_refused_with_kafkas_message() {
-        let subtopology = |node_type| push::topology_description::TopologyDescription {
-            subtopologies: vec![
-                push::topology_description_subtopology::TopologyDescriptionSubtopology {
-                    subtopology_id: "0".into(),
-                    nodes: vec![push_node("n", node_type)],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        let global_store = |source, processor| push::topology_description::TopologyDescription {
-            global_stores: vec![
-                push::topology_description_global_store::TopologyDescriptionGlobalStore {
-                    source: push_node("s", source),
-                    processor: push_node("p", processor),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        let mixed = push::topology_description::TopologyDescription {
-            global_stores: global_store(NODE_TYPE_SINK, NODE_TYPE_PROCESSOR).global_stores,
-            ..subtopology(9)
-        };
-        let shape = "Global store must be composed of a source and a processor node.";
-        let rows = [
-            (
-                "node type 0",
-                subtopology(0),
-                "Unknown topology node type: 0",
-            ),
-            (
-                "node type 4",
-                subtopology(4),
-                "Unknown topology node type: 4",
-            ),
-            (
-                "negative node type",
-                subtopology(-1),
-                "Unknown topology node type: -1",
-            ),
-            (
-                "global store of a sink",
-                global_store(NODE_TYPE_SINK, NODE_TYPE_PROCESSOR),
-                shape,
-            ),
-            (
-                "global store of two sources",
-                global_store(NODE_TYPE_SOURCE, NODE_TYPE_SOURCE),
-                shape,
-            ),
-            (
-                "global store with an unknown processor type",
-                global_store(NODE_TYPE_SOURCE, 7),
-                "Unknown topology node type: 7",
-            ),
-            (
-                "subtopologies are read first",
-                mixed,
-                "Unknown topology node type: 9",
-            ),
-        ];
-        for (row, wire, message) in rows {
-            assert!(
-                TopologyDescription::from_push(&wire) == Err(message.to_owned()),
-                "{row}"
-            );
-        }
+        assert!(
+            topology_push
+                .description
+                .as_ref()
+                .expect("push handled")
+                .as_ref()
+                .expect("valid pushed topology")
+                == &expected
+        );
     }
+    #[then("the topology push is rejected with Kafka message {message}")]
+    fn refused_topology_push(topology_push: &TopologyPush, message: String) {
+        assert!(
+            topology_push
+                .description
+                .as_ref()
+                .expect("push handled")
+                .as_ref()
+                .err()
+                == Some(&message)
+        );
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/description/model.feature",fixtures=[topology_push:TopologyPush]);
 }

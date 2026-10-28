@@ -1,27 +1,21 @@
 //! Reading the acknowledged ledger back, with two clients that share no code.
 //!
-//! [`assert_rust_readback`] runs while the object store is still blocked, so
+//! [`consume_ledger`] runs while the object store is still blocked, so
 //! what it reads can only have come from the WAL quorum on the survivors. It
 //! fetches the one known partition directly rather than through a consumer
 //! group: a group coordinator is an unrelated subsystem, and the broker that
 //! hosted it is the one the schedule just killed.
 //!
-//! [`assert_jvm_differential`] runs the stock `kafka-console-consumer` in a
-//! container and compares its stdout byte for byte with the values that were
-//! acknowledged. The Rust fetch and the Rust broker share a decoder and a
+//! [`jvm_consume_exact`] runs the stock `kafka-console-consumer` in a
+//! container and returns its output for the scenario to compare byte for byte
+//! with the acknowledged values. The Rust fetch and the Rust broker share a decoder and a
 //! record model; the JVM client shares neither, so agreement between them says
 //! the bytes on the wire are Kafka's and not this project's idea of them.
 
 use {
-    crate::{
-        TOPIC,
-        history::{AckedRecord, LedgerEntry, ledger_values},
-        support::client::connect_owned,
-    },
-    assert2::assert,
+    crate::{TOPIC, history::LedgerEntry, support::client::connect_owned},
     krabka_client_core::{FetchMinBytes, IsolatedFetch},
     std::{
-        iter,
         process::{Output, Stdio},
         time::{Duration, Instant},
     },
@@ -38,17 +32,7 @@ const JVM_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 /// who runs this test outside CI has no preload step.
 const JVM_CONSUME_TIMEOUT: Duration = Duration::from_mins(5);
 
-/// Fetch the partition directly and require the exact acknowledged ledger.
-pub async fn assert_rust_readback(bootstrap: &str, ledger: &[AckedRecord]) {
-    let observed = consume_ledger(bootstrap, ledger.len()).await;
-    let expected = ledger_values(ledger);
-    assert!(
-        observed == expected,
-        "Rust consumer lost or reordered acknowledged records: expected={expected:?} observed={observed:?}"
-    );
-}
-
-async fn consume_ledger(bootstrap: &str, expected: usize) -> Vec<LedgerEntry> {
+pub async fn consume_ledger(bootstrap: &str, expected: usize) -> Vec<LedgerEntry> {
     let client = connect_owned(bootstrap, "diskless-jepsen-consumer", "direct fetch client").await;
     let metadata = client.refresh_metadata().await.expect("fetch metadata");
     let topic = metadata
@@ -94,25 +78,9 @@ async fn consume_ledger(bootstrap: &str, expected: usize) -> Vec<LedgerEntry> {
     observed
 }
 
-/// Run the JVM console consumer against `bootstrap` and require its stdout to
-/// be the acknowledged values, in order, one per line.
-pub async fn assert_jvm_differential(bootstrap: &str, ledger: &[AckedRecord]) {
-    let observed = jvm_consume_exact(bootstrap, ledger.len()).await;
-    let expected = ledger_values(ledger)
-        .iter()
-        .flat_map(|entry| entry.value.iter().copied().chain(iter::once(b'\n')))
-        .collect::<Vec<_>>();
-    assert!(
-        observed == expected,
-        "JVM byte differential mismatch: expected={:?} observed={:?}",
-        String::from_utf8_lossy(&expected),
-        String::from_utf8_lossy(&observed),
-    );
-}
-
-async fn jvm_consume_exact(bootstrap: &str, expected: usize) -> Vec<u8> {
+pub async fn jvm_consume_exact(bootstrap: &str, expected: usize) -> Output {
     let max_messages = expected.to_string();
-    let output = docker_output(
+    docker_output(
         &[
             "run",
             "--rm",
@@ -134,14 +102,7 @@ async fn jvm_consume_exact(bootstrap: &str, expected: usize) -> Vec<u8> {
         JVM_CONSUME_TIMEOUT,
         "JVM console consumer",
     )
-    .await;
-    assert!(
-        output.status.success(),
-        "JVM consumer failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    output.stdout
+    .await
 }
 
 /// Run `docker` under a deadline and kill the child when the deadline passes.

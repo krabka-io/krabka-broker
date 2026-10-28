@@ -90,7 +90,7 @@ fn mandatory_protocol_type_and_name_present(req: &SyncGroupRequest, version: Api
 mod tests {
     use {
         crate::{
-            authorizer::AllowAllAuthorizer,
+            authorizer::{AllowAllAuthorizer, Authorizer},
             broker::Broker,
             handlers::{RequestContext, join_group::handle as join_group_handle},
             test_support::{
@@ -196,118 +196,169 @@ mod tests {
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
     }
 
-    /// #736 and #793: from v5 a missing protocol type or name answers
-    /// `INCONSISTENT_GROUP_PROTOCOL` before the group ACL, and an empty group
-    /// id answers `INVALID_GROUP_ID` after it. Every error reply carries only
-    /// its `error_code`, as Kafka's `SyncGroupRequest.getErrorResponse`.
-    #[tokio::test]
-    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order() {
-        struct Row {
-            name: &'static str,
-            version: i16,
-            group_id: &'static str,
-            protocol_type: Option<&'static str>,
-            protocol_name: Option<&'static str>,
-            allowed: bool,
-            want: i16,
+    #[derive(Default)]
+    struct SyncGroupValidationScenario {
+        started: Option<HandlerStartedBroker>,
+        request: Option<SyncGroupRequest>,
+        version: i16,
+        response: Option<SyncGroupResponse>,
+    }
+    #[rstest::fixture]
+    fn sync_group_validation() -> SyncGroupValidationScenario {
+        let started = None;
+        SyncGroupValidationScenario {
+            started,
+            ..Default::default()
         }
-        let rows = [
-            Row {
-                name: "v5 null type, denied",
-                version: 5,
-                group_id: GROUP,
-                protocol_type: None,
-                protocol_name: Some(PROTOCOL_NAME),
-                allowed: false,
-                want: codes::INCONSISTENT_GROUP_PROTOCOL,
-            },
-            Row {
-                name: "v5 null name, allowed",
-                version: 5,
-                group_id: GROUP,
-                protocol_type: Some(PROTOCOL_TYPE),
-                protocol_name: None,
-                allowed: true,
-                want: codes::INCONSISTENT_GROUP_PROTOCOL,
-            },
-            Row {
-                name: "v4 null both, allowed: normal path to an unknown group",
-                version: 4,
-                group_id: GROUP,
-                protocol_type: None,
-                protocol_name: None,
-                allowed: true,
-                want: codes::UNKNOWN_MEMBER_ID,
-            },
-            Row {
-                name: "v5 both present, denied",
-                version: 5,
-                group_id: GROUP,
-                protocol_type: Some(PROTOCOL_TYPE),
-                protocol_name: Some(PROTOCOL_NAME),
-                allowed: false,
-                want: codes::GROUP_AUTHORIZATION_FAILED,
-            },
-            Row {
-                name: "empty group id, allowed",
-                version: 5,
-                group_id: "",
-                protocol_type: Some(PROTOCOL_TYPE),
-                protocol_name: Some(PROTOCOL_NAME),
-                allowed: true,
-                want: codes::INVALID_GROUP_ID,
-            },
-            Row {
-                name: "empty group id, denied",
-                version: 5,
-                group_id: "",
-                protocol_type: Some(PROTOCOL_TYPE),
-                protocol_name: Some(PROTOCOL_NAME),
-                allowed: false,
-                want: codes::GROUP_AUTHORIZATION_FAILED,
-            },
-        ];
-        let HandlerStartedBroker {
-            broker: denied_handle,
-            dir: _denied_dir,
-        } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
-        let HandlerStartedBroker {
-            broker: allowed_handle,
-            dir: _allowed_dir,
-        } = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
-        krabka_macros::request_test_identity! {
-            bind(principal, peer, ctx);
-            user ["alice"];
-            context [context];
+    }
+    #[rstest_bdd_macros::given("the SyncGroup caller is authorized {allowed}")]
+    async fn sync_group_authorization(
+        sync_group_validation: &mut SyncGroupValidationScenario,
+        allowed: bool,
+    ) {
+        let authorizer: Arc<dyn Authorizer> = if allowed {
+            Arc::new(AllowAllAuthorizer)
+        } else {
+            Arc::new(DenyAll)
         };
-
-        for r in rows {
-            let broker = if r.allowed {
-                allowed_handle.broker_arc_for_test()
+        sync_group_validation.started = Some(start_group_broker_no_audit(authorizer).await);
+    }
+    #[rstest_bdd_macros::given(
+        "a SyncGroup version {version} request names group {group} protocol type {protocol_type} and name {protocol_name}"
+    )]
+    fn sync_group_protocol_fields(
+        sync_group_validation: &mut SyncGroupValidationScenario,
+        version: i16,
+        group: String,
+        protocol_type: String,
+        protocol_name: String,
+    ) {
+        sync_group_validation.version = version;
+        sync_group_validation.request = Some(SyncGroupRequest {
+            group_id: if group == "empty" {
+                String::new()
             } else {
-                denied_handle.broker_arc_for_test()
-            };
-            let req = SyncGroupRequest {
-                group_id: r.group_id.into(),
-                member_id: "member-a".into(),
-                generation_id: 1,
-                protocol_type: r.protocol_type.map(String::from),
-                protocol_name: r.protocol_name.map(String::from),
-                ..Default::default()
-            };
+                group
+            },
+            member_id: "member-a".into(),
+            generation_id: 1,
+            protocol_type: if protocol_type == "null" {
+                None
+            } else {
+                Some(protocol_type)
+            },
+            protocol_name: if protocol_name == "null" {
+                None
+            } else {
+                Some(protocol_name)
+            },
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when("alice synchronizes the requested group")]
+    async fn synchronize_group(sync_group_validation: &mut SyncGroupValidationScenario) {
+        let broker = sync_group_validation
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(principal,peer,ctx);user ["alice"];context [context];};
+        sync_group_validation.response = Some(
+            handle(
+                &broker,
+                sync_group_validation.request.take().unwrap(),
+                sync_group_validation.version,
+                &ctx,
+            )
+            .await
+            .expect("SyncGroup"),
+        );
+    }
+    #[rstest_bdd_macros::then("the complete SyncGroup response contains only error {code}")]
+    async fn check_sync_group_validation(
+        sync_group_validation: &mut SyncGroupValidationScenario,
+        code: i16,
+    ) {
+        assert!(
+            sync_group_validation.response.as_ref().unwrap()
+                == &SyncGroupResponse {
+                    error_code: code,
+                    ..Default::default()
+                }
+        );
+        sync_group_validation
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=false, version=5, group=sync-group-unit (1)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
+    }
 
-            let resp = handle(&broker, req, r.version, &ctx)
-                .await
-                .expect("SyncGroup");
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=true, version=5, group=sync-group-unit (2)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order_case_2(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
+    }
 
-            let expected = SyncGroupResponse {
-                error_code: r.want,
-                ..Default::default()
-            };
-            assert!(resp == expected, "{}: {resp:?}", r.name);
-        }
-        denied_handle.shutdown().await;
-        allowed_handle.shutdown().await;
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=true, version=4, group=sync-group-unit (3)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order_case_3(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=false, version=5, group=sync-group-unit (4)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order_case_4(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=true, version=5, group=empty (5)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order_case_5(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_sync_group_validation/sync.feature",
+        name = "Protocol fields precede authorization and authorization precedes group identity: allowed=false, version=5, group=empty (6)"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order_case_6(
+        sync_group_validation: SyncGroupValidationScenario,
+    ) {
+        let _ = (sync_group_validation,);
     }
 
     #[tokio::test]

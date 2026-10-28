@@ -108,47 +108,123 @@ fn sorted_isr(cluster: &RoleSeparated, topic: &str) -> Vec<u64> {
     isr
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_only() {
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+const TOPIC: &str = "rolesep-isr";
+
+#[derive(Default)]
+struct RoleSeparatedIsr {
+    cluster: Option<RoleSeparated>,
+    leader: Option<u64>,
+    restart: Option<BrokerConfig>,
+}
+
+#[fixture]
+fn role_separated_isr() -> RoleSeparatedIsr {
+    // Preserve the stopped follower's ports and directory for its real rejoin.
+    RoleSeparatedIsr::default()
+}
+
+#[given("one controller-only voter manages two broker-only nodes")]
+async fn controller_only_topology(role_separated_isr: &mut RoleSeparatedIsr) {
     support::init_tracing();
-    let topic = "rolesep-isr";
-    let mut cluster = start_role_separated().await;
+    role_separated_isr.cluster = Some(start_role_separated().await);
+}
+
+#[when("a two-replica rolesep-isr partition is created")]
+async fn replicated_role_topic(role_separated_isr: &RoleSeparatedIsr) {
+    let cluster = role_separated_isr
+        .cluster
+        .as_ref()
+        .expect("role-separated cluster");
     create_topic_for_broker(
         &cluster.controller,
         configured_topic_request()
-            .topic(topic)
+            .topic(TOPIC)
             .replication_factor(2)
             .call(),
     )
     .await;
-    cluster.controller.wait_until_isr_len(topic, 0, 2).await;
-    assert!(sorted_isr(&cluster, topic) == vec![2, 3]);
+}
 
+#[then("the controller commits brokers 2 and 3 in the partition ISR")]
+async fn full_role_isr(role_separated_isr: &RoleSeparatedIsr) {
+    let cluster = role_separated_isr
+        .cluster
+        .as_ref()
+        .expect("role-separated cluster");
+    cluster.controller.wait_until_isr_len(TOPIC, 0, 2).await;
+    assert!(sorted_isr(cluster, TOPIC) == vec![2, 3]);
+}
+
+#[when("the broker-only follower crashes without controlled shutdown")]
+async fn crash_role_follower(role_separated_isr: &mut RoleSeparatedIsr) {
+    let cluster = role_separated_isr
+        .cluster
+        .as_mut()
+        .expect("role-separated cluster");
     let leader = cluster
         .controller
-        .partition_record_for_test(topic, 0)
-        .expect("the partition is in the image")
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition in image")
         .leader
         .0;
     let follower = cluster
         .brokers
         .iter()
         .position(|broker| broker.node_id() != leader)
-        .expect("a follower");
-    let follower_config = cluster.broker_configs[follower].clone();
-
-    // The follower stops without a controlled shutdown, so it leaves the ISR.
+        .expect("follower");
+    role_separated_isr.restart = Some(cluster.broker_configs[follower].clone());
+    role_separated_isr.leader = Some(leader);
     cluster.brokers.remove(follower).crash_for_test().await;
-    cluster.controller.wait_until_isr_len(topic, 0, 1).await;
-    assert!(sorted_isr(&cluster, topic) == vec![leader]);
+}
 
-    // The restarted follower catches up. Only an `AlterPartition` from the
-    // leader that the controller commits puts it back into the ISR.
-    cluster
+#[then("only the partition leader remains in the controller's ISR")]
+async fn reduced_role_isr(role_separated_isr: &RoleSeparatedIsr) {
+    let cluster = role_separated_isr
+        .cluster
+        .as_ref()
+        .expect("role-separated cluster");
+    cluster.controller.wait_until_isr_len(TOPIC, 0, 1).await;
+    assert!(
+        sorted_isr(cluster, TOPIC) == vec![role_separated_isr.leader.expect("partition leader")]
+    );
+}
+
+#[when("the follower restarts using the same broker-only configuration")]
+async fn restart_role_follower(role_separated_isr: &mut RoleSeparatedIsr) {
+    let broker = support::start_reusing_addrs(
+        role_separated_isr
+            .restart
+            .as_ref()
+            .expect("follower configuration"),
+        "restarted follower",
+    )
+    .await;
+    role_separated_isr
+        .cluster
+        .as_mut()
+        .expect("role-separated cluster")
         .brokers
-        .push(support::start_reusing_addrs(&follower_config, "restarted follower").await);
-    cluster.controller.wait_until_isr_len(topic, 0, 2).await;
-    assert!(sorted_isr(&cluster, topic) == vec![2, 3]);
+        .push(broker);
+}
 
-    cluster.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/role_separated_isr.feature",
+    name = "a restarted follower rejoins the isr when the controller is controller only"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_only(
+    role_separated_isr: RoleSeparatedIsr,
+) {
+    role_separated_isr
+        .cluster
+        .take()
+        .expect("role-separated cluster")
+        .shutdown()
+        .await;
+    drop(role_separated_isr);
 }

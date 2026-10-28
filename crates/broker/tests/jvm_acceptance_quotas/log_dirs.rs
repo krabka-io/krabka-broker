@@ -9,15 +9,37 @@ use {
         broker0_advertised, docker_run_kafka_tool, nc_check_connectivity, start_host_broker_jbod,
     },
     assert2::check,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::fs,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
 
-/// KIP-113: `kafka-log-dirs --describe` against a two-directory
-/// JBOD broker. The test asserts that the JVM tool sees both configured log
-/// directories and that the new topic spreads its partitions across them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
+struct DirectoryReport {
+    port_ownership: Option<MutexGuard<'static, ()>>,
+    broker: Option<BrokerHandle>,
+    primary: Option<TempDir>,
+    extra: Option<TempDir>,
+    stdout: Option<String>,
+}
+#[fixture]
+fn directories() -> DirectoryReport {
+    // Start this scenario with fresh inputs and observations.
+
+    DirectoryReport {
+        port_ownership: None,
+        broker: None,
+        primary: None,
+        extra: None,
+        stdout: None,
+    }
+}
+
+#[given("six partitions are materialized across a broker configured with two log directories")]
+async fn jbod_topic(directories: &mut DirectoryReport) {
+    directories.port_ownership = Some(crate::claim_broker_ports().await);
     let (broker, primary, extra) = start_host_broker_jbod().await;
     nc_check_connectivity();
 
@@ -42,6 +64,13 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
             .await;
     }
 
+    directories.broker = Some(broker);
+    directories.primary = Some(primary);
+    directories.extra = Some(extra);
+}
+
+#[when("the operator describes broker one with kafka log dirs")]
+fn inspect(directories: &mut DirectoryReport) {
     let out = docker_run_kafka_tool(&[
         "kafka-log-dirs",
         "--describe",
@@ -50,7 +79,17 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
         "--broker-list",
         "1",
     ]);
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    directories.stdout = Some(String::from_utf8_lossy(&out.stdout).into_owned());
+}
+
+#[then("the report contains both canonical log directories and the topic partitions")]
+fn visible_directories(directories: &DirectoryReport) {
+    let stdout = directories
+        .stdout
+        .as_ref()
+        .expect("the operator obtained a directory report");
+    let primary = directories.primary.as_ref().expect("primary log directory");
+    let extra = directories.extra.as_ref().expect("extra log directory");
 
     // The broker reports canonical absolute host paths; canonicalize the
     // expected dirs so the substring match is robust to /tmp symlinks.
@@ -72,6 +111,24 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
         stdout.contains("jbodtopic"),
         "kafka-log-dirs output missing topic partitions; got: {stdout}"
     );
+}
 
-    broker.shutdown().await;
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/log_dirs.feature",
+    name = "Operators see both configured JBOD directories"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_kafka_log_dirs_describe_reports_jbod_spread(directories: DirectoryReport) {
+    directories.shutdown().await;
+    drop(directories);
+}
+
+impl DirectoryReport {
+    async fn shutdown(&mut self) {
+        let port_ownership = self.port_ownership.take();
+        self.broker.take().expect("running broker").shutdown().await;
+        drop((self.primary.take(), self.extra.take()));
+        drop(port_ownership);
+    }
 }

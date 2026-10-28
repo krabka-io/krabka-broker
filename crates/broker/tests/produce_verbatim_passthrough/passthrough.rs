@@ -1,7 +1,4 @@
-//! The three scenarios that decide between the verbatim (zero-copy) append and
-//! the owned (decode, recompress, re-encode) fallback: a producer-compressed
-//! LZ4 batch, an uncompressed batch checked byte for byte, and a topic whose
-//! `compression.type` forces the broker to recompress.
+//! Verbatim producer bytes and topic-directed recompression over the wire.
 
 use {
     crate::{
@@ -12,130 +9,221 @@ use {
         support::client::connect_client,
     },
     assert2::{assert, check},
+    bytes::Bytes,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
     krabka_compression::CompressionType,
-    krabka_protocol::{owned::create_topics_request::CreatableTopicConfig, records::HEADER_LEN},
+    krabka_protocol::{
+        owned::create_topics_request::CreatableTopicConfig,
+        primitives::uuid::Uuid,
+        records::{HEADER_LEN, RecordBatch},
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-/// A producer-LZ4-compressed v2 batch whose DECOMPRESSED form is large
-/// (~100 KiB) takes the verbatim path. The broker validates it, retains the
-/// Lz4 codec with no recompression, and round-trips the data on Fetch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lz4_batch_passes_through_and_roundtrips() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "lz4t").await;
-
-    let client = connect_client(bootstrap.clone(), None).await;
-    let topic_id = topic_id_for(&client, "lz4t").await;
-
-    // 200 records of a highly-compressible 512-byte value → ~100 KiB raw,
-    // tiny compressed. An accidental uncompressed re-encode is obvious.
-    let value = vec![b'Z'; 512];
-    let b = batch(CompressionType::Lz4, 200, &value);
-    let wire = encode_batch(&b);
-    let raw_uncompressed_size = 200 * 512;
-    assert!(
-        wire.len() < raw_uncompressed_size / 8,
-        "lz4 wire ({} B) must be far smaller than raw ({} B)",
-        wire.len(),
-        raw_uncompressed_size
-    );
-
-    let base = produce_one(&client, "lz4t", topic_id, b.clone())
-        .await
-        .expect("produce ok");
-    assert!(base == 0);
-
-    // Fetch it back: the stored batch must still be Lz4-compressed (no
-    // recompression to a different codec) and decode to the same records.
-    let fetched = fetch_first_batch(&broker, &client, "lz4t", topic_id, 200).await;
-    check!(
-        fetched.attributes.compression() == CompressionType::Lz4,
-        "stored batch must keep producer's Lz4 codec; got {:?}",
-        fetched.attributes.compression()
-    );
-    assert!(fetched.records.len() == 200, "all records round-trip");
-    check!(fetched.records[0].value.as_deref() == Some(&value[..]));
-    check!(fetched.records[199].value.as_deref() == Some(&value[..]));
-    check!(fetched.base_offset == 0);
-
-    broker.shutdown().await;
+struct BatchStorage {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Client>,
+    topic: String,
+    topic_id: Uuid,
+    producer_batch: Option<RecordBatch>,
+    producer_wire: Bytes,
+    value: Vec<u8>,
+    count: usize,
+    answer: Option<Result<i64, i16>>,
+    fetched: Option<RecordBatch>,
 }
 
-/// An UNCOMPRESSED v2 batch takes the verbatim path and round-trips
-/// byte-identically. The CRC-covered region (bytes 21..) of the stored bytes
-/// equals the producer's wire bytes exactly. The broker patches only
-/// `base_offset` and `partition_leader_epoch`, which both sit before the CRC
-/// region. The test re-encodes the fetched batch and compares. For an
-/// uncompressed batch the re-encode is deterministic and byte-exact.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn uncompressed_batch_roundtrips_byte_identically() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "raw").await;
+#[fixture]
+fn storage() -> BatchStorage {
+    // Start this scenario with fresh inputs and observations.
 
-    let client = connect_client(bootstrap.clone(), None).await;
-    let topic_id = topic_id_for(&client, "raw").await;
+    BatchStorage {
+        broker: None,
+        directory: None,
+        client: None,
+        topic: String::new(),
+        topic_id: Uuid::ZERO,
+        producer_batch: None,
+        producer_wire: Bytes::new(),
+        value: Vec::new(),
+        count: 0,
+        answer: None,
+        fetched: None,
+    }
+}
 
-    let b = batch(CompressionType::None, 3, b"payload");
-    let wire = encode_batch(&b);
+enum StoragePolicy {
+    PreserveProducer,
+    ForceZstd,
+}
 
-    produce_one(&client, "raw", topic_id, b.clone())
-        .await
-        .expect("produce ok");
+async fn storage_topic(storage: &mut BatchStorage, topic: &str, policy: StoragePolicy) {
+    let (broker, bootstrap, directory) = boot().await;
+    if matches!(policy, StoragePolicy::ForceZstd) {
+        create_topic_with_configs(&broker, &bootstrap, topic, vec![CreatableTopicConfig {
+            name: "compression.type".into(),
+            value: Some("zstd".into()),
+            ..Default::default()
+        }])
+        .await;
+        wait_for_compression(&broker, topic, Some(CompressionType::Zstd)).await;
+    } else {
+        create_topic(&broker, &bootstrap, topic).await;
+    }
+    let client = connect_client(bootstrap, None).await;
+    storage.topic_id = topic_id_for(&client, topic).await;
+    storage.broker = Some(broker);
+    storage.directory = Some(directory);
+    storage.client = Some(client);
+    storage.topic = topic.into();
+}
 
-    let fetched = fetch_first_batch(&broker, &client, "raw", topic_id, 3).await;
-    let fetched_wire = encode_batch(&fetched);
+fn input_batch(storage: &mut BatchStorage, codec: CompressionType, count: usize, value: Vec<u8>) {
+    let batch = batch(codec, count, &value);
+    storage.producer_wire = encode_batch(&batch);
+    storage.producer_batch = Some(batch);
+    storage.value = value;
+    storage.count = count;
+}
 
-    // The CRC-covered region (attributes onward) must be byte-identical to
-    // what the producer sent — proving no decode/re-encode/recompress.
+#[given("a small LZ4 producer batch represents two hundred 512-byte Z records")]
+async fn producer_lz4(storage: &mut BatchStorage) {
+    storage_topic(storage, "lz4t", StoragePolicy::PreserveProducer).await;
+    input_batch(storage, CompressionType::Lz4, 200, vec![b'Z'; 512]);
+    assert!(
+        storage.producer_wire.len() < (200 * 512) / 8,
+        "the LZ4 fixture must be far smaller than its raw records"
+    );
+}
+
+#[given("an uncompressed producer batch contains three payload records")]
+async fn producer_uncompressed(storage: &mut BatchStorage) {
+    storage_topic(storage, "raw", StoragePolicy::PreserveProducer).await;
+    input_batch(storage, CompressionType::None, 3, b"payload".to_vec());
+}
+
+#[given("a zstd topic receives an LZ4 producer batch containing ten 256-byte Q records")]
+async fn topic_recompression(storage: &mut BatchStorage) {
+    storage_topic(storage, "recmp", StoragePolicy::ForceZstd).await;
+    input_batch(storage, CompressionType::Lz4, 10, vec![b'Q'; 256]);
+}
+
+#[when("the producer batch is appended to the topic")]
+async fn append_batch(storage: &mut BatchStorage) {
+    let client = storage
+        .client
+        .as_ref()
+        .expect("a producer topic was created");
+    storage.answer = Some(
+        produce_one(
+            client,
+            &storage.topic,
+            storage.topic_id,
+            storage
+                .producer_batch
+                .as_ref()
+                .expect("a producer batch was prepared")
+                .clone(),
+        )
+        .await,
+    );
+}
+
+#[then("the producer batch is accepted at offset zero")]
+fn accepted_batch(storage: &BatchStorage) {
+    assert!(storage.answer.as_ref().expect("Produce completed") == &Ok(0));
+}
+
+#[when("the stored producer batch is fetched")]
+async fn read_stored_batch(storage: &mut BatchStorage) {
+    storage.fetched = Some(
+        fetch_first_batch(
+            storage.broker.as_ref().expect("a broker was started"),
+            storage.client.as_ref().expect("a client connected"),
+            &storage.topic,
+            storage.topic_id,
+            i64::try_from(storage.count).expect("record count fits in offset"),
+        )
+        .await,
+    );
+}
+
+fn matching_values(storage: &BatchStorage, codec: CompressionType) {
+    let fetched = storage.fetched.as_ref().expect("Fetch completed");
     check!(
-        fetched_wire[HEADER_LEN..] == wire[HEADER_LEN..],
+        fetched.attributes.compression() == codec,
+        "stored batch codec: {:?}",
+        fetched.attributes.compression()
+    );
+    assert!(fetched.records.len() == storage.count);
+    check!(
+        fetched
+            .records
+            .iter()
+            .all(|record| record.value.as_deref() == Some(storage.value.as_slice())),
+        "every record value must round trip"
+    );
+    check!(fetched.base_offset == 0);
+}
+
+#[then("LZ4 compression and every large record value are preserved")]
+fn preserved_lz4(storage: &BatchStorage) { matching_values(storage, CompressionType::Lz4); }
+
+#[then("the topic's zstd compression replaces LZ4 without changing record values")]
+fn forced_zstd(storage: &BatchStorage) { matching_values(storage, CompressionType::Zstd); }
+
+#[then("the record body CRC-covered header and CRC bytes are unchanged")]
+fn preserved_bytes(storage: &BatchStorage) {
+    let fetched = encode_batch(storage.fetched.as_ref().expect("Fetch completed"));
+    check!(
+        fetched[HEADER_LEN..] == storage.producer_wire[HEADER_LEN..],
         "record body must be verbatim"
     );
     check!(
-        fetched_wire[21..HEADER_LEN] == wire[21..HEADER_LEN],
-        "CRC-covered header (attributes..records_count) must be verbatim"
+        fetched[21..HEADER_LEN] == storage.producer_wire[21..HEADER_LEN],
+        "CRC-covered header must be verbatim"
     );
-    // The producer's CRC bytes (17..21) are preserved (no recompute).
-    check!(fetched_wire[17..21] == wire[17..21], "CRC field unchanged");
-
-    broker.shutdown().await;
+    check!(
+        fetched[17..21] == storage.producer_wire[17..21],
+        "CRC field unchanged"
+    );
 }
 
-/// A topic configured with a concrete `compression.type` that differs from
-/// the producer's codec forces broker-side recompression, which is the OWNED
-/// path. The stored batch must carry the TOPIC's codec, and the data must still
-/// be correct. This pins the verbatim predicate's recompression gate to the
-/// owned fallback.
+async fn stop_batch_storage(storage: BatchStorage) {
+    storage
+        .broker
+        .expect("a broker was started")
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "Producer LZ4 compression survives the verbatim append and Fetch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recompression_config_takes_owned_path() {
-    let (broker, bootstrap, _dir) = boot().await;
-    // Topic forces zstd; producer sends lz4 → must recompress (owned path).
-    create_topic_with_configs(&broker, &bootstrap, "recmp", vec![CreatableTopicConfig {
-        name: "compression.type".into(),
-        value: Some("zstd".into()),
-        ..Default::default()
-    }])
-    .await;
-    wait_for_compression(&broker, "recmp", Some(CompressionType::Zstd)).await;
+async fn lz4_batch_passes_through_and_roundtrips(storage: BatchStorage) {
+    stop_batch_storage(storage).await;
+}
 
-    let client = connect_client(bootstrap.clone(), None).await;
-    let topic_id = topic_id_for(&client, "recmp").await;
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "An uncompressed producer batch retains its CRC and record bytes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uncompressed_batch_roundtrips_byte_identically(storage: BatchStorage) {
+    stop_batch_storage(storage).await;
+}
 
-    let value = vec![b'Q'; 256];
-    let b = batch(CompressionType::Lz4, 10, &value);
-    produce_one(&client, "recmp", topic_id, b.clone())
-        .await
-        .expect("produce ok");
-
-    let fetched = fetch_first_batch(&broker, &client, "recmp", topic_id, 10).await;
-    // Owned path recompressed lz4 → zstd: stored batch carries the TOPIC codec.
-    check!(
-        fetched.attributes.compression() == CompressionType::Zstd,
-        "recompression config must rewrite codec to zstd; got {:?}",
-        fetched.attributes.compression()
-    );
-    assert!(fetched.records.len() == 10);
-    check!(fetched.records[0].value.as_deref() == Some(&value[..]));
-
-    broker.shutdown().await;
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "A topic codec override recompresses producer records without data loss"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recompression_config_takes_owned_path(storage: BatchStorage) {
+    stop_batch_storage(storage).await;
 }

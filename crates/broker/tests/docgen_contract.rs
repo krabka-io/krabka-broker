@@ -10,6 +10,7 @@
 use {
     assert2::{assert, check},
     krabka_broker::file_config,
+    krabka_protocol::owned::api_versions_response::ApiVersion,
     krabka_raft::scenarios::{NodeRole, ScenarioTrace, TraceAction, TraceStep, scenarios},
     std::collections::BTreeSet,
     support::api_versions::supported_client_apis,
@@ -17,9 +18,10 @@ use {
 
 mod support;
 
-#[test]
-fn file_config_schema_has_the_shape_docgen_renders() {
-    let schema = file_config::config_schema();
+#[cfg(test)]
+#[rstest_bdd_macros::then("file config schema has the shape docgen renders")]
+fn file_config_schema_has_the_shape_docgen_renders(reference: &DocgenReference) {
+    let schema = reference.schema.as_ref().expect("schema generated");
     // `render_sectioned_field_table` partitions `properties` of the root and
     // resolves `$ref` pointers into a `$defs` table.
     check!(schema["title"] == "FileConfig");
@@ -53,9 +55,10 @@ fn file_config_schema_has_the_shape_docgen_renders() {
     check!(description.contains("KIP-595"));
 }
 
-#[test]
-fn supported_apis_is_non_empty_and_unique_by_key() {
-    let apis = supported_client_apis();
+#[cfg(test)]
+#[rstest_bdd_macros::then("supported apis is non empty and unique by key")]
+fn supported_apis_is_non_empty_and_unique_by_key(reference: &DocgenReference) {
+    let apis = reference.apis.as_ref().expect("client APIs discovered");
     assert!(!apis.is_empty());
     let keys: BTreeSet<i16> = apis.iter().map(|api| api.api_key).collect();
     assert!(
@@ -70,7 +73,7 @@ fn supported_apis_is_non_empty_and_unique_by_key() {
     assert!(sorted_keys.windows(2).all(|pair| pair[0] < pair[1]));
     // ApiVersions itself is advertised, and every advertised key has a name.
     check!(keys.contains(&18));
-    for api in &apis {
+    for api in apis {
         check!(
             krabka_protocol::ApiKey::from_i16(api.api_key).is_some(),
             "api_key {} has no ApiKey name; docgen would print `?`",
@@ -84,14 +87,15 @@ fn supported_apis_is_non_empty_and_unique_by_key() {
     }
 }
 
-#[test]
-fn topic_config_docs_carry_the_columns_docgen_prints() {
-    let docs = krabka_broker::topic_config_docs();
+#[cfg(test)]
+#[rstest_bdd_macros::then("topic config docs carry the columns docgen prints")]
+fn topic_config_docs_carry_the_columns_docgen_prints(reference: &DocgenReference) {
+    let docs = reference.docs.as_ref().expect("topic reference generated");
     assert!(!docs.is_empty());
     let keys: BTreeSet<&str> = docs.iter().map(|doc| doc.key).collect();
     assert!(keys.len() == docs.len(), "topic_config_docs repeats a key");
     check!(keys.contains("retention.ms"));
-    for doc in &docs {
+    for doc in docs {
         check!(!doc.value_type.is_empty(), "{} has no value type", doc.key);
         check!(
             !doc.description.is_empty(),
@@ -104,9 +108,10 @@ fn topic_config_docs_carry_the_columns_docgen_prints() {
 /// The one scenario `krabka-docgen` special-cases by id.
 const SPECIAL_CASED_SCENARIO: &str = "split_brain_prevented";
 
-#[test]
-fn scenarios_record_the_trace_shape_docgen_renders() {
-    let traces = scenarios();
+#[cfg(test)]
+#[rstest_bdd_macros::then("scenarios record the trace shape docgen renders")]
+fn scenarios_record_the_trace_shape_docgen_renders(reference: &DocgenReference) {
+    let traces = reference.traces.as_ref().expect("simulations executed");
     assert!(!traces.is_empty());
     let ids: Vec<&str> = traces.iter().map(|trace| trace.id.as_str()).collect();
     check!(
@@ -116,7 +121,7 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
     let unique: BTreeSet<&str> = ids.iter().copied().collect();
     check!(unique.len() == ids.len(), "docgen keys its slides by id");
 
-    for trace in &traces {
+    for trace in traces {
         // Destructured in full so that a renamed or removed field fails to
         // compile here, and not first in the tool.
         let ScenarioTrace {
@@ -192,3 +197,54 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+enum ReferenceSource {
+    Configuration,
+    ClientApis,
+    TopicConfiguration,
+    RaftSimulation,
+}
+struct DocgenReference {
+    source: Option<ReferenceSource>,
+    schema: Option<serde_json::Value>,
+    apis: Option<Vec<ApiVersion>>,
+    docs: Option<Vec<krabka_broker::TopicConfigDoc>>,
+    traces: Option<Vec<ScenarioTrace>>,
+}
+#[rstest::fixture]
+fn reference() -> DocgenReference {
+    // Start this scenario with fresh inputs and observations.
+
+    DocgenReference {
+        source: None,
+        schema: None,
+        apis: None,
+        docs: None,
+        traces: None,
+    }
+}
+#[rstest_bdd_macros::given("docgen reads the {source} reference source")]
+fn select_reference_source(reference: &mut DocgenReference, source: String) {
+    reference.source = Some(match source.as_str() {
+        "configuration schema" => ReferenceSource::Configuration,
+        "client API catalog" => ReferenceSource::ClientApis,
+        "topic configuration registry" => ReferenceSource::TopicConfiguration,
+        "Raft simulation catalog" => ReferenceSource::RaftSimulation,
+        other => panic!("unknown documentation source {other}"),
+    });
+}
+#[rstest_bdd_macros::when(
+    "docgen obtains the selected reference data through its public entry point"
+)]
+fn read_reference_source(reference: &mut DocgenReference) {
+    match reference.source.expect("documentation source selected") {
+        ReferenceSource::Configuration => reference.schema = Some(file_config::config_schema()),
+        ReferenceSource::ClientApis => reference.apis = Some(supported_client_apis()),
+        ReferenceSource::TopicConfiguration => {
+            reference.docs = Some(krabka_broker::topic_config_docs());
+        }
+        ReferenceSource::RaftSimulation => reference.traces = Some(scenarios()),
+    }
+}
+rstest_bdd_macros::scenarios!("tests/features/migrated/tests/docgen_contract.feature", fixtures = [reference: DocgenReference]);

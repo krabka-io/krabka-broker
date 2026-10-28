@@ -167,90 +167,118 @@ mod tests {
             test_support::{EventQueueRecord, RecordingEventQueue},
         },
         assert2::check,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenario, then, when},
         std::sync::Arc,
         tokio::time::{Duration, Instant, advance},
     };
 
-    /// One turn under a paused clock. A command, when there is one, is sent
-    /// at the start; the previous turn then runs for `busy`, the loop idles
-    /// for `idle`, and this turn runs for `runs`.
-    struct TurnCase {
-        name: &'static str,
-        command: Option<Caller>,
-        busy: Duration,
-        idle: Duration,
-        runs: Duration,
-        expected: EventQueueRecord,
+    struct MeteredTurn {
+        recorder: Option<Arc<RecordingEventQueue>>,
+        meter: Option<EventQueueMeter>,
+        arrival: Option<Arrival>,
+        measurements: Option<EventQueueRecord>,
     }
 
-    /// Whether the command's caller is still waiting when the turn starts.
-    #[derive(Clone, Copy)]
-    enum Caller {
-        Waiting,
-        Gone,
-    }
+    #[fixture]
+    fn turn() -> MeteredTurn {
+        // Start this scenario with fresh inputs and observations.
 
-    #[tokio::test(start_paused = true)]
-    async fn one_turn_records_kafkas_event_queue_measurements() {
-        let ms = Duration::from_millis;
-        let cases = [
-            TurnCase {
-                name: "a timer has no queue time",
-                command: None,
-                busy: ms(9),
-                idle: ms(40),
-                runs: ms(3),
-                expected: EventQueueRecord {
-                    queue_times: vec![],
-                    processing_times: vec![ms(3)],
-                    started: 1,
-                    timed_out: 0,
-                    idle_times: vec![ms(40)],
-                },
-            },
-            TurnCase {
-                name: "a command queued behind a busy turn",
-                command: Some(Caller::Waiting),
-                busy: ms(25),
-                idle: ms(0),
-                runs: ms(7),
-                expected: EventQueueRecord {
-                    queue_times: vec![ms(25)],
-                    processing_times: vec![ms(7)],
-                    started: 1,
-                    timed_out: 0,
-                    idle_times: vec![ms(0)],
-                },
-            },
-            TurnCase {
-                name: "a command whose caller left still runs, and counts as timed out",
-                command: Some(Caller::Gone),
-                busy: ms(30_000),
-                idle: ms(5),
-                runs: ms(1),
-                expected: EventQueueRecord {
-                    queue_times: vec![ms(30_005)],
-                    processing_times: vec![ms(1)],
-                    started: 1,
-                    timed_out: 1,
-                    idle_times: vec![ms(5)],
-                },
-            },
-        ];
-        for case in cases {
-            let recorder = Arc::new(RecordingEventQueue::default());
-            let mut meter = EventQueueMeter::new(Arc::<RecordingEventQueue>::clone(&recorder));
-            let enqueued_at = Instant::now();
-            advance(case.busy).await;
-            meter.finish_turn();
-            advance(case.idle).await;
-            let timer = meter.start(case.command.map(|caller| Arrival {
-                enqueued_at,
-                caller_gone: matches!(caller, Caller::Gone),
-            }));
-            advance(case.runs).await;
-            drop(timer);
-            check!(recorder.record() == case.expected, "{}", case.name);
+        MeteredTurn {
+            recorder: None,
+            meter: None,
+            arrival: None,
+            measurements: None,
         }
     }
+
+    #[given("an event queue with a {source} after {busy_ms} ms of work and {idle_ms} ms idle")]
+    async fn queued_event(turn: &mut MeteredTurn, source: String, busy_ms: u64, idle_ms: u64) {
+        let recorder = Arc::new(RecordingEventQueue::default());
+        let mut meter = EventQueueMeter::new(Arc::<RecordingEventQueue>::clone(&recorder));
+        let enqueued_at = Instant::now();
+        advance(Duration::from_millis(busy_ms)).await;
+        meter.finish_turn();
+        advance(Duration::from_millis(idle_ms)).await;
+        turn.arrival = match source.as_str() {
+            "timer" => None,
+            "waiting-caller-command" => Some(Arrival {
+                enqueued_at,
+                caller_gone: false,
+            }),
+            "abandoned-caller-command" => Some(Arrival {
+                enqueued_at,
+                caller_gone: true,
+            }),
+            _ => panic!("unknown controller event source: {source}"),
+        };
+        turn.recorder = Some(recorder);
+        turn.meter = Some(meter);
+    }
+
+    #[when("the event queue runs the next turn for {runs_ms} ms")]
+    async fn run_turn(turn: &mut MeteredTurn, runs_ms: u64) {
+        let meter = turn.meter.as_ref().expect("an event queue was given");
+        let timer = meter.start(turn.arrival);
+        advance(Duration::from_millis(runs_ms)).await;
+        drop(timer);
+        turn.measurements = Some(
+            turn.recorder
+                .as_ref()
+                .expect("a recorder was installed")
+                .record(),
+        );
+    }
+
+    #[then(
+        "queue time is {queue_ms} ms, processing is {processing_ms} ms, started count is {started}, timed-out count is {timed_out}, and idle time is {idle_ms} ms"
+    )]
+    fn recorded_measurements(
+        turn: &MeteredTurn,
+        queue_ms: String,
+        processing_ms: u64,
+        started: u64,
+        timed_out: u64,
+        idle_ms: u64,
+    ) {
+        let queue_times = if queue_ms == "unrecorded" {
+            Vec::new()
+        } else {
+            vec![Duration::from_millis(
+                queue_ms
+                    .parse()
+                    .expect("queue time is an unsigned millisecond count"),
+            )]
+        };
+        let expected = EventQueueRecord {
+            queue_times,
+            processing_times: vec![Duration::from_millis(processing_ms)],
+            started,
+            timed_out,
+            idle_times: vec![Duration::from_millis(idle_ms)],
+        };
+        check!(turn.measurements.as_ref() == Some(&expected));
+    }
+
+    // Each binding retains start_paused so metric expectations use exact logical time.
+    #[scenario(
+        path = "tests/features/migrated/src/event_queue.feature",
+        name = "Timer turns do not record queue delay"
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn one_turn_records_kafkas_event_queue_measurements(turn: MeteredTurn) {}
+
+    #[scenario(
+        path = "tests/features/migrated/src/event_queue.feature",
+        name = "Queued commands include the preceding busy turn in queue delay"
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn queued_command_measurements(turn: MeteredTurn) {}
+
+    #[scenario(
+        path = "tests/features/migrated/src/event_queue.feature",
+        name = "An abandoned caller is counted as timed out while its command still runs"
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn abandoned_command_measurements(turn: MeteredTurn) {}
 }

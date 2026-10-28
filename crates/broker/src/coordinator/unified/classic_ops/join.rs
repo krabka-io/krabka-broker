@@ -751,24 +751,6 @@ mod tests {
 
     /// Kafka's `JoinGroupRequest.requiresKnownMemberId`: only a dynamic member
     /// with no member id at v4 or later is sent back for an id.
-    #[test]
-    fn requires_known_member_id_follows_kafka() {
-        // (member id, group instance id, version, expected)
-        let rows = [
-            ("", None, 4, true),
-            ("", None, 9, true),
-            ("", None, 3, false),
-            ("", Some("instance-1"), 9, false),
-            ("m1", None, 9, false),
-        ];
-        for (member_id, instance_id, version, want) in rows {
-            check!(
-                requires_known_member_id(&join_req(member_id, instance_id), version) == want,
-                "{member_id:?} {instance_id:?} v{version}"
-            );
-        }
-    }
-
     /// #790: KIP-394. A dynamic member gets `MEMBER_ID_REQUIRED` at v4+ and
     /// joins with that id; an id the group never gave out is unknown.
     #[test]
@@ -1174,4 +1156,40 @@ mod tests {
         assert!(build_join_result(&g, "m1").members.len() == 2);
         assert!(build_join_result(&g, "m2").members.is_empty());
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct MemberIdBootstrap {
+        request: Option<JoinGroupRequest>,
+        required: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn member_bootstrap() -> MemberIdBootstrap {
+        // Start this scenario with fresh inputs and observations.
+        MemberIdBootstrap::default()
+    }
+    #[given("a JoinGroup request has member {member} and instance {instance}")]
+    fn join_identity(member_bootstrap: &mut MemberIdBootstrap, member: String, instance: String) {
+        let member = if member == "empty" { "" } else { &member };
+        let instance = if instance == "absent" {
+            None
+        } else {
+            Some(instance.as_str())
+        };
+        member_bootstrap.request = Some(join_req(member, instance));
+    }
+    #[when("the coordinator checks known member identity for JoinGroup version {version}")]
+    fn check_join_identity(member_bootstrap: &mut MemberIdBootstrap, version: i16) {
+        member_bootstrap.required = Some(requires_known_member_id(
+            member_bootstrap
+                .request
+                .as_ref()
+                .expect("join request prepared"),
+            version,
+        ));
+    }
+    #[then("the member must obtain an assigned member identifier {required}")]
+    fn known_member_required(member_bootstrap: &MemberIdBootstrap, required: bool) {
+        check!(member_bootstrap.required == Some(required));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_ops/join.feature",fixtures=[member_bootstrap:MemberIdBootstrap]);
 }

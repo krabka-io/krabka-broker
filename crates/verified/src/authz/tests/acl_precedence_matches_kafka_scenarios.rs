@@ -1,228 +1,202 @@
-use super::*;
+use {
+    super::{
+        AclDecision, AclDefault, AclFacts, AclOperationKind, AclPatternKind, AclResourceFacts,
+        AclResourceTypeMatch, RequestAuthState, acl_decision, acl_identity_match,
+        acl_operation_match, acl_resource_match, check, request_auth_admission,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
 
-/// Kafka `AclAuthorizer` precedence scenarios.
-#[yare::parameterized(
-    no_acl_default_denies = { facts(), AclDecision::DenyDefault },
-    matching_allow = { AclFacts { saw_allow: true, ..facts() }, AclDecision::AllowAcl },
-    matching_deny = { AclFacts { saw_deny: true, ..facts() }, AclDecision::DenyExplicit },
-    deny_precedes_allow = {
-        AclFacts { saw_allow: true, saw_deny: true, ..facts() },
-        AclDecision::DenyExplicit,
-    },
-    superuser_bypasses_deny = {
-        AclFacts { super_user: true, saw_deny: true, ..facts() },
-        AclDecision::AllowSuperuser,
-    },
-    allow_default_without_acl = {
-        AclFacts { default_decision: AclDefault::Allow, ..facts() },
-        AclDecision::AllowNoAcl,
-    },
-    allow_default_does_not_override_deny = {
-        AclFacts { saw_deny: true, default_decision: AclDefault::Allow, ..facts() },
-        AclDecision::DenyExplicit,
-    },
-    explicit_allow_is_acl_grant = {
-        AclFacts { saw_allow: true, default_decision: AclDefault::Allow, ..facts() },
-        AclDecision::AllowAcl,
-    },
-)]
-fn acl_precedence_matches_kafka_scenarios(facts: AclFacts, expected: AclDecision) {
-    check!(acl_decision(facts) == expected);
+struct AclScenario {
+    facts: Option<AclFacts>,
+    identity: Option<(bool, bool)>,
+    resource: Option<(AclPatternKind, AclResourceFacts)>,
+    operation: Option<(AclOperationKind, AclOperationKind, bool)>,
+    admission: Option<RequestAuthState>,
+    decision: Option<AclDecision>,
+    matches: Option<bool>,
 }
 
-/// Kafka principal and host matching: `User:*` and host `*` are wildcards.
-#[yare::parameterized(
-    exact_principal = { false, true, true },
-    wildcard_principal = { true, false, true },
-    different_principal = { false, false, false },
-    wildcard_host = { true, false, true },
-)]
-fn identity_wildcards_match_kafka_scenarios(wildcard: bool, exact: bool, expected: bool) {
-    check!(acl_identity_match(wildcard, exact) == expected);
+#[fixture]
+fn acl() -> AclScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    AclScenario {
+        facts: None,
+        identity: None,
+        resource: None,
+        operation: None,
+        admission: None,
+        decision: None,
+        matches: None,
+    }
 }
 
-/// Kafka LITERAL, wildcard, and PREFIXED resource patterns against the
-/// requested topic `orders`.
-#[yare::parameterized(
-    literal_exact = {
-        AclPatternKind::Literal,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: true,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        true,
-    },
-    literal_wildcard = {
-        AclPatternKind::Literal,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: false,
-            wildcard_name: true,
-            name_has_prefix: false,
-        },
-        true,
-    },
-    literal_prefix_only = {
-        AclPatternKind::Literal,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: false,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        false,
-    },
-    prefixed_prefix = {
-        AclPatternKind::Prefixed,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: false,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        true,
-    },
-    prefixed_exact = {
-        AclPatternKind::Prefixed,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: true,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        true,
-    },
-    prefixed_no_match = {
-        AclPatternKind::Prefixed,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: false,
-            wildcard_name: false,
-            name_has_prefix: false,
-        },
-        false,
-    },
-    prefixed_wildcard_is_not_special = {
-        AclPatternKind::Prefixed,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Same,
-            exact_name: false,
-            wildcard_name: true,
-            name_has_prefix: false,
-        },
-        false,
-    },
-    literal_wrong_type = {
-        AclPatternKind::Literal,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Different,
-            exact_name: true,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        false,
-    },
-    prefixed_wrong_type = {
-        AclPatternKind::Prefixed,
-        AclResourceFacts {
-            resource_type: AclResourceTypeMatch::Different,
-            exact_name: false,
-            wildcard_name: false,
-            name_has_prefix: true,
-        },
-        false,
-    },
+#[given(
+    "a {principal} principal has matching entries {entries} and the no-ACL policy is {default_policy}"
 )]
-fn resource_patterns_match_kafka_scenarios(
-    pattern: AclPatternKind,
-    facts: AclResourceFacts,
-    expected: bool,
+fn acl_facts(acl: &mut AclScenario, principal: String, entries: String, default_policy: String) {
+    let super_user = match principal.as_str() {
+        "superuser" => true,
+        "regular" => false,
+        _ => panic!("unknown principal status"),
+    };
+    let (saw_allow, saw_deny) = match entries.as_str() {
+        "none" => (false, false),
+        "allow" => (true, false),
+        "deny" => (false, true),
+        "allow-and-deny" => (true, true),
+        _ => panic!("unknown matching ACL permissions"),
+    };
+    let default_decision = match default_policy.as_str() {
+        "allow" => AclDefault::Allow,
+        "deny" => AclDefault::Deny,
+        _ => panic!("unknown no-ACL policy"),
+    };
+    acl.facts = Some(AclFacts {
+        super_user,
+        saw_allow,
+        saw_deny,
+        default_decision,
+    });
+}
+
+#[when("the ACL decision is evaluated")]
+fn evaluate_decision(acl: &mut AclScenario) {
+    acl.decision = Some(acl_decision(acl.facts.expect("ACL facts were given")));
+}
+
+#[then("authorization is {decision}")]
+fn decision_matches(acl: &AclScenario, decision: String) {
+    let expected = match decision.as_str() {
+        "allowed by superuser status" => AclDecision::AllowSuperuser,
+        "allowed by a matching ACL" => AclDecision::AllowAcl,
+        "allowed because no ACL applies" => AclDecision::AllowNoAcl,
+        "denied by an explicit ACL" => AclDecision::DenyExplicit,
+        "denied because no ACL grants access" => AclDecision::DenyDefault,
+        _ => panic!("unknown ACL decision: {decision}"),
+    };
+    check!(acl.decision == Some(expected));
+}
+
+#[given("an ACL {identity} entry {stored} is checked against {requested}")]
+fn identity_facts(acl: &mut AclScenario, identity: String, stored: String, requested: String) {
+    match identity.as_str() {
+        "principal" | "host" => {}
+        _ => panic!("unknown ACL identity field"),
+    }
+    acl.identity = Some((stored == "*", stored == requested));
+}
+
+#[when("the ACL identity is matched")]
+fn match_identity(acl: &mut AclScenario) {
+    let (wildcard, exact) = acl.identity.expect("identity facts were given");
+    acl.matches = Some(acl_identity_match(wildcard, exact));
+}
+
+#[given(
+    "a {pattern} ACL on {stored_type} named {stored_name} is checked against {requested_type} named {requested_name}"
+)]
+fn resource_facts(
+    acl: &mut AclScenario,
+    pattern: String,
+    stored_type: String,
+    stored_name: String,
+    requested_type: String,
+    requested_name: String,
 ) {
-    check!(acl_resource_match(pattern, facts) == expected);
+    let pattern = match pattern.as_str() {
+        "Literal" => AclPatternKind::Literal,
+        "Prefixed" => AclPatternKind::Prefixed,
+        _ => panic!("unknown ACL resource pattern"),
+    };
+    acl.resource = Some((pattern, AclResourceFacts {
+        resource_type: if stored_type == requested_type {
+            AclResourceTypeMatch::Same
+        } else {
+            AclResourceTypeMatch::Different
+        },
+        exact_name: stored_name == requested_name,
+        wildcard_name: stored_name == "*",
+        name_has_prefix: requested_name.starts_with(&stored_name),
+    }));
 }
 
-/// Kafka's operation-implication table (`AclAuthorizer` /
-/// `AclEntry.supportedOperations`) for stored ALLOW and DENY ACLs.
-#[yare::parameterized(
-    same_operation_allow = { AclOperationKind::Read, AclOperationKind::Read, true, true },
-    same_operation_deny = { AclOperationKind::Read, AclOperationKind::Read, false, true },
-    all_cluster_action = { AclOperationKind::All, AclOperationKind::ClusterAction, true, true },
-    all_describe_deny = { AclOperationKind::All, AclOperationKind::Describe, false, true },
-    read_implies_describe = { AclOperationKind::Read, AclOperationKind::Describe, true, true },
-    write_implies_describe = { AclOperationKind::Write, AclOperationKind::Describe, true, true },
-    delete_implies_describe = { AclOperationKind::Delete, AclOperationKind::Describe, true, true },
-    alter_implies_describe = { AclOperationKind::Alter, AclOperationKind::Describe, true, true },
-    alter_configs_implies_describe_configs = {
-        AclOperationKind::AlterConfigs,
-        AclOperationKind::DescribeConfigs,
-        true,
-        true,
-    },
-    deny_does_not_gain_describe = {
-        AclOperationKind::Read,
-        AclOperationKind::Describe,
-        false,
-        false,
-    },
-    deny_does_not_gain_describe_configs = {
-        AclOperationKind::AlterConfigs,
-        AclOperationKind::DescribeConfigs,
-        false,
-        false,
-    },
-    describe_does_not_imply_read = {
-        AclOperationKind::Describe,
-        AclOperationKind::Read,
-        true,
-        false,
-    },
-    describe_configs_does_not_imply_alter_configs = {
-        AclOperationKind::DescribeConfigs,
-        AclOperationKind::AlterConfigs,
-        true,
-        false,
-    },
-    create_does_not_imply_describe = {
-        AclOperationKind::Create,
-        AclOperationKind::Describe,
-        true,
-        false,
-    },
-    write_does_not_imply_read = { AclOperationKind::Write, AclOperationKind::Read, true, false },
-    alter_does_not_imply_alter_configs = {
-        AclOperationKind::Alter,
-        AclOperationKind::AlterConfigs,
-        true,
-        false,
-    },
-)]
-fn operation_implications_match_kafka_scenarios(
-    stored: AclOperationKind,
-    requested: AclOperationKind,
-    is_allow: bool,
-    expected: bool,
-) {
-    check!(acl_operation_match(stored, requested, is_allow) == expected);
+#[when("the ACL resource is matched")]
+fn match_resource(acl: &mut AclScenario) {
+    let (pattern, facts) = acl.resource.expect("resource facts were given");
+    acl.matches = Some(acl_resource_match(pattern, facts));
 }
 
-#[yare::parameterized(
-    pre_handshake_sasl_handshake = { RequestAuthState::PreHandshake, 17, true },
-    pre_handshake_sasl_authenticate = { RequestAuthState::PreHandshake, 18, true },
-    pre_handshake_token_auth = { RequestAuthState::PreHandshake, 36, false },
-    pre_handshake_negative = { RequestAuthState::PreHandshake, -1, false },
-    pre_handshake_unknown = { RequestAuthState::PreHandshake, 0, false },
-    exchanging_token_auth = { RequestAuthState::Exchanging, 36, true },
-    exchanging_sasl_handshake = { RequestAuthState::Exchanging, 17, false },
-    exchanging_sasl_authenticate = { RequestAuthState::Exchanging, 18, false },
-    exchanging_other = { RequestAuthState::Exchanging, i16::MAX, false },
-    failed_token_auth = { RequestAuthState::Failed, 36, false },
-    failed_sasl_handshake = { RequestAuthState::Failed, 17, false },
-    failed_sasl_authenticate = { RequestAuthState::Failed, 18, false },
-    authenticated_zero = { RequestAuthState::Authenticated, 0, true },
-    authenticated_maximum = { RequestAuthState::Authenticated, i16::MAX, true },
-)]
-fn request_auth_admission_truth_table(state: RequestAuthState, api_key: i16, allowed: bool) {
-    check!(request_auth_admission(state, api_key) == allowed);
+fn operation_kind(name: &str) -> AclOperationKind {
+    match name {
+        "All" => AclOperationKind::All,
+        "Read" => AclOperationKind::Read,
+        "Write" => AclOperationKind::Write,
+        "Create" => AclOperationKind::Create,
+        "Delete" => AclOperationKind::Delete,
+        "Alter" => AclOperationKind::Alter,
+        "Describe" => AclOperationKind::Describe,
+        "ClusterAction" => AclOperationKind::ClusterAction,
+        "DescribeConfigs" => AclOperationKind::DescribeConfigs,
+        "AlterConfigs" => AclOperationKind::AlterConfigs,
+        _ => panic!("unknown ACL operation: {name}"),
+    }
 }
+
+#[given(
+    "an ACL {permission} entry for {stored} is checked against requested operation {requested}"
+)]
+fn operation_facts(acl: &mut AclScenario, permission: String, stored: String, requested: String) {
+    let allow = match permission.as_str() {
+        "Allow" => true,
+        "Deny" => false,
+        _ => panic!("unknown ACL permission"),
+    };
+    acl.operation = Some((operation_kind(&stored), operation_kind(&requested), allow));
+}
+
+#[when("the ACL operation is matched")]
+fn match_operation(acl: &mut AclScenario) {
+    let (stored, requested, allow) = acl.operation.expect("operation facts were given");
+    acl.matches = Some(acl_operation_match(stored, requested, allow));
+}
+
+#[given("authentication state {state}")]
+fn authentication_facts(acl: &mut AclScenario, state: String) {
+    let state = match state.as_str() {
+        "PreHandshake" => RequestAuthState::PreHandshake,
+        "Exchanging" => RequestAuthState::Exchanging,
+        "Failed" => RequestAuthState::Failed,
+        "Authenticated" => RequestAuthState::Authenticated,
+        _ => panic!("unknown authentication state: {state}"),
+    };
+    acl.admission = Some(state);
+}
+
+#[when("a {request} API request is admitted")]
+fn evaluate_admission(acl: &mut AclScenario, request: String) {
+    let state = acl.admission.expect("authentication facts were given");
+    let api_key = match request.as_str() {
+        "SaslHandshake" => 17,
+        "ApiVersions" => 18,
+        "SaslAuthenticate" => 36,
+        "Produce" => 0,
+        "Invalid" => -1,
+        "Unsupported" => i16::MAX,
+        _ => panic!("unknown authentication request: {request}"),
+    };
+    acl.matches = Some(request_auth_admission(state, api_key));
+}
+
+#[then("the ACL applies: {matches}")]
+fn match_result(acl: &AclScenario, matches: bool) {
+    check!(acl.matches == Some(matches));
+}
+#[then("the authentication state admits the request: {matches}")]
+fn admission_result(acl: &AclScenario, matches: bool) {
+    check!(acl.matches == Some(matches));
+}
+
+scenarios!("tests/features/acl", fixtures = [acl: AclScenario]);

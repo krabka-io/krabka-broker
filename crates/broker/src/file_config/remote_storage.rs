@@ -385,14 +385,15 @@ pub(super) fn apply_remote_storage(
 mod tests {
     use {
         crate::{
-            config::{
-                BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, KafkaRlmmConfig, RemoteStorageBackend,
-                RlmmKind,
-            },
+            config::{BrokerConfig, DEFAULT_REMOTE_COPY_TIMEOUT, RemoteStorageBackend, RlmmKind},
             file_config::{FileConfig, test_support::configured_unwrap_parse},
         },
         assert2::{assert, check},
-        krabka_units::{gibibytes, mebibytes, millis, secs},
+        krabka_units::{
+            convert::{ByteSizeExt, TimeExt},
+            mebibytes, secs,
+        },
+        rstest_bdd::datatable::Rows,
         std::path::PathBuf,
     };
 
@@ -417,101 +418,152 @@ storage_dir = "/var/lib/krabka/tier"
         // No remote_storage section: RLMM stays at the production default (TopicBacked).
         assert!(matches!(cfg.remote_log_metadata, RlmmKind::TopicBacked(_)));
     }
-    fn parsed_kafka_metadata(toml: &str) -> KafkaRlmmConfig {
-        let cfg = configured_unwrap_parse(toml).unwrap();
-        match cfg.remote_log_metadata {
-            RlmmKind::TopicBacked(config) => config,
-            RlmmKind::InMemory => panic!("expected TopicBacked"),
-        }
+    #[derive(Default)]
+    struct RemoteFilePolicy {
+        source: String,
+        applied: Option<Result<BrokerConfig, String>>,
     }
 
-    #[test]
-    fn kafka_metadata_section_parses_with_defaults() {
-        let toml = r#"
-[remote_storage]
-storage_dir = "/tmp/tier"
-
-[remote_storage.kafka_metadata]
-bootstrap = "127.0.0.1:9092"
-"#;
-        let km = parsed_kafka_metadata(toml);
-        check!(km.bootstrap.as_str() == "127.0.0.1:9092");
-        check!(km.num_partitions == 50);
-        check!(km.replication == 3);
-        check!(km.min_isr == 2);
-        check!(km.topic_create_timeout == secs(30));
-        check!(km.fetch_max_wait == millis(500));
-        check!(km.fetch_max_bytes == mebibytes(1));
-        check!(km.fetch_retry_backoff == millis(200));
-        check!(km.event_queue_capacity.capacity() == 1024);
-        check!(km.snapshot_interval == secs(60));
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct PolicyValue {
+        field: String,
+        value: String,
     }
-    #[test]
-    fn kafka_metadata_section_honors_overrides() {
-        let toml = r#"
-[remote_storage]
-storage_dir = "/tmp/tier"
 
-[remote_storage.kafka_metadata]
-bootstrap = "broker-0:9094"
-num_partitions = 8
-replication = 1
-min_isr = 1
-topic_create_timeout = "45s"
-fetch_max_wait = "750ms"
-fetch_max_bytes = "2MiB"
-fetch_retry_backoff = "300ms"
-event_queue_capacity = 2048
-snapshot_interval = "90s"
-"#;
-        let km = parsed_kafka_metadata(toml);
-        check!(km.bootstrap.as_str() == "broker-0:9094");
-        check!(km.num_partitions == 8);
-        check!(km.replication == 1);
-        check!(km.min_isr == 1);
-        check!(km.topic_create_timeout == secs(45));
-        check!(km.fetch_max_wait == millis(750));
-        check!(km.fetch_max_bytes == mebibytes(2));
-        check!(km.fetch_retry_backoff == millis(300));
-        check!(km.event_queue_capacity.capacity() == 2048);
-        check!(km.snapshot_interval == secs(90));
+    #[rstest::fixture]
+    fn remote_file_policy() -> RemoteFilePolicy {
+        // Parsing and application observations belong to this configuration alone.
+        RemoteFilePolicy::default()
     }
-    #[yare::parameterized(
-        min_isr = { "min_isr", "0" },
-        topic_create_timeout_zero = { "topic_create_timeout", "\"0ms\"" },
-        topic_create_timeout_fractional = { "topic_create_timeout", "\"0.5ms\"" },
-        topic_create_timeout_overflow = { "topic_create_timeout", "\"2147483648ms\"" },
-        fetch_max_wait_zero = { "fetch_max_wait", "\"0ms\"" },
-        fetch_max_bytes_zero = { "fetch_max_bytes", "\"0B\"" },
-        fetch_max_bytes_fractional = { "fetch_max_bytes", "\"0.5B\"" },
-        fetch_max_bytes_overflow = { "fetch_max_bytes", "\"2147483648B\"" },
-        fetch_retry_backoff_zero = { "fetch_retry_backoff", "\"0ms\"" },
-        event_queue_capacity_zero = { "event_queue_capacity", "0" },
-        snapshot_interval_zero = { "snapshot_interval", "\"0s\"" },
-    )]
-    fn kafka_metadata_section_rejects_invalid_policy(field: &str, value: &str) {
-        let source = format!(
-            "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
-             [remote_storage.kafka_metadata]\n{field} = {value}\n"
+
+    #[rstest_bdd_macros::given("the remote storage TOML is")]
+    fn remote_policy_source(remote_file_policy: &mut RemoteFilePolicy, docstring: String) {
+        remote_file_policy.source = docstring;
+    }
+
+    #[rstest_bdd_macros::when("the remote storage file is parsed and applied to broker defaults")]
+    fn apply_remote_policy(remote_file_policy: &mut RemoteFilePolicy) {
+        remote_file_policy.applied = Some(
+            configured_unwrap_parse(&remote_file_policy.source).map_err(|error| error.to_string()),
         );
-        let file: FileConfig = toml::from_str(&source).expect("parse policy syntax");
-        let mut config = BrokerConfig::default();
-        let error = file
-            .apply_to(&mut config)
-            .expect_err("invalid metadata policy must fail");
-        assert2::assert!(error.to_string().contains(field), "{field}: {error}");
     }
-    #[test]
-    fn reader_bounds_and_index_cache_size_default_to_kafkas_values() {
-        let toml = r#"
-[remote_storage]
-storage_dir = "/tmp/tier"
-"#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
-        check!(cfg.remote_reader_threads == 10);
-        check!(cfg.remote_reader_max_pending_tasks == 100);
-        check!(cfg.remote_index_cache_size == gibibytes(1));
+
+    #[rstest_bdd_macros::then("the complete Kafka metadata transport policy is")]
+    fn metadata_transport_values(
+        remote_file_policy: &RemoteFilePolicy,
+        #[datatable] datatable: Rows<PolicyValue>,
+    ) {
+        let config = remote_file_policy
+            .applied
+            .as_ref()
+            .expect("file applied")
+            .as_ref()
+            .expect("valid configuration");
+        let RlmmKind::TopicBacked(policy) = &config.remote_log_metadata else {
+            panic!("expected topic-backed metadata");
+        };
+        let actual = vec![
+            ("bootstrap", policy.bootstrap.clone()),
+            ("num_partitions", policy.num_partitions.to_string()),
+            ("replication", policy.replication.to_string()),
+            ("min_isr", policy.min_isr.to_string()),
+            (
+                "topic_create_timeout_ms",
+                policy.topic_create_timeout.millis_i64().to_string(),
+            ),
+            (
+                "fetch_max_wait_ms",
+                policy.fetch_max_wait.millis_i64().to_string(),
+            ),
+            (
+                "fetch_max_bytes",
+                policy.fetch_max_bytes.bytes_u64().to_string(),
+            ),
+            (
+                "fetch_retry_backoff_ms",
+                policy.fetch_retry_backoff.millis_i64().to_string(),
+            ),
+            (
+                "event_queue_capacity",
+                policy.event_queue_capacity.capacity().to_string(),
+            ),
+            (
+                "snapshot_interval_ms",
+                policy.snapshot_interval.millis_i64().to_string(),
+            ),
+        ];
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .map(|row| (row.field, row.value))
+            .collect();
+        let observed: Vec<_> = actual
+            .into_iter()
+            .map(|(field, value)| (field.to_owned(), value))
+            .collect();
+        check!(observed == expected);
     }
+
+    #[rstest_bdd_macros::then(
+        "the remote reader has {threads} threads and {pending} pending tasks with {bytes} index cache bytes"
+    )]
+    fn remote_reader_bounds(
+        remote_file_policy: &RemoteFilePolicy,
+        threads: usize,
+        pending: usize,
+        bytes: u64,
+    ) {
+        let config = remote_file_policy
+            .applied
+            .as_ref()
+            .expect("file applied")
+            .as_ref()
+            .expect("valid configuration");
+        check!(config.remote_reader_threads == threads);
+        check!(config.remote_reader_max_pending_tasks == pending);
+        check!(config.remote_index_cache_size.bytes_u64() == bytes);
+    }
+
+    #[rstest_bdd_macros::then(
+        "remote copying uses {copier} threads and expiration uses {expiration} threads"
+    )]
+    fn remote_sweep_bounds(
+        remote_file_policy: &RemoteFilePolicy,
+        copier: usize,
+        expiration: usize,
+    ) {
+        let config = remote_file_policy
+            .applied
+            .as_ref()
+            .expect("file applied")
+            .as_ref()
+            .expect("valid configuration");
+        check!(config.remote_copier_threads == copier);
+        check!(config.remote_expiration_threads == expiration);
+    }
+
+    #[rstest_bdd_macros::then("remote metadata is held in memory")]
+    fn in_memory_remote_metadata(remote_file_policy: &RemoteFilePolicy) {
+        let config = remote_file_policy
+            .applied
+            .as_ref()
+            .expect("file applied")
+            .as_ref()
+            .expect("valid configuration");
+        assert!(matches!(config.remote_log_metadata, RlmmKind::InMemory));
+    }
+
+    #[rstest_bdd_macros::then("remote policy application refuses property {field}")]
+    fn invalid_remote_policy(remote_file_policy: &RemoteFilePolicy, field: String) {
+        let error = remote_file_policy
+            .applied
+            .as_ref()
+            .expect("file applied")
+            .as_ref()
+            .expect_err("invalid policy refused");
+        assert!(error.contains(&field), "{field}: {error}");
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/file_config/remote_storage.feature", fixtures = [remote_file_policy: RemoteFilePolicy]);
 
     #[test]
     fn reader_bounds_and_index_cache_size_are_overridable() {
@@ -526,27 +578,6 @@ index_cache_size = "256MiB"
         check!(cfg.remote_reader_threads == 4);
         check!(cfg.remote_reader_max_pending_tasks == 32);
         check!(cfg.remote_index_cache_size == mebibytes(256));
-    }
-
-    /// The two KIP-405 sweep bounds default to Kafka's thread-pool sizes,
-    /// and an operator who names them gets what they named.
-    #[yare::parameterized(
-        defaults = { "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n", 10, 10 },
-        overridden = {
-            "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
-             copier_threads = 32\nexpiration_threads = 4\n",
-            32,
-            4,
-        },
-    )]
-    fn sweep_bounds_default_to_kafkas_thread_pool_sizes_and_are_overridable(
-        source: &str,
-        copier: usize,
-        expiration: usize,
-    ) {
-        let config = configured_unwrap_parse(source).unwrap();
-        assert2::check!(config.remote_copier_threads == copier);
-        assert2::check!(config.remote_expiration_threads == expiration);
     }
 
     #[yare::parameterized(
@@ -609,23 +640,6 @@ bucket = "b"
         assert2::assert!(
             rendered.contains(expected),
             "{case}: expected backend-conflict error, got: {rendered}"
-        );
-    }
-
-    #[test]
-    fn kafka_metadata_in_memory_true_opts_out_to_in_memory_rlmm() {
-        let toml = r#"
-[remote_storage]
-storage_dir = "/tmp/tier"
-
-[remote_storage.kafka_metadata]
-in_memory = true
-"#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
-        assert!(
-            matches!(cfg.remote_log_metadata, RlmmKind::InMemory),
-            "in_memory = true must opt out to RlmmKind::InMemory, got {:?}",
-            cfg.remote_log_metadata
         );
     }
 

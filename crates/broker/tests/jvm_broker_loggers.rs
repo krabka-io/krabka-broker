@@ -138,77 +138,117 @@ async fn kafka_configs(args: &[&str]) -> Output {
 
 fn combined(output: &Output) -> String { support::combined_output(output) }
 
-/// The whole `broker-loggers` operator loop, driven by the real 4.3.1 tool.
-///
-/// One test and one broker: each `kafka-configs` invocation is a JVM start, so
-/// splitting the cases would multiply the container count without covering
-/// anything the ordering here does not already cover -- the alter has to be
-/// read back by a later describe to mean anything.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_describes_and_alters_broker_loggers() {
-    let StartedBroker {
-        broker: _broker,
-        dir: _dir,
-    } = start_broker().await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    let all = kafka_configs(&["--describe", "--all"]).await;
-    assert!(
-        all.status.success(),
-        "kafka-configs --describe --all failed: {}",
-        combined(&all)
-    );
-    let rendered = combined(&all);
-    check!(
-        rendered.contains(&format!("{LOGGER}=INFO")),
-        "--describe --all should list {LOGGER} at its startup level:\n{rendered}"
-    );
+struct LoggerAdministration {
+    broker: Option<StartedBroker>,
+    all: Option<Output>,
+    described: Option<Output>,
+    altered: Option<Output>,
+    after_alter: Option<Output>,
+    deleted: Option<Output>,
+    after_delete: Option<Output>,
+}
+#[fixture]
+fn logger() -> LoggerAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-    // The non-`--all` path first asks `DescribeCluster` whether this node is
-    // in the broker list. A list that does not name it turns the command into
-    // a one-line "doesn't exist" report that still exits 0, so the text is
-    // what carries the result here, not the status.
-    let described = kafka_configs(&["--describe"]).await;
-    assert!(
-        described.status.success(),
-        "kafka-configs --describe failed: {}",
-        combined(&described)
-    );
-    let rendered = combined(&described);
-    assert!(
-        !rendered.contains("doesn't exist"),
-        "--describe without --all reported the broker-logger missing:\n{rendered}"
-    );
-    check!(
-        rendered.contains(&format!("{LOGGER}=INFO")),
-        "--describe without --all should list {LOGGER}:\n{rendered}"
-    );
-
-    let altered = kafka_configs(&["--alter", "--add-config", &format!("{LOGGER}=DEBUG")]).await;
+    LoggerAdministration {
+        broker: None,
+        all: None,
+        described: None,
+        altered: None,
+        after_alter: None,
+        deleted: None,
+        after_delete: None,
+    }
+}
+#[given("a registered broker starts with its default INFO logger level")]
+async fn registered(logger: &mut LoggerAdministration) {
+    logger.broker = Some(start_broker().await);
+}
+#[when("the operator describes broker loggers with and without the all flag")]
+async fn startup_descriptions(logger: &mut LoggerAdministration) {
+    logger.all = Some(kafka_configs(&["--describe", "--all"]).await);
+    logger.described = Some(kafka_configs(&["--describe"]).await);
+}
+#[then("both successful reports expose the existing broker logger at INFO")]
+fn startup_levels(logger: &LoggerAdministration) {
+    for output in [&logger.all, &logger.described] {
+        let output = output
+            .as_ref()
+            .expect("the operator obtained both descriptions");
+        assert!(
+            output.status.success(),
+            "describe failed: {}",
+            combined(output)
+        );
+        let rendered = combined(output);
+        assert!(
+            !rendered.contains("doesn't exist"),
+            "broker-logger reported missing: {rendered}"
+        );
+        check!(
+            rendered.contains(&format!("{LOGGER}=INFO")),
+            "startup level missing: {rendered}"
+        );
+    }
+}
+#[when("the operator sets the broker logger to DEBUG and reads it back")]
+async fn raise_level(logger: &mut LoggerAdministration) {
+    logger.altered =
+        Some(kafka_configs(&["--alter", "--add-config", &format!("{LOGGER}=DEBUG")]).await);
+    logger.after_alter = Some(kafka_configs(&["--describe"]).await);
+}
+#[then("the alteration succeeds and the next report shows DEBUG")]
+fn raised(logger: &LoggerAdministration) {
+    let altered = logger.altered.as_ref().expect("alter command completed");
     assert!(
         altered.status.success(),
-        "kafka-configs --alter --add-config failed: {}",
-        combined(&altered)
+        "alter failed: {}",
+        combined(altered)
     );
-
-    let after_alter = kafka_configs(&["--describe"]).await;
-    let rendered = combined(&after_alter);
+    let rendered = combined(logger.after_alter.as_ref().expect("altered level was read"));
     check!(
         rendered.contains(&format!("{LOGGER}=DEBUG")),
-        "the altered level should read back:\n{rendered}"
+        "altered level missing: {rendered}"
     );
-
-    let deleted = kafka_configs(&["--alter", "--delete-config", LOGGER]).await;
+}
+#[when("the operator deletes the logger override and reads all levels again")]
+async fn remove_override(logger: &mut LoggerAdministration) {
+    logger.deleted = Some(kafka_configs(&["--alter", "--delete-config", LOGGER]).await);
+    logger.after_delete = Some(kafka_configs(&["--describe", "--all"]).await);
+}
+#[then("the deletion succeeds and the startup INFO level is restored")]
+fn restored(logger: &LoggerAdministration) {
+    let deleted = logger.deleted.as_ref().expect("delete command completed");
     assert!(
         deleted.status.success(),
-        "kafka-configs --alter --delete-config failed: {}",
-        combined(&deleted)
+        "delete failed: {}",
+        combined(deleted)
     );
-
-    let after_delete = kafka_configs(&["--describe", "--all"]).await;
-    let rendered = combined(&after_delete);
+    let rendered = combined(
+        logger
+            .after_delete
+            .as_ref()
+            .expect("restored level was read"),
+    );
     check!(
         rendered.contains(&format!("{LOGGER}=INFO")),
-        "deleting the override should restore the startup level:\n{rendered}"
+        "startup level not restored: {rendered}"
     );
+}
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_broker_loggers.feature",
+    name = "Operators inspect override and restore a broker logger level"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_configs_describes_and_alters_broker_loggers(logger: LoggerAdministration) {
+    let StartedBroker { broker, dir } = logger.broker.expect("broker started");
+    broker.shutdown().await;
+    drop(dir);
 }

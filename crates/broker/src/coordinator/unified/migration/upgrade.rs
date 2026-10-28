@@ -296,26 +296,9 @@ mod tests {
 
     /// A conversion row: its label, each member's subscription and
     /// assignment, and the refusal it expects.
-    struct ConversionRow {
-        label: &'static str,
-        members: Vec<MemberBlobs>,
-        want: Result<(), &'static str>,
-    }
-
     /// A member's `ConsumerProtocolSubscription` blob and, once it has
     /// synced, its `ConsumerProtocolAssignment` blob.
-    struct MemberBlobs {
-        subscription: Bytes,
-        assignment: Option<Bytes>,
-    }
-
     /// A subscription row: its label, the blob, and the topics it decodes to.
-    struct SubscriptionRow<'a> {
-        label: &'static str,
-        blob: &'a [u8],
-        topics: Option<Vec<String>>,
-    }
-
     /// A `ConsumerProtocolAssignment` blob of `version` for partition 0 of
     /// `t1`, with `user_data`.
     fn assignment_blob(version: i16, user_data: Option<&'static [u8]>) -> Bytes {
@@ -338,169 +321,9 @@ mod tests {
     /// `convertToConsumerGroup`: (label, the members' subscription and
     /// assignment) to whether the group converts, or the message of the
     /// `GROUP_ID_NOT_FOUND` that refuses it.
-    #[test]
-    fn conversion_refuses_what_kafka_cannot_carry_over() {
-        let malformed = "Cannot upgrade classic group g to consumer group because the embedded \
-                         consumer protocol is malformed.";
-        let custom = "Cannot upgrade classic group g to consumer group because an unsupported \
-                      custom assignor is in use. Please refer to the documentation or switch to \
-                      a default assignor before re-attempting the upgrade.";
-        let valid = subscription_blob(&["t1"]);
-        let rows: Vec<ConversionRow> = vec![
-            ConversionRow {
-                label: "no member synced yet",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: None,
-                }],
-                want: Ok(()),
-            },
-            ConversionRow {
-                label: "an empty assignment",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(Bytes::new()),
-                }],
-                want: Ok(()),
-            },
-            ConversionRow {
-                label: "an assignment without user data",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(assignment_blob(0, None)),
-                }],
-                want: Ok(()),
-            },
-            ConversionRow {
-                label: "empty user data",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(assignment_blob(1, Some(b""))),
-                }],
-                want: Ok(()),
-            },
-            ConversionRow {
-                label: "an assignment of a version above the schema's",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(assignment_blob(9, None)),
-                }],
-                want: Ok(()),
-            },
-            ConversionRow {
-                label: "an undecodable subscription",
-                members: vec![
-                    MemberBlobs {
-                        subscription: valid.clone(),
-                        assignment: None,
-                    },
-                    MemberBlobs {
-                        subscription: Bytes::from_static(&[0xff, 0xff, 0x01]),
-                        assignment: None,
-                    },
-                ],
-                want: Err(malformed),
-            },
-            ConversionRow {
-                label: "an undecodable assignment",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(Bytes::from_static(b"garbage")),
-                }],
-                want: Err(malformed),
-            },
-            ConversionRow {
-                label: "user data from a custom assignor",
-                members: vec![MemberBlobs {
-                    subscription: valid.clone(),
-                    assignment: Some(assignment_blob(0, Some(b"sticky"))),
-                }],
-                want: Err(custom),
-            },
-            ConversionRow {
-                label: "user data before a malformed subscription of a later member",
-                members: vec![
-                    MemberBlobs {
-                        subscription: valid,
-                        assignment: Some(assignment_blob(0, Some(b"sticky"))),
-                    },
-                    MemberBlobs {
-                        subscription: Bytes::from_static(&[0]),
-                        assignment: None,
-                    },
-                ],
-                want: Err(custom),
-            },
-        ];
-        for ConversionRow {
-            label,
-            members,
-            want,
-        } in rows
-        {
-            let mut g = ClassicGroup::new("g");
-            g.protocol_type = Some("consumer".into());
-            for (index, blobs) in members.into_iter().enumerate() {
-                let mut member = consumer_member(&format!("m{index}"), blobs.subscription);
-                member.assignment = blobs.assignment;
-                g.add_member(member);
-            }
-
-            let got = convert_classic_to_consumer(&g, &ReconcileInput::default()).map(|_| ());
-
-            check!(got == want.map_err(String::from), "{label}");
-        }
-    }
-
     /// Kafka's `checkSubscriptionVersion`: a blob too short for a version and
     /// a negative version do not decode, and a version above the highest the
     /// schema knows is read as the highest.
-    #[test]
-    fn subscription_versions_decode_as_kafka_reads_them() {
-        let mut above = BytesMut::new();
-        above.put_i16(99);
-        ConsumerProtocolSubscription {
-            topics: vec!["t1".into()],
-            ..Default::default()
-        }
-        .encode(&mut above, 3)
-        .unwrap();
-        let rows: [SubscriptionRow<'_>; 4] = [
-            SubscriptionRow {
-                label: "empty",
-                blob: &[],
-                topics: None,
-            },
-            SubscriptionRow {
-                label: "too short",
-                blob: &[0],
-                topics: None,
-            },
-            SubscriptionRow {
-                label: "negative version",
-                blob: &[0xff, 0xff, 0, 0, 0, 0],
-                topics: None,
-            },
-            SubscriptionRow {
-                label: "above the highest",
-                blob: &above,
-                topics: Some(vec!["t1".into()]),
-            },
-        ];
-        for SubscriptionRow {
-            label,
-            blob,
-            topics,
-        } in rows
-        {
-            check!(
-                decode_consumer_subscription(blob).map(|subscription| subscription.topics)
-                    == topics,
-                "{label}"
-            );
-        }
-    }
-
     #[test]
     fn convert_preserves_members_subscriptions_and_facade() {
         let mut g = ClassicGroup::new("g");
@@ -564,31 +387,139 @@ mod tests {
 
     /// Kafka's `validateOnlineUpgrade`, row by row: (label, protocol type,
     /// member count, upgrade enabled, consumer max size, expected result).
-    #[test]
-    fn validate_online_upgrade_follows_kafka() {
-        let disabled = "Cannot upgrade classic group g to consumer group because online upgrade \
-                        is disabled.";
-        let protocol = "Cannot upgrade classic group g to consumer group because the group does \
-                        not use the consumer embedded protocol.";
-        let size = "Cannot upgrade classic group g to consumer group because the group size \
-                    exceeds the consumer group maximum size.";
-        let rows = [
-            ("upgradable", Some("consumer"), 2, true, 2, Ok(())),
-            ("policy off", Some("consumer"), 2, false, 2, Err(disabled)),
-            ("connect group", Some("connect"), 2, true, 2, Err(protocol)),
-            ("too many members", Some("consumer"), 3, true, 2, Err(size)),
-        ];
-        for (label, protocol_type, members, enabled, max_size, want) in rows {
-            let mut g = ClassicGroup::new("g");
-            g.protocol_type = protocol_type.map(String::from);
-            for index in 0..members {
-                g.add_member(consumer_member(
-                    &format!("m{index}"),
-                    subscription_blob(&["t"]),
-                ));
-            }
-            let got = validate_online_upgrade(&g, enabled, max_size);
-            check!(got == want.map_err(String::from), "{label}");
-        }
+    use {
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct OnlineUpgrade {
+        classic: Option<ClassicGroup>,
+        result: Option<Result<(), String>>,
+        subscription: Vec<u8>,
+        topics: Slot<Option<Vec<String>>>,
     }
+    #[derive(DataTableRow)]
+    struct UpgradeMember {
+        subscription: String,
+        assignment: String,
+        userdata: String,
+    }
+    #[rstest::fixture]
+    fn upgrade() -> OnlineUpgrade {
+        // Start this scenario with fresh inputs and observations.
+        OnlineUpgrade::default()
+    }
+    #[given("classic consumer group g has these persisted member subscriptions and assignments")]
+    fn upgrade_members(upgrade: &mut OnlineUpgrade, #[datatable] rows: Rows<UpgradeMember>) {
+        let mut group = ClassicGroup::new("g");
+        group.protocol_type = Some("consumer".into());
+        for (index, row) in rows.into_iter().enumerate() {
+            let subscription = match row.subscription.as_str() {
+                "t1" => subscription_blob(&["t1"]),
+                "malformed-negative" => Bytes::from_static(&[0xff, 0xff, 0x01]),
+                "malformed-zero" => Bytes::from_static(&[0]),
+                _ => panic!("unknown subscription fixture"),
+            };
+            let assignment = match row.assignment.as_str() {
+                "absent" => None,
+                "empty" => Some(Bytes::new()),
+                "malformed" => Some(Bytes::from_static(b"garbage")),
+                version => Some(assignment_blob(
+                    version.parse().expect("assignment schema version"),
+                    match row.userdata.as_str() {
+                        "null" => None,
+                        "empty" => Some(b""),
+                        "sticky" => Some(b"sticky"),
+                        _ => panic!("unknown assignment user data"),
+                    },
+                )),
+            };
+            let mut member = consumer_member(&format!("m{index}"), subscription);
+            member.assignment = assignment;
+            group.add_member(member);
+        }
+        upgrade.classic = Some(group);
+    }
+    #[when("the coordinator converts the classic group to consumer membership")]
+    fn convert_upgrade(upgrade: &mut OnlineUpgrade) {
+        upgrade.result = Some(
+            convert_classic_to_consumer(
+                upgrade.classic.as_ref().expect("classic group prepared"),
+                &ReconcileInput::default(),
+            )
+            .map(|_| ()),
+        );
+    }
+    #[then("online conversion is {outcome} with the exact Kafka reason")]
+    fn upgrade_result(upgrade: &OnlineUpgrade, outcome: String) {
+        let expected=match outcome.as_str() {
+ "allowed"=>Ok(()),
+ "malformed"=>Err("Cannot upgrade classic group g to consumer group because the embedded consumer protocol is malformed.".to_owned()),
+ "custom-assignor"=>Err("Cannot upgrade classic group g to consumer group because an unsupported custom assignor is in use. Please refer to the documentation or switch to a default assignor before re-attempting the upgrade.".to_owned()),
+ "disabled"=>Err("Cannot upgrade classic group g to consumer group because online upgrade is disabled.".to_owned()),
+ "wrong-protocol"=>Err("Cannot upgrade classic group g to consumer group because the group does not use the consumer embedded protocol.".to_owned()),
+ "too-large"=>Err("Cannot upgrade classic group g to consumer group because the group size exceeds the consumer group maximum size.".to_owned()),
+ _=>panic!("unknown upgrade result"),
+ };
+        check!(upgrade.result.as_ref() == Some(&expected));
+    }
+    #[given("a consumer protocol subscription has encoding {encoding}")]
+    fn encoded_upgrade_subscription(upgrade: &mut OnlineUpgrade, encoding: String) {
+        upgrade.subscription = match encoding.as_str() {
+            "empty" => vec![],
+            "short" => vec![0],
+            "negative-version" => vec![0xff, 0xff, 0, 0, 0, 0],
+            "above-schema" => {
+                let mut bytes = BytesMut::new();
+                bytes.put_i16(99);
+                ConsumerProtocolSubscription {
+                    topics: vec!["t1".into()],
+                    ..Default::default()
+                }
+                .encode(&mut bytes, 3)
+                .expect("encode subscription at highest schema");
+                bytes.to_vec()
+            }
+            _ => panic!("unknown consumer subscription encoding"),
+        };
+    }
+    #[when("the coordinator decodes the embedded consumer subscription")]
+    fn decode_upgrade_subscription(upgrade: &mut OnlineUpgrade) {
+        upgrade.topics.set(
+            decode_consumer_subscription(&upgrade.subscription)
+                .map(|subscription| subscription.topics),
+        );
+    }
+    #[then("the embedded subscription resolves to {topics}")]
+    fn upgrade_subscription_topics(upgrade: &OnlineUpgrade, topics: String) {
+        let expected = if topics == "undecodable" {
+            None
+        } else {
+            Some(vec![topics])
+        };
+        check!(upgrade.topics.get() == Some(expected));
+    }
+    #[given("classic group g uses protocol {protocol} with {members} consumer members")]
+    fn eligible_upgrade_group(upgrade: &mut OnlineUpgrade, protocol: String, members: usize) {
+        let mut group = ClassicGroup::new("g");
+        group.protocol_type = Some(protocol);
+        for index in 0..members {
+            group.add_member(consumer_member(
+                &format!("m{index}"),
+                subscription_blob(&["t"]),
+            ));
+        }
+        upgrade.classic = Some(group);
+    }
+    #[when(
+        "the coordinator validates online upgrade enabled {enabled} with maximum size {maximum}"
+    )]
+    fn validate_upgrade_policy(upgrade: &mut OnlineUpgrade, enabled: bool, maximum: usize) {
+        upgrade.result = Some(validate_online_upgrade(
+            upgrade.classic.as_ref().expect("classic group prepared"),
+            enabled,
+            maximum,
+        ));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/migration/upgrade.feature",fixtures=[upgrade:OnlineUpgrade]);
 }

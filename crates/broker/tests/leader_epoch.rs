@@ -22,3 +22,6 @@ mod epoch_diverge_leader;
 mod epoch_fencing;
 #[path = "leader_epoch/epoch_harness.rs"]
 mod epoch_harness;
+
+#[path = "leader_epoch/epoch_scenarios.rs"]
+mod epoch_scenarios;

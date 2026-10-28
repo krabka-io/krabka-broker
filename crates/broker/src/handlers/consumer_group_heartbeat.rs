@@ -292,12 +292,28 @@ mod tests {
         assert!(group_version_disabled(&disabled));
     }
 
-    /// Kafka's `throwIfConsumerGroupHeartbeatRequestIsInvalid`, row by row:
-    /// (label, version, request, whole expected refusal or `None`).
-    #[test]
-    fn validate_request_follows_kafka() {
-        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
-
+    #[derive(Default)]
+    struct ConsumerHeartbeatScenario {
+        request: Option<ConsumerGroupHeartbeatRequest>,
+        version: i16,
+        validation: Vec<Option<ConsumerGroupHeartbeatResponse>>,
+        live: Option<LiveBrokerFixture>,
+        response: Option<ConsumerGroupHeartbeatResponse>,
+    }
+    #[rstest::fixture]
+    fn consumer_heartbeat() -> ConsumerHeartbeatScenario {
+        let request = None;
+        ConsumerHeartbeatScenario {
+            request,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("a consumer {phase} heartbeat uses API version {version}")]
+    fn consumer_heartbeat_phase(
+        consumer_heartbeat: &mut ConsumerHeartbeatScenario,
+        phase: String,
+        version: i16,
+    ) {
         let join = ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "m".into(),
@@ -307,160 +323,194 @@ mod tests {
             topic_partitions: Some(vec![]),
             ..Default::default()
         };
-        let steady = ConsumerGroupHeartbeatRequest {
-            member_epoch: 3,
-            rebalance_timeout_ms: -1,
-            subscribed_topic_names: None,
-            topic_partitions: None,
-            ..join.clone()
+        consumer_heartbeat.request = Some(match phase.as_str() {
+            "joining" => join,
+            "steady" => ConsumerGroupHeartbeatRequest {
+                member_epoch: 3,
+                rebalance_timeout_ms: -1,
+                subscribed_topic_names: None,
+                topic_partitions: None,
+                ..join
+            },
+            "leaving" => ConsumerGroupHeartbeatRequest {
+                member_epoch: -1,
+                rebalance_timeout_ms: -1,
+                subscribed_topic_names: None,
+                topic_partitions: None,
+                ..join
+            },
+            _ => panic!("unknown consumer heartbeat phase: {phase}"),
+        });
+        consumer_heartbeat.version = version;
+    }
+    #[rstest_bdd_macros::given("the consumer heartbeat field {field} is {value}")]
+    fn consumer_heartbeat_field(
+        consumer_heartbeat: &mut ConsumerHeartbeatScenario,
+        field: String,
+        value: String,
+    ) {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+        let request = consumer_heartbeat.request.as_mut().unwrap();
+        let text = match value.as_str() {
+            "empty" => String::new(),
+            "blank" => " ".into(),
+            _ => value.clone(),
         };
-        let invalid = |message: &str| {
-            Some(ConsumerGroupHeartbeatResponse {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some(message.into()),
-                ..Default::default()
-            })
-        };
-        let rows = [
-            ("valid join", 1, join.clone(), None),
-            ("valid steady", 1, steady.clone(), None),
-            (
-                "v0 join mints the member id",
-                0,
-                ConsumerGroupHeartbeatRequest {
-                    member_id: String::new(),
-                    ..join.clone()
-                },
-                None,
-            ),
-            (
-                "v1 empty member id",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    member_id: " ".into(),
-                    ..join.clone()
-                },
-                invalid("MemberId can't be empty."),
-            ),
-            (
-                "v0 leave with empty member id",
-                0,
-                ConsumerGroupHeartbeatRequest {
-                    member_id: String::new(),
-                    member_epoch: -1,
-                    ..steady.clone()
-                },
-                invalid("MemberId can't be empty."),
-            ),
-            (
-                "empty group id",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    group_id: String::new(),
-                    ..join.clone()
-                },
-                invalid("GroupId can't be empty."),
-            ),
-            (
-                "empty instance id",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    instance_id: Some(String::new()),
-                    ..join.clone()
-                },
-                invalid("InstanceId can't be empty."),
-            ),
-            (
-                "empty rack id",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    rack_id: Some(String::new()),
-                    ..join.clone()
-                },
-                invalid("RackId can't be empty."),
-            ),
-            (
-                "join without rebalance timeout",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    rebalance_timeout_ms: -1,
-                    ..join.clone()
-                },
-                invalid("RebalanceTimeoutMs must be provided in first request."),
-            ),
-            (
-                "join with null owned partitions",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    topic_partitions: None,
-                    ..join.clone()
-                },
-                invalid("TopicPartitions must be empty when (re-)joining."),
-            ),
-            (
-                "join with owned partitions",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    topic_partitions: Some(vec![TopicPartitions::default()]),
-                    ..join.clone()
-                },
-                invalid("TopicPartitions must be empty when (re-)joining."),
-            ),
-            (
-                "join without a subscription",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    subscribed_topic_names: None,
-                    ..join.clone()
-                },
-                invalid(
-                    "Either SubscribedTopicNames or SubscribedTopicRegex must be non-null when \
-                     (re-)joining.",
-                ),
-            ),
-            (
-                "static leave without instance id",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    member_epoch: -2,
-                    ..steady.clone()
-                },
-                invalid("InstanceId can't be null."),
-            ),
-            (
-                "epoch below -2",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    member_epoch: -3,
-                    ..steady
-                },
-                invalid("MemberEpoch is invalid."),
-            ),
-            (
-                "unknown assignor",
-                1,
-                ConsumerGroupHeartbeatRequest {
-                    server_assignor: Some("sticky".into()),
-                    ..join
-                },
-                Some(ConsumerGroupHeartbeatResponse {
-                    error_code: codes::UNSUPPORTED_ASSIGNOR,
-                    error_message: Some(
-                        "ServerAssignor sticky is not supported. Supported assignors: uniform, \
-                         range."
-                            .into(),
-                    ),
-                    ..Default::default()
-                }),
-            ),
-        ];
-        let config = NextGenConfig::default();
-        for (label, version, request, want) in rows {
-            let got = validate_request(&request, version, &config)
-                .err()
-                .map(|e| *e);
-            assert!(got == want, "{label}");
+        match field.as_str() {
+            "member ID" => request.member_id = text,
+            "group ID" => request.group_id = text,
+            "instance ID" => request.instance_id = Some(text),
+            "rack ID" => request.rack_id = Some(text),
+            "rebalance timeout" => request.rebalance_timeout_ms = value.parse().unwrap(),
+            "owned partitions" => {
+                request.topic_partitions = match value.as_str() {
+                    "null" => None,
+                    "nonempty" => Some(vec![TopicPartitions::default()]),
+                    _ => panic!("unknown owned partitions"),
+                }
+            }
+            "subscription" => {
+                assert!(value == "null");
+                request.subscribed_topic_names = None;
+            }
+            "member epoch" => request.member_epoch = value.parse().unwrap(),
+            "server assignor" => request.server_assignor = Some(text),
+            _ => panic!("unknown consumer heartbeat field: {field}"),
         }
+    }
+    #[rstest_bdd_macros::when(
+        "the consumer heartbeat is validated with default coordinator settings"
+    )]
+    fn validate_consumer_heartbeat(consumer_heartbeat: &mut ConsumerHeartbeatScenario) {
+        consumer_heartbeat.validation.push(
+            validate_request(
+                consumer_heartbeat.request.as_ref().unwrap(),
+                consumer_heartbeat.version,
+                &NextGenConfig::default(),
+            )
+            .err()
+            .map(|error| *error),
+        );
+    }
+    #[rstest_bdd_macros::then("consumer heartbeat validation accepts the request")]
+    fn check_valid_consumer_heartbeat(consumer_heartbeat: &ConsumerHeartbeatScenario) {
+        assert!(consumer_heartbeat.validation == vec![None]);
+    }
+    #[rstest_bdd_macros::then(
+        "consumer heartbeat validation refuses with code {code} message {message}"
+    )]
+    fn check_invalid_consumer_heartbeat(
+        consumer_heartbeat: &ConsumerHeartbeatScenario,
+        code: i16,
+        message: String,
+    ) {
+        assert!(
+            consumer_heartbeat.validation
+                == vec![Some(ConsumerGroupHeartbeatResponse {
+                    error_code: code,
+                    error_message: Some(message),
+                    ..Default::default()
+                })]
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_consumer_heartbeat_validation",fixtures=[consumer_heartbeat:ConsumerHeartbeatScenario]);
+    #[rstest_bdd_macros::given(
+        "the consumer coordinator has a share marker a live share actor and a streams marker"
+    )]
+    async fn consumer_coordinator_group_kinds(consumer_heartbeat: &mut ConsumerHeartbeatScenario) {
+        let fixture =
+            versioned_group_broker(Arc::new(AllowAllAuthorizer), GroupFeatureLevel(1)).await;
+        let coordinator = &fixture.broker.group_coordinator;
+        coordinator.mark_share("share");
+        coordinator.mark_streams("streams");
+        let _share_actor = coordinator.get_or_create_share("share-actor");
+        consumer_heartbeat.live = Some(fixture);
+    }
+    #[rstest_bdd_macros::given("consumer member m1 sends epoch {epoch} for group {group}")]
+    fn consumer_group_creation_request(
+        consumer_heartbeat: &mut ConsumerHeartbeatScenario,
+        epoch: i32,
+        group: String,
+    ) {
+        consumer_heartbeat.request = Some(ConsumerGroupHeartbeatRequest {
+            group_id: group,
+            member_id: "m1".into(),
+            instance_id: (epoch == -2).then(|| "i1".into()),
+            member_epoch: epoch,
+            rebalance_timeout_ms: if epoch == 0 { 30_000 } else { -1 },
+            topic_partitions: (epoch == 0).then(Vec::new),
+            subscribed_topic_names: Some(vec!["topic-a".into()]),
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when("the consumer coordinator handles the member heartbeat")]
+    async fn handle_consumer_group_creation(consumer_heartbeat: &mut ConsumerHeartbeatScenario) {
+        let broker = &consumer_heartbeat.live.as_ref().unwrap().broker;
+        krabka_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
+        consumer_heartbeat.response = Some(
+            handle(
+                broker,
+                consumer_heartbeat.request.as_ref().unwrap().clone(),
+                VERSION,
+                &ctx,
+            )
+            .await
+            .expect("ConsumerGroupHeartbeat handler"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the consumer coordinator returns error {code} message {message} and creates only accepted joins"
+    )]
+    async fn check_consumer_group_creation(
+        consumer_heartbeat: &mut ConsumerHeartbeatScenario,
+        code: i16,
+        message: String,
+    ) {
+        let response = consumer_heartbeat.response.as_ref().unwrap();
+        if code == codes::NONE {
+            assert!(response.error_code == codes::NONE);
+        } else {
+            assert!(
+                response
+                    == &ConsumerGroupHeartbeatResponse {
+                        error_code: code,
+                        error_message: Some(message),
+                        ..Default::default()
+                    }
+            );
+        }
+        let fixture = consumer_heartbeat.live.as_ref().unwrap();
+        let coordinator = &fixture.broker.group_coordinator;
+        assert!(coordinator.find("joined").is_some() == (code == codes::NONE));
+        for group in [
+            "absent-heartbeat",
+            "absent-leave",
+            "absent-static-leave",
+            "share",
+        ] {
+            assert!(coordinator.find(group).is_none(), "{group}");
+        }
+        consumer_heartbeat
+            .live
+            .take()
+            .unwrap()
+            .handle
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_consumer_group_creation/creation.feature",
+        name = "Only joins can create consumer groups and other group kinds are refused"
+    )]
+    #[tokio::test]
+    async fn handle_creates_consumer_group_only_on_join_as_kafka_does(
+        consumer_heartbeat: ConsumerHeartbeatScenario,
+        epoch: i32,
+        group: String,
+        code: i16,
+        message: String,
+    ) {
+        let _ = (consumer_heartbeat, epoch, group, code, message);
     }
 
     #[test]
@@ -588,106 +638,6 @@ mod tests {
         assert!(view.members[0].client_id == "consumer-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
-        broker_handle.shutdown().await;
-    }
-
-    /// Kafka's `getOrMaybeCreateConsumerGroup` and `consumerGroupLeave`: only a
-    /// join creates a consumer group, a missing group answers
-    /// `GROUP_ID_NOT_FOUND` on any other epoch, and a share or streams group is
-    /// not a consumer group. Each row sends one heartbeat for its own group id
-    /// and compares the whole response; `None` expects an accepted join.
-    #[tokio::test]
-    async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
-        let LiveBrokerFixture {
-            handle: broker_handle,
-            directory: _dir,
-            broker,
-        } = versioned_group_broker(Arc::new(AllowAllAuthorizer), GroupFeatureLevel(1)).await;
-        let coordinator = &broker.group_coordinator;
-        coordinator.mark_share("share");
-        coordinator.mark_streams("streams");
-        let _share_actor = coordinator.get_or_create_share("share-actor");
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["ANONYMOUS"];
-        };
-        let not_found = |message: &str| {
-            Some(ConsumerGroupHeartbeatResponse {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: Some(message.into()),
-                ..Default::default()
-            })
-        };
-        // (group id, member epoch, expected response)
-        let rows = [
-            (
-                "absent-heartbeat",
-                3,
-                not_found("Consumer group absent-heartbeat not found."),
-            ),
-            (
-                "absent-leave",
-                -1,
-                not_found("Group absent-leave not found."),
-            ),
-            (
-                "absent-static-leave",
-                -2,
-                not_found("Group absent-static-leave not found."),
-            ),
-            (
-                "share",
-                0,
-                not_found("Group share is not a consumer group."),
-            ),
-            (
-                "share-actor",
-                0,
-                not_found("Group share-actor is not a consumer group."),
-            ),
-            (
-                "streams",
-                3,
-                not_found("Group streams is not a consumer group."),
-            ),
-            (
-                "streams",
-                -1,
-                not_found("Group streams is not a consumer group."),
-            ),
-            ("joined", 0, None),
-        ];
-
-        for (group_id, member_epoch, expected) in rows {
-            let req = ConsumerGroupHeartbeatRequest {
-                group_id: group_id.into(),
-                member_id: "m1".into(),
-                instance_id: (member_epoch == -2).then(|| "i1".into()),
-                member_epoch,
-                rebalance_timeout_ms: if member_epoch == 0 { 30_000 } else { -1 },
-                topic_partitions: (member_epoch == 0).then(Vec::new),
-                subscribed_topic_names: Some(vec!["topic-a".into()]),
-                ..Default::default()
-            };
-            let resp = handle(&broker, req, VERSION, &ctx)
-                .await
-                .expect("ConsumerGroupHeartbeat handler");
-            match expected {
-                Some(expected) => assert!(resp == expected, "{group_id}: {resp:?}"),
-                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
-            }
-        }
-
-        // Only the join left a consumer group behind.
-        assert!(coordinator.find("joined").is_some());
-        for group_id in [
-            "absent-heartbeat",
-            "absent-leave",
-            "absent-static-leave",
-            "share",
-        ] {
-            assert!(coordinator.find(group_id).is_none(), "{group_id}");
-        }
         broker_handle.shutdown().await;
     }
 

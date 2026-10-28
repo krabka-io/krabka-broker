@@ -202,52 +202,52 @@ mod tests {
         assert!(resp == expected_resp);
     }
 
-    /// Each code answers with Kafka's `new ApiError(error)` message, and a
-    /// success row or a whole-request error row carries none.
-    #[test]
-    fn rows_carry_kafkas_default_messages() {
-        let id = WireUuid([3; 16]);
-        let row = |code, message: Option<&str>| {
-            krabka_macros::tagged_wire!(DeletableTopicResult {
-                name: Some("t".into()),
-                topic_id: id,
-                error_code: code,
-                error_message: message.map(str::to_owned),
-            })
-        };
-        let actual: Vec<DeletableTopicResult> = [
-            codes::NONE,
-            codes::TOPIC_AUTHORIZATION_FAILED,
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            codes::UNKNOWN_TOPIC_ID,
-            codes::THROTTLING_QUOTA_EXCEEDED,
-            codes::NOT_CONTROLLER,
-        ]
-        .into_iter()
-        .map(|code| delete_topic_result(Some("t".into()), id, code))
-        .collect();
-        let expected = vec![
-            row(codes::NONE, None),
-            row(
-                codes::TOPIC_AUTHORIZATION_FAILED,
-                Some("Topic authorization failed."),
-            ),
-            row(
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                Some("This server does not host this topic-partition."),
-            ),
-            row(
-                codes::UNKNOWN_TOPIC_ID,
-                Some("This server does not host this topic ID."),
-            ),
-            row(
-                codes::THROTTLING_QUOTA_EXCEEDED,
-                Some("The throttling quota has been exceeded."),
-            ),
-            row(codes::NOT_CONTROLLER, None),
-        ];
-        assert!(actual == expected);
+    #[derive(Default)]
+    struct DeleteTopicMessageScenario {
+        code: i16,
+        row: Option<DeletableTopicResult>,
     }
+    #[rstest::fixture]
+    fn delete_topic_message() -> DeleteTopicMessageScenario {
+        let row = None;
+        DeleteTopicMessageScenario {
+            row,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("deleting topic t with UUID bytes 3 returns error {code}")]
+    fn delete_topic_outcome(delete_topic_message: &mut DeleteTopicMessageScenario, code: i16) {
+        delete_topic_message.code = code;
+    }
+    #[rstest_bdd_macros::when("the DeleteTopics result row is rendered")]
+    fn render_delete_topic_message(delete_topic_message: &mut DeleteTopicMessageScenario) {
+        delete_topic_message.row = Some(delete_topic_result(
+            Some("t".into()),
+            WireUuid([3; 16]),
+            delete_topic_message.code,
+        ));
+    }
+    #[rstest_bdd_macros::then("the topic identity and error remain intact with message {message}")]
+    fn check_delete_topic_message(
+        delete_topic_message: &DeleteTopicMessageScenario,
+        message: String,
+    ) {
+        let error_message = if message == "null" {
+            None
+        } else {
+            Some(message)
+        };
+        assert!(
+            delete_topic_message.row.as_ref().unwrap()
+                == &krabka_macros::tagged_wire!(DeletableTopicResult {
+                    name: Some("t".into()),
+                    topic_id: WireUuid([3; 16]),
+                    error_code: delete_topic_message.code,
+                    error_message
+                })
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_delete_topic_messages",fixtures=[delete_topic_message:DeleteTopicMessageScenario]);
 
     /// A shuffle keeps every row, a fixed seed gives a fixed order, and
     /// different seeds reach different orders.

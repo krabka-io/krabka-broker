@@ -309,37 +309,15 @@ mod tests {
         );
     }
 
-    /// The setup a [`Row`] starts from.
+    /// A share acquisition state used by the sequential transition oracle.
     #[derive(Debug, Clone, Copy)]
     enum Setup {
         /// `member` holds offsets 0 to 9 at delivery count 1.
         Acquired,
-        /// Offsets 0 to 4 are accepted, so the SPSO is 5, and `member` holds
-        /// 5 to 9.
-        HalfAccepted,
         /// `member` holds 0 to 4 and `other` holds 5 to 9.
         Split,
         /// `member` holds 0 to 9 at delivery count 2, the limit of these rows.
         AtTheLimit,
-    }
-
-    /// One acknowledgement batch of a row.
-    #[derive(Clone, Copy)]
-    struct TestBatch {
-        first: i64,
-        last: i64,
-        types: &'static [i8],
-    }
-
-    /// One row: the setup, the batches, and what Kafka's
-    /// `SharePartition.acknowledge` leaves behind.
-    struct Row {
-        name: &'static str,
-        setup: Setup,
-        batches: &'static [TestBatch],
-        error: i16,
-        spso: i64,
-        states: Vec<(i64, RecordState)>,
     }
 
     const LIMIT: i16 = 2;
@@ -644,7 +622,7 @@ mod tests {
         let mut state = AcquisitionState::new(Offset(0));
         state.materialize(Offset(10), 100);
         match setup {
-            Setup::Acquired | Setup::HalfAccepted => {
+            Setup::Acquired => {
                 state.acquire("member", 10, Offset(i64::MAX), now, lock, LIMIT);
             }
             Setup::Split => {
@@ -657,153 +635,78 @@ mod tests {
                 state.acquire("member", 10, Offset(i64::MAX), now, lock, LIMIT);
             }
         }
-        if matches!(setup, Setup::HalfAccepted) {
-            state
-                .acknowledge("member", Offset(0), Offset(4), AckType::Accept, LIMIT)
-                .expect("accept the first half");
-        }
         state
     }
 
-    fn rows() -> Vec<Row> {
-        use RecordState::Acquired;
-        vec![
-            Row {
-                name: "a failed second batch rolls the first back",
-                setup: Setup::Split,
-                batches: &[
-                    TestBatch {
-                        first: 0,
-                        last: 4,
-                        types: &[ACCEPT],
-                    },
-                    TestBatch {
-                        first: 5,
-                        last: 9,
-                        types: &[ACCEPT],
-                    },
-                ],
-                error: codes::INVALID_RECORD_STATE,
-                spso: 0,
-                states: states(0, 9, Acquired),
-            },
-            Row {
-                name: "a batch below the SPSO is skipped",
-                setup: Setup::HalfAccepted,
-                batches: &[TestBatch {
-                    first: 0,
-                    last: 2,
-                    types: &[ACCEPT],
-                }],
-                error: codes::NONE,
-                spso: 5,
-                states: states(5, 9, Acquired),
-            },
-            Row {
-                name: "a batch across the SPSO acknowledges the part above it",
-                setup: Setup::HalfAccepted,
-                batches: &[TestBatch {
-                    first: 3,
-                    last: 7,
-                    types: &[ACCEPT],
-                }],
-                error: codes::NONE,
-                spso: 8,
-                states: states(8, 9, Acquired),
-            },
-            Row {
-                name: "per-offset types across the SPSO",
-                setup: Setup::HalfAccepted,
-                batches: &[TestBatch {
-                    first: 4,
-                    last: 6,
-                    types: &[RELEASE, ACCEPT, ACCEPT],
-                }],
-                error: codes::NONE,
-                spso: 7,
-                states: states(7, 9, Acquired),
-            },
-            Row {
-                name: "a batch past the records handed out",
-                setup: Setup::Acquired,
-                batches: &[
-                    TestBatch {
-                        first: 0,
-                        last: 4,
-                        types: &[ACCEPT],
-                    },
-                    TestBatch {
-                        first: 8,
-                        last: 12,
-                        types: &[ACCEPT],
-                    },
-                ],
-                error: codes::INVALID_REQUEST,
-                spso: 0,
-                states: states(0, 9, Acquired),
-            },
-            Row {
-                name: "a release at the delivery limit archives",
-                setup: Setup::AtTheLimit,
-                batches: &[TestBatch {
-                    first: 0,
-                    last: 9,
-                    types: &[RELEASE],
-                }],
-                error: codes::NONE,
-                spso: 10,
-                states: Vec::new(),
-            },
-            Row {
-                name: "a release under the limit offers the records again",
-                setup: Setup::Acquired,
-                batches: &[TestBatch {
-                    first: 0,
-                    last: 9,
-                    types: &[RELEASE],
-                }],
-                error: codes::NONE,
-                spso: 0,
-                states: states(0, 9, RecordState::Available),
-            },
-            Row {
-                name: "a release of part of the records at the limit",
-                setup: Setup::AtTheLimit,
-                batches: &[TestBatch {
-                    first: 0,
-                    last: 4,
-                    types: &[RELEASE],
-                }],
-                error: codes::NONE,
-                spso: 5,
-                states: states(5, 9, Acquired),
-            },
-            Row {
-                // The first batch archives 0 to 9 and moves the SPSO past
-                // them, so the second batch is below the SPSO.
-                name: "an archived run is below the SPSO for a later batch",
-                setup: Setup::AtTheLimit,
-                batches: &[
-                    TestBatch {
-                        first: 0,
-                        last: 9,
-                        types: &[RELEASE],
-                    },
-                    TestBatch {
-                        first: 0,
-                        last: 9,
-                        types: &[ACCEPT],
-                    },
-                ],
-                error: codes::NONE,
-                spso: 10,
-                states: Vec::new(),
-            },
-        ]
+    #[derive(Default)]
+    struct ShareAcknowledgementScenario {
+        state: Option<AcquisitionState>,
+        result: Option<i16>,
     }
-
-    #[test]
-    fn acknowledgements_apply_as_kafka_applies_them() {
+    #[rstest::fixture]
+    fn share_acknowledgement() -> ShareAcknowledgementScenario {
+        let state = None;
+        ShareAcknowledgementScenario {
+            state,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "share offsets 0 through 9 have delivery count {delivery}, member owns the first {owned} records and the first {accepted} records are accepted"
+    )]
+    fn owned_share_records(
+        share_acknowledgement: &mut ShareAcknowledgementScenario,
+        delivery: i16,
+        owned: i32,
+        accepted: i64,
+    ) {
+        let now = Instant::now();
+        let lock = Duration::from_secs(30);
+        let mut state = AcquisitionState::new(Offset(0));
+        state.materialize(Offset(10), 100);
+        for attempt in 0..delivery {
+            state.acquire("member", owned, Offset(i64::MAX), now, lock, LIMIT);
+            if owned < 10 {
+                state.acquire("other", 10 - owned, Offset(i64::MAX), now, lock, LIMIT);
+            }
+            if attempt + 1 < delivery {
+                state.release_member("member", LIMIT);
+            }
+        }
+        if accepted > 0 {
+            state
+                .acknowledge(
+                    "member",
+                    Offset(0),
+                    Offset(accepted - 1),
+                    AckType::Accept,
+                    LIMIT,
+                )
+                .expect("accepted prefix");
+        }
+        share_acknowledgement.state = Some(state);
+    }
+    #[rstest_bdd_macros::when(
+        "member acknowledges these ordered batches with renewal disabled and maximum delivery count 2"
+    )]
+    fn acknowledge_share_batches(
+        share_acknowledgement: &mut ShareAcknowledgementScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let batches = datatable
+            .into_iter()
+            .skip(1)
+            .map(|cells| {
+                (
+                    cells[0].parse::<i64>().expect("first offset"),
+                    cells[1].parse::<i64>().expect("last offset"),
+                    cells[2]
+                        .split(',')
+                        .map(|kind| kind.parse::<i8>().expect("acknowledgement type"))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
         let application = AckApplication {
             member: "member",
             now: Instant::now(),
@@ -814,22 +717,50 @@ mod tests {
             },
             max_attempts: LIMIT,
         };
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for row in rows() {
-            let mut state = start(row.setup);
-            let error = apply_acknowledgements(
-                &mut state,
-                &application,
-                row.batches
-                    .iter()
-                    .map(|batch| (batch.first, batch.last, batch.types)),
-            );
-            actual.push((row.name, error, state.start_offset.0, state.record_states()));
-            expected.push((row.name, row.error, row.spso, row.states));
-        }
-        assert!(actual == expected);
+        share_acknowledgement.result = Some(apply_acknowledgements(
+            share_acknowledgement
+                .state
+                .as_mut()
+                .expect("acquired records"),
+            &application,
+            batches
+                .iter()
+                .map(|(first, last, types)| (*first, *last, types.as_slice())),
+        ));
     }
+    #[rstest_bdd_macros::then(
+        "acknowledgement returns code {code}, start offset {start} and these remaining record states"
+    )]
+    fn acknowledged_share_state(
+        share_acknowledgement: &ShareAcknowledgementScenario,
+        code: i16,
+        start: i64,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .flat_map(|cells| {
+                let state = match cells[2].as_str() {
+                    "acquired" => RecordState::Acquired,
+                    "available" => RecordState::Available,
+                    other => panic!("unknown record state {other}"),
+                };
+                states(
+                    cells[0].parse().expect("first offset"),
+                    cells[1].parse().expect("last offset"),
+                    state,
+                )
+            })
+            .collect::<Vec<_>>();
+        let state = share_acknowledgement
+            .state
+            .as_ref()
+            .expect("acknowledged state");
+        assert!(share_acknowledgement.result == Some(code));
+        assert!((state.start_offset.0, state.record_states()) == (start, expected));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_share_acknowledgement.feature", fixtures = [share_acknowledgement: ShareAcknowledgementScenario]);
 
     /// One row of the lock-deadline table: the setup, the seconds after the
     /// acquisition, whether the request renews, the acknowledge type, and the

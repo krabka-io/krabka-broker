@@ -17,28 +17,6 @@ const HETEROGENEOUS: SubscriptionType = SubscriptionType::Heterogeneous;
 /// A topic ID whose rank in Kafka's `Uuid` order is `rank`.
 fn tid(rank: u8) -> Uuid { Uuid([rank; 16]) }
 
-/// The partitions of one topic that a member holds.
-struct TopicPartitions<'a> {
-    topic: Uuid,
-    partitions: &'a [i32],
-}
-
-type Partitions<'a> = &'a [TopicPartitions<'a>];
-
-fn owns(topic: Uuid, partitions: &[i32]) -> TopicPartitions<'_> {
-    TopicPartitions { topic, partitions }
-}
-
-/// One member's expected partitions.
-struct MemberPartitions<'a> {
-    member: &'a str,
-    partitions: Partitions<'a>,
-}
-
-fn expects<'a>(member: &'a str, partitions: Partitions<'a>) -> MemberPartitions<'a> {
-    MemberPartitions { member, partitions }
-}
-
 /// A topic and its partition count.
 struct TopicCount {
     topic: Uuid,
@@ -52,35 +30,6 @@ fn sized(topic: Uuid, partitions: i32) -> TopicCount { TopicCount { topic, parti
 struct Case {
     spec: GroupSpec,
     topics: TopicMetadata,
-}
-
-fn owned(partitions: Partitions<'_>) -> HashMap<Uuid, Vec<i32>> {
-    partitions
-        .iter()
-        .map(|held| (held.topic, held.partitions.to_vec()))
-        .collect()
-}
-
-fn member(id: &str, topics: &[Uuid], current: Partitions<'_>) -> MemberSubscription {
-    MemberSubscription {
-        member_id: id.into(),
-        rack_id: None,
-        subscribed_topic_ids: topics.to_vec(),
-        assigned_partitions: owned(current),
-    }
-}
-
-fn uneven_two_topic_members(primary: Uuid, secondary: Uuid) -> Vec<MemberSubscription> {
-    vec![
-        member("A", &[primary, secondary], &[
-            owns(primary, &[0, 2]),
-            owns(secondary, &[0]),
-        ]),
-        member("B", &[primary, secondary], &[
-            owns(primary, &[1]),
-            owns(secondary, &[1, 2]),
-        ]),
-    ]
 }
 
 fn group(subscription_type: SubscriptionType, members: Vec<MemberSubscription>) -> GroupSpec {
@@ -97,28 +46,6 @@ fn metadata(topics: &[TopicCount]) -> TopicMetadata {
             .map(|count| (count.topic, count.partitions))
             .collect(),
         ..TopicMetadata::default()
-    }
-}
-
-fn assignment(members: &[MemberPartitions<'_>]) -> Assignment {
-    members
-        .iter()
-        .map(|held| (held.member.to_owned(), owned(held.partitions)))
-        .collect()
-}
-
-struct Scenario<'a> {
-    name: &'a str,
-    group: GroupSpec,
-    topics: TopicMetadata,
-    expected: Assignment,
-}
-
-fn run(scenarios: Vec<Scenario<'_>>) {
-    for scenario in scenarios {
-        let actual = UniformAssignor.assign(&scenario.group, &scenario.topics);
-        assert!(actual == scenario.expected, "{}", scenario.name);
-        check_validity(&scenario.group, &scenario.topics, &actual);
     }
 }
 
@@ -169,418 +96,6 @@ fn sizes(actual: &Assignment) -> Vec<usize> {
     sizes
 }
 
-/// `UniformHomogeneousAssignmentBuilderTest`, with exact expected
-/// assignments. Kafka's homogeneous builder walks topics in `HashSet` order.
-/// Here topics go in ascending ID order, so each row numbers its topics to
-/// reproduce the order Kafka's expectation was computed in.
-#[test]
-fn homogeneous_builder_matches_kafka_scenarios() {
-    run(homogeneous_rows_early());
-    run(homogeneous_rows_late());
-}
-
-#[bon::builder]
-fn empty_homogeneous_assignment(
-    name: &'static str,
-    #[builder(default = &[])] subscriptions: &[Uuid],
-) -> Scenario<'static> {
-    Scenario {
-        name,
-        group: group(HOMOGENEOUS, vec![member("A", subscriptions, &[])]),
-        topics: metadata(&[sized(tid(1), 3)]),
-        expected: assignment(&[expects("A", &[])]),
-    }
-}
-
-fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
-    let (first, second) = (tid(1), tid(2));
-    vec![
-        empty_homogeneous_assignment()
-            .name("testOneMemberNoTopicSubscription")
-            .call(),
-        // The reconciler skips a topic absent from the subscription snapshot.
-        empty_homogeneous_assignment()
-            .name("testOneMemberSubscribedToNonexistentTopic")
-            .subscriptions(&[second])
-            .call(),
-        Scenario {
-            // Kafka's HashSet visits topic3 before topic1.
-            name: "testFirstAssignmentTwoMembersTwoTopicsNoMemberRacks",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[second, first], &[]),
-                member("B", &[second, first], &[]),
-            ]),
-            topics: metadata(&[sized(second, 3), sized(first, 2)]),
-            expected: assignment(&[
-                expects("A", &[owns(first, &[0, 1])]),
-                expects("B", &[owns(second, &[0, 1, 2])]),
-            ]),
-        },
-        Scenario {
-            name: "testFirstAssignmentNumMembersGreaterThanTotalNumPartitions",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[first], &[]),
-                member("B", &[first], &[]),
-                member("C", &[first], &[]),
-            ]),
-            topics: metadata(&[sized(first, 2)]),
-            expected: assignment(&[
-                expects("A", &[]),
-                expects("B", &[owns(first, &[0])]),
-                expects("C", &[owns(first, &[1])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentForTwoMembersTwoTopicsGivenUnbalancedPrevAssignment",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[first, second], &[
-                    owns(first, &[0, 1]),
-                    owns(second, &[0, 1]),
-                ]),
-                member("B", &[first, second], &[
-                    owns(first, &[2]),
-                    owns(second, &[2]),
-                ]),
-            ]),
-            topics: metadata(&[sized(first, 3), sized(second, 3)]),
-            expected: assignment(&[
-                expects("A", &[owns(first, &[0, 1]), owns(second, &[0])]),
-                expects("B", &[owns(first, &[2]), owns(second, &[1, 2])]),
-            ]),
-        },
-    ]
-}
-
-fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
-    let (first, second) = (tid(1), tid(2));
-    let mut growing_members = uneven_two_topic_members(first, second);
-    growing_members.push(member("C", &[first, second], &[]));
-    vec![
-        Scenario {
-            // Kafka's HashSet visits topic2 before topic1.
-            name: "testReassignmentWhenPartitionsAreAddedForTwoMembersTwoTopics",
-            group: group(HOMOGENEOUS, uneven_two_topic_members(second, first)),
-            topics: metadata(&[sized(second, 6), sized(first, 5)]),
-            expected: assignment(&[
-                expects("A", &[owns(second, &[0, 2]), owns(first, &[0, 3, 4])]),
-                expects("B", &[owns(second, &[1, 3, 4, 5]), owns(first, &[1, 2])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenOneMemberAddedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(HOMOGENEOUS, growing_members),
-            topics: metadata(&[sized(first, 3), sized(second, 3)]),
-            expected: assignment(&[
-                expects("A", &[owns(first, &[0, 2])]),
-                expects("B", &[owns(first, &[1]), owns(second, &[1])]),
-                expects("C", &[owns(second, &[0, 2])]),
-            ]),
-        },
-        Scenario {
-            // Kafka's HashSet visits topic2 before topic1.
-            name: "testReassignmentWhenOneMemberRemovedAfterInitialAssignmentWithThreeMembersTwoTopics",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[second, first], &[
-                    owns(second, &[0]),
-                    owns(first, &[0]),
-                ]),
-                member("B", &[second, first], &[
-                    owns(second, &[1]),
-                    owns(first, &[1]),
-                ]),
-            ]),
-            topics: metadata(&[sized(second, 3), sized(first, 3)]),
-            expected: assignment(&[
-                expects("A", &[owns(second, &[0]), owns(first, &[0, 2])]),
-                expects("B", &[owns(second, &[1, 2]), owns(first, &[1])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenOneSubscriptionRemovedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[second], &[owns(first, &[0]), owns(second, &[0])]),
-                member("B", &[second], &[owns(first, &[1]), owns(second, &[1])]),
-            ]),
-            topics: metadata(&[sized(first, 2), sized(second, 2)]),
-            expected: assignment(&[
-                expects("A", &[owns(second, &[0])]),
-                expects("B", &[owns(second, &[1])]),
-            ]),
-        },
-    ]
-}
-
-/// `UniformHeterogeneousAssignmentBuilderTest`, with exact expected
-/// assignments. Topic IDs rank topic1 < topic2 < topic3 < topic4, as Kafka's
-/// test IDs do.
-#[test]
-fn heterogeneous_builder_matches_kafka_scenarios() {
-    run(heterogeneous_rows_early());
-    run(heterogeneous_rows_late());
-}
-
-fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
-    let (t1, t2, t3) = (tid(1), tid(2), tid(3));
-    vec![
-        Scenario {
-            name: "testTwoMembersNoTopicSubscription",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[], &[]),
-                member("B", &[], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 3)]),
-            expected: empty_two_member_assignment(),
-        },
-        Scenario {
-            // Kafka throws PartitionAssignorException; missing topics are
-            // skipped here.
-            name: "testTwoMembersSubscribedToNonexistentTopics",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t3], &[]),
-                member("B", &[t2], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 3)]),
-            expected: empty_two_member_assignment(),
-        },
-        Scenario {
-            name: "testFirstAssignmentTwoMembersTwoTopics",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1, t3], &[]),
-                member("B", &[t3], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 3), sized(t3, 6)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 1, 2]), owns(t3, &[4])]),
-                expects("B", &[owns(t3, &[0, 1, 2, 3, 5])]),
-            ]),
-        },
-        Scenario {
-            name: "testFirstAssignmentNumMembersGreaterThanTotalNumPartitions",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t3], &[]),
-                member("B", &[t3], &[]),
-                member("C", &[t1], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 2), sized(t3, 1)]),
-            expected: assignment(&[
-                expects("A", &[owns(t3, &[0])]),
-                expects("B", &[]),
-                expects("C", &[owns(t1, &[0, 1])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentForTwoMembersThreeTopicsGivenUnbalancedPrevAssignment",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1], &[owns(t1, &[0, 1, 2])]),
-                member("B", &[t1, t2], &[owns(t1, &[3]), owns(t2, &[0])]),
-                member("C", &[t1, t2, t3], &[
-                    owns(t1, &[4, 5]),
-                    owns(t2, &[1, 2, 3]),
-                    owns(t3, &[0, 1, 2, 3]),
-                ]),
-            ]),
-            topics: metadata(&[sized(t1, 6), sized(t2, 4), sized(t3, 4)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 1, 2, 5])]),
-                expects("B", &[owns(t1, &[3]), owns(t2, &[0, 1, 2, 3])]),
-                expects("C", &[owns(t1, &[4]), owns(t3, &[0, 1, 2, 3])]),
-            ]),
-        },
-    ]
-}
-
-fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
-    let (t1, t2, t3, t4) = (tid(1), tid(2), tid(3), tid(4));
-    vec![
-        Scenario {
-            name: "testReassignmentWhenPartitionsAreAddedForTwoMembers",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1, t3], &[
-                    owns(t1, &[0, 1, 2, 3]),
-                    owns(t3, &[0, 1]),
-                ]),
-                member("B", &[t1, t2, t3, t4], &[
-                    owns(t2, &[0, 1, 2]),
-                    owns(t4, &[0, 1, 2]),
-                ]),
-            ]),
-            topics: metadata(&[sized(t1, 6), sized(t2, 5), sized(t3, 3), sized(t4, 3)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 1, 2, 3, 4, 5]), owns(t3, &[0, 1, 2])]),
-                expects("B", &[owns(t2, &[0, 1, 2, 3, 4]), owns(t4, &[0, 1, 2])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenOneMemberAddedAndPartitionsAddedTwoMembersTwoTopics",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[0])]),
-                member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[1, 2])]),
-                member("C", &[t1, t2], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 6), sized(t2, 7)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 2, 3, 4, 5])]),
-                expects("B", &[owns(t1, &[1]), owns(t2, &[1, 2, 6])]),
-                expects("C", &[owns(t2, &[0, 3, 4, 5])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenOneMemberRemovedAfterInitialAssignmentWithThreeMembersThreeTopics",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1, t3], &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1])]),
-                member("B", &[t2], &[owns(t2, &[3, 4, 5, 6])]),
-            ]),
-            topics: metadata(&[sized(t1, 3), sized(t2, 8), sized(t3, 3)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1, 2])]),
-                expects("B", &[owns(t2, &[0, 1, 2, 3, 4, 5, 6, 7])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenOneSubscriptionRemovedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[1, 3])]),
-                member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[0, 2, 4])]),
-            ]),
-            topics: metadata(&[sized(t1, 3), sized(t2, 5)]),
-            expected: assignment(&[
-                expects("A", &[owns(t1, &[0, 1, 2])]),
-                expects("B", &[owns(t2, &[0, 1, 2, 3, 4])]),
-            ]),
-        },
-        Scenario {
-            name: "testReassignmentWhenTopicPartitionsRunOutAndMembersHaveNoPartitions",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1, t2, t3], &[
-                    owns(t1, &[0, 1]),
-                    owns(t2, &[0, 1]),
-                    owns(t3, &[0, 1]),
-                ]),
-                member("B", &[t1, t2, t3], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 2), sized(t2, 2), sized(t3, 2)]),
-            expected: assignment(&[
-                expects("A", &[owns(t2, &[0]), owns(t3, &[0, 1])]),
-                expects("B", &[owns(t1, &[0, 1]), owns(t2, &[1])]),
-            ]),
-        },
-        Scenario {
-            name: "testFirstAssignmentWithTwoMembersIncludingOneWithoutSubscriptions",
-            group: group(HETEROGENEOUS, vec![
-                member("A", &[t1], &[]),
-                member("B", &[], &[]),
-            ]),
-            topics: metadata(&[sized(t1, 3)]),
-            expected: assignment(&[expects("A", &[owns(t1, &[0, 1, 2])]), expects("B", &[])]),
-        },
-    ]
-}
-
-/// The review scenario: member A sits in rack r1, member B in r2, and every
-/// replica of the topic's four partitions is in r1. Kafka's uniform
-/// assignor does not read racks, so each member gets two partitions.
-#[test]
-fn replica_racks_do_not_outrank_balance() {
-    let topic = tid(1);
-    let members = vec![
-        MemberSubscription {
-            rack_id: Some("r1".into()),
-            ..member("A", &[topic], &[])
-        },
-        MemberSubscription {
-            rack_id: Some("r2".into()),
-            ..member("B", &[topic], &[])
-        },
-    ];
-    let topics = TopicMetadata {
-        partitions_per_topic: [(topic, 4)].into(),
-        partition_racks: (0..4)
-            .map(|partition| {
-                (
-                    TopicIdPartition {
-                        topic_id: topic,
-                        partition,
-                    },
-                    vec!["r1".into()],
-                )
-            })
-            .collect(),
-    };
-    for subscription_type in [HOMOGENEOUS, HETEROGENEOUS] {
-        let actual = UniformAssignor.assign(&group(subscription_type, members.clone()), &topics);
-        let expected = match subscription_type {
-            SubscriptionType::Homogeneous => assignment(&[
-                expects("A", &[owns(topic, &[0, 1])]),
-                expects("B", &[owns(topic, &[2, 3])]),
-            ]),
-            SubscriptionType::Heterogeneous => assignment(&[
-                expects("A", &[owns(topic, &[0, 2])]),
-                expects("B", &[owns(topic, &[1, 3])]),
-            ]),
-        };
-        assert!(actual == expected, "{subscription_type:?}");
-    }
-}
-
-/// A group whose type says homogeneous but whose resolved subscriptions
-/// differ runs the heterogeneous builder, so no member receives a topic it
-/// does not subscribe to.
-#[test]
-fn diverging_resolved_subscriptions_use_the_heterogeneous_builder() {
-    let (t1, t2) = (tid(1), tid(2));
-    let members = vec![member("A", &[t1, t2], &[]), member("B", &[t1], &[])];
-    let topics = metadata(&[sized(t1, 2), sized(t2, 2)]);
-    let as_homogeneous = UniformAssignor.assign(&group(HOMOGENEOUS, members.clone()), &topics);
-    let as_heterogeneous = UniformAssignor.assign(&group(HETEROGENEOUS, members), &topics);
-    assert!(as_homogeneous == as_heterogeneous);
-    assert!(
-        as_homogeneous
-            == assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t2, &[0, 1])]
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t1, &[0, 1])]
-                }
-            ])
-    );
-}
-
-/// Kafka's `testValidityAndBalanceForLargeSampleSet`: 100 topics of three
-/// partitions over 49 members.
-#[test]
-fn homogeneous_large_sample_is_valid_and_balanced() {
-    let topic_ids: Vec<Uuid> = (1..=100).map(tid).collect();
-    let members: Vec<MemberSubscription> = (1..50)
-        .map(|i| member(&format!("member{i}"), &topic_ids, &[]))
-        .collect();
-    let topics = TopicMetadata {
-        partitions_per_topic: topic_ids.iter().map(|id| (*id, 3)).collect(),
-        ..TopicMetadata::default()
-    };
-    let spec = group(HOMOGENEOUS, members);
-    let actual = UniformAssignor.assign(&spec, &topics);
-    check_validity(&spec, &topics, &actual);
-    let sizes = sizes(&actual);
-    assert!(sizes[sizes.len() - 1] - sizes[0] <= 1);
-}
-
-/// The three-topic group of Kafka's `CommonAssignorTests`.
-fn common_group(subscription_type: SubscriptionType) -> Case {
-    let topic_ids = [tid(1), tid(2), tid(3)];
-    let members = ["A", "B", "C"]
-        .iter()
-        .map(|id| member(id, &topic_ids, &[]))
-        .collect();
-    let topics = metadata(&[sized(tid(1), 2), sized(tid(2), 5), sized(tid(3), 7)]);
-    Case {
-        spec: group(subscription_type, members),
-        topics,
-    }
-}
-
 fn with_current(spec: &GroupSpec, current: &Assignment, order: &[&str]) -> GroupSpec {
     let members = order
         .iter()
@@ -602,27 +117,6 @@ fn with_current(spec: &GroupSpec, current: &Assignment, order: &[&str]) -> Group
 /// Kafka's `testAssignmentReuse` and `testReassignmentStickiness`: feeding an
 /// assignment back in returns it unchanged, whatever order the members come
 /// in.
-#[test]
-fn assignment_is_a_fixed_point_in_every_member_order() {
-    let orders: [[&str; 3]; 6] = [
-        ["A", "B", "C"],
-        ["A", "C", "B"],
-        ["B", "A", "C"],
-        ["B", "C", "A"],
-        ["C", "A", "B"],
-        ["C", "B", "A"],
-    ];
-    for subscription_type in [HOMOGENEOUS, HETEROGENEOUS] {
-        let Case { spec, topics } = common_group(subscription_type);
-        let first = UniformAssignor.assign(&spec, &topics);
-        check_validity(&spec, &topics, &first);
-        for order in orders {
-            let again = UniformAssignor.assign(&with_current(&spec, &first, &order), &topics);
-            assert!(again == first, "{subscription_type:?} {order:?}");
-        }
-    }
-}
-
 /// How many partitions of `previous` each member still holds in `next`.
 fn retained(previous: &Assignment, next: &Assignment, member: &str) -> usize {
     previous[member]
@@ -746,7 +240,165 @@ proptest! {
     }
 }
 
-/// Kafka's independent expected mapping when neither fixture member gets a partition.
-fn empty_two_member_assignment() -> Assignment {
-    assignment(&[expects("A", &[]), expects("B", &[])])
+use {
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
+#[derive(Default)]
+struct UniformPlacement {
+    source: Option<Case>,
+    actual: Option<Assignment>,
+    heterogeneous: Option<Assignment>,
+    reused: Vec<Assignment>,
 }
+#[rstest::fixture]
+fn uniform_placement() -> UniformPlacement {
+    // Start this scenario with fresh inputs and observations.
+    UniformPlacement::default()
+}
+
+#[given("a homogeneous group has 100 three-partition topics and 49 subscribing members")]
+fn large_uniform_group(uniform_placement: &mut UniformPlacement) {
+    let topic_ids = (1..=100).map(tid).collect::<Vec<_>>();
+    let members = (1..50)
+        .map(|index| MemberSubscription {
+            member_id: format!("member{index}"),
+            rack_id: None,
+            subscribed_topic_ids: topic_ids.clone(),
+            assigned_partitions: HashMap::new(),
+        })
+        .collect();
+    let topics = TopicMetadata {
+        partitions_per_topic: topic_ids.iter().map(|id| (*id, 3)).collect(),
+        ..TopicMetadata::default()
+    };
+    uniform_placement.source = Some(Case {
+        spec: group(HOMOGENEOUS, members),
+        topics,
+    });
+}
+
+#[when("the uniform assignor balances the subscribed partitions")]
+fn assign_uniform_group(uniform_placement: &mut UniformPlacement) {
+    let source = uniform_placement
+        .source
+        .as_ref()
+        .expect("group and topics prepared");
+    uniform_placement.actual = Some(UniformAssignor.assign(&source.spec, &source.topics));
+}
+#[when("the same resolved subscriptions are assigned with the heterogeneous builder")]
+fn assign_explicit_heterogeneous(uniform_placement: &mut UniformPlacement) {
+    let source = uniform_placement.source.as_ref().expect("group prepared");
+    let group = GroupSpec {
+        subscription_type: HETEROGENEOUS,
+        ..source.spec.clone()
+    };
+    uniform_placement.heterogeneous = Some(UniformAssignor.assign(&group, &source.topics));
+}
+#[when("the first assignment is reused in all six member orders")]
+fn reuse_uniform_assignments(uniform_placement: &mut UniformPlacement) {
+    let source = uniform_placement.source.as_ref().expect("group prepared");
+    let first = uniform_placement
+        .actual
+        .as_ref()
+        .expect("first assignment computed");
+    for order in [
+        ["A", "B", "C"],
+        ["A", "C", "B"],
+        ["B", "A", "C"],
+        ["B", "C", "A"],
+        ["C", "A", "B"],
+        ["C", "B", "A"],
+    ] {
+        uniform_placement.reused.push(
+            UniformAssignor.assign(&with_current(&source.spec, first, &order), &source.topics),
+        );
+    }
+}
+#[then("the declared homogeneous and explicit heterogeneous assignments are identical")]
+fn uniform_builder_fallback(uniform_placement: &UniformPlacement) {
+    assert!(uniform_placement.heterogeneous == uniform_placement.actual);
+}
+#[then("every subscribed partition is assigned once and member loads differ by at most one")]
+fn balanced_large_assignment(uniform_placement: &UniformPlacement) {
+    let source = uniform_placement.source.as_ref().expect("group prepared");
+    let actual = uniform_placement
+        .actual
+        .as_ref()
+        .expect("assignment computed");
+    check_validity(&source.spec, &source.topics, actual);
+    let sizes = sizes(actual);
+    assert!(sizes[sizes.len() - 1] - sizes[0] <= 1);
+}
+#[then("the first assignment is valid and all six reordered assignments preserve every owner")]
+fn sticky_reused_assignment(uniform_placement: &UniformPlacement) {
+    let source = uniform_placement.source.as_ref().expect("group prepared");
+    let first = uniform_placement
+        .actual
+        .as_ref()
+        .expect("assignment computed");
+    check_validity(&source.spec, &source.topics, first);
+    assert!(uniform_placement.reused.len() == 6);
+    for reused in &uniform_placement.reused {
+        assert!(reused == first);
+    }
+}
+
+use crate::coordinator::unified::test_support::partition_assignments::{
+    self, ExpectedMemberPartitions, MemberAssignmentInput, TopicPartitionsInput,
+};
+#[given("the uniform subscription builder is {builder}")]
+fn subscription_policy(uniform_placement: &mut UniformPlacement, builder: String) {
+    uniform_placement.source = Some(Case {
+        spec: GroupSpec {
+            members: vec![],
+            subscription_type: partition_assignments::subscription_type(&builder),
+        },
+        topics: TopicMetadata::default(),
+    });
+}
+#[given("the uniform topic partitions and replica racks are")]
+fn assignment_topic_metadata(
+    uniform_placement: &mut UniformPlacement,
+    #[datatable] rows: Rows<TopicPartitionsInput>,
+) {
+    uniform_placement
+        .source
+        .as_mut()
+        .expect("subscription builder given")
+        .topics = partition_assignments::topic_metadata(rows);
+}
+#[given("the uniform members have these subscriptions and previous assignments")]
+fn assignment_member_subscriptions(
+    uniform_placement: &mut UniformPlacement,
+    #[datatable] rows: Rows<MemberAssignmentInput>,
+) {
+    uniform_placement
+        .source
+        .as_mut()
+        .expect("subscription builder given")
+        .spec
+        .members = partition_assignments::member_subscriptions(rows);
+}
+#[then("the complete uniform assignment is")]
+fn complete_assignment(
+    uniform_placement: &UniformPlacement,
+    #[datatable] rows: Rows<ExpectedMemberPartitions>,
+) {
+    let expected = partition_assignments::expected_assignment(rows);
+    assert!(uniform_placement.actual.as_ref() == Some(&expected));
+    let source = uniform_placement
+        .source
+        .as_ref()
+        .expect("group and topics prepared");
+    check_validity(
+        &source.spec,
+        &source.topics,
+        uniform_placement
+            .actual
+            .as_ref()
+            .expect("assignment computed"),
+    );
+}
+
+scenarios!("tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",fixtures=[uniform_placement:UniformPlacement]);

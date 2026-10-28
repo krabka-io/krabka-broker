@@ -14,7 +14,6 @@ use {
     },
     assert2::assert,
     krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest,
-    std::net::SocketAddr,
     tokio::net::TcpStream,
 };
 
@@ -78,3 +77,4 @@ pub async fn create_topic_plaintext(addr: SocketAddr, topic: AssignedTopicSetup)
         .await;
 }
 pub use crate::kafka_wire::elect_leaders_plaintext as drive_elect_leaders;
+use std::net::SocketAddr;

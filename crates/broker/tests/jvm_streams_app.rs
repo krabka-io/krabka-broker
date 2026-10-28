@@ -88,8 +88,6 @@ const CP_APACHE: &str = r"$(ls /opt/kafka/libs/*.jar | tr '\n' ':')";
 /// `KSTREAM-AGGREGATE-STATE-STORE-<n>`.
 const WINDOW_STORE_NAME: &str = "krabka-counts";
 
-const EXPECTED_SINK: [&str; 5] = ["alpha:1", "alpha:2", "beta:1", "alpha:3", "beta:2"];
-
 /// The JVM linkage failures that mean the Kafka-3.5-compiled class cannot run
 /// against the 4.3 jars. The KIP-1071 case reports these rather than failing:
 /// they say the cross-image compile did not work out, not that krabka
@@ -223,21 +221,6 @@ fn list_topics(bootstrap: &str) -> Vec<String> {
     support::jvm_output_lines(&out)
 }
 
-/// The one topic in `topics` that `matches` accepts, or a failure naming every
-/// topic there was. A Streams run that never got as far as creating its
-/// internal topics otherwise fails as an opaque index panic.
-fn only_topic(topics: &[String], what: &str, matches: impl Fn(&str) -> bool) -> String {
-    let found: Vec<&String> = topics
-        .iter()
-        .filter(|name| matches(name.as_str()))
-        .collect();
-    assert!(
-        found.len() == 1,
-        "expected exactly one {what} topic, found {found:?} among {topics:?}",
-    );
-    found[0].clone()
-}
-
 /// `kafka-configs --describe --entity-type topics` for one topic, as text.
 ///
 /// The tool prints only the configs that were explicitly set, which is what
@@ -281,156 +264,215 @@ async fn finalize_streams_version() {
     support::streams::finalize_streams_version(&client).await;
 }
 
-/// The shared half of both cases: the app has run, so check what it left
-/// behind -- the sink under `read_committed`, and the two internal topics with
-/// the configs `RepartitionTopicConfig` and `WindowedChangelogTopicConfig`
-/// give them.
-fn assert_streams_run(bootstrap: &str, application_id: &str, output_topic: &str) {
-    let sink = read_committed_sink(bootstrap, output_topic);
-    assert!(
-        sink == EXPECTED_SINK,
-        "the read_committed sink must hold the windowed running counts in input order, \
-         got {sink:?}",
-    );
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::collections::BTreeMap,
+    tempfile::TempDir,
+};
+#[derive(Clone, Copy)]
+enum StreamsRuntime {
+    Classic,
+    Streams,
+}
+struct StreamsApplication {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    classes: Option<TempDir>,
+    runtime: Option<StreamsRuntime>,
+    input: String,
+    output: String,
+    application_id: String,
+    run: Option<Output>,
+    sink: Option<Vec<String>>,
+    topics: Vec<String>,
+    configs: BTreeMap<String, String>,
+}
+#[fixture]
+fn application() -> StreamsApplication {
+    // Start this scenario with fresh inputs and observations.
 
-    let topics = list_topics(bootstrap);
-    let repartition_topic = format!("{application_id}-shuffle-repartition");
-    let repartition = only_topic(&topics, "repartition", |name| name == repartition_topic);
-    // `<app>-<store>-changelog`, where the store is the one the topology names
-    // in its `Materialized`. Streams generates a
-    // `KSTREAM-AGGREGATE-STATE-STORE-<n>` name only for an unnamed store, and
-    // this topology names its window store so it can ask for an in-memory one.
-    let changelog = only_topic(&topics, "aggregate-store changelog", |name| {
-        name == format!("{application_id}-{WINDOW_STORE_NAME}-changelog")
-    });
-
-    // `RepartitionTopicConfig`: `cleanup.policy=delete`, `retention.ms=-1`
-    // ("infinity"), and `message.timestamp.type=CreateTime` from
-    // `InternalTopicConfig.INTERNAL_TOPIC_DEFAULT_OVERRIDES`.
-    let repartition_configs = describe_topic_configs(bootstrap, &repartition);
-    for needle in ["retention.ms=-1", "message.timestamp.type=CreateTime"] {
-        assert!(
-            repartition_configs.contains(needle),
-            "the repartition topic {repartition} must carry {needle}; \
-             kafka-configs said:\n{repartition_configs}",
-        );
-    }
-
-    // `WindowedChangelogTopicConfig`: the list-valued `compact,delete` policy,
-    // which is the whole point of the changelog half -- a broker that accepts
-    // only a single policy refuses the topic and the app never starts.
-    let changelog_configs = describe_topic_configs(bootstrap, &changelog);
-    for needle in [
-        "cleanup.policy=compact,delete",
-        "message.timestamp.type=CreateTime",
-    ] {
-        assert!(
-            changelog_configs.contains(needle),
-            "the windowed-store changelog {changelog} must carry {needle}; \
-             kafka-configs said:\n{changelog_configs}",
-        );
+    StreamsApplication {
+        broker: None,
+        directory: None,
+        classes: None,
+        runtime: None,
+        input: String::new(),
+        output: String::new(),
+        application_id: String::new(),
+        run: None,
+        sink: None,
+        topics: Vec::new(),
+        configs: BTreeMap::new(),
     }
 }
-
-/// A real `KafkaStreams` topology, on the classic rebalance protocol, with
-/// `processing.guarantee=exactly_once_v2`, against krabka.
-///
-/// This is `StreamsPartitionAssignor` end to end: the members' subscription
-/// and assignment userdata, `InternalTopicManager` creating the repartition
-/// and changelog topics, the transactional producer the stream thread runs,
-/// and the offsets it commits inside those transactions. The suite reads the
-/// result back at `read_committed`, so an output record that was never
-/// committed is not counted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn compiled_streams_app_runs_on_the_classic_protocol() {
-    const INPUT: &str = "krabka-streams-classic-in";
-    const OUTPUT: &str = "krabka-streams-classic-out";
-    const APPLICATION_ID: &str = "krabka-streams-classic";
-
-    let (broker, _dir) = start_host_broker().await;
-    let bootstrap = broker0_advertised();
-
-    create_topic(bootstrap, INPUT);
-    create_topic(bootstrap, OUTPUT);
-
-    let classes = shared_class_dir();
-    compile_streams_app(classes.path());
-    let out = run_streams_app(KAFKA_IMAGE_TXN, classes.path(), CP_CONFLUENT, &[
-        bootstrap,
-        INPUT,
-        OUTPUT,
-        APPLICATION_ID,
-    ]);
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(
-        stdout.contains("STREAMSPROBE OK"),
-        "the Streams app did not emit every expected record; stdout:\n{stdout}\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr),
-    );
-
-    assert_streams_run(bootstrap, APPLICATION_ID, OUTPUT);
-    broker.shutdown().await;
+#[given("a broker is ready for the compiled windowed count Streams application")]
+async fn broker(application: &mut StreamsApplication) {
+    let (broker, directory) = start_host_broker().await;
+    application.broker = Some(broker);
+    application.directory = Some(directory);
 }
-
-/// The same topology under KIP-1071: `group.protocol=streams`, so the app
-/// sends its topology in `StreamsGroupHeartbeat` instead of in an assignor's
-/// userdata, and the broker -- not the client's assignor -- resolves the
-/// tasks.
-///
-/// The class is compiled against Kafka 3.5 and run against Kafka 4.3, because
-/// no pinned image has both `javac` and KIP-1071. If that does not load, the
-/// case says so and stops rather than reporting a krabka failure: a linkage
-/// error is a statement about the two Kafka releases, not about the broker.
-/// The classic case above still covers the compiled-topology half in that
-/// event.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn compiled_streams_app_runs_on_the_streams_protocol() {
-    const INPUT: &str = "krabka-streams-kip1071-in";
-    const OUTPUT: &str = "krabka-streams-kip1071-out";
-    const APPLICATION_ID: &str = "krabka-streams-kip1071";
-
-    let (broker, _dir) = start_host_broker().await;
-    let bootstrap = broker0_advertised();
-
+#[given("Kafka 3.5 runs the application with the classic group protocol")]
+fn classic(application: &mut StreamsApplication) {
+    application.runtime = Some(StreamsRuntime::Classic);
+}
+#[given(
+    "Kafka 4.3 runs the application with the streams group protocol and streams version one finalized"
+)]
+async fn streams(application: &mut StreamsApplication) {
     finalize_streams_version().await;
-    create_topic(bootstrap, INPUT);
-    create_topic(bootstrap, OUTPUT);
-
+    application.runtime = Some(StreamsRuntime::Streams);
+}
+#[given("application {id} reads topic {input} and writes topic {output}")]
+fn topics(application: &mut StreamsApplication, id: String, input: String, output: String) {
+    create_topic(broker0_advertised(), &input);
+    create_topic(broker0_advertised(), &output);
+    application.application_id = id;
+    application.input = input;
+    application.output = output;
+}
+#[given("the windowed count application is compiled against Kafka 3.5 for Java eleven")]
+fn compile(application: &mut StreamsApplication) {
     let classes = shared_class_dir();
     compile_streams_app(classes.path());
-    let out = run_streams_app(KAFKA_IMAGE_STREAMS_PROTOCOL, classes.path(), CP_APACHE, &[
-        bootstrap,
-        INPUT,
-        OUTPUT,
-        APPLICATION_ID,
-        "streams",
-    ]);
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-    if let Some(error) = LINKAGE_ERRORS
-        .iter()
-        .find(|error| stderr.contains(*error) || stdout.contains(*error))
-    {
-        eprintln!(
-            "KRABKA[test] the Kafka 3.5-compiled StreamsApp does not load against the Kafka 4.3 \
-             jars ({error}), so the KIP-1071 run cannot be made from a cross-compiled class. \
-             Nothing here is a krabka result; \
-             `compiled_streams_app_runs_on_the_classic_protocol` covers the compiled topology. \
-             stdout:\n{stdout}\nstderr:\n{stderr}"
-        );
-        broker.shutdown().await;
-        return;
+    application.classes = Some(classes);
+}
+#[when("the compiled application runs with exactly once version two processing")]
+async fn run(application: &mut StreamsApplication) {
+    let runtime = application.runtime.expect("Streams runtime configured");
+    let (image, classpath) = match runtime {
+        StreamsRuntime::Classic => (KAFKA_IMAGE_TXN, CP_CONFLUENT),
+        StreamsRuntime::Streams => (KAFKA_IMAGE_STREAMS_PROTOCOL, CP_APACHE),
+    };
+    let mut args = vec![
+        broker0_advertised(),
+        application.input.as_str(),
+        application.output.as_str(),
+        application.application_id.as_str(),
+    ];
+    if matches!(runtime, StreamsRuntime::Streams) {
+        args.push("streams");
     }
-
+    let output = run_streams_app(
+        image,
+        application
+            .classes
+            .as_ref()
+            .expect("application compiled")
+            .path(),
+        classpath,
+        &args,
+    );
+    if matches!(runtime, StreamsRuntime::Streams) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(error) = LINKAGE_ERRORS
+            .iter()
+            .find(|error| stdout.contains(*error) || stderr.contains(*error))
+        {
+            application
+                .broker
+                .take()
+                .expect("Streams broker started")
+                .shutdown()
+                .await;
+            rstest_bdd::skip!(
+                "Kafka3.5 compiled class cannot load against Kafka4.3 jars: {}; stdout:{}; stderr:{}",
+                error,
+                stdout,
+                stderr
+            );
+        }
+    }
+    application.run = Some(output);
+}
+#[then("the application reports STREAMSPROBE OK")]
+fn completed(application: &StreamsApplication) {
+    let output = application
+        .run
+        .as_ref()
+        .expect("compiled application completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("STREAMSPROBE OK"),
-        "the Streams app did not emit every expected record under group.protocol=streams; \
-         stdout:\n{stdout}\nstderr:\n{stderr}",
+        "Streams application did not emit all expected records: stdout={stdout} stderr={}",
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    assert_streams_run(bootstrap, APPLICATION_ID, OUTPUT);
-    broker.shutdown().await;
+}
+#[when(
+    "the operator reads the committed sink and inspects the application's repartition and window changelog topics"
+)]
+fn inspect(application: &mut StreamsApplication) {
+    let bootstrap = broker0_advertised();
+    application.sink = Some(read_committed_sink(bootstrap, &application.output));
+    application.topics = list_topics(bootstrap);
+    for name in [
+        format!("{}-shuffle-repartition", application.application_id),
+        format!(
+            "{}-{WINDOW_STORE_NAME}-changelog",
+            application.application_id
+        ),
+    ] {
+        application
+            .configs
+            .insert(name.clone(), describe_topic_configs(bootstrap, &name));
+    }
+}
+#[then("the committed sink contains the running window counts in this exact order")]
+fn sink(application: &StreamsApplication, datatable: Vec<Vec<String>>) {
+    let expected: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.into_iter().next().expect("window count"))
+        .collect();
+    assert!(application.sink.as_ref().expect("committed sink read") == &expected);
+}
+#[then("exactly one of each internal topic exists and its config report includes")]
+fn configurations(application: &StreamsApplication, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [name, config]: [String; 2] =
+            row.try_into().expect("internal topic and expected config");
+        assert!(
+            application
+                .topics
+                .iter()
+                .filter(|topic| *topic == &name)
+                .count()
+                == 1,
+            "expected one internal topic {name}, found {:?}",
+            application.topics
+        );
+        let actual = application
+            .configs
+            .get(&name)
+            .expect("internal topic config inspected");
+        assert!(
+            actual.contains(&config),
+            "internal topic {name} missing {config}: {actual}"
+        );
+    }
+}
+async fn shutdown(application: StreamsApplication) {
+    if let Some(broker) = application.broker {
+        broker.shutdown().await;
+    }
+}
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_streams_app.feature",
+    name = "A classic protocol Streams topology writes committed counts and configures its internal topics"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compiled_streams_app_runs_on_the_classic_protocol(application: StreamsApplication) {
+    shutdown(application).await;
+}
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_streams_app.feature",
+    name = "A streams protocol topology writes committed counts when its cross compiled class loads"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compiled_streams_app_runs_on_the_streams_protocol(application: StreamsApplication) {
+    shutdown(application).await;
 }

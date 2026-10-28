@@ -240,8 +240,31 @@ fn leader_epoch(handle: &BrokerHandle, partition: i32) -> i32 {
         .0
 }
 
-#[tokio::test]
-async fn offline_log_dir_is_reported_as_an_offline_replica() {
+struct DiskProjection {
+    broker: Option<TwoDirBroker>,
+    primary_id: uuid::Uuid,
+    doomed: Vec<i32>,
+    offline_transition: bool,
+    metadata: Vec<MetadataResponsePartition>,
+    described: Vec<DescribeTopicPartitionsResponsePartition>,
+}
+#[rstest::fixture]
+fn disk() -> DiskProjection {
+    // Start this scenario with fresh inputs and observations.
+
+    DiskProjection {
+        broker: None,
+        primary_id: uuid::Uuid::nil(),
+        doomed: Vec::new(),
+        offline_transition: false,
+        metadata: Vec::new(),
+        described: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "six single-replica partitions are assigned across both registered log directories"
+)]
+async fn assigned_disks(disk: &mut DiskProjection) {
     let TwoDirBroker {
         handle,
         primary,
@@ -278,23 +301,49 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
          (primary={survivors:?} extra={doomed:?})"
     );
 
+    disk.primary_id = primary_id;
+    disk.doomed = doomed;
+    disk.broker = Some(TwoDirBroker {
+        handle,
+        primary,
+        extra,
+        addr,
+    });
+}
+#[rstest_bdd_macros::when(
+    "the extra directory goes offline and the client queries Metadata and DescribeTopicPartitions"
+)]
+async fn offline_queries(disk: &mut DiskProjection) {
+    let TwoDirBroker {
+        handle,
+        extra,
+        addr,
+        ..
+    } = disk.broker.as_ref().expect("two-dir broker");
+    let primary_id = disk.primary_id;
     // Flip only the extra dir offline: the primary stays online, so the broker
     // does not take the all-dirs-offline self-shutdown path.
-    assert!(
-        handle.test_mark_log_dir_offline(extra.path()),
-        "mark_offline must return true (dir was registered and online)"
-    );
+    disk.offline_transition = handle.test_mark_log_dir_offline(extra.path());
 
     // The heartbeat carries the offline dir to the controller, which retires
     // it from the broker registration's online set.
-    wait_for_image(&handle, "offline dir retired from registration", |image| {
+    wait_for_image(handle, "offline dir retired from registration", |image| {
         image
             .broker(krabka_raft::NodeId(u64::try_from(BROKER_ID).unwrap()))
             .is_some_and(|b| b.log_dirs == vec![primary_id])
     })
     .await;
 
-    let expected_offline: HashSet<i32> = doomed.iter().copied().collect();
+    disk.metadata = metadata_partitions(*addr).await;
+    disk.described = describe_topic_partitions(*addr).await;
+}
+#[rstest_bdd_macros::then(
+    "dead-directory partitions report offline replica 1, leader -1, empty ISR, Metadata error 5, and Describe error 0 with replica 1 eligible and last-known"
+)]
+fn disk_rows(disk: &DiskProjection) {
+    assert!(disk.offline_transition);
+    let handle = &disk.broker.as_ref().expect("broker").handle;
+    let expected_offline: HashSet<i32> = disk.doomed.iter().copied().collect();
 
     // The whole row, for both APIs. The sole replica of a doomed partition is
     // on the dead disk, so it is reported offline, it does not lead, and it is
@@ -305,7 +354,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
     // last ISR member leaves: the replica is eligible, even at the default
     // `min.insync.replicas` of 1, and it is the last-known leader, which is
     // what `Leader: none` means to the controller.
-    let metadata = metadata_partitions(addr).await;
+    let metadata = &disk.metadata;
     let expected_metadata: Vec<MetadataResponsePartition> = (0..PARTITIONS)
         .map(|partition| {
             let doomed = expected_offline.contains(&partition);
@@ -313,7 +362,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
                 error_code: if doomed { LEADER_NOT_AVAILABLE } else { 0 },
                 partition_index: partition,
                 leader_id: if doomed { NO_LEADER_ID } else { BROKER_ID },
-                leader_epoch: leader_epoch(&handle, partition),
+                leader_epoch: leader_epoch(handle, partition),
                 replica_nodes: vec![BROKER_ID],
                 isr_nodes: if doomed { vec![] } else { vec![BROKER_ID] },
                 offline_replicas: if doomed { vec![BROKER_ID] } else { vec![] },
@@ -321,15 +370,15 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
             }
         })
         .collect();
-    assert!(metadata == expected_metadata);
+    assert!(*metadata == expected_metadata);
 
-    let described = describe_topic_partitions(addr).await;
+    let described = &disk.described;
     let expected_described: Vec<DescribeTopicPartitionsResponsePartition> = (0..PARTITIONS)
         .map(|partition| {
             let doomed = expected_offline.contains(&partition);
             let active_nodes = if doomed { vec![] } else { vec![BROKER_ID] };
             let leader = if doomed { NO_LEADER_ID } else { BROKER_ID };
-            let epoch = leader_epoch(&handle, partition);
+            let epoch = leader_epoch(handle, partition);
             let elr_nodes = if doomed { vec![BROKER_ID] } else { vec![] };
             DescribeTopicPartitionsResponsePartition {
                 error_code: 0,
@@ -345,9 +394,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
             }
         })
         .collect();
-    assert!(described == expected_described);
-
-    handle.shutdown().await;
+    assert!(*described == expected_described);
 }
 
 /// The three-node suite below drives the fencing half of the projection.
@@ -393,13 +440,35 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
     }
 }
 
-/// A `Metadata` response served by a broker that is not the controller must
-/// report the replicas of a dead broker offline. The fencing state lives in
-/// the controller's heartbeat registry, so it only reaches this node if the
-/// controller writes it to the metadata log.
-#[tokio::test]
-async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
-    let mut cluster = registered_cluster(3).await;
+type FencingCluster = Vec<(BrokerHandle, krabka_broker::BrokerConfig, TempDir)>;
+struct FencedProjection {
+    cluster: FencingCluster,
+    victim_index: usize,
+    observer_index: usize,
+    victim_id: i32,
+    observer_addr: Option<SocketAddr>,
+    victim_resources: Option<(krabka_broker::BrokerConfig, TempDir)>,
+    actual: Vec<MetadataResponsePartition>,
+}
+#[rstest::fixture]
+fn fenced() -> FencedProjection {
+    // Start this scenario with fresh inputs and observations.
+
+    FencedProjection {
+        cluster: Vec::new(),
+        victim_index: 0,
+        observer_index: 0,
+        victim_id: 0,
+        observer_addr: None,
+        victim_resources: None,
+        actual: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "a three-replica partition and two brokers that are not controller leader"
+)]
+async fn fencing_cluster(fenced: &mut FencedProjection) {
+    let cluster = registered_cluster(3).await;
     create_topic_named(cluster[0].0.listen_addr(), FENCED_TOPIC, 1, 3).await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(FENCED_TOPIC, 0).await;
@@ -412,17 +481,28 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
     let victim_id = node_id_of(&cluster[victim_index].0);
     let observer_addr = cluster[observer_index].0.listen_addr();
 
-    // The config and the log dir stay alive for the rest of the test: a
-    // crashed broker's teardown must not race a deleted directory.
-    let (victim, _victim_config, _victim_dir) = cluster.remove(victim_index);
+    fenced.cluster = cluster;
+    fenced.victim_index = victim_index;
+    fenced.observer_index = observer_index;
+    fenced.victim_id = victim_id;
+    fenced.observer_addr = Some(observer_addr);
+}
+#[rstest_bdd_macros::when(
+    "one controller follower crashes and the other serves Metadata until fencing propagates"
+)]
+async fn fencing_query(fenced: &mut FencedProjection) {
+    let (victim, config, dir) = fenced.cluster.remove(fenced.victim_index);
+    fenced.victim_resources = Some((config, dir));
     victim.crash_for_test().await;
-
-    let observer = &cluster[observer_index].0;
+    let observer = &fenced.cluster[fenced.observer_index].0;
+    let victim_id = fenced.victim_id;
+    let observer_addr = fenced.observer_addr.expect("observer address");
     let deadline = Instant::now() + FENCING_TIMEOUT;
     loop {
         let expected = vec![expected_partition(observer, victim_id)];
         let actual = metadata_partitions_of(observer_addr, FENCED_TOPIC).await;
         if actual == expected {
+            fenced.actual = actual;
             break;
         }
         assert!(
@@ -432,13 +512,40 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
         );
         time::sleep(Duration::from_millis(250)).await;
     }
-
-    // The answer above is only worth anything if it came from a node that
-    // does not hold the heartbeat registry.
+}
+#[rstest_bdd_macros::then(
+    "the non-controller observer reports the dead replica offline with the complete committed partition row"
+)]
+fn fenced_row(fenced: &FencedProjection) {
+    let observer = &fenced.cluster[fenced.observer_index].0;
+    assert!(fenced.actual == vec![expected_partition(observer, fenced.victim_id)]);
     assert!(
         observer.controller_leader_id() != Some(krabka_raft::NodeId(observer.node_id())),
         "the observer must still be a follower for this test to mean anything"
     );
+}
 
-    shutdown_cluster(cluster).await;
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offline_replicas.feature",
+    name = "offline log dir is reported as an offline replica"
+)]
+#[tokio::test]
+async fn offline_log_dir_is_reported_as_an_offline_replica(disk: DiskProjection) {
+    disk.broker.take().expect("broker").handle.shutdown().await;
+}
+
+/// A `Metadata` response served by a broker that is not the controller must
+/// report the replicas of a dead broker offline. The fencing state lives in
+/// the controller's heartbeat registry, so it only reaches this node if the
+/// controller writes it to the metadata log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offline_replicas.feature",
+    name = "a follower reports the replicas of a fenced broker offline"
+)]
+#[tokio::test]
+async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline(fenced: FencedProjection) {
+    shutdown_cluster(fenced.cluster).await;
 }

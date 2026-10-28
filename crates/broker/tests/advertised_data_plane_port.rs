@@ -1,42 +1,76 @@
-//! A `for_tests` broker that asks for an OS-assigned data-plane port must
-//! register the port it actually bound, not the `:0` it was configured with.
-//!
-//! `register_broker` used to submit this node's `BrokerRegistrationRecord`
-//! before the data-plane listener bound, so a `:0` config published port 0
-//! into the metadata image. Every other broker's `Metadata` response, and
-//! every KIP-annotated admin call that routes through it (`ListGroups`,
-//! `DescribeCluster`, ...), then named this broker's own dead endpoint.
+//! A broker configured with port zero advertises the endpoint it actually bound.
 #![cfg(test)]
 
 mod support;
 
 use {
-    crate::support::{
-        client::connect_client, discovery::topic_metadata_request, standalone_broker,
-    },
     assert2::assert,
+    krabka_broker::BrokerHandle,
     krabka_protocol::owned::metadata_response::MetadataResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::{client::connect_client, discovery::topic_metadata_request, standalone_broker},
+    tempfile::TempDir,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_port_zero_broker_registers_its_bound_port() {
-    let (_dir, broker) = standalone_broker().await;
+struct DiscoveryScenario {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    response: Option<MetadataResponse>,
+}
+
+#[fixture]
+fn discovery() -> DiscoveryScenario {
+    DiscoveryScenario {
+        broker: None,
+        directory: None,
+        response: None,
+    }
+}
+
+#[given("a standalone broker configured with port zero")]
+async fn start_broker(discovery: &mut DiscoveryScenario) {
+    let (directory, broker) = standalone_broker().await;
+    discovery.directory = Some(directory);
+    discovery.broker = Some(broker);
+}
+
+#[when("a client requests cluster metadata")]
+async fn request_metadata(discovery: &mut DiscoveryScenario) {
+    let broker = discovery.broker.as_ref().expect("a broker was started");
+    let client = connect_client(broker.listen_addr().to_string(), None).await;
+    discovery.response = Some(
+        client
+            .send(topic_metadata_request(Some(vec![])))
+            .await
+            .unwrap(),
+    );
+}
+
+#[then("metadata advertises the broker's actual bound port")]
+fn advertised_port(discovery: &DiscoveryScenario) {
+    let broker = discovery.broker.as_ref().expect("a broker was started");
+    let response = discovery.response.as_ref().expect("metadata was requested");
     let bound_port = i32::from(broker.listen_addr().port());
     assert!(bound_port != 0, "the broker bound an OS-assigned port");
-
-    let client = connect_client(broker.listen_addr().to_string(), None).await;
-    let resp: MetadataResponse = client
-        .send(topic_metadata_request(Some(vec![])))
-        .await
-        .unwrap();
-
-    assert!(resp.brokers.len() == 1);
+    assert!(response.brokers.len() == 1);
     assert!(
-        resp.brokers[0].port == bound_port,
+        response.brokers[0].port == bound_port,
         "Metadata advertised port {}, the broker actually bound {bound_port}: {:?}",
-        resp.brokers[0].port,
-        resp.brokers[0],
+        response.brokers[0].port,
+        response.brokers[0]
     );
+}
 
-    broker.shutdown().await;
+#[scenario(
+    path = "tests/features/advertised_data_plane_port.feature",
+    name = "An OS assigned port is advertised in metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_port_zero_broker_registers_its_bound_port(discovery: DiscoveryScenario) {
+    discovery
+        .broker
+        .expect("a broker was started")
+        .shutdown()
+        .await;
 }

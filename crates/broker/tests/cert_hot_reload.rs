@@ -20,7 +20,6 @@ use {
     },
     assert2::assert,
     krabka_broker::Broker,
-    krabka_units::{Time, convert::TimeExt},
     rustls::crypto::aws_lc_rs,
     std::{
         fs, io,
@@ -81,107 +80,6 @@ async fn handshake_against(
         .map_err(io::Error::other)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reload_tls_swaps_served_cert() {
-    let _ = aws_lc_rs::default_provider().install_default();
-
-    let CertFixture {
-        log_dir: _log_dir,
-        pem_dir: _pem_dir,
-        cert_path,
-        key_path,
-        mut cfg,
-    } = cert_fixture();
-    // Disable the periodic watcher; this test drives reloads via the
-    // explicit `BrokerHandle::reload_tls()` so it doesn't depend on
-    // poll-tick timing.
-    cfg.tls_reload_interval = <Time as TimeExt>::ZERO;
-
-    let handle = Broker::start(cfg).await.expect("broker start");
-    let addr = handle.listen_addr();
-
-    let cert_a = cert_der_from_pem(DEV_CERT_A);
-    let cert_b = cert_der_from_pem(DEV_CERT_B);
-
-    // Before reload: cert A is served. Cert-A verifier accepts;
-    // cert-B verifier rejects.
-    handshake_against(addr, cert_a.clone())
-        .await
-        .expect("pre-reload handshake against cert A must succeed");
-    let pre_b = handshake_against(addr, cert_b.clone()).await;
-    assert!(
-        pre_b.is_err(),
-        "pre-reload handshake against cert B must fail: got {pre_b:?}",
-    );
-
-    // Overwrite the cert files with cert B and trigger an immediate
-    // reload. The periodic watcher is disabled, so without this call
-    // the broker would keep serving cert A indefinitely.
-    fs::write(&cert_path, DEV_CERT_B).unwrap();
-    fs::write(&key_path, DEV_KEY_B).unwrap();
-    handle.reload_tls().expect("reload_tls must succeed");
-
-    // After reload: cert B is served. Now the verifiers flip.
-    handshake_against(addr, cert_b.clone())
-        .await
-        .expect("post-reload handshake against cert B must succeed");
-    let post_a = handshake_against(addr, cert_a).await;
-    assert!(
-        post_a.is_err(),
-        "post-reload handshake against cert A must fail: got {post_a:?}",
-    );
-
-    handle.shutdown().await;
-}
-
-/// The periodic watcher reloads when the files' mtime changes on disk. This
-/// proves the mtime-polling path, not only the explicit `reload_tls` trigger.
-/// The test uses a 100 ms tick to stay fast.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn periodic_watcher_reloads_on_mtime_change() {
-    let _ = aws_lc_rs::default_provider().install_default();
-
-    let mut fixture = cert_fixture();
-    fixture.cfg.tls_reload_interval = krabka_units::millis(100);
-    let (cert_path, key_path) = (fixture.cert_path.clone(), fixture.key_path.clone());
-
-    let handle = Broker::start(fixture.cfg.clone())
-        .await
-        .expect("broker start");
-    let addr = handle.listen_addr();
-
-    let cert_b = cert_der_from_pem(DEV_CERT_B);
-
-    // Sleep > 1s before rewriting so the new mtime is guaranteed to
-    // differ from the original (mtime resolution on some filesystems
-    // is 1s).
-    // intentional: mtime-resolution deadline is the behavior under test; no broker
-    // image/metric signal reflects on-disk mtime.
-    time::sleep(Duration::from_millis(1100)).await;
-    fs::write(&cert_path, DEV_CERT_B).unwrap();
-    fs::write(&key_path, DEV_KEY_B).unwrap();
-
-    // Poll up to 5s for the watcher to pick up the change. Each
-    // attempt is a fresh TCP+TLS handshake — keep going until cert B
-    // is served.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if handshake_against(addr, cert_b.clone()).await.is_ok() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "watcher never reloaded within 5s",
-        );
-        // intentional: the periodic mtime-polling reload is the behavior under test;
-        // "cert B is served" is observable only via a live handshake, not any broker
-        // metadata-image or metric, so keep the bounded handshake-retry poll.
-        time::sleep(Duration::from_millis(50)).await;
-    }
-
-    handle.shutdown().await;
-}
-
 /// The directories a case keeps alive, the certificate and key paths it
 /// rotates, and the broker config that serves them.
 struct CertFixture {
@@ -212,4 +110,150 @@ fn cert_fixture() -> CertFixture {
         key_path,
         cfg,
     }
+}
+
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+#[derive(Default)]
+struct CertificateRotation {
+    broker: Option<BrokerHandle>,
+    directories: Option<(TempDir, TempDir)>,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    handshake: Option<Result<(), io::Error>>,
+    reload: Option<Result<(), String>>,
+}
+
+#[fixture]
+fn rotation() -> CertificateRotation {
+    // Start this scenario with fresh inputs and observations.
+
+    CertificateRotation {
+        broker: None,
+        directories: None,
+        cert_path: PathBuf::new(),
+        key_path: PathBuf::new(),
+        handshake: None,
+        reload: None,
+    }
+}
+
+fn certificate(name: &str) -> CertificateDer<'static> {
+    cert_der_from_pem(match name {
+        "A" => DEV_CERT_A,
+        "B" => DEV_CERT_B,
+        _ => panic!("unknown fixture certificate {name}"),
+    })
+}
+
+#[given("a TLS broker serving certificate A with watcher interval {interval} ms")]
+async fn serve_a(rotation: &mut CertificateRotation, interval: u32) {
+    let _ = aws_lc_rs::default_provider().install_default();
+    let CertFixture {
+        log_dir,
+        pem_dir,
+        cert_path,
+        key_path,
+        mut cfg,
+    } = cert_fixture();
+    cfg.tls_reload_interval = krabka_units::millis(interval);
+    rotation.broker = Some(Broker::start(cfg).await.expect("broker start"));
+    rotation.directories = Some((log_dir, pem_dir));
+    rotation.cert_path = cert_path;
+    rotation.key_path = key_path;
+}
+
+#[when("a fresh TLS client pins certificate {name}")]
+async fn pinned_handshake(rotation: &mut CertificateRotation, name: String) {
+    rotation.handshake = Some(
+        handshake_against(
+            rotation.broker.as_ref().unwrap().listen_addr(),
+            certificate(&name),
+        )
+        .await,
+    );
+}
+
+#[then("the TLS handshake is accepted")]
+fn accepted(rotation: &CertificateRotation) {
+    assert!(
+        rotation.handshake.as_ref().unwrap().is_ok(),
+        "TLS handshake failed: {:?}",
+        rotation.handshake
+    );
+}
+
+#[then("the TLS handshake is rejected")]
+fn rejected(rotation: &CertificateRotation) {
+    assert!(
+        rotation.handshake.as_ref().unwrap().is_err(),
+        "unexpected TLS acceptance"
+    );
+}
+
+#[when("the certificate and key files are replaced with B after {delay} ms")]
+async fn replace_files(rotation: &CertificateRotation, delay: u64) {
+    if delay > 0 {
+        time::sleep(Duration::from_millis(delay)).await;
+    }
+    fs::write(&rotation.cert_path, DEV_CERT_B).unwrap();
+    fs::write(&rotation.key_path, DEV_KEY_B).unwrap();
+}
+
+#[when("the broker explicitly reloads TLS")]
+fn reload(rotation: &mut CertificateRotation) {
+    rotation.reload = Some(
+        rotation
+            .broker
+            .as_ref()
+            .unwrap()
+            .reload_tls()
+            .map_err(|error| error.to_string()),
+    );
+}
+
+#[then("the explicit reload succeeds")]
+fn reloaded(rotation: &CertificateRotation) {
+    assert!(
+        rotation.reload.as_ref().unwrap().is_ok(),
+        "reload failed: {:?}",
+        rotation.reload
+    );
+}
+
+#[when("fresh B-pinned handshakes retry every {retry} ms for at most {budget} ms")]
+async fn await_watcher(rotation: &mut CertificateRotation, retry: u64, budget: u64) {
+    let addr = rotation.broker.as_ref().unwrap().listen_addr();
+    let deadline = Instant::now() + Duration::from_millis(budget);
+    loop {
+        let result = handshake_against(addr, certificate("B")).await;
+        if result.is_ok() || Instant::now() >= deadline {
+            rotation.handshake = Some(result);
+            break;
+        }
+        time::sleep(Duration::from_millis(retry)).await;
+    }
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/cert_hot_reload.feature",
+    name = "reload tls swaps served cert"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_tls_swaps_served_cert(rotation: CertificateRotation) {
+    rotation.broker.unwrap().shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/cert_hot_reload.feature",
+    name = "periodic watcher reloads on mtime change"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn periodic_watcher_reloads_on_mtime_change(rotation: CertificateRotation) {
+    rotation.broker.unwrap().shutdown().await;
 }

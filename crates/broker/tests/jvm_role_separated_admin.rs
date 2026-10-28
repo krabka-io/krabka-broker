@@ -81,7 +81,7 @@ fn ports() -> &'static Ports {
 /// A booted role-separated cluster. Held so the log directories outlive the
 /// nodes that write them.
 struct RoleSeparated {
-    _controller: BrokerHandle,
+    controller: BrokerHandle,
     brokers: Vec<BrokerHandle>,
     _dirs: Vec<tempfile::TempDir>,
 }
@@ -162,7 +162,7 @@ async fn start_role_separated() -> RoleSeparated {
     }
 
     RoleSeparated {
-        _controller: controller,
+        controller,
         brokers,
         _dirs: dirs,
     }
@@ -224,116 +224,161 @@ fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
     support::jvm_finalized_level(describe_stdout, feature)
 }
 
-/// Both admin write tools an operator drives by hand, aimed at a broker-only
-/// node in a role-separated cluster.
-///
-/// One test, one cluster, both tools: two three-node clusters plus their CLI
-/// containers contend badly enough on a loaded machine that a broker misses
-/// its heartbeat window, and the failure then looks like a routing bug rather
-/// than the resource shortage it is.
-///
-/// - `kafka-configs --alter` sends `IncrementalAlterConfigs` (44). The alter
-///   must succeed, `--describe` must read the new value back, and the *other*
-///   broker-only node — the one that did not serve the write — must replicate
-///   it, which is what proves the write really went through the controller
-///   rather than being answered locally.
-/// - `kafka-features downgrade` then `upgrade` sends `UpdateFeatures` (57) in
-///   both directions, the api key whose forwarding the deleted
-///   `jvm_kip320_divergence` retry loop used to paper over.
-///
-/// Both keys are `forwardable` in Kafka's own table, so a JVM broker in this
-/// position wraps them in a KIP-590 `Envelope`. A node with no forwarding path
-/// of any kind answers `NOT_CONTROLLER` and every command here fails.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn admin_write_tools_reach_the_controller_from_a_broker_only_node() {
-    const TOPIC: &str = "role-separated-admin";
+struct Administration {
+    cluster: Option<RoleSeparated>,
+    topic: String,
+    outputs: Vec<Output>,
+    described: Option<Output>,
+}
+#[rstest::fixture]
+fn administration() -> Administration {
+    // Start this scenario with fresh inputs and observations.
 
-    let cluster = Box::pin(start_role_separated()).await;
-    let bootstrap = bootstrap();
-
-    let created = kafka_tool("/opt/kafka/bin/kafka-topics.sh", bootstrap, &[
-        "--create",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-    ])
-    .await;
-    assert!(
-        created.status.success(),
-        "kafka-topics --create against a broker-only node failed: {}",
-        combined(&created)
+    Administration {
+        cluster: None,
+        topic: String::new(),
+        outputs: Vec::new(),
+        described: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "one controller-only voter and two registered broker-only metadata observers"
+)]
+async fn roles(administration: &mut Administration) {
+    administration.cluster = Some(Box::pin(start_role_separated()).await);
+}
+#[rstest_bdd_macros::when(
+    "the JVM administrator creates single-replica topic {topic} through a broker-only node"
+)]
+async fn create(administration: &mut Administration, topic: String) {
+    administration.outputs.push(
+        kafka_tool("/opt/kafka/bin/kafka-topics.sh", bootstrap(), &[
+            "--create",
+            "--topic",
+            &topic,
+            "--partitions",
+            "1",
+            "--replication-factor",
+            "1",
+        ])
+        .await,
     );
-
-    let altered = kafka_configs(bootstrap, &[
-        "--alter",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--add-config",
-        "retention.ms=60000",
-    ])
-    .await;
-    assert!(
-        altered.status.success(),
-        "kafka-configs --alter against a broker-only node failed: {}",
-        combined(&altered)
+    administration.topic = topic;
+}
+#[rstest_bdd_macros::then("every forwarded administration command succeeds")]
+fn accepted(administration: &Administration) {
+    assert!(!administration.outputs.is_empty());
+    for output in &administration.outputs {
+        assert!(output.status.success(), "{}", combined(output));
+    }
+}
+#[rstest_bdd_macros::when(
+    "the administrator alters topic configuration to {key}={value} through a broker-only node"
+)]
+async fn configure(administration: &mut Administration, key: String, value: String) {
+    administration.outputs.push(
+        kafka_configs(bootstrap(), &[
+            "--alter",
+            "--entity-type",
+            "topics",
+            "--entity-name",
+            &administration.topic,
+            "--add-config",
+            &format!("{key}={value}"),
+        ])
+        .await,
     );
-
-    let described = kafka_configs(bootstrap, &[
-        "--describe",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-    ])
-    .await;
-    let rendered = combined(&described);
-    check!(
-        rendered.contains("retention.ms=60000"),
-        "the forwarded alter is not readable back: {rendered}"
+    administration.described = Some(
+        kafka_configs(bootstrap(), &[
+            "--describe",
+            "--entity-type",
+            "topics",
+            "--entity-name",
+            &administration.topic,
+        ])
+        .await,
     );
-
+}
+#[rstest_bdd_macros::then("the tool and both broker-only images report {key}={value}")]
+async fn replicated_config(administration: &Administration, key: String, value: String) {
+    let rendered = combined(
+        administration
+            .described
+            .as_ref()
+            .expect("configuration described"),
+    );
+    check!(rendered.contains(&format!("{key}={value}")), "{rendered}");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let replicated = cluster.brokers.iter().all(|broker| {
-            broker
-                .controller_image_for_test()
-                .topic_config(TOPIC)
-                .is_some_and(|overrides| {
-                    overrides.get("retention.ms").map(String::as_str) == Some("60000")
-                })
-        });
-        if replicated {
+        if administration
+            .cluster
+            .as_ref()
+            .expect("cluster")
+            .brokers
+            .iter()
+            .all(|broker| {
+                broker
+                    .controller_image_for_test()
+                    .topic_config(&administration.topic)
+                    .is_some_and(|overrides| {
+                        overrides.get(&key).map(String::as_str) == Some(value.as_str())
+                    })
+            })
+        {
             break;
         }
         assert!(
             Instant::now() <= deadline,
-            "the forwarded config change never reached every broker-only node"
+            "forwarded configuration did not reach both broker-only images"
         );
         time::sleep(Duration::from_millis(200)).await;
     }
-
-    for (verb, spec, want) in [
-        ("downgrade", "transaction.version=1", 1),
-        ("upgrade", "transaction.version=2", 2),
-    ] {
-        let output = kafka_features(bootstrap, &[verb, "--feature", spec]).await;
-        assert!(
-            output.status.success(),
-            "kafka-features {verb} {spec} against a broker-only node failed: {}",
-            combined(&output)
-        );
-
-        let described = kafka_features(bootstrap, &["describe"]).await;
-        let rendered = String::from_utf8_lossy(&described.stdout).into_owned();
-        check!(
-            finalized_level(&rendered, "transaction.version") == Some(want),
-            "transaction.version should be {want} after {verb}:\n{rendered}"
-        );
+}
+#[rstest_bdd_macros::when(
+    "the administrator requests {verb} of feature {feature} to {level} through a broker-only node"
+)]
+async fn change_feature(
+    administration: &mut Administration,
+    verb: String,
+    feature: String,
+    level: i64,
+) {
+    administration.outputs.push(
+        kafka_features(bootstrap(), &[
+            &verb,
+            "--feature",
+            &format!("{feature}={level}"),
+        ])
+        .await,
+    );
+    administration.described = Some(kafka_features(bootstrap(), &["describe"]).await);
+}
+#[rstest_bdd_macros::then("the feature tool reports finalized {feature} level {level}")]
+fn feature_level(administration: &Administration, feature: String, level: i64) {
+    let rendered = String::from_utf8_lossy(
+        &administration
+            .described
+            .as_ref()
+            .expect("feature described")
+            .stdout,
+    );
+    check!(
+        finalized_level(&rendered, &feature) == Some(level),
+        "{rendered}"
+    );
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_role_separated_admin.feature",
+    name = "Broker-only nodes forward configuration and feature administration"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admin_write_tools_reach_the_controller_from_a_broker_only_node(
+    administration: Administration,
+) {
+    let cluster = administration.cluster.take().expect("cluster");
+    for broker in cluster.brokers {
+        broker.shutdown().await;
     }
+    cluster.controller.shutdown().await;
 }

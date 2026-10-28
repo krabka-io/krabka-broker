@@ -514,61 +514,6 @@ fn metadata_snapshot_fetch_max_cannot_raise_the_core_security_ceiling() {
     assert!(error.to_string().contains("metadata_snapshot_fetch_max"));
 }
 
-/// The whole-config check `Broker::start` runs states the same bounds on the
-/// two KIP-98 expiry knobs that the file-config validator does, because an
-/// embedding caller that builds a `BrokerConfig` in process never passes
-/// through that validator.
-///
-/// Both keys are `ConfigDef.Type::INT` in Kafka, so the value the sweep runs
-/// on has to be a whole number of milliseconds an `i32` holds -- otherwise
-/// `DescribeConfigs` saturates and reports an expiry the broker is not using.
-/// The expiry itself must run (Kafka's `atLeast(1)`); zero on the cadence
-/// disables the sweep and is accepted.
-#[test]
-fn rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {
-    let cases: [RuntimeInvalidator; 6] = [
-        RuntimeInvalidator {
-            expected: "txn_id_expiration must be within 1ms..=2147483647ms",
-            invalidate: |c| {
-                c.txn_id_expiration = <Time as TimeExt>::ZERO;
-            },
-        },
-        RuntimeInvalidator {
-            expected: "txn_id_expiration must be within 1ms..=2147483647ms",
-            invalidate: |c| {
-                c.txn_id_expiration = <Time as TimeExt>::from_millis(i64::from(i32::MAX) + 1);
-            },
-        },
-        RuntimeInvalidator {
-            expected: "txn_id_expiration must be a whole number of milliseconds",
-            invalidate: |c| {
-                c.txn_id_expiration = nanos(1_500_000);
-            },
-        },
-        RuntimeInvalidator {
-            expected: "txn_id_expiration_cleanup_interval must be within 0ms..=2147483647ms",
-            invalidate: |c| {
-                c.txn_id_expiration_cleanup_interval =
-                    <Time as TimeExt>::from_millis(i64::from(i32::MAX) + 1);
-            },
-        },
-        RuntimeInvalidator {
-            expected: "txn_id_expiration_cleanup_interval must be a whole number of milliseconds",
-            invalidate: |c| {
-                c.txn_id_expiration_cleanup_interval = nanos(1_500_000);
-            },
-        },
-        RuntimeInvalidator {
-            expected: "txn_id_expiration_cleanup_interval must be within 0ms..=2147483647ms",
-            invalidate: |c| {
-                c.txn_id_expiration_cleanup_interval = <Time as TimeExt>::from_millis(-1);
-            },
-        },
-    ];
-
-    assert_invalid_runtime_cases(cases.iter().copied());
-}
-
 #[derive(Clone, Copy)]
 enum AcceptedZeroScalar {
     DisabledExpirySweep,
@@ -636,3 +581,57 @@ fn the_request_byte_budget_must_hold_one_whole_request() {
         assert!(config.validate().is_ok(), "{budget:?}");
     }
 }
+
+#[derive(Default)]
+struct ExpiryConfiguration {
+    config: BrokerConfig,
+    validation: Option<Result<(), BrokerError>>,
+}
+
+#[rstest::fixture]
+fn expiry_configuration() -> ExpiryConfiguration {
+    // In-process broker startup validates an independent default configuration.
+    ExpiryConfiguration::default()
+}
+
+#[rstest_bdd_macros::given("transaction expiry setting {setting} is {amount} {unit}")]
+fn supplied_expiry_duration(
+    expiry_configuration: &mut ExpiryConfiguration,
+    setting: String,
+    amount: i64,
+    unit: String,
+) {
+    let duration = match unit.as_str() {
+        "milliseconds" => <Time as TimeExt>::from_millis(amount),
+        "nanoseconds" => nanos(amount.try_into().expect("nonnegative nanosecond example")),
+        _ => panic!("unknown duration unit {unit}"),
+    };
+    match setting.as_str() {
+        "txn_id_expiration" => expiry_configuration.config.txn_id_expiration = duration,
+        "txn_id_expiration_cleanup_interval" => {
+            expiry_configuration
+                .config
+                .txn_id_expiration_cleanup_interval = duration;
+        }
+        _ => panic!("unknown expiry setting {setting}"),
+    }
+}
+
+#[rstest_bdd_macros::when("the in-process broker configuration is validated before startup")]
+fn validate_expiry_configuration(expiry_configuration: &mut ExpiryConfiguration) {
+    expiry_configuration.validation = Some(expiry_configuration.config.validate());
+}
+
+#[rstest_bdd_macros::then("startup refuses an invalid runtime configuration with {message}")]
+fn refused_expiry_configuration(expiry_configuration: &ExpiryConfiguration, message: String) {
+    let Some(Err(BrokerError::InvalidRuntimeConfig(actual))) = &expiry_configuration.validation
+    else {
+        panic!("startup validation must reject the configured expiry duration");
+    };
+    assert!(actual == &message);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/config/scalar_checks/tests.feature",
+    fixtures = [expiry_configuration: ExpiryConfiguration]
+);

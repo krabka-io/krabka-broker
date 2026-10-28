@@ -237,70 +237,6 @@ mod tests {
 
     /// `ClassicGroup.validateOffsetDelete` and `isSubscribedToTopic`, row by
     /// row.
-    #[test]
-    fn classic_guard_follows_kafka() {
-        let rows = [
-            (
-                "empty consumer group subscribes to nothing",
-                classic().call(),
-                Ok(named(&[])),
-            ),
-            (
-                "empty connect group subscribes to nothing",
-                classic().maybe_protocol_type(Some(Some("connect"))).call(),
-                Ok(named(&[])),
-            ),
-            (
-                "stable connect group is not empty",
-                classic()
-                    .state(ClassicGroupState::Stable)
-                    .maybe_protocol_type(Some(Some("connect")))
-                    .maybe_protocol_name(Some("default"))
-                    .metadata(&[Bytes::from_static(b"x")])
-                    .call(),
-                Err(codes::NON_EMPTY_GROUP),
-            ),
-            (
-                "preparing group without a protocol type is not empty",
-                classic()
-                    .state(ClassicGroupState::PreparingRebalance)
-                    .protocol_type(None)
-                    .metadata(&[Bytes::new()])
-                    .call(),
-                Err(codes::NON_EMPTY_GROUP),
-            ),
-            (
-                "consumer group unions its members' topics, any version",
-                classic()
-                    .state(ClassicGroupState::Stable)
-                    .maybe_protocol_name(Some("range"))
-                    .metadata(&[subscription(0, &["a", "b"]), subscription(3, &["c"])])
-                    .call(),
-                Ok(named(&["a", "b", "c"])),
-            ),
-            (
-                "undecodable metadata subscribes to every topic",
-                classic()
-                    .state(ClassicGroupState::CompletingRebalance)
-                    .maybe_protocol_name(Some("range"))
-                    .metadata(&[subscription(1, &["a"]), Bytes::from_static(b"\x00")])
-                    .call(),
-                Ok(SubscribedTopics::All),
-            ),
-            (
-                "no protocol selected yet subscribes to every topic",
-                classic()
-                    .state(ClassicGroupState::PreparingRebalance)
-                    .metadata(&[subscription(0, &["a"])])
-                    .call(),
-                Ok(SubscribedTopics::All),
-            ),
-        ];
-        for (name, group, want) in rows {
-            check!(classic_guard(&group) == want, "{name}");
-        }
-    }
-
     /// `ModernGroup.isSubscribedToTopic`: the names, and the topics that the
     /// group resolved each regex to. A regex the group has not resolved makes
     /// the group subscribed to every topic.
@@ -323,4 +259,94 @@ mod tests {
         });
         check!(consumer_subscribed_topics(&g) == named(&["orders", "payments"]));
     }
+    use {
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct OffsetDeletionGuard {
+        group: Option<ClassicState>,
+        decision: Option<Result<SubscribedTopics, i16>>,
+    }
+    #[derive(DataTableRow)]
+    struct SubscriptionMetadata {
+        version: String,
+        topics: String,
+    }
+    #[rstest::fixture]
+    fn deletion_guard() -> OffsetDeletionGuard {
+        // Start this scenario with fresh inputs and observations.
+        OffsetDeletionGuard::default()
+    }
+    #[given(
+        "a classic group is {state} with protocol type {kind} selected protocol {selected} and member metadata"
+    )]
+    fn deletion_group_metadata(
+        deletion_guard: &mut OffsetDeletionGuard,
+        state: String,
+        kind: String,
+        selected: String,
+        #[datatable] rows: Rows<SubscriptionMetadata>,
+    ) {
+        let state = match state.as_str() {
+            "empty" => ClassicGroupState::Empty,
+            "stable" => ClassicGroupState::Stable,
+            "preparing" => ClassicGroupState::PreparingRebalance,
+            "completing" => ClassicGroupState::CompletingRebalance,
+            _ => panic!("unknown classic group state"),
+        };
+        let kind = if kind == "absent" {
+            None
+        } else {
+            Some(kind.as_str())
+        };
+        let selected = if selected == "absent" {
+            None
+        } else {
+            Some(selected.as_str())
+        };
+        let metadata = rows
+            .into_iter()
+            .map(|row| match row.version.as_str() {
+                "empty" => Bytes::new(),
+                "opaque" => Bytes::from_static(b"x"),
+                "truncated" => Bytes::from_static(b"\x00"),
+                version => {
+                    let topics = row.topics.split(',').collect::<Vec<_>>();
+                    subscription(version.parse().expect("subscription version"), &topics)
+                }
+            })
+            .collect::<Vec<_>>();
+        deletion_guard.group = Some(
+            classic()
+                .state(state)
+                .protocol_type(kind)
+                .maybe_protocol_name(selected)
+                .metadata(&metadata)
+                .call(),
+        );
+    }
+    #[when("the coordinator checks which topics a classic OffsetDelete must protect")]
+    fn classic_deletion_guard(deletion_guard: &mut OffsetDeletionGuard) {
+        deletion_guard.decision = Some(classic_guard(
+            deletion_guard
+                .group
+                .as_ref()
+                .expect("classic group prepared"),
+        ));
+    }
+    #[then("the deletion guard protects {topics}")]
+    fn classic_protected_topics(deletion_guard: &OffsetDeletionGuard, topics: String) {
+        let expected = match topics.as_str() {
+            "none" => Ok(named(&[])),
+            "all" => Ok(SubscribedTopics::All),
+            "nonempty-group-error" => Err(codes::NON_EMPTY_GROUP),
+            _ => {
+                let names = topics.split(',').collect::<Vec<_>>();
+                Ok(named(&names))
+            }
+        };
+        check!(deletion_guard.decision.as_ref() == Some(&expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/offset_delete.feature",fixtures=[deletion_guard:OffsetDeletionGuard]);
 }

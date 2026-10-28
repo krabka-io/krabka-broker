@@ -77,10 +77,42 @@ pub const CACHED_BUFFER_MAX_BYTES_DEFAULT: u32 = 1024 * 1024 + 12;
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, crate::config::BrokerConfig, assert2::assert};
 
-    #[test]
-    fn defaults_match_kafka() {
+    #[derive(Default)]
+    struct ShareCoordinatorDefaults {
+        broker: Option<BrokerConfig>,
+        selected: Option<ShareCoordinatorConfig>,
+    }
+
+    #[rstest::fixture]
+    fn share_coordinator_defaults() -> ShareCoordinatorDefaults {
+        // Selecting defaults for one broker cannot reuse a previous policy.
+        ShareCoordinatorDefaults::default()
+    }
+
+    #[rstest_bdd_macros::given("a broker has no share coordinator configuration overrides")]
+    fn default_share_broker(share_coordinator_defaults: &mut ShareCoordinatorDefaults) {
+        share_coordinator_defaults.broker = Some(BrokerConfig::default());
+    }
+
+    #[rstest_bdd_macros::when("the broker selects its share coordinator persistence settings")]
+    fn select_share_defaults(share_coordinator_defaults: &mut ShareCoordinatorDefaults) {
+        share_coordinator_defaults.selected = Some(
+            share_coordinator_defaults
+                .broker
+                .as_ref()
+                .expect("broker configuration was given")
+                .share_coordinator
+                .as_ref()
+                .clone(),
+        );
+    }
+
+    #[rstest_bdd_macros::then(
+        "the share state topic, recovery buffers, snapshots and worker policy use Kafka defaults"
+    )]
+    fn kafka_share_defaults(share_coordinator_defaults: &ShareCoordinatorDefaults) {
         let expected = ShareCoordinatorConfig {
             state_topic_num_partitions: 50,
             state_topic_replication_factor: 3,
@@ -97,6 +129,11 @@ mod tests {
             cached_buffer_max_bytes: bytes(1_048_588),
             trunk_rules: false,
         };
-        assert!(ShareCoordinatorConfig::default() == expected);
+        assert!(share_coordinator_defaults.selected.as_ref() == Some(&expected));
     }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_coordinator/config.feature",
+        fixtures = [share_coordinator_defaults: ShareCoordinatorDefaults]
+    );
 }

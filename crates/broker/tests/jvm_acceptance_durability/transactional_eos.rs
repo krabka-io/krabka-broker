@@ -19,9 +19,16 @@ use {
         },
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, config::ListenerSpec},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec},
     krabka_log::LogConfig,
-    std::{io::Write, net::SocketAddr, process::Stdio, time::Duration},
+    std::{
+        io::Write,
+        mem,
+        net::SocketAddr,
+        process::{Output, Stdio},
+        time::Duration,
+    },
+    tempfile::TempDir,
     tokio::{time, time::Instant},
 };
 
@@ -114,11 +121,26 @@ public final class ZombieProducer {
 // loopback, so local Linux runs do not need an /etc/hosts entry.
 //
 // Same multi-thread runtime caveat as the other multi-broker tests.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn transactional_console_producer_eos() {
-    const TOPIC: &str = "krabka-txn-itest";
-    const ZOMBIE_TOPIC: &str = "krabka-txn-zombie";
+const TOPIC: &str = "krabka-txn-itest";
+struct TransactionIsolation {
+    cluster: Vec<(BrokerHandle, TempDir)>,
+    output: Option<Output>,
+    consumed: Vec<String>,
+}
+#[rstest::fixture]
+fn isolation() -> TransactionIsolation {
+    // Start this scenario with fresh inputs and observations.
+
+    TransactionIsolation {
+        cluster: Vec::new(),
+        output: None,
+        consumed: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "three brokers expose external and internal listeners with 128-byte segments and topic krabka-txn-itest"
+)]
+async fn segmented_cluster(isolation: &mut TransactionIsolation) {
     /// Segment size every broker in this cluster boots with, so that each
     /// batch the transactional producer writes lands in a segment of its own
     /// and the abort marker's transaction index is sealed before the reads.
@@ -216,7 +238,6 @@ async fn transactional_console_producer_eos() {
     }
 
     let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
-    let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
 
     // 1. Create the topic via node 1.
     create_plain_console_topic_at(&bootstrap_1, TOPIC);
@@ -236,6 +257,13 @@ async fn transactional_console_producer_eos() {
         time::sleep(Duration::from_millis(25)).await;
     }
 
+    isolation.cluster = cluster;
+}
+#[rstest_bdd_macros::when(
+    "the JVM helper commits six records, aborts two, and appends after-abort"
+)]
+async fn write_transactions(isolation: &mut TransactionIsolation) {
+    let bootstrap_1 = "host.docker.internal:9792";
     // 2. Compile the small Java helper against the image's Kafka client jars.
     //    It writes one committed transaction, one aborted transaction, and a
     //    later record that seals the abort marker's transaction index.
@@ -247,7 +275,7 @@ async fn transactional_console_producer_eos() {
                javac -cp "$CP" -d /tmp /tmp/TransactionalProducer.java; \
                java -cp "/tmp:$CP" TransactionalProducer "$1" "$2""#,
             "--",
-            &bootstrap_1,
+            bootstrap_1,
             TOPIC,
         ]).input(ContainerInput::Attached).call()
         .stdin(Stdio::piped())
@@ -269,95 +297,59 @@ async fn transactional_console_producer_eos() {
         String::from_utf8_lossy(&producer_out.stdout),
         String::from_utf8_lossy(&producer_out.stderr),
     );
-    assert!(
-        producer_out.status.success(),
-        "transactional Java producer failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr),
-    );
-    assert!(
-        String::from_utf8_lossy(&producer_out.stdout).contains("TXNPROBE OK"),
-        "transactional Java producer did not report success: {}",
-        String::from_utf8_lossy(&producer_out.stdout),
-    );
-
-    // 3. Brief pause to let commit markers propagate through the log.
-    // intentional: transactional commit-marker propagation and LSO advance are
-    // not in the metadata image and have no krabka awaiter/metric.
+    isolation.output = Some(producer_out);
     time::sleep(Duration::from_secs(2)).await;
-
-    // 4. read_committed must return the committed transaction and the later
-    // record, even though the abort entry is now in a sealed segment.
-    let committed_out = docker_run_kafka_tool(&[
+}
+#[rstest_bdd_macros::then("the JVM exits successfully and reports {marker}")]
+fn java_outcome(isolation: &TransactionIsolation, marker: String) {
+    let output = isolation.output.as_ref().expect("JVM helper ran");
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains(&marker));
+}
+#[rstest_bdd_macros::when("a console consumer reads {count} records with {level} through broker 3")]
+fn consume_transactions(isolation: &mut TransactionIsolation, count: usize, level: String) {
+    let output = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        &bootstrap_3,
+        "host.docker.internal:9992",
         "--topic",
         TOPIC,
         "--isolation-level",
-        "read_committed",
+        &level,
         "--from-beginning",
         "--max-messages",
-        "7",
+        &count.to_string(),
         "--timeout-ms",
         "20000",
     ]);
-    let committed_stdout = String::from_utf8_lossy(&committed_out.stdout);
-    let committed: Vec<_> = committed_stdout
+    isolation.consumed = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
         .collect();
-    assert!(
-        committed
-            == [
-                "committed-0",
-                "committed-1",
-                "committed-2",
-                "committed-3",
-                "committed-4",
-                "committed-5",
-                "after-abort",
-            ],
-        "read_committed returned the wrong records: {committed_stdout}",
-    );
-
-    // 5. read_uncommitted must return both transactions and the later record
-    // in log order.
-    let uncommitted_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        &bootstrap_3,
-        "--topic",
-        TOPIC,
-        "--isolation-level",
-        "read_uncommitted",
-        "--from-beginning",
-        "--max-messages",
-        "9",
-        "--timeout-ms",
-        "20000",
-    ]);
-    let uncommitted_stdout = String::from_utf8_lossy(&uncommitted_out.stdout);
-    let uncommitted: Vec<_> = uncommitted_stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
+}
+#[rstest_bdd_macros::then("the console returns exactly these values in log order")]
+fn isolated_values(isolation: &TransactionIsolation, datatable: Vec<Vec<String>>) {
+    let expected: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [value]: [String; 1] = row.try_into().expect("value");
+            value
+        })
         .collect();
-    assert!(
-        uncommitted
-            == [
-                "committed-0",
-                "committed-1",
-                "committed-2",
-                "committed-3",
-                "committed-4",
-                "committed-5",
-                "aborted-0",
-                "aborted-1",
-                "after-abort",
-            ],
-        "read_uncommitted returned the wrong records: {uncommitted_stdout}",
-    );
-
+    assert!(isolation.consumed == expected);
+}
+#[rstest_bdd_macros::when(
+    "two JVM producers claim zombie-tid on topic {topic} and the superseded producer writes"
+)]
+fn fenced_producer(isolation: &mut TransactionIsolation, topic: String) {
+    let bootstrap_1 = "host.docker.internal:9792";
     // 6. KIP-360: a second producer on one transactional.id fences the first,
     // and the first learns it as a fatal `ProducerFencedException` the next
     // time it writes.
@@ -366,13 +358,13 @@ async fn transactional_console_producer_eos() {
         "--create",
         "--if-not-exists",
         "--topic",
-        ZOMBIE_TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        &bootstrap_1,
+        bootstrap_1,
     ]);
     let mut zombie = jvm_docker_command().image("--entrypoint").args(&["bash",
             KAFKA_IMAGE_TXN,
@@ -382,8 +374,8 @@ async fn transactional_console_producer_eos() {
                javac -cp "$CP" -d /tmp /tmp/ZombieProducer.java; \
                java -cp "/tmp:$CP" ZombieProducer "$1" "$2""#,
             "--",
-            &bootstrap_1,
-            ZOMBIE_TOPIC,
+            bootstrap_1,
+            &topic,
         ]).input(ContainerInput::Attached).call()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -406,18 +398,19 @@ async fn transactional_console_producer_eos() {
         zombie_out.status,
         String::from_utf8_lossy(&zombie_out.stderr),
     );
-    assert!(
-        zombie_out.status.success(),
-        "zombie Java producer failed: stdout={zombie_stdout}, stderr={}",
-        String::from_utf8_lossy(&zombie_out.stderr),
-    );
-    assert!(
-        zombie_stdout.contains("ZOMBIEPROBE fenced=ProducerFencedException"),
-        "the zombie producer must be fenced with ProducerFencedException; \
-         `fenced=none` means it was allowed to write: {zombie_stdout}",
-    );
+    isolation.output = Some(zombie_out);
+}
 
-    for (h, _) in cluster {
-        h.shutdown().await;
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_eos.feature",
+    name = "transactional console producer eos"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transactional_console_producer_eos(isolation: TransactionIsolation) {
+    for (broker, _) in mem::take(&mut isolation.cluster) {
+        broker.shutdown().await;
     }
+    drop(isolation);
 }

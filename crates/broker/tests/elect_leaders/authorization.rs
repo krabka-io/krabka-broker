@@ -27,19 +27,28 @@ use {
     tokio::time,
 };
 
-/// Single-broker SASL/PLAIN cluster.
-///
-/// alice authenticates with PLAIN credentials but has **no** ACLs. The test
-/// seeds a dummy ACL to disable the compat shim, which allows every operation
-/// while `image.acls` is empty. alice then sends `ElectLeaders Preferred` for
-/// topic "foo-auth-test" partition 0. Each row must carry
-/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_super_user_without_acl_denied() {
+#[derive(Default)]
+struct ElectionAuthorizationScenario {
+    directory: Option<tempfile::TempDir>,
+    handle: Option<krabka_broker::BrokerHandle>,
+    response: Option<Vec<(i32, i16)>>,
+}
+#[rstest::fixture]
+fn election_authorization() -> ElectionAuthorizationScenario {
+    let directory = None;
+    ElectionAuthorizationScenario {
+        directory,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a SASL PLAIN broker grants admin and ANONYMOUS super-user access, authenticates alice without ACLs and holds foo-auth-test partition 0"
+)]
+async fn denied_election_principal(election_authorization: &mut ElectionAuthorizationScenario) {
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
-    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
+    let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_owned(), "admin-secret".to_owned());
     cfg.plain_credentials
@@ -91,13 +100,20 @@ async fn non_super_user_without_acl_denied() {
     // real convergence gate.
     time::sleep(Duration::from_millis(50)).await;
 
-    // Drive ElectLeaders Preferred as alice. Because the compat shim is
-    // now off (image.acls is non-empty) and alice has no Cluster Alter
-    // ACL, the handler must return CLUSTER_AUTHORIZATION_FAILED (31)
-    // for every requested partition.
-    //
-    // If the shim were still active we'd see error_code=0 (allowed).
-    // Retry up to 5s to absorb raft apply latency on slow runners.
+    election_authorization.directory = Some(log_dir);
+    election_authorization.handle = Some(handle);
+}
+#[rstest_bdd_macros::when(
+    "alice requests a preferred election of foo-auth-test partition 0 through SASL PLAIN"
+)]
+async fn request_election_without_cluster_alter(
+    election_authorization: &mut ElectionAuthorizationScenario,
+) {
+    let addr = election_authorization
+        .handle
+        .as_ref()
+        .expect("SASL broker")
+        .listen_addr();
     let resp = retry_until()
         .attempt(|| async {
             drive_elect_leaders_sasl_plain(
@@ -114,11 +130,29 @@ async fn non_super_user_without_acl_denied() {
         .call()
         .await;
 
-    handle.shutdown().await;
-
-    // Per-row error code must be 31 (CLUSTER_AUTHORIZATION_FAILED).
-    assert!(
-        resp == [(0, 31)],
-        "expected CLUSTER_AUTHORIZATION_FAILED (31) for alice; got {resp:?}"
-    );
+    election_authorization.response = Some(resp);
 }
+#[rstest_bdd_macros::then(
+    "every requested partition is refused with CLUSTER_AUTHORIZATION_FAILED code 31"
+)]
+async fn denied_preferred_election(election_authorization: &mut ElectionAuthorizationScenario) {
+    assert!(
+        election_authorization
+            .response
+            .as_ref()
+            .expect("election response")
+            == &[(0, 31)]
+    );
+    election_authorization
+        .handle
+        .take()
+        .expect("SASL broker")
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/election_authorization.feature",
+    name = "Authenticated users need Cluster Alter for preferred elections"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_super_user_without_acl_denied(election_authorization: ElectionAuthorizationScenario) {}

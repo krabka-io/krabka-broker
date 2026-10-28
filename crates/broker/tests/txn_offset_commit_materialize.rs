@@ -212,72 +212,6 @@ async fn begin_and_commit_offsets(
     }
 }
 
-/// The COMMIT marker materializes the buffered txn offsets into the group's
-/// committed offsets. Before `EndTxn(commit)`, `OffsetFetch` reads `-1`. After
-/// it, `OffsetFetch` reads the committed offset.
-#[tokio::test]
-async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
-    let p = start().await;
-    create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client, TOPIC).await;
-
-    let tid = "tid-commit";
-    let group = "g-commit";
-
-    let producer = begin_and_commit_offsets(&p.client, tid, group, 3).await;
-
-    // Pre-commit: the transactional offset is held under the LSO and NOT yet
-    // surfaced — Kafka makes it visible to OffsetFetch only after the marker.
-    assert!(
-        fetch_offset(&p.client, group, topic_id).await == -1,
-        "txn offset must be invisible before the COMMIT marker"
-    );
-
-    // EndTxn(commit) writes the COMMIT marker → materializes the buffer.
-    finish_transaction(&p.client, tid, EndTransactionSetup {
-        producer,
-        ..Default::default()
-    })
-    .await;
-
-    // Post-commit: the offset is now visible via OffsetFetch.
-    assert!(
-        fetch_offset(&p.client, group, topic_id).await == 3,
-        "txn offset must be visible after the COMMIT marker"
-    );
-
-    p.broker.shutdown().await;
-}
-
-/// ABORT drops the buffered txn offsets. `OffsetFetch` still reads `-1` after
-/// `EndTxn(abort)`. Aborted offsets must never become committed.
-#[tokio::test]
-async fn txn_offset_commit_dropped_on_abort_marker() {
-    let p = start().await;
-    create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client, TOPIC).await;
-
-    let tid = "tid-abort";
-    let group = "g-abort";
-
-    let producer = begin_and_commit_offsets(&p.client, tid, group, 5).await;
-
-    // EndTxn(abort): the buffer is dropped without applying.
-    finish_transaction(&p.client, tid, EndTransactionSetup {
-        producer,
-        outcome: TransactionOutcome::Abort,
-    })
-    .await;
-
-    // Still absent: an aborted transactional offset is never committed.
-    assert!(
-        fetch_offset(&p.client, group, topic_id).await == -1,
-        "txn offset must stay absent after the ABORT marker"
-    );
-
-    p.broker.shutdown().await;
-}
-
 /// The `OffsetFetch` version that carries both KIP-447's `require_stable` and
 /// the KIP-516 `groups[]` response shape this test asserts on. Pinning it
 /// makes the expected response struct exact: at v10 the topic name is off the
@@ -386,62 +320,6 @@ fn stable_row(offset: krabka_ids::Offset) -> OffsetFetchResponsePartitions {
     }
 }
 
-/// KIP-447: a `read_committed` EOS consumer sets `require_stable = true` and
-/// must be told to retry -- `UNSTABLE_OFFSET_COMMIT (88)` -- while its own
-/// transaction's offset commit is still waiting for a marker.
-///
-/// The group starts at offset 3 and the transaction proposes 9. Strict reads
-/// retry while it is open; after resolution a commit publishes 9 and an abort
-/// leaves 3 intact.
-#[yare::parameterized(
-    commit = { "commit", TransactionOutcome::Commit, 9 },
-    abort = { "abort", TransactionOutcome::Abort, 3 },
-)]
-#[test_macro(tokio::test)]
-async fn require_stable_offset_fetch_tracks_transaction_outcome(
-    label: &str,
-    outcome: TransactionOutcome,
-    settled_offset: i64,
-) {
-    let p = start().await;
-    create_topic(&p.client).await;
-    let topic_id = topic_id_for(&p.client, TOPIC).await;
-
-    let tid = format!("tid-require-stable-{label}");
-    let group = format!("g-require-stable-{label}");
-
-    commit_stable_offset(&p.client, &group, krabka_ids::Offset(3)).await;
-    let producer = begin_and_commit_offsets(&p.client, &tid, &group, 9).await;
-
-    let unstable = OffsetFetchResponsePartitions {
-        partition_index: 0,
-        committed_offset: -1,
-        committed_leader_epoch: -1,
-        metadata: Some(String::new()),
-        error_code: 88, // UNSTABLE_OFFSET_COMMIT
-        ..Default::default()
-    };
-    let strict = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::RequireStable).await;
-    assert2::assert!(strict == v10_response(&group, topic_id, unstable));
-
-    let relaxed = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::AllowPending).await;
-    assert2::assert!(relaxed == v10_response(&group, topic_id, stable_row(krabka_ids::Offset(3))));
-
-    finish_transaction(&p.client, &tid, EndTransactionSetup { producer, outcome }).await;
-
-    let settled = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::RequireStable).await;
-    assert2::assert!(
-        settled
-            == v10_response(
-                &group,
-                topic_id,
-                stable_row(krabka_ids::Offset(settled_offset))
-            )
-    );
-
-    p.broker.shutdown().await;
-}
-
 /// Resolve the pending offsets through `EndTxn`, retaining the full response on failure.
 async fn finish_transaction(
     client: &krabka_client_core::Client,
@@ -463,4 +341,216 @@ async fn finish_transaction(
         .await
         .expect("end transaction");
     assert!(end.error_code == 0, "EndTxn({label}): {end:?}");
+}
+
+#[derive(Default)]
+struct TransactionalOffsets {
+    process: Option<support::InProcess>,
+    topic_id: Option<WireUuid>,
+    producer: Option<ProducerIdentity>,
+    fetched: Option<i64>,
+    strict: Option<OffsetFetchResponse>,
+    relaxed: Option<OffsetFetchResponse>,
+}
+
+#[rstest::fixture]
+fn transactional_offsets() -> TransactionalOffsets {
+    // Every transaction is isolated in a fresh coordinator process.
+    TransactionalOffsets::default()
+}
+
+impl TransactionalOffsets {
+    fn process(&self) -> &support::InProcess { self.process.as_ref().expect("offset coordinator") }
+
+    fn topic_id(&self) -> WireUuid { self.topic_id.expect("source topic") }
+
+    async fn shutdown(self) {
+        self.process
+            .expect("offset coordinator")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
+
+#[rstest_bdd_macros::given("a source topic and group coordinator are ready on one broker")]
+async fn transactional_offset_topic(transactional_offsets: &mut TransactionalOffsets) {
+    transactional_offsets.process = Some(start().await);
+    create_topic(&transactional_offsets.process().client).await;
+    transactional_offsets.topic_id =
+        Some(topic_id_for(&transactional_offsets.process().client, TOPIC).await);
+}
+
+#[rstest_bdd_macros::given("group g-materialize has stable committed offset {offset}")]
+async fn stable_materialized_offset(transactional_offsets: &TransactionalOffsets, offset: i64) {
+    commit_stable_offset(
+        &transactional_offsets.process().client,
+        "g-materialize",
+        krabka_ids::Offset(offset),
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::when("transaction tid-materialize stages group g-materialize offset {offset}")]
+async fn stage_materialized_offset(transactional_offsets: &mut TransactionalOffsets, offset: i64) {
+    transactional_offsets.producer = Some(
+        begin_and_commit_offsets(
+            &transactional_offsets.process().client,
+            "tid-materialize",
+            "g-materialize",
+            offset,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::when("OffsetFetch reads group g-materialize")]
+async fn read_materialized_offset(transactional_offsets: &mut TransactionalOffsets) {
+    transactional_offsets.fetched = Some(
+        fetch_offset(
+            &transactional_offsets.process().client,
+            "g-materialize",
+            transactional_offsets.topic_id(),
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the fetched offset is {offset}")]
+fn observed_materialized_offset(transactional_offsets: &TransactionalOffsets, offset: i64) {
+    assert!(transactional_offsets.fetched == Some(offset));
+}
+
+#[rstest_bdd_macros::when("EndTxn resolves tid-materialize by {outcome}")]
+async fn resolve_materialized_offset(
+    transactional_offsets: &TransactionalOffsets,
+    outcome: String,
+) {
+    let outcome = match outcome.as_str() {
+        "commit" => TransactionOutcome::Commit,
+        "abort" => TransactionOutcome::Abort,
+        _ => panic!("unsupported transaction outcome: {outcome}"),
+    };
+    finish_transaction(
+        &transactional_offsets.process().client,
+        "tid-materialize",
+        EndTransactionSetup {
+            producer: transactional_offsets
+                .producer
+                .expect("pending offset transaction"),
+            outcome,
+        },
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::when("v10 OffsetFetch reads g-materialize with and without require_stable")]
+async fn read_pending_materialized_offset(transactional_offsets: &mut TransactionalOffsets) {
+    transactional_offsets.strict = Some(
+        fetch_at_v10(
+            &transactional_offsets.process().client,
+            "g-materialize",
+            transactional_offsets.topic_id(),
+            OffsetStability::RequireStable,
+        )
+        .await,
+    );
+    transactional_offsets.relaxed = Some(
+        fetch_at_v10(
+            &transactional_offsets.process().client,
+            "g-materialize",
+            transactional_offsets.topic_id(),
+            OffsetStability::AllowPending,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the full strict response has offset -1 and UNSTABLE_OFFSET_COMMIT 88 while the relaxed response retains offset 3"
+)]
+fn unstable_materialized_offset(transactional_offsets: &TransactionalOffsets) {
+    let unstable = OffsetFetchResponsePartitions {
+        partition_index: 0,
+        committed_offset: -1,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code: 88,
+        ..Default::default()
+    };
+    assert!(
+        transactional_offsets.strict.as_ref()
+            == Some(&v10_response(
+                "g-materialize",
+                transactional_offsets.topic_id(),
+                unstable
+            ))
+    );
+    assert!(
+        transactional_offsets.relaxed.as_ref()
+            == Some(&v10_response(
+                "g-materialize",
+                transactional_offsets.topic_id(),
+                stable_row(krabka_ids::Offset(3))
+            ))
+    );
+}
+
+#[rstest_bdd_macros::when("v10 require_stable OffsetFetch reads the resolved transaction")]
+async fn read_resolved_materialized_offset(transactional_offsets: &mut TransactionalOffsets) {
+    transactional_offsets.strict = Some(
+        fetch_at_v10(
+            &transactional_offsets.process().client,
+            "g-materialize",
+            transactional_offsets.topic_id(),
+            OffsetStability::RequireStable,
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the full stable v10 response reports offset {offset} with no error")]
+fn stable_materialized_response(transactional_offsets: &TransactionalOffsets, offset: i64) {
+    assert!(
+        transactional_offsets.strict.as_ref()
+            == Some(&v10_response(
+                "g-materialize",
+                transactional_offsets.topic_id(),
+                stable_row(krabka_ids::Offset(offset))
+            ))
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "txn offset commit visible via offset fetch after commit marker"
+)]
+#[tokio::test]
+async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker(
+    transactional_offsets: TransactionalOffsets,
+) {
+    transactional_offsets.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "txn offset commit dropped on abort marker"
+)]
+#[tokio::test]
+async fn txn_offset_commit_dropped_on_abort_marker(transactional_offsets: TransactionalOffsets) {
+    transactional_offsets.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "require stable offset fetch tracks transaction outcome"
+)]
+#[tokio::test]
+async fn require_stable_offset_fetch_tracks_transaction_outcome(
+    transactional_offsets: TransactionalOffsets,
+    outcome: String,
+    offset: i64,
+) {
+    let _ = (outcome, offset);
+    transactional_offsets.shutdown().await;
 }

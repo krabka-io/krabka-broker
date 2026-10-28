@@ -24,26 +24,6 @@ use {
     tokio::time,
 };
 
-/// The floor the fetch asks for. 64 KiB is orders of magnitude above the one
-/// small record the exchange produces, so nothing that is readable can satisfy
-/// it and only `max_wait_ms` can end the wait.
-///
-/// The stock consumer default is `fetch.min.bytes=1`, which is why the default
-/// path never showed this; a Streams or Connect deployment raises it, and this
-/// is the shape of the request it then sends.
-pub const MIN_BYTES: i32 = 64 * 1024;
-
-/// The wait that bounds the floor.
-pub const MAX_WAIT_MS: i32 = 2_000;
-
-/// The least time the answer may take.
-///
-/// A broker that treats `min_bytes` as a hint answers on the first append,
-/// which lands here in single-digit milliseconds. The bound is one-sided and a
-/// slow machine only makes it more true, so it is not the kind of timing
-/// assertion instrumentation can break.
-pub const HELD_AT_LEAST: Duration = Duration::from_millis(1_800);
-
 /// Topic-created-already, which a re-run of the ignored differential meets.
 const TOPIC_ALREADY_EXISTS: i16 = 36;
 
@@ -56,14 +36,6 @@ pub struct FetchFacts {
     /// The base offset of every batch the response carried.
     pub(crate) base_offsets: Vec<i64>,
 }
-
-/// The delay before the second record of the exchange is appended, well
-/// inside `MAX_WAIT_MS`.
-///
-/// It is what makes the held time mean something: a broker that answers on the
-/// first append it sees comes back at roughly this mark, and one that holds
-/// out for `min_bytes` comes back at `MAX_WAIT_MS`.
-const APPEND_AFTER: Duration = Duration::from_millis(300);
 
 /// A client on `bootstrap`.
 async fn connect(bootstrap: &str) -> Client {
@@ -155,53 +127,65 @@ fn base_offsets(records: Option<&RecordsPayload>) -> Vec<i64> {
     batches.iter().map(|batch| batch.base_offset).collect()
 }
 
-/// Create the topic, put one record in it, then fetch under a `min_bytes`
-/// floor neither that record nor the second one appended mid-flight can reach.
-///
-/// The second append is the point: it wakes the broker's long poll partway
-/// through the wait, and a broker that treats `min_bytes` as a hint answers
-/// there and then. Both records must come back, and not before `MAX_WAIT_MS`.
-///
-/// Returns how long the fetch was held and what it answered with.
-pub async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duration, FetchFacts) {
-    let client = connect(bootstrap).await;
-    create_topic(&client, topic).await;
-    let topic_id = topic_id(&client, topic).await;
-    produce_one(&client, topic, topic_id, b"first").await;
+/// A topic seeded with one record and a connection reserved for its Fetch.
+pub struct SeededTopic {
+    client: Client,
+    bootstrap: String,
+    topic: String,
+    topic_id: WireUuid,
+}
 
-    // Its own connection: the fetch below occupies this one for seconds, and
-    // the append has to land while it does.
-    let producer = connect(bootstrap).await;
-    let appended = {
-        let topic = topic.to_owned();
-        tokio::spawn(async move {
-            time::sleep(APPEND_AFTER).await;
+impl SeededTopic {
+    pub async fn create(bootstrap: &str, topic: &str) -> Self {
+        let client = connect(bootstrap).await;
+        create_topic(&client, topic).await;
+        let topic_id = topic_id(&client, topic).await;
+        produce_one(&client, topic, topic_id, b"first").await;
+        Self {
+            client,
+            bootstrap: bootstrap.to_owned(),
+            topic: topic.to_owned(),
+            topic_id,
+        }
+    }
+
+    /// Fetch while another connection appends the second record partway through its wait.
+    pub async fn fetch(
+        &self,
+        minimum: i32,
+        wait: i32,
+        append_after_ms: u64,
+    ) -> (Duration, FetchFacts) {
+        let producer = connect(&self.bootstrap).await;
+        let topic = self.topic.clone();
+        let topic_id = self.topic_id;
+        let appended = tokio::spawn(async move {
+            time::sleep(Duration::from_millis(append_after_ms)).await;
             produce_one(&producer, &topic, topic_id, b"second").await;
+        });
+        let started = Instant::now();
+        let fetched = self
+            .client
+            .send(
+                single_partition_fetch()
+                    .topic(self.topic.clone())
+                    .topic_id(self.topic_id)
+                    .limits(FetchLimits {
+                        wait: RequestWaitMillis(wait),
+                        minimum: FetchByteLimit(minimum),
+                        ..Default::default()
+                    })
+                    .call(),
+            )
+            .await
+            .expect("Fetch");
+        let held = started.elapsed();
+        appended.await.expect("the mid-fetch append");
+        let partition = &fetched.responses[0].partitions[0];
+        (held, FetchFacts {
+            error_code: partition.error_code,
+            high_watermark: partition.high_watermark,
+            base_offsets: base_offsets(partition.records.as_ref()),
         })
-    };
-
-    let started = Instant::now();
-    let fetched = client
-        .send(
-            single_partition_fetch()
-                .topic(topic.into())
-                .topic_id(topic_id)
-                .limits(FetchLimits {
-                    wait: RequestWaitMillis(MAX_WAIT_MS),
-                    minimum: FetchByteLimit(MIN_BYTES),
-                    ..Default::default()
-                })
-                .call(),
-        )
-        .await
-        .expect("Fetch");
-    let held = started.elapsed();
-    appended.await.expect("the mid-fetch append");
-
-    let partition = &fetched.responses[0].partitions[0];
-    (held, FetchFacts {
-        error_code: partition.error_code,
-        high_watermark: partition.high_watermark,
-        base_offsets: base_offsets(partition.records.as_ref()),
-    })
+    }
 }

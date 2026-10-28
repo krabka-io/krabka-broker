@@ -68,83 +68,133 @@ async fn await_transaction_coordinator(client: &Client) -> ProducerIdentity {
     }
 }
 
-/// At the default `TV_2`, verify-only `AddPartitionsToTxn` (KIP-890) returns
-/// per-partition `NONE (0)` for a partition already in the ongoing txn and
-/// `TRANSACTION_ABORTABLE (120)` for one that was never added.
-///
-/// Flow: `InitProducerId` → `AddPartitionsToTxn` (`verify_only=false`) adding
-/// `(t,0)` → `AddPartitionsToTxn` (`verify_only=true`) querying both `(t,0)`
-/// (added → NONE) and `(t,1)` (never added → `TRANSACTION_ABORTABLE`).
-///
-/// The test sends this over a single connection to the in-process broker,
-/// which is its own transaction coordinator. `Client::send` negotiates the
-/// highest mutually supported version. The broker advertises v5, which carries
-/// the same batched `transactions` array and `verify_only` field as v4 and
-/// routes through the identical `handle_v4` verify path, so the assertions
-/// hold at either version.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
-    let (broker, bootstrap, _dir) = boot_single().await;
+use {
+    krabka_broker::BrokerHandle,
+    krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+#[derive(Default)]
+struct PartitionVerification {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Client>,
+    producer: Option<ProducerIdentity>,
+    added: Option<AddPartitionsToTxnResponse>,
+    verified: Option<AddPartitionsToTxnResponse>,
+}
+
+#[fixture]
+fn partition_verification() -> PartitionVerification {
+    // Added and queried partitions are separate protocol observations.
+    PartitionVerification::default()
+}
+
+#[given("a TV2 coordinator with producer verify-tid and two-partition topic t")]
+async fn verification_coordinator(partition_verification: &mut PartitionVerification) {
+    let (broker, bootstrap, directory) = boot_single().await;
     let client = admin_client(&bootstrap).await;
-    // Two partitions so (t,1) is a real partition that simply isn't in the txn.
     create_topic(&client, "t", TopicPartitionCount(2)).await;
+    partition_verification.producer = Some(await_transaction_coordinator(&client).await);
+    partition_verification.client = Some(client);
+    partition_verification.broker = Some(broker);
+    partition_verification.directory = Some(directory);
+}
 
-    // Locate (and trigger loading of) the transaction coordinator for TID.
-    // On a single-broker cluster the coordinator is this same node, but the
-    // `__transaction_state` partition's coordinator load can lag broker boot,
-    // so `InitProducerId` may transiently return NOT_COORDINATOR (16) until it
-    // settles — retry until the coordinator is ready.
-    let producer = await_transaction_coordinator(&client).await;
-
-    // Normal add of (t, 0): transitions the entry to Ongoing and registers the
-    // partition. verify_only=false.
-    let added_topic = AddPartitionsToTxnTopic {
-        name: "t".into(),
-        partitions: vec![0],
-        ..Default::default()
-    };
-    let add = client
-        .send(
-            partitions_request()
-                .transactional_id(VERIFY_TID)
-                .producer(producer)
-                .topics(vec![added_topic])
-                .call(),
-        )
-        .await
-        .expect("AddPartitionsToTxn add");
-    let expected_add = expected_partitions(VERIFY_TID, "t", &[partition_code(0, NONE)]);
-    assert!(
-        add == expected_add,
-        "adding (t,0) returned an unexpected response: {add:?}"
+#[when("the producer adds t partition 0 to its transaction")]
+async fn add_verified_partition(partition_verification: &mut PartitionVerification) {
+    partition_verification.added = Some(
+        partition_verification
+            .client
+            .as_ref()
+            .expect("coordinator client")
+            .send(
+                partitions_request()
+                    .transactional_id(VERIFY_TID)
+                    .producer(
+                        partition_verification
+                            .producer
+                            .expect("initialized identity"),
+                    )
+                    .topics(vec![AddPartitionsToTxnTopic {
+                        name: "t".into(),
+                        partitions: vec![0],
+                        ..Default::default()
+                    }])
+                    .call(),
+            )
+            .await
+            .expect("AddPartitionsToTxn add"),
     );
+}
 
-    // Verify-only query for BOTH (t,0) (added → NONE) and (t,1) (not added →
-    // TRANSACTION_ABORTABLE). verify_only=true must never mutate state.
-    let verify_topic = AddPartitionsToTxnTopic {
-        name: "t".into(),
-        partitions: vec![0, 1],
-        ..Default::default()
-    };
-    let verify = client
-        .send(
-            partitions_request()
-                .transactional_id(VERIFY_TID)
-                .producer(producer)
-                .registration(PartitionRegistration::VerifyOnly)
-                .topics(vec![verify_topic])
-                .call(),
-        )
-        .await
-        .expect("AddPartitionsToTxn verify-only");
-    let expected_verify = expected_partitions(VERIFY_TID, "t", &[
-        partition_code(0, NONE),
-        partition_code(1, TRANSACTION_ABORTABLE),
-    ]);
+#[then("the add response contains exactly t partition 0 with NONE")]
+fn partition_added_response(partition_verification: &PartitionVerification) {
     assert!(
-        verify == expected_verify,
-        "verify-only response did not match the partition result table: {verify:?}"
+        partition_verification.added.as_ref().expect("add answered")
+            == &expected_partitions(VERIFY_TID, "t", &[partition_code(0, NONE)])
     );
+}
 
-    broker.shutdown().await;
+#[when("the producer verifies t partitions 0 and 1 without adding them")]
+async fn verify_registered_partitions(partition_verification: &mut PartitionVerification) {
+    partition_verification.verified = Some(
+        partition_verification
+            .client
+            .as_ref()
+            .expect("coordinator client")
+            .send(
+                partitions_request()
+                    .transactional_id(VERIFY_TID)
+                    .producer(
+                        partition_verification
+                            .producer
+                            .expect("initialized identity"),
+                    )
+                    .registration(PartitionRegistration::VerifyOnly)
+                    .topics(vec![AddPartitionsToTxnTopic {
+                        name: "t".into(),
+                        partitions: vec![0, 1],
+                        ..Default::default()
+                    }])
+                    .call(),
+            )
+            .await
+            .expect("AddPartitionsToTxn verify-only"),
+    );
+}
+
+#[then(
+    "verification reports NONE for added partition 0 and TRANSACTION_ABORTABLE for unregistered partition 1"
+)]
+fn partition_verification_response(partition_verification: &PartitionVerification) {
+    assert!(
+        partition_verification
+            .verified
+            .as_ref()
+            .expect("verification answered")
+            == &expected_partitions(VERIFY_TID, "t", &[
+                partition_code(0, NONE),
+                partition_code(1, TRANSACTION_ABORTABLE),
+            ])
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_verify_only.feature",
+    name = "tv2 verify only add partitions reports per partition codes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tv2_verify_only_add_partitions_reports_per_partition_codes(
+    partition_verification: PartitionVerification,
+) {
+    partition_verification
+        .broker
+        .take()
+        .expect("coordinator broker")
+        .shutdown()
+        .await;
+    drop(partition_verification);
 }

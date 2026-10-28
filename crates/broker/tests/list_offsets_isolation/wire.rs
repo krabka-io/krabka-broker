@@ -15,14 +15,11 @@
 use {
     crate::support::{
         offsets::{list_offset_partition, single_partition_list_offsets},
-        producer::producer_record,
         topics::{creatable_topic, create_topic_request},
     },
     assert2::check,
-    bytes::Bytes,
     krabka_broker::{BrokerHandle, codes},
     krabka_client_core::Client,
-    krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::owned::{
         list_offsets_request::ListOffsetsRequest,
         list_offsets_response::ListOffsetsPartitionResponse,
@@ -149,34 +146,4 @@ pub async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, offset: i6
         .wait_until_local_log_end_offset(topic, 0, offset)
         .await;
     broker.wait_until_high_watermark(topic, 0, offset).await;
-}
-
-fn record(topic: &str, value: &'static str) -> ProducerRecord {
-    producer_record()
-        .topic((topic).into())
-        .maybe_value(Some(Some(Bytes::from_static(value.as_bytes()))))
-        .call()
-}
-
-pub async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {
-    producer
-        .send(record(topic, value))
-        .await
-        .expect("produce acknowledged");
-}
-
-/// Produce one record carrying an explicit `timestamp_ms`.
-///
-/// The timestamp cases need to know what they are looking up, and a record left
-/// to the producer's wall clock cannot be named in an assertion. Fixed
-/// timestamps also keep the ordinary records far below the transactional ones,
-/// so a lookup can aim either side of the bound on purpose.
-pub async fn send_at(producer: &Producer, topic: &str, value: &'static str, timestamp_ms: i64) {
-    producer
-        .send(ProducerRecord {
-            timestamp_ms: Some(timestamp_ms),
-            ..record(topic, value)
-        })
-        .await
-        .expect("produce acknowledged");
 }

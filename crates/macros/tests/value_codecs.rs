@@ -119,9 +119,38 @@ fn hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-#[test]
-fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
-    let snapshot = SnapshotValue {
+#[derive(Debug, PartialEq, Eq)]
+enum ShareValue {
+    Snapshot(SnapshotValue),
+    Update(Update),
+}
+
+struct ShareCodecScenario {
+    value: Option<ShareValue>,
+    golden: Vec<u8>,
+    encoded: Vec<u8>,
+    decoded: Option<Result<ShareValue, BrokerError>>,
+    truncated: Vec<Result<ShareValue, BrokerError>>,
+    unsupported: Option<Result<Update, BrokerError>>,
+}
+
+#[rstest::fixture]
+fn share_codec() -> ShareCodecScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    ShareCodecScenario {
+        value: None,
+        golden: Vec::new(),
+        encoded: Vec::new(),
+        decoded: None,
+        truncated: Vec::new(),
+        unsupported: None,
+    }
+}
+
+#[rstest_bdd_macros::given("an empty share snapshot at state epoch 1 and timestamp 1000")]
+fn share_snapshot(share_codec: &mut ShareCodecScenario) {
+    share_codec.value = Some(ShareValue::Snapshot(SnapshotValue {
         snapshot_epoch: 0,
         state_epoch: 1,
         leader_epoch: 0,
@@ -130,17 +159,12 @@ fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
         create_timestamp: 1000,
         write_timestamp: 1000,
         state_batches: vec![],
-    };
-    let golden = hex(
-        "0000 00000000 00000001 00000000 ffffffffffffffff 00000000000003e8 00000000000003e8 01 00",
-    );
-    assert!(snapshot.encode() == golden);
-    assert!(SnapshotValue::decode(&golden) == Ok(snapshot));
-    for end in 0..golden.len() {
-        assert!(SnapshotValue::decode(&golden[..end]).is_err());
-    }
+    }));
+}
 
-    let update = Update {
+#[rstest_bdd_macros::given("a share update at snapshot epoch 3 covering offsets 12 through 15")]
+fn share_update(share_codec: &mut ShareCodecScenario) {
+    share_codec.value = Some(ShareValue::Update(Update {
         snapshot_epoch: 3,
         leader_epoch: 4,
         start_offset: Offset(12),
@@ -151,17 +175,63 @@ fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
             delivery_state: 0,
             delivery_count: 1,
         }],
-    };
-    let golden = hex(
-        "0000 00000003 00000004 000000000000000c 02 000000000000000c 000000000000000f 00 0001 00 01 00 04 00000007",
-    );
-    assert!(update.encode() == golden);
-    assert!(Update::decode(&golden) == Ok(update));
-    for end in 0..golden.len() {
-        assert!(Update::decode(&golden[..end]).is_err());
-    }
-    assert!(Update::decode(&hex("0001")) == Err("unsupported share-state value version"));
+    }));
 }
+
+#[rstest_bdd_macros::given("Kafka share-state bytes {golden}")]
+fn share_bytes(share_codec: &mut ShareCodecScenario, golden: String) {
+    share_codec.golden = hex(&golden);
+}
+
+#[rstest_bdd_macros::when("the share-state value is encoded and its wire bytes are decoded")]
+fn share_value_codec(share_codec: &mut ShareCodecScenario) {
+    match share_codec
+        .value
+        .as_ref()
+        .expect("a share-state value was supplied")
+    {
+        ShareValue::Snapshot(value) => {
+            share_codec.encoded = value.encode().to_vec();
+            share_codec.decoded =
+                Some(SnapshotValue::decode(&share_codec.golden).map(ShareValue::Snapshot));
+            share_codec.truncated = (0..share_codec.golden.len())
+                .map(|end| {
+                    SnapshotValue::decode(&share_codec.golden[..end]).map(ShareValue::Snapshot)
+                })
+                .collect();
+        }
+        ShareValue::Update(value) => {
+            share_codec.encoded = value.encode().to_vec();
+            share_codec.decoded = Some(Update::decode(&share_codec.golden).map(ShareValue::Update));
+            share_codec.truncated = (0..share_codec.golden.len())
+                .map(|end| Update::decode(&share_codec.golden[..end]).map(ShareValue::Update))
+                .collect();
+        }
+    }
+    share_codec.unsupported = Some(Update::decode(&hex("0001")));
+}
+
+#[rstest_bdd_macros::then("the share-state codec preserves Kafka scalar array and tag order")]
+fn share_wire_order(share_codec: &ShareCodecScenario) {
+    assert!(share_codec.encoded == share_codec.golden);
+    let decoded = share_codec
+        .decoded
+        .as_ref()
+        .expect("wire value decoded")
+        .as_ref()
+        .expect("golden bytes accepted");
+    assert!(Some(decoded) == share_codec.value.as_ref());
+}
+
+#[rstest_bdd_macros::then("every incomplete share-state prefix is rejected")]
+fn share_truncation(share_codec: &ShareCodecScenario) {
+    for decoded in &share_codec.truncated {
+        assert!(decoded.is_err());
+    }
+    assert!(share_codec.unsupported == Some(Err("unsupported share-state value version")));
+}
+
+rstest_bdd_macros::scenarios!("tests/features/share_state_codec", fixtures = [share_codec: ShareCodecScenario]);
 
 fn write_items(buf: &mut BytesMut, items: &[i32]) {
     buf.put_u8(u8::try_from(items.len() + 1).unwrap());

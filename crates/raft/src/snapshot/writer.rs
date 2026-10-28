@@ -392,55 +392,58 @@ mod tests {
         28, 29,
     ];
 
-    /// Every data record of a checkpoint names an apiKey that Kafka knows,
-    /// also for the krabka-only state. One row for each krabka-only record.
-    #[test]
-    fn writer_emits_only_kafka_metadata_record_types() {
-        use {
-            krabka_metadata::{
-                BreakGlassAction, BreakGlassProposalRecord, FeatureLevelRecord,
-                PartitionOffsetAdvanceRecord, PatternType, TopicFreezeRecord,
-            },
-            krabka_protocol::records::metadata::KraftMetadataRecord,
-        };
+    use {
+        krabka_metadata::{
+            BreakGlassAction, BreakGlassProposalRecord, FeatureLevelRecord,
+            PartitionOffsetAdvanceRecord, PatternType, TopicFreezeRecord,
+        },
+        krabka_protocol::records::metadata::KraftMetadataRecord,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-        struct Row {
-            label: &'static str,
-            rec: MetadataRecord,
+    struct MetadataCheckpoint {
+        image: Option<MetadataImage>,
+        bytes: Option<Bytes>,
+    }
+
+    #[fixture]
+    fn checkpoint() -> MetadataCheckpoint {
+        // Start this scenario with fresh inputs and observations.
+
+        MetadataCheckpoint {
+            image: None,
+            bytes: None,
         }
-        let rows = [
-            Row {
-                label: "features epoch",
-                rec: MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: "metadata.version".into(),
-                    level: 25,
-                }),
-            },
-            Row {
-                label: "diskless offset advance",
-                rec: MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+    }
+
+    #[given("a snapshot metadata image containing record family {family}")]
+    fn snapshot_record_family(checkpoint: &mut MetadataCheckpoint, family: String) {
+        let record = match family.as_str() {
+            "feature-level" => MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: "metadata.version".into(),
+                level: 25,
+            }),
+            "diskless-offset-advance" => {
+                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
                     topic: "orders".into(),
                     partition: 0,
                     count: 12,
-                }),
-            },
-            Row {
-                label: "write freeze",
-                rec: MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-                    scope: "orders".into(),
-                    pattern_type: PatternType::Literal,
-                    frozen: true,
-                    reason: "incident".into(),
-                    set_by: "User:alice".into(),
-                    set_at_ms: 1,
-                    proposal_id: Uuid::nil(),
-                    key_id: String::new(),
-                    signature: vec![],
-                }),
-            },
-            Row {
-                label: "break-glass proposal",
-                rec: MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
+                })
+            }
+            "topic-write-freeze" => MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+                scope: "orders".into(),
+                pattern_type: PatternType::Literal,
+                frozen: true,
+                reason: "incident".into(),
+                set_by: "User:alice".into(),
+                set_at_ms: 1,
+                proposal_id: Uuid::nil(),
+                key_id: String::new(),
+                signature: vec![],
+            }),
+            "break-glass-proposal" => {
+                MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
                     proposal_id: Uuid::from_u128(0xB1),
                     action: BreakGlassAction::ThawTopicFreeze,
                     target: "literal:orders".into(),
@@ -451,35 +454,55 @@ mod tests {
                     approvals: vec![],
                     consumed_at_ms: 0,
                     withdrawn: false,
-                }),
-            },
-        ];
-        for Row { label, rec } in rows {
-            let mut image = MetadataImage::new(Uuid::new_v4());
-            image.apply(&rec);
-
-            let bytes = SnapshotWriter::serialize(&image, 1).unwrap();
-            let mut cur: &[u8] = &bytes;
-            let mut api_keys = Vec::new();
-            while !cur.is_empty() {
-                let batch = RecordBatch::decode(&mut cur).expect("batch");
-                if batch.attributes.is_control_batch() {
-                    continue;
-                }
-                for record in &batch.records {
-                    let value = record.value.as_ref().expect("metadata value");
-                    let (decoded, _) = KraftMetadataRecord::decode_value(value).expect("decode");
-                    api_keys.push(decoded.api_key());
-                }
+                })
             }
-
-            check!(!api_keys.is_empty(), "{label}");
-            check!(
-                api_keys
-                    .iter()
-                    .all(|key| KAFKA_METADATA_RECORD_API_KEYS.contains(key)),
-                "{label}: {api_keys:?}"
-            );
-        }
+            _ => panic!("unknown checkpoint record family: {family}"),
+        };
+        let mut image = MetadataImage::new(Uuid::new_v4());
+        image.apply(&record);
+        checkpoint.image = Some(image);
     }
+
+    #[when("the metadata image is serialized into a KRaft snapshot")]
+    fn write_checkpoint(checkpoint: &mut MetadataCheckpoint) {
+        checkpoint.bytes = Some(
+            SnapshotWriter::serialize(
+                checkpoint
+                    .image
+                    .as_ref()
+                    .expect("a metadata image was given"),
+                1,
+            )
+            .expect("serialize checkpoint"),
+        );
+    }
+
+    #[then("the checkpoint contains data records and every data-record API key is Kafka-defined")]
+    fn kafka_checkpoint_records(checkpoint: &MetadataCheckpoint) {
+        let mut cur: &[u8] = checkpoint
+            .bytes
+            .as_ref()
+            .expect("the snapshot was serialized");
+        let mut api_keys = Vec::new();
+        while !cur.is_empty() {
+            let batch = RecordBatch::decode(&mut cur).expect("batch");
+            if batch.attributes.is_control_batch() {
+                continue;
+            }
+            for record in &batch.records {
+                let value = record.value.as_ref().expect("metadata value");
+                let (decoded, _) = KraftMetadataRecord::decode_value(value).expect("decode");
+                api_keys.push(decoded.api_key());
+            }
+        }
+        check!(!api_keys.is_empty());
+        check!(
+            api_keys
+                .iter()
+                .all(|key| KAFKA_METADATA_RECORD_API_KEYS.contains(key)),
+            "{api_keys:?}"
+        );
+    }
+
+    scenarios!("tests/features/migrated/src/snapshot/writer.feature", fixtures = [checkpoint: MetadataCheckpoint]);
 }

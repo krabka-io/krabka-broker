@@ -172,42 +172,78 @@ mod tests {
         }
     }
 
-    #[test]
-    fn errors_follow_kafka_precedence() {
-        let mut facts = valid_upsert();
-        facts.prior = ScramPriorState::Rejected;
-        facts.authorized = false;
-        facts.name_empty = true;
-        facts.mechanism = 0;
-        facts.iterations = i32::MIN;
-        assert2::check!(
-            scram_alteration_decision(facts) == ScramAlterationDecision::KeepPriorError
-        );
+    use std::vec;
 
-        facts.prior = ScramPriorState::Accepted;
-        assert2::check!(scram_alteration_decision(facts) == ScramAlterationDecision::Duplicate);
-
-        facts.prior = ScramPriorState::Unseen;
-        assert2::check!(scram_alteration_decision(facts) == ScramAlterationDecision::Unauthorized);
-
-        facts.authorized = true;
-        assert2::check!(scram_alteration_decision(facts) == ScramAlterationDecision::EmptyName);
-
-        facts.name_empty = false;
-        assert2::check!(
-            scram_alteration_decision(facts) == ScramAlterationDecision::UnsupportedMechanism
-        );
-
-        facts.mechanism = 1;
-        assert2::check!(
-            scram_alteration_decision(facts) == ScramAlterationDecision::TooFewIterations
-        );
-
-        facts.iterations = i32::MAX;
-        assert2::check!(
-            scram_alteration_decision(facts) == ScramAlterationDecision::TooManyIterations
-        );
+    struct ScramValidation {
+        facts: Option<ScramAlterationFacts>,
+        decision: Option<ScramAlterationDecision>,
     }
+
+    #[rstest::fixture]
+    fn alteration() -> ScramValidation {
+        // Start this scenario with fresh inputs and observations.
+
+        ScramValidation {
+            facts: None,
+            decision: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given(
+        "a SCRAM upsert with prior result {prior}, authorization {authorized}, empty name {empty_name}, mechanism {mechanism}, and iterations {iterations}"
+    )]
+    fn upsert_facts(
+        alteration: &mut ScramValidation,
+        prior: String,
+        authorized: bool,
+        empty_name: bool,
+        mechanism: i8,
+        iterations: String,
+    ) {
+        let prior = match prior.as_str() {
+            "rejected" => ScramPriorState::Rejected,
+            "accepted" => ScramPriorState::Accepted,
+            "unseen" => ScramPriorState::Unseen,
+            _ => panic!("unknown prior SCRAM result: {prior}"),
+        };
+        let iterations = match iterations.as_str() {
+            "minimum-integer" => i32::MIN,
+            "maximum-integer" => i32::MAX,
+            _ => iterations.parse().expect("iteration count is an integer"),
+        };
+        alteration.facts = Some(ScramAlterationFacts {
+            prior,
+            authorized,
+            name_empty: empty_name,
+            mechanism,
+            iterations,
+            ..valid_upsert()
+        });
+    }
+
+    #[rstest_bdd_macros::when("the SCRAM upsert is validated")]
+    fn validate_upsert(alteration: &mut ScramValidation) {
+        alteration.decision = Some(scram_alteration_decision(
+            alteration.facts.expect("a SCRAM upsert was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the SCRAM response preserves {outcome}")]
+    fn scram_response(alteration: &ScramValidation, outcome: String) {
+        let expected = match outcome.as_str() {
+            "the-prior-error" => ScramAlterationDecision::KeepPriorError,
+            "a-duplicate-error" => ScramAlterationDecision::Duplicate,
+            "an-authorization-error" => ScramAlterationDecision::Unauthorized,
+            "an-empty-name-error" => ScramAlterationDecision::EmptyName,
+            "an-unsupported-mechanism-error" => ScramAlterationDecision::UnsupportedMechanism,
+            "a-too-few-iterations-error" => ScramAlterationDecision::TooFewIterations,
+            "a-too-many-iterations-error" => ScramAlterationDecision::TooManyIterations,
+            _ => panic!("unknown SCRAM response outcome: {outcome}"),
+        };
+        assert2::check!(alteration.decision == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/scram.feature", fixtures = [alteration: ScramValidation]);
 
     #[test]
     fn accepts_only_supported_complete_rows() {

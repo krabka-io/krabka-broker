@@ -259,13 +259,10 @@ async fn start_two_brokers_with_controller_protocol(
     }
 }
 
-/// Independent single-voter clusters cannot merge when authentication or authorization fails.
-/// Start broker 1 then broker 2, retain both directories, and observe the original 3s window.
-async fn assert_disconnected_controllers(
+async fn start_independent_controllers(
     credentials: [PlainCredentials<'_>; 2],
     authorization: ControllerAuthorization,
-    failure: &str,
-) {
+) -> TwoBrokers {
     init_tracing();
     let ReservedControllers {
         addrs: ctrl_addrs,
@@ -304,47 +301,15 @@ async fn assert_disconnected_controllers(
     let b2 = Broker::start_with_controller_listener(c2, Some(ctrl_l2))
         .await
         .expect("start b2");
-    // Intentional negative observation: no awaiter can assert that state stays put.
-    time::sleep(Duration::from_secs(3)).await;
-    assert!(b1.broker_count() < 2, "{failure}");
-    let _ = &b2;
-    b2.shutdown().await;
-    b1.shutdown().await;
-}
-
-// Exercises follower → leader `submit_change` forwarding under SASL.
-//
-// With `controller_listener_protocol = SaslPlaintext`, broker 1 elects itself,
-// b1.add_learner + b1.change_membership replicate via the dialer (SASL OK),
-// b2's Broker::start returns when it sees the leader — and b2 then calls
-// `controller.submit_change(self_reg)` which forwards to the leader via
-// `krabka_raft::controller::forward_submit_to`. T9b routes that helper
-// through the injected `OutboundDialer` so the SASL handshake runs before
-// `API_KEY_SUBMIT_CHANGE` hits the wire, and b1 accepts the registration.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_two_broker_quorum() {
-    let TwoBrokers {
+    TwoBrokers {
         broker0: b1,
         broker1: b2,
-        dir0: _d1,
-        dir1: _d2,
-    } = Box::pin(start_two_brokers_with_controller_protocol(
-        ListenerProtocol::SaslPlaintext,
-        "broker",
-        "secret",
-    ))
-    .await;
-    // Wait until both brokers see two registered peers in the metadata image.
-    // Event-driven: each awaiter observes `img.brokers().count() >= 2` (the
-    // same signal `broker_count()` reads) and panics if convergence stalls.
-    b1.wait_until_brokers_registered(2).await;
-    b2.wait_until_brokers_registered(2).await;
-    b1.shutdown().await;
-    b2.shutdown().await;
+        dir0: dir1,
+        dir1: dir2,
+    }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_oauthbearer_two_broker_quorum() {
+async fn start_oauth_controllers() -> (TwoBrokers, TempDir) {
     init_tracing();
     let ReservedControllers {
         addrs: controller_addrs,
@@ -408,56 +373,18 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
     let broker0 = join0.await.expect("broker 0 task").expect("start broker 0");
     let broker1 = join1.await.expect("broker 1 task").expect("start broker 1");
 
-    broker0.wait_until_brokers_registered(2).await;
-    broker1.wait_until_brokers_registered(2).await;
-    broker0.shutdown().await;
-    broker1.shutdown().await;
+    (
+        TwoBrokers {
+            broker0,
+            broker1,
+            dir0,
+            dir1,
+        },
+        token_dir,
+    )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
-    // Neither broker has the other's password, so authentication fails both ways.
-    Box::pin(assert_disconnected_controllers(
-        [
-            PlainCredentials {
-                user: "alice",
-                password: "wonderland",
-            },
-            PlainCredentials {
-                user: "bob",
-                password: "burgers",
-            },
-        ],
-        ControllerAuthorization::Allowed,
-        "mismatched creds must not converge",
-    ))
-    .await;
-}
-
-// H-1: authentication is not authorization. Here both brokers present
-// *valid, matching* SASL credentials (so the SASL handshake succeeds), but
-// the controller listener is gated by a `SimpleAclAuthorizer` with NO
-// super-users and NO ACLs — so the authenticated principal is DENIED
-// `CLUSTER_ACTION` on `Cluster("kafka-cluster")`. The listener keeps the
-// connection and refuses every raft and metadata RPC on it with
-// `CLUSTER_AUTHORIZATION_FAILED` (#684), so the two single-voter clusters can
-// never exchange controller RPCs to merge. b1 must still see only itself.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_denies_unauthorized_principal() {
-    // Both credentials authenticate; the empty authorizers deny controller RPCs.
-    Box::pin(assert_disconnected_controllers(
-        [PlainCredentials {
-            user: "broker",
-            password: "secret",
-        }; 2],
-        ControllerAuthorization::Denied,
-        "unauthorized principal must not be able to drive controller RPCs",
-    ))
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_plaintext_legacy_path_unchanged() {
+async fn start_legacy_controllers() -> TwoBrokers {
     // Default `controller_listener_protocol = Plaintext` and the default
     // `AllowAllAuthorizer`: every peer is `ANONYMOUS` and every request is
     // allowed. Two brokers converge over the plaintext path.
@@ -501,10 +428,227 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
 
     let b2 = join.await.expect("join spawn").expect("start b2");
 
-    // Event-driven convergence: both brokers observe two registered peers in
-    // the metadata image (same signal `broker_count()` reads).
-    b1.wait_until_brokers_registered(2).await;
-    b2.wait_until_brokers_registered(2).await;
-    b1.shutdown().await;
-    b2.shutdown().await;
+    TwoBrokers {
+        broker0: b1,
+        broker1: b2,
+        dir0: dir1,
+        dir1: dir2,
+    }
+}
+
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+enum PeerSecurity {
+    Plain,
+    OAuth,
+    Mismatched,
+    Unauthorized,
+    Anonymous,
+}
+
+#[derive(Default)]
+struct ControllerAuthentication {
+    security: Option<PeerSecurity>,
+    brokers: Option<TwoBrokers>,
+    token_directory: Option<TempDir>,
+    registrations: Option<[usize; 2]>,
+}
+
+#[fixture]
+fn controller_authentication() -> ControllerAuthentication {
+    // Authentication policy is configured before observing actual peer registrations.
+    ControllerAuthentication::default()
+}
+
+#[given("controller peers use matching SASL PLAIN credentials")]
+fn matching_plain(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.security = Some(PeerSecurity::Plain);
+}
+
+#[given("controller peers use the same OAuth bearer identity")]
+fn matching_oauth(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.security = Some(PeerSecurity::OAuth);
+}
+
+#[given("controller peers accept different SASL PLAIN users and passwords")]
+fn mismatched_plain(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.security = Some(PeerSecurity::Mismatched);
+}
+
+#[given("controller peers authenticate with matching credentials but deny CLUSTER_ACTION")]
+fn denied_controller_action(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.security = Some(PeerSecurity::Unauthorized);
+}
+
+#[given("controller peers use anonymous plaintext listeners")]
+fn anonymous_controller_peers(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.security = Some(PeerSecurity::Anonymous);
+}
+
+#[when("the two controller listeners start with their configured peer security")]
+async fn start_authenticated_controllers(controller_authentication: &mut ControllerAuthentication) {
+    controller_authentication.brokers = Some(
+        match controller_authentication
+            .security
+            .as_ref()
+            .expect("peer security configured")
+        {
+            PeerSecurity::Plain => {
+                Box::pin(start_two_brokers_with_controller_protocol(
+                    ListenerProtocol::SaslPlaintext,
+                    "broker",
+                    "secret",
+                ))
+                .await
+            }
+            PeerSecurity::OAuth => {
+                let (brokers, directory) = start_oauth_controllers().await;
+                controller_authentication.token_directory = Some(directory);
+                brokers
+            }
+            PeerSecurity::Mismatched => {
+                Box::pin(start_independent_controllers(
+                    [
+                        PlainCredentials {
+                            user: "alice",
+                            password: "wonderland",
+                        },
+                        PlainCredentials {
+                            user: "bob",
+                            password: "burgers",
+                        },
+                    ],
+                    ControllerAuthorization::Allowed,
+                ))
+                .await
+            }
+            PeerSecurity::Unauthorized => {
+                Box::pin(start_independent_controllers(
+                    [PlainCredentials {
+                        user: "broker",
+                        password: "secret",
+                    }; 2],
+                    ControllerAuthorization::Denied,
+                ))
+                .await
+            }
+            PeerSecurity::Anonymous => Box::pin(start_legacy_controllers()).await,
+        },
+    );
+}
+
+#[then("both controller peers observe two registered brokers")]
+async fn authorized_registrations(controller_authentication: &ControllerAuthentication) {
+    let brokers = controller_authentication
+        .brokers
+        .as_ref()
+        .expect("controller listeners started");
+    brokers.broker0.wait_until_brokers_registered(2).await;
+    brokers.broker1.wait_until_brokers_registered(2).await;
+}
+
+#[when("peer registrations are observed after a three-second rejection window")]
+async fn rejected_registration_window(controller_authentication: &mut ControllerAuthentication) {
+    // Negative observation retains the original three-second interval.
+    time::sleep(Duration::from_secs(3)).await;
+    let brokers = controller_authentication
+        .brokers
+        .as_ref()
+        .expect("controller listeners started");
+    controller_authentication.registrations = Some([
+        brokers.broker0.broker_count(),
+        brokers.broker1.broker_count(),
+    ]);
+}
+
+#[then("the first controller still observes fewer than two brokers")]
+fn rejected_registrations(controller_authentication: &ControllerAuthentication) {
+    let registrations = controller_authentication
+        .registrations
+        .expect("rejection window observed");
+    assert!(
+        registrations[0] < 2,
+        "rejected peer unexpectedly registered: {registrations:?}"
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext two broker quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_plaintext_two_broker_quorum(
+    controller_authentication: ControllerAuthentication,
+) {
+    controller_authentication.shutdown().await;
+    drop(controller_authentication);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener oauthbearer two broker quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_oauthbearer_two_broker_quorum(
+    controller_authentication: ControllerAuthentication,
+) {
+    controller_authentication.shutdown().await;
+    drop(controller_authentication);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext rejects mismatched creds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_plaintext_rejects_mismatched_creds(
+    controller_authentication: ControllerAuthentication,
+) {
+    controller_authentication.shutdown().await;
+    drop(controller_authentication);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl denies unauthorized principal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_denies_unauthorized_principal(
+    controller_authentication: ControllerAuthentication,
+) {
+    controller_authentication.shutdown().await;
+    drop(controller_authentication);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener plaintext legacy path unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_plaintext_legacy_path_unchanged(
+    controller_authentication: ControllerAuthentication,
+) {
+    controller_authentication.shutdown().await;
+    drop(controller_authentication);
+}
+
+impl ControllerAuthentication {
+    async fn shutdown(&mut self) {
+        let brokers = self.brokers.take().expect("controller peers running");
+        if matches!(
+            self.security,
+            Some(PeerSecurity::Mismatched | PeerSecurity::Unauthorized)
+        ) {
+            brokers.broker1.shutdown().await;
+            brokers.broker0.shutdown().await;
+        } else {
+            brokers.broker0.shutdown().await;
+            brokers.broker1.shutdown().await;
+        }
+        drop((brokers.dir0, brokers.dir1));
+        self.token_directory.take();
+    }
 }

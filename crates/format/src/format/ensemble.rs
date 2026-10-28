@@ -181,6 +181,7 @@ mod tests {
     use {
         super::*,
         crate::{ids::DirectoryId, meta_properties::node_id_mismatch_message},
+        std::mem,
         uuid::Uuid,
     };
 
@@ -208,49 +209,84 @@ mod tests {
 
     type Verdict = Result<Option<ClusterId>, String>;
 
-    /// The formatted set agrees with `--cluster-id` and `--node-id`, with
-    /// Kafka's message for each way it can fail. `verify_ensemble` has the
-    /// full table of Kafka's checks; these cases pin what `format` passes
-    /// to it.
-    #[yare::parameterized(
-        nothing_formatted = { formatted(vec![]), None, Ok(None) },
-        no_records_given_id = {
-            formatted(vec![]),
-            Some(ClusterId(Uuid::from_u128(0xc1))),
-            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
-        },
-        set_supplies_id = {
-            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000)), directory("/b", meta(0xc1, 1, 0x2000))]),
-            None,
-            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
-        },
-        given_id_disagrees = {
-            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
-            Some(ClusterId(Uuid::from_u128(0xc2))),
-            Err(format!(
+    #[derive(Default)]
+    struct FormatEnsembleScenario {
+        expected: Option<ClusterId>,
+        directories: Vec<FormattedDirectory>,
+        verdict: Option<Verdict>,
+    }
+    #[rstest::fixture]
+    fn format_ensemble() -> FormatEnsembleScenario {
+        let directories = Vec::new();
+        FormatEnsembleScenario {
+            directories,
+            ..FormatEnsembleScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("the formatter expects cluster {cluster} and node 1")]
+    fn formatter_ensemble_ids(format_ensemble: &mut FormatEnsembleScenario, cluster: String) {
+        format_ensemble.expected = (cluster != "discover").then(|| {
+            ClusterId(Uuid::from_u128(
+                cluster.parse().expect("cluster UUID integer"),
+            ))
+        });
+    }
+    #[rstest_bdd_macros::given("the formatter finds these formatted directories")]
+    fn formatter_directory_set(
+        format_ensemble: &mut FormatEnsembleScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        format_ensemble.directories = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [path, cluster, node, id] = row.as_slice() else {
+                    panic!("path cluster node and directory ID columns required")
+                };
+                directory(
+                    path,
+                    meta(
+                        cluster.parse().expect("cluster UUID integer"),
+                        node.parse().expect("node ID"),
+                        id.parse().expect("directory UUID integer"),
+                    ),
+                )
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when("the formatter verifies the existing directory ensemble")]
+    fn verify_formatter_ensemble(format_ensemble: &mut FormatEnsembleScenario) {
+        let ensemble = formatted(mem::take(&mut format_ensemble.directories));
+        format_ensemble.verdict = Some(ensemble.verify(format_ensemble.expected, 1));
+    }
+    #[rstest_bdd_macros::then("the formatter ensemble cluster is {cluster}")]
+    fn formatter_verified_cluster(format_ensemble: &FormatEnsembleScenario, cluster: String) {
+        let expected = (cluster != "unknown").then(|| {
+            ClusterId(Uuid::from_u128(
+                cluster.parse().expect("cluster UUID integer"),
+            ))
+        });
+        assert2::check!(format_ensemble.verdict == Some(Ok(expected)));
+    }
+    #[rstest_bdd_macros::then("the formatter refuses {conflict}")]
+    fn formatter_ensemble_conflict(format_ensemble: &FormatEnsembleScenario, conflict: String) {
+        let expected = match conflict.as_str() {
+            "a different cluster ID" => format!(
                 "Invalid cluster.id in: {}. Expected {}, but read {}",
                 Path::new("/a").join(META_PROPERTIES).display(),
                 ClusterId(Uuid::from_u128(0xc2)),
                 ClusterId(Uuid::from_u128(0xc1))
-            )),
-        },
-        another_nodes_directory = {
-            formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
-            Some(ClusterId(Uuid::from_u128(0xc1))),
-            Err(node_id_mismatch_message()
+            ),
+            "another node's log directory" => node_id_mismatch_message()
                 .stored(2)
                 .previous(1)
                 .path(&Path::new("/a").join(META_PROPERTIES))
-                .call()),
-        },
-    )]
-    fn verify_matches_kafka_meta_properties_ensemble(
-        ensemble: Ensemble,
-        expected: Option<ClusterId>,
-        want: Verdict,
-    ) {
-        assert2::check!(ensemble.verify(expected, 1) == want);
+                .call(),
+            _ => panic!("unknown formatter directory conflict {conflict}"),
+        };
+        assert2::check!(format_ensemble.verdict == Some(Err(expected)));
     }
+    rstest_bdd_macros::scenarios!("tests/features/formatter_directory_ensemble", fixtures = [format_ensemble: FormatEnsembleScenario]);
 
     /// Only what a run writes before `meta.properties` makes a directory with
     /// no marker count as empty.

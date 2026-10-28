@@ -4,8 +4,8 @@
 use {
     crate::{
         streams_harness::{
-            active_partitions_for, boot, connect, create_topic, finalize_streams_version,
-            first_join, follow_up, join_and_converge, topology,
+            StreamsGroupScenario, active_partitions_for, connect, first_join, follow_up,
+            streams_group, topology,
         },
         support::heartbeat_config,
     },
@@ -64,64 +64,137 @@ impl Member {
     }
 }
 
-/// A member that joins after a restart gets the task that the reloaded member
-/// gives up, as it would without the restart.
-///
-/// The broker spawns the actor of a reloaded group during the
-/// `__consumer_offsets` replay, before it connects the metadata source that the
-/// assignment reads. An actor that never saw the source assigned no task, so
-/// the reloaded member revoked both of its tasks and the new member got none:
-/// the Kafka system test `test_streams_should_failover_while_brokers_down`
-/// then saw no instance process a record.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart() {
-    let (broker, bootstrap, dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, TOPIC, 2).await;
-    let (id, joined) = join_and_converge(&client, GROUP, topology(TOPIC, vec![]), 2, 10).await;
-    let mut reloaded = Member {
-        id,
-        epoch: joined.member_epoch,
-        active: active_partitions_for(&joined, "0"),
-    };
-    assert!(reloaded.active == vec![0, 1]);
-    broker.shutdown().await;
+use {
+    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{scenario, then, when},
+};
 
-    let mut config = heartbeat_config(dir.path());
+#[derive(Default)]
+struct StreamsRecovery {
+    reloaded: Option<Member>,
+    joining: Option<Member>,
+    join_response: Option<StreamsGroupHeartbeatResponse>,
+}
+
+#[fixture]
+fn streams_recovery() -> StreamsRecovery {
+    // Members report their actual owned tasks during the post-restart handover.
+    StreamsRecovery::default()
+}
+
+#[when("the streams broker restarts preserving the original member and assigned tasks")]
+async fn restart_streams_assignment(
+    streams_group: &mut StreamsGroupScenario,
+    streams_recovery: &mut StreamsRecovery,
+) {
+    let joined = streams_group
+        .heartbeat
+        .as_ref()
+        .expect("original member joined");
+    streams_recovery.reloaded = Some(Member {
+        id: streams_group.member.clone(),
+        epoch: joined.member_epoch,
+        active: active_partitions_for(joined, "0"),
+    });
+    streams_group
+        .broker
+        .take()
+        .expect("first streams broker")
+        .shutdown()
+        .await;
+    let mut config = heartbeat_config(
+        streams_group
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path(),
+    );
     config.bootstrap_mode = BootstrapMode::Rejoin;
     let broker = Broker::start(config).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;
-    let client = connect(&broker.listen_addr().to_string()).await;
+    streams_group.client = Some(connect(&broker.listen_addr().to_string()).await);
+    streams_group.broker = Some(broker);
+}
 
-    let resp = client
+#[when("a new streams process p2 joins after recovery")]
+async fn join_recovered_streams_assignment(
+    streams_group: &StreamsGroupScenario,
+    streams_recovery: &mut StreamsRecovery,
+) {
+    let response = streams_group
+        .client()
         .send(StreamsGroupHeartbeatRequest {
             process_id: Some("p2".into()),
             ..first_join(GROUP, topology(TOPIC, vec![]))
         })
         .await
-        .expect("join after the restart");
-    assert!(resp.error_code == 0, "join error: {resp:?}");
-    let mut joining = Member {
-        id: resp.member_id.clone(),
-        epoch: resp.member_epoch,
-        active: active_partitions_for(&resp, "0"),
-    };
+        .expect("join after restart");
+    streams_recovery.joining = Some(Member {
+        id: response.member_id.clone(),
+        epoch: response.member_epoch,
+        active: active_partitions_for(&response, "0"),
+    });
+    streams_recovery.join_response = Some(response);
+}
 
-    // intentional: the hand-over takes a revocation by one member and then a
-    // heartbeat of the other, and the assignment is coordinator-local state
-    // that only the heartbeat responses expose.
+#[then("the recovered streams coordinator accepts the new process")]
+fn recovered_streams_join(streams_recovery: &StreamsRecovery) {
+    let response = streams_recovery
+        .join_response
+        .as_ref()
+        .expect("join answered");
+    assert!(response.error_code == 0, "{response:?}");
+}
+
+#[when("both streams members report owned tasks until the assignment handover converges")]
+async fn hand_over_recovered_streams_tasks(
+    streams_group: &StreamsGroupScenario,
+    streams_recovery: &mut StreamsRecovery,
+) {
+    let reloaded = streams_recovery
+        .reloaded
+        .as_mut()
+        .expect("recovered member");
+    let joining = streams_recovery.joining.as_mut().expect("new member");
     for _ in 0..20 {
         if reloaded.active == [0] && joining.active == [1] {
             break;
         }
-        reloaded.heartbeat(&client).await;
-        joining.heartbeat(&client).await;
+        reloaded.heartbeat(streams_group.client()).await;
+        joining.heartbeat(streams_group.client()).await;
         time::sleep(Duration::from_millis(100)).await;
     }
+}
 
+#[then("the recovered member owns task zero and the joining process owns task one")]
+fn recovered_streams_handover(streams_recovery: &StreamsRecovery) {
     assert!(
-        (reloaded.active, joining.active) == (vec![0], vec![1]),
-        "the members did not share the tasks after the restart"
+        (
+            &streams_recovery
+                .reloaded
+                .as_ref()
+                .expect("recovered member")
+                .active,
+            &streams_recovery
+                .joining
+                .as_ref()
+                .expect("new member")
+                .active
+        ) == (&vec![0], &vec![1])
     );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_restart.feature",
+    name = "a reloaded group assigns tasks to a member that joins after a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart(
+    streams_group: StreamsGroupScenario,
+    streams_recovery: StreamsRecovery,
+) {
+    let _ = streams_recovery;
+    streams_group.shutdown().await;
+    drop(streams_group);
 }

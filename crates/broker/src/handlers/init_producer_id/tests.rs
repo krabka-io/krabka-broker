@@ -16,8 +16,8 @@ use {
         broker::{Broker, BrokerHandle},
         error::BrokerError,
         handlers::{
-            RequestContext as HandlerRequestContext, acl_test_support as acl_fixtures, acl_wire,
-            context::RequestContext, find_coordinator::handle as find_coordinator_handle,
+            acl_test_support as acl_fixtures, acl_wire, context::RequestContext,
+            find_coordinator::handle as find_coordinator_handle,
         },
         test_support::{
             ControllerPeerAllowed, start_broker_no_audit, start_broker_no_audit_with,
@@ -91,68 +91,6 @@ async fn wait_for_transaction_v2_coordinator(handle: &BrokerHandle) {
     handle.wait_until_transaction_coordinator_ready().await;
 }
 
-/// The timeout table of Kafka's `validateTransactionTimeoutMs`, checked
-/// against a live broker whose `transaction.max.timeout.ms` is 8 s.
-async fn check_timeout_answers(
-    broker: &Arc<Broker>,
-    context: &HandlerRequestContext<'_>,
-    tids: [&str; 4],
-) {
-    let version = init_producer_id_response::MAX_VERSION;
-    for (tid, requested_ms, enable_2pc, expected) in [
-        (tids[0], 500, false, Ok(500)),
-        (
-            tids[1],
-            10_000,
-            false,
-            Err(codes::INVALID_TRANSACTION_TIMEOUT),
-        ),
-        (tids[2], 500, true, Ok(i32::MAX)),
-        (tids[3], 0, false, Err(codes::INVALID_TRANSACTION_TIMEOUT)),
-    ] {
-        let request = InitProducerIdRequest {
-            transactional_id: Some(tid.to_owned()),
-            transaction_timeout_ms: requested_ms,
-            enable2_pc: enable_2pc,
-            ..Default::default()
-        };
-        let response = init_producer_id_handle(broker, request, version, context)
-            .await
-            .expect("initialize transactional producer");
-        match expected {
-            Ok(expected_ms) => {
-                assert!(
-                    response
-                        == InitProducerIdResponse {
-                            producer_id: response.producer_id,
-                            producer_epoch: 0,
-                            ..Default::default()
-                        },
-                    "{tid}: {response:?}"
-                );
-                let entry = broker
-                    .txn_coordinator
-                    .get(tid)
-                    .expect("persisted transaction entry");
-                assert!(entry.lock().await.txn_timeout_ms == expected_ms, "{tid}");
-            }
-            Err(error_code) => {
-                assert!(
-                    response
-                        == InitProducerIdResponse {
-                            error_code,
-                            producer_id: -1,
-                            producer_epoch: -1,
-                            ..Default::default()
-                        },
-                    "{tid}: {response:?}"
-                );
-                assert!(broker.txn_coordinator.get(tid).is_none(), "{tid}");
-            }
-        }
-    }
-}
-
 /// The KIP-939 test configuration precedes coordinator readiness at each caller.
 async fn transaction_v2_broker() -> HandlerStartedBroker {
     start_broker_no_audit_with(|config| {
@@ -163,138 +101,349 @@ async fn transaction_v2_broker() -> HandlerStartedBroker {
     })
     .await
 }
-#[tokio::test]
-async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
-    krabka_macros::broker_test_setup!(
-        bind(broker_handle, _dir, broker);
-        boot [transaction_v2_broker()];
-    );
-    krabka_macros::request_test_identity! {
-        bind(principal, peer, context);
-        user ["admin"];
-        client ["txn-client"];
-    };
-    let tids = ["txn-small", "txn-above-max", "txn-2pc", "txn-zero"];
+#[derive(Default)]
+struct TransactionInitializationScenario {
+    started: Option<HandlerStartedBroker>,
+    transaction: String,
+    initialized: Option<InitProducerIdResponse>,
+    ongoing: Option<ProducerIdentity>,
+    recovered: Vec<InitProducerIdResponse>,
+    completed: Vec<EndTxnResponse>,
+}
+impl TransactionInitializationScenario {
+    fn initialization_request(
+        &self,
+        transaction_timeout_ms: i32,
+        enable2_pc: bool,
+        keep_prepared_txn: bool,
+    ) -> InitProducerIdRequest {
+        InitProducerIdRequest {
+            transactional_id: Some(self.transaction.clone()),
+            transaction_timeout_ms,
+            enable2_pc,
+            keep_prepared_txn,
+            ..Default::default()
+        }
+    }
 
-    let version = init_producer_id_response::MAX_VERSION;
-    wait_for_transaction_v2_coordinator(&broker_handle).await;
-
-    let find_version = find_coordinator_response::MAX_VERSION;
-    let find_request = FindCoordinatorRequest {
+    fn coordinator_broker(&self) -> Arc<Broker> {
+        self.started
+            .as_ref()
+            .expect("coordinator")
+            .broker
+            .broker_arc_for_test()
+    }
+}
+#[rstest::fixture]
+fn transaction_initialization() -> TransactionInitializationScenario {
+    let started = None;
+    TransactionInitializationScenario {
+        started,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a transaction-version-2 coordinator with two-phase commit enabled and 8000ms maximum timeout owns {transaction}"
+)]
+async fn transaction_initialization_coordinator(
+    transaction_initialization: &mut TransactionInitializationScenario,
+    transaction: String,
+) {
+    let started = transaction_v2_broker().await;
+    wait_for_transaction_v2_coordinator(&started.broker).await;
+    let broker = started.broker.broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    let request = FindCoordinatorRequest {
         key_type: 1,
-        coordinator_keys: tids.iter().map(ToString::to_string).collect(),
+        coordinator_keys: vec![transaction.clone()],
         ..Default::default()
     };
-    let find_response = find_coordinator_handle(&broker, find_request, find_version, &context)
-        .await
-        .expect("find transaction coordinators");
+    let response = find_coordinator_handle(
+        &broker,
+        request,
+        find_coordinator_response::MAX_VERSION,
+        &context,
+    )
+    .await
+    .expect("find transaction coordinator");
     assert!(
-        find_response
+        response
             .coordinators
             .iter()
             .all(|coordinator| coordinator.error_code == codes::NONE)
     );
-
-    // Kafka `validateTransactionTimeoutMs`: a timeout above
-    // `transaction.max.timeout.ms`, or one that is not positive, is refused.
-    // Every other value is stored as the client sent it, and 2PC stores the
-    // sentinel whatever the request asks for.
-    check_timeout_answers(&broker, &context, tids).await;
-
+    transaction_initialization.started = Some(started);
+    transaction_initialization.transaction = transaction;
+}
+#[rstest_bdd_macros::when(
+    "InitProducerId requests timeout {timeout} with two-phase commit {two_phase}"
+)]
+async fn initialize_transaction_identity(
+    transaction_initialization: &mut TransactionInitializationScenario,
+    timeout: i32,
+    two_phase: bool,
+) {
+    let broker = transaction_initialization.coordinator_broker();
+    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    let request = transaction_initialization.initialization_request(timeout, two_phase, false);
+    transaction_initialization.initialized = Some(
+        init_producer_id_handle(
+            &broker,
+            request,
+            init_producer_id_response::MAX_VERSION,
+            &context,
+        )
+        .await
+        .expect("initialize transaction"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete initialization response has code {code} and persisted timeout {timeout}"
+)]
+async fn transaction_initialization_timeout(
+    transaction_initialization: &mut TransactionInitializationScenario,
+    code: i16,
+    timeout: String,
+) {
+    let response = transaction_initialization
+        .initialized
+        .as_ref()
+        .expect("initialization response");
+    let broker = transaction_initialization.coordinator_broker();
+    if code == codes::NONE {
+        assert!(
+            response
+                == &InitProducerIdResponse {
+                    producer_id: response.producer_id,
+                    producer_epoch: 0,
+                    ..Default::default()
+                }
+        );
+        let entry = broker
+            .txn_coordinator
+            .get(&transaction_initialization.transaction)
+            .expect("persisted transaction");
+        assert!(
+            entry.lock().await.txn_timeout_ms == timeout.parse::<i32>().expect("stored timeout")
+        );
+    } else {
+        assert!(
+            response
+                == &InitProducerIdResponse {
+                    error_code: code,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                }
+        );
+        assert!(
+            broker
+                .txn_coordinator
+                .get(&transaction_initialization.transaction)
+                .is_none()
+        );
+    }
+    transaction_initialization
+        .started
+        .take()
+        .expect("coordinator")
+        .broker
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::given(
+    "the 500ms two-phase transaction has a persisted ongoing producer identity"
+)]
+async fn ongoing_two_phase_transaction(
+    transaction_initialization: &mut TransactionInitializationScenario,
+) {
+    initialize_transaction_identity(transaction_initialization, 500, true).await;
+    assert!(
+        transaction_initialization
+            .initialized
+            .as_ref()
+            .expect("initialized transaction")
+            .error_code
+            == codes::NONE
+    );
+    let broker = transaction_initialization.coordinator_broker();
     let ongoing = broker
         .txn_coordinator
-        .get(tids[2])
-        .expect("2PC transaction entry");
-    let ProducerIdentity {
-        id: ongoing_pid,
-        epoch: ongoing_epoch,
-    } = persist_ongoing(
-        &broker.txn_coordinator,
-        &ongoing,
-        "persist ongoing 2PC transaction",
-    )
-    .await;
-
-    let recovery_request = InitProducerIdRequest {
-        transactional_id: Some(tids[2].to_owned()),
-        transaction_timeout_ms: 500,
-        enable2_pc: true,
-        keep_prepared_txn: true,
-        ..Default::default()
-    };
-    let recovery_response =
-        init_producer_id_handle(&broker, recovery_request.clone(), version, &context)
+        .get(&transaction_initialization.transaction)
+        .expect("two-phase transaction entry");
+    transaction_initialization.ongoing = Some(
+        persist_ongoing(
+            &broker.txn_coordinator,
+            &ongoing,
+            "persist ongoing two-phase transaction",
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::when(
+    "two clients recover the prepared transaction with a 500ms timeout and keepPreparedTxn enabled"
+)]
+async fn recover_two_phase_transaction(
+    transaction_initialization: &mut TransactionInitializationScenario,
+) {
+    let broker = transaction_initialization.coordinator_broker();
+    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    let request = transaction_initialization.initialization_request(500, true, true);
+    for _ in 0..2 {
+        transaction_initialization.recovered.push(
+            init_producer_id_handle(
+                &broker,
+                request.clone(),
+                init_producer_id_response::MAX_VERSION,
+                &context,
+            )
             .await
-            .expect("recover prepared transaction");
-    assert!(recovery_response.error_code == codes::NONE);
-    assert!(recovery_response.ongoing_txn_producer_id == ongoing_pid.get());
-    assert!(recovery_response.ongoing_txn_producer_epoch == ongoing_epoch);
-
-    let second_recovery_response =
-        init_producer_id_handle(&broker, recovery_request, version, &context)
-            .await
-            .expect("recover prepared transaction again");
-    assert!(second_recovery_response.error_code == codes::NONE);
-    assert!(second_recovery_response.producer_id == recovery_response.producer_id);
-    assert!(second_recovery_response.producer_epoch == recovery_response.producer_epoch + 1);
-    assert!(second_recovery_response.ongoing_txn_producer_id == ongoing_pid.get());
-    assert!(second_recovery_response.ongoing_txn_producer_epoch == ongoing_epoch);
-
-    let end_version = end_txn_response::MAX_VERSION;
-    let fenced_end_request = EndTxnRequest {
-        transactional_id: tids[2].to_owned(),
-        producer_id: recovery_response.producer_id,
-        producer_epoch: recovery_response.producer_epoch,
-        committed: true,
-        ..Default::default()
+            .expect("recover prepared transaction"),
+        );
+    }
+}
+#[rstest_bdd_macros::then(
+    "both recoveries retain the ongoing identity and the second recovery increments the recovery producer epoch"
+)]
+fn recovered_two_phase_identities(transaction_initialization: &TransactionInitializationScenario) {
+    let [first, second] = transaction_initialization.recovered.as_slice() else {
+        panic!("two recovery responses required")
     };
-    let fenced_end_response = end_txn_handle(&broker, fenced_end_request, end_version, &context)
-        .await
-        .expect("reject fenced recovery client");
-    // Kafka `endTransaction` fences a stale identity with PRODUCER_FENCED at
-    // `EndTxn` v2 and above.
+    let ongoing = transaction_initialization
+        .ongoing
+        .as_ref()
+        .expect("ongoing producer identity");
+    assert!(first.error_code == codes::NONE);
+    assert!(first.ongoing_txn_producer_id == ongoing.id.get());
+    assert!(first.ongoing_txn_producer_epoch == ongoing.epoch);
+    assert!(second.error_code == codes::NONE);
+    assert!(second.producer_id == first.producer_id);
+    assert!(second.producer_epoch == first.producer_epoch + 1);
+    assert!(second.ongoing_txn_producer_id == ongoing.id.get());
+    assert!(second.ongoing_txn_producer_epoch == ongoing.epoch);
+}
+#[rstest_bdd_macros::when(
+    "the older recovery client commits, then the current recovery client commits and retries"
+)]
+async fn complete_recovered_transaction(
+    transaction_initialization: &mut TransactionInitializationScenario,
+) {
+    let broker = transaction_initialization.coordinator_broker();
+    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    let [first, second] = transaction_initialization.recovered.as_slice() else {
+        panic!("two recovery responses required")
+    };
+    for identity in [first, second, second] {
+        let request = EndTxnRequest {
+            transactional_id: transaction_initialization.transaction.clone(),
+            producer_id: identity.producer_id,
+            producer_epoch: identity.producer_epoch,
+            committed: true,
+            ..Default::default()
+        };
+        transaction_initialization.completed.push(
+            end_txn_handle(&broker, request, end_txn_response::MAX_VERSION, &context)
+                .await
+                .expect("complete recovered transaction"),
+        );
+    }
+}
+#[rstest_bdd_macros::then(
+    "the older client is fenced, the current commit is idempotent and the persisted state is CompleteCommit without a next producer identity"
+)]
+async fn completed_recovered_transaction(
+    transaction_initialization: &mut TransactionInitializationScenario,
+) {
+    let [fenced, completed, retry] = transaction_initialization.completed.as_slice() else {
+        panic!("three commit responses required")
+    };
     assert!(
-        fenced_end_response
-            == krabka_macros::unthrottled_wire!(EndTxnResponse {
+        fenced
+            == &krabka_macros::unthrottled_wire!(EndTxnResponse {
                 error_code: codes::PRODUCER_FENCED,
                 producer_id: -1,
-                producer_epoch: -1,
+                producer_epoch: -1
             })
     );
-
-    let end_request = EndTxnRequest {
-        transactional_id: tids[2].to_owned(),
-        producer_id: second_recovery_response.producer_id,
-        producer_epoch: second_recovery_response.producer_epoch,
-        committed: true,
-        ..Default::default()
-    };
-    let end_response = end_txn_handle(&broker, end_request.clone(), end_version, &context)
-        .await
-        .expect("complete recovered transaction");
+    let identity = &transaction_initialization.recovered[1];
     assert!(
-        end_response
-            == krabka_macros::unthrottled_wire!(EndTxnResponse {
+        completed
+            == &krabka_macros::unthrottled_wire!(EndTxnResponse {
                 error_code: codes::NONE,
-                producer_id: second_recovery_response.producer_id,
-                producer_epoch: second_recovery_response.producer_epoch + 1,
+                producer_id: identity.producer_id,
+                producer_epoch: identity.producer_epoch + 1
             })
     );
-
-    let retry_response = end_txn_handle(&broker, end_request, end_version, &context)
-        .await
-        .expect("retry recovered transaction completion");
-    assert!(retry_response == end_response);
-    let completed = broker
+    assert!(retry == completed);
+    let broker = transaction_initialization.coordinator_broker();
+    let entry = broker
         .txn_coordinator
-        .get(tids[2])
-        .expect("completed 2PC transaction entry");
-    let completed = completed.lock().await;
-    assert!(completed.state == TxnState::CompleteCommit);
-    assert!(completed.next_producer_id.is_none());
-    assert!(completed.next_producer_epoch == -1);
-    drop(completed);
-    broker_handle.shutdown().await;
+        .get(&transaction_initialization.transaction)
+        .expect("completed transaction");
+    {
+        let state = entry.lock().await;
+        assert!(state.state == TxnState::CompleteCommit);
+        assert!(state.next_producer_id.is_none());
+        assert!(state.next_producer_epoch == -1);
+        drop(state);
+    }
+    transaction_initialization
+        .started
+        .take()
+        .expect("coordinator")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_transaction_initialization.feature",
+    name = "Positive client timeout is stored unchanged"
+)]
+#[tokio::test]
+async fn transaction_initialization_case_0(
+    transaction_initialization: TransactionInitializationScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_transaction_initialization.feature",
+    name = "Timeout above the broker maximum is refused"
+)]
+#[tokio::test]
+async fn transaction_initialization_case_1(
+    transaction_initialization: TransactionInitializationScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_transaction_initialization.feature",
+    name = "Two-phase commit stores the sentinel timeout"
+)]
+#[tokio::test]
+async fn transaction_initialization_case_2(
+    transaction_initialization: TransactionInitializationScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_transaction_initialization.feature",
+    name = "Zero timeout is refused"
+)]
+#[tokio::test]
+async fn transaction_initialization_case_3(
+    transaction_initialization: TransactionInitializationScenario,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_transaction_initialization.feature",
+    name = "Prepared recovery fences stale identities and commits idempotently"
+)]
+#[tokio::test]
+async fn transaction_initialization_case_4(
+    transaction_initialization: TransactionInitializationScenario,
+) {
 }
 
 /// krabka-io/krabka-broker#784: Kafka 4.3.1 gates KIP-939 on

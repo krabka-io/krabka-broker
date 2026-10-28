@@ -21,3 +21,12 @@ mod delegation_tokens;
 mod log_dirs;
 #[path = "jvm_acceptance_quotas/scram_credentials.rs"]
 mod scram_credentials;
+
+// Every case in this binary uses the same process-wide advertised endpoints.
+// Hold ownership until the brokers have completed shutdown before reusing them.
+use tokio::sync::{Mutex, MutexGuard};
+
+async fn claim_broker_ports() -> MutexGuard<'static, ()> {
+    static PORTS: Mutex<()> = Mutex::const_new(());
+    PORTS.lock().await
+}

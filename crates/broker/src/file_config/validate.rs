@@ -558,187 +558,77 @@ mod tests {
         assert2::assert!(result.is_ok() == expect_ok, "{source}: {result:?}");
     }
 
-    /// Each of the five `MetadataLogConfig` keys takes the domain Kafka's
-    /// `ConfigDef` gives it, in whole bytes or whole milliseconds. A value
-    /// that is accepted lands in its own field and leaves the other four at
-    /// Kafka's defaults. A value that is refused names its field.
-    #[test]
-    fn metadata_log_keys_take_kafkas_domains() {
-        struct Case {
-            line: &'static str,
-            expected: Result<krabka_raft::MetadataLogConfig, &'static str>,
-        }
-
-        use krabka_units::{bytes, days, mebibytes, millis};
-
-        let base = krabka_raft::MetadataLogConfig::default();
-        let segment_size = |size| {
-            Ok(krabka_raft::MetadataLogConfig {
-                segment_size: size,
-                ..base
-            })
-        };
-        let segment_roll_interval = |time| {
-            Ok(krabka_raft::MetadataLogConfig {
-                segment_roll_interval: time,
-                ..base
-            })
-        };
-        let max_retention_size = |size| {
-            Ok(krabka_raft::MetadataLogConfig {
-                max_retention_size: Some(size),
-                ..base
-            })
-        };
-        let max_retention = |time| {
-            Ok(krabka_raft::MetadataLogConfig {
-                max_retention: Some(time),
-                ..base
-            })
-        };
-        let max_idle_interval = |time| {
-            Ok(krabka_raft::MetadataLogConfig {
-                max_idle_interval: time,
-                ..base
-            })
-        };
-        let cases: [Case; 26] = [
-            // `INT` with `atLeast(8388608)`.
-            Case {
-                line: "metadata_log_segment_bytes = \"8MiB\"",
-                expected: segment_size(mebibytes(8)),
-            },
-            Case {
-                line: "metadata_log_segment_bytes = \"2147483647B\"",
-                expected: segment_size(bytes(2_147_483_647)),
-            },
-            Case {
-                line: "metadata_log_segment_bytes = \"8388607B\"",
-                expected: Err("metadata_log_segment_bytes"),
-            },
-            Case {
-                line: "metadata_log_segment_bytes = \"0B\"",
-                expected: Err("metadata_log_segment_bytes"),
-            },
-            Case {
-                line: "metadata_log_segment_bytes = \"2147483648B\"",
-                expected: Err("metadata_log_segment_bytes"),
-            },
-            Case {
-                line: "metadata_log_segment_bytes = \"8388608.5B\"",
-                expected: Err("metadata_log_segment_bytes"),
-            },
-            // A `LONG` that krabka holds positive.
-            Case {
-                line: "metadata_log_segment_roll_interval = \"1ms\"",
-                expected: segment_roll_interval(millis(1)),
-            },
-            Case {
-                line: "metadata_log_segment_roll_interval = \"7d\"",
-                expected: segment_roll_interval(days(7)),
-            },
-            Case {
-                line: "metadata_log_segment_roll_interval = \"0ms\"",
-                expected: Err("metadata_log_segment_roll_interval"),
-            },
-            Case {
-                line: "metadata_log_segment_roll_interval = \"250us\"",
-                expected: Err("metadata_log_segment_roll_interval"),
-            },
-            // A `LONG` where zero is a value.
-            Case {
-                line: "metadata_max_retention_bytes = \"0B\"",
-                expected: max_retention_size(bytes(0)),
-            },
-            Case {
-                line: "metadata_max_retention_bytes = \"1GiB\"",
-                expected: max_retention_size(mebibytes(1024)),
-            },
-            Case {
-                line: "metadata_max_retention_bytes = \"1.5B\"",
-                expected: Err("metadata_max_retention_bytes"),
-            },
-            Case {
-                line: "metadata_max_retention_bytes = \"9223372036854775808B\"",
-                expected: Err("metadata_max_retention_bytes"),
-            },
-            Case {
-                line: "metadata_max_retention = \"0ms\"",
-                expected: max_retention(millis(0)),
-            },
-            Case {
-                line: "metadata_max_retention = \"30d\"",
-                expected: max_retention(days(30)),
-            },
-            Case {
-                line: "metadata_max_retention = \"250us\"",
-                expected: Err("metadata_max_retention"),
-            },
-            Case {
-                line: "metadata_max_retention = \"1.5ms\"",
-                expected: Err("metadata_max_retention"),
-            },
-            // `INT` with `atLeast(0)`, where zero stops the KIP-835 no-op
-            // records.
-            Case {
-                line: "metadata_max_idle_interval = \"0ms\"",
-                expected: max_idle_interval(millis(0)),
-            },
-            Case {
-                line: "metadata_max_idle_interval = \"500ms\"",
-                expected: max_idle_interval(millis(500)),
-            },
-            Case {
-                line: "metadata_max_idle_interval = \"2147483647ms\"",
-                expected: max_idle_interval(millis(2_147_483_647)),
-            },
-            Case {
-                line: "metadata_max_idle_interval = \"2147483648ms\"",
-                expected: Err("metadata_max_idle_interval"),
-            },
-            Case {
-                line: "metadata_max_idle_interval = \"250us\"",
-                expected: Err("metadata_max_idle_interval"),
-            },
-            Case {
-                line: "metadata_max_idle_interval = \"-1ms\"",
-                expected: Err("metadata_max_idle_interval"),
-            },
-            // A negative value does not stand for "no limit" in the file.
-            Case {
-                line: "metadata_max_retention = \"-1ms\"",
-                expected: Err("metadata_max_retention"),
-            },
-            Case {
-                line: "metadata_log_segment_roll_interval = \"-1ms\"",
-                expected: Err("metadata_log_segment_roll_interval"),
-            },
-        ];
-
-        for Case { line, expected } in cases {
-            let source = format!("[runtime]\n{line}\n");
-            let file: FileConfig = toml::from_str(&source).expect("parse runtime config");
-            let mut cfg = BrokerConfig::default();
-            let actual = file
-                .apply_to(&mut cfg)
-                .map(|()| cfg.metadata_log)
-                .map_err(|error| error.to_string());
-
-            match expected {
-                Ok(want) => {
-                    check!(actual == Ok(want), "{line}");
-                }
-                Err(field) => {
-                    check!(
-                        actual
-                            .as_ref()
-                            .is_err_and(|message| message.contains(&format!("{field}: must"))),
-                        "{line}: {actual:?}"
-                    );
-                }
-            }
-        }
+    #[derive(Default)]
+    struct MetadataLogProperty {
+        line: String,
+        applied: Option<Result<krabka_raft::MetadataLogConfig, String>>,
     }
+    #[rstest::fixture]
+    fn metadata_log_property() -> MetadataLogProperty {
+        // The parsed property and its complete policy observation are scenario-local.
+        MetadataLogProperty::default()
+    }
+    #[rstest_bdd_macros::given("the runtime metadata property is")]
+    fn metadata_property_source(
+        metadata_log_property: &mut MetadataLogProperty,
+        docstring: String,
+    ) {
+        metadata_log_property.line = docstring;
+    }
+    #[rstest_bdd_macros::when("the broker validates and applies the metadata property")]
+    fn apply_metadata_property(metadata_log_property: &mut MetadataLogProperty) {
+        let file: FileConfig =
+            toml::from_str(&format!("[runtime]\n{}\n", metadata_log_property.line))
+                .expect("runtime TOML syntax");
+        let mut config = BrokerConfig::default();
+        metadata_log_property.applied = Some(
+            file.apply_to(&mut config)
+                .map(|()| config.metadata_log)
+                .map_err(|error| error.to_string()),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the entire metadata log policy equals defaults with {field} set to {value}"
+    )]
+    fn metadata_policy_value(
+        metadata_log_property: &MetadataLogProperty,
+        field: String,
+        value: u32,
+    ) {
+        let mut expected = krabka_raft::MetadataLogConfig::default();
+        match field.as_str() {
+            "segment_size_bytes" => expected.segment_size = krabka_units::bytes(value),
+            "segment_roll_interval_ms" => {
+                expected.segment_roll_interval = krabka_units::millis(value);
+            }
+            "max_retention_size_bytes" => {
+                expected.max_retention_size = Some(krabka_units::bytes(value));
+            }
+            "max_retention_ms" => expected.max_retention = Some(krabka_units::millis(value)),
+            "max_idle_interval_ms" => expected.max_idle_interval = krabka_units::millis(value),
+            other => panic!("unknown metadata policy field {other}"),
+        }
+        check!(
+            metadata_log_property
+                .applied
+                .as_ref()
+                .expect("metadata property applied")
+                == &Ok(expected)
+        );
+    }
+    #[rstest_bdd_macros::then("metadata policy refuses {field} with a must constraint")]
+    fn metadata_policy_refusal(metadata_log_property: &MetadataLogProperty, field: String) {
+        let outcome = metadata_log_property
+            .applied
+            .as_ref()
+            .expect("metadata property applied");
+        check!(
+            outcome
+                .as_ref()
+                .is_err_and(|message| message.contains(&format!("{field}: must")))
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/file_config/validate.feature", fixtures = [metadata_log_property: MetadataLogProperty]);
 
     #[test]
     fn existing_file_inputs_reject_invalid_refined_values() {

@@ -453,43 +453,6 @@ mod tests {
     /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
     /// a trunk key -- is neither advertised nor accepted while unstable api
     /// versions are disabled, and is served whole when they are enabled.
-    #[yare::parameterized(
-        disabled = { UnstableApiVersions::Disabled, None, true },
-        enabled = { UnstableApiVersions::Enabled, Some((0, 0)), false },
-    )]
-    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable(
-        unstable: UnstableApiVersions,
-        advertised: Option<(i16, i16)>,
-        disabled: bool,
-    ) {
-        struct TrunkRouter;
-        impl ControllerAdminRouter for TrunkRouter {
-            fn api_versions(&self) -> &[ControllerApiVersion] {
-                &[ControllerApiVersion {
-                    api_key: 94,
-                    min_version: 0,
-                    max_version: 0,
-                    released_max: None,
-                    flexible_min: 0,
-                }]
-            }
-
-            fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
-                Box::pin(async { Ok(None) })
-            }
-        }
-
-        let row = advertised_api_keys(Some(&TrunkRouter), unstable)
-            .into_iter()
-            .find(|key| key.api_key == 94)
-            .map(|key| (key.min_version, key.max_version));
-        assert2::check!(row == advertised, "{unstable:?}");
-        assert2::check!(
-            is_disabled_version(94, 0, Some(&TrunkRouter), unstable) == disabled,
-            "{unstable:?}"
-        );
-    }
-
     /// The controller listener's table is strictly ascending by api key, the
     /// router's rows merged in, as Kafka's `apisForListener` `EnumSet` orders
     /// it.
@@ -507,186 +470,6 @@ mod tests {
     /// answer, the `isValid` refusals, and the full table. A request whose
     /// version is not served carries a body that does not decode, because
     /// Kafka does not read it.
-    #[test]
-    fn api_versions_response_runs_kafka_request_checks() {
-        use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
-
-        /// The answer a request must get, and the version it is encoded at.
-        struct Answer {
-            version: i16,
-            response: ApiVersionsResponse,
-        }
-        struct Row {
-            label: &'static str,
-            unstable: UnstableApiVersions,
-            version: i16,
-            request: Option<ApiVersionsRequest>,
-            expected: Option<Answer>,
-        }
-        let request = |name: &str, software_version: &str, cluster_id: Option<&str>, node_id| {
-            Some(ApiVersionsRequest {
-                client_software_name: name.into(),
-                client_software_version: software_version.into(),
-                cluster_id: cluster_id.map(str::to_owned),
-                node_id,
-                ..Default::default()
-            })
-        };
-        let unsupported = |max_version| {
-            Some(Answer {
-                version: 0,
-                response: ApiVersionsResponse {
-                    error_code: API_VERSIONS_UNSUPPORTED_VERSION,
-                    api_keys: vec![ApiVersionEntry {
-                        api_key: 18,
-                        min_version: 0,
-                        max_version,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-            })
-        };
-        let (strict, trunk) = (UnstableApiVersions::Disabled, UnstableApiVersions::Enabled);
-        let invalid = |version| {
-            Some(Answer {
-                version,
-                response: ApiVersionsResponse {
-                    error_code: API_VERSIONS_INVALID_REQUEST,
-                    ..Default::default()
-                },
-            })
-        };
-        let rows = [
-            Row {
-                label: "v6",
-                unstable: strict,
-                version: 6,
-                request: None,
-                expected: unsupported(4),
-            },
-            Row {
-                label: "i16::MAX",
-                unstable: strict,
-                version: i16::MAX,
-                request: None,
-                expected: unsupported(4),
-            },
-            Row {
-                label: "negative",
-                unstable: strict,
-                version: -1,
-                request: None,
-                expected: unsupported(4),
-            },
-            Row {
-                label: "v3 empty name",
-                unstable: strict,
-                version: 3,
-                request: request("", "1.0", None, -1),
-                expected: invalid(3),
-            },
-            Row {
-                label: "v4 name with a space",
-                unstable: strict,
-                version: 4,
-                request: request("a b", "1.0", None, -1),
-                expected: invalid(4),
-            },
-            Row {
-                label: "v3 empty software version",
-                unstable: strict,
-                version: 3,
-                request: request("krabka", "", None, -1),
-                expected: invalid(3),
-            },
-            Row {
-                label: "v5 cluster id without node id",
-                unstable: trunk,
-                version: 5,
-                request: request("krabka", "1.0", Some("cluster"), -1),
-                expected: invalid(5),
-            },
-            Row {
-                label: "v5 node id without cluster id",
-                unstable: trunk,
-                version: 5,
-                request: request("krabka", "1.0", None, 7),
-                expected: invalid(5),
-            },
-            Row {
-                label: "v5 another cluster and node, no KIP-1242 check",
-                unstable: trunk,
-                version: 5,
-                request: request("krabka", "1.0", Some("other"), 8),
-                expected: None,
-            },
-            Row {
-                label: "v5 valid",
-                unstable: trunk,
-                version: 5,
-                request: request("krabka", "1.0", None, -1),
-                expected: None,
-            },
-            Row {
-                label: "v0",
-                unstable: strict,
-                version: 0,
-                request: Some(ApiVersionsRequest::default()),
-                expected: None,
-            },
-            Row {
-                label: "v6 under unstable api versions",
-                unstable: trunk,
-                version: 6,
-                request: None,
-                expected: unsupported(5),
-            },
-            Row {
-                label: "v5 is Kafka 4.3.1's unsupported version",
-                unstable: strict,
-                version: 5,
-                request: request("krabka", "1.0", None, -1),
-                expected: unsupported(4),
-            },
-        ];
-
-        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        for row in rows {
-            let body = row.request.map_or_else(
-                || bytes::Bytes::from_static(&[0xff]),
-                |request| {
-                    let mut body = BytesMut::new();
-                    request.encode(&mut body, row.version).expect("encode");
-                    body.freeze()
-                },
-            );
-            let view = ApiVersionsView {
-                unstable: row.unstable,
-                ..view(&image, -1)
-            };
-            let answer = super::api_versions_response(row.version, &body, view).expect("answer");
-            let Answer {
-                version,
-                response: expected,
-            } = row.expected.unwrap_or_else(|| {
-                let full = super::api_versions_response_body(row.version, view);
-                Answer {
-                    version: row.version,
-                    response: ApiVersionsResponse::decode(&mut &full[..], row.version)
-                        .expect("full"),
-                }
-            });
-            let mut cur = &answer[..];
-            let decoded = ApiVersionsResponse::decode(&mut cur, version).expect("decode");
-            assert2::check!(cur.is_empty(), "{}", row.label);
-            assert2::check!(decoded == expected, "{}", row.label);
-            if expected.error_code == 0 {
-                assert2::check!(!decoded.api_keys.is_empty(), "{}", row.label);
-            }
-        }
-    }
-
     /// A served version whose body does not decode fails the request, as
     /// Kafka's `RequestContext.parseRequest` does.
     #[test]
@@ -699,126 +482,11 @@ mod tests {
     /// the supported rows follow Kafka's minimums and `alterFeatureLevel0`,
     /// the finalized rows omit level 0 (`kraft.version` included), and the
     /// epoch is the metadata offset the view carries.
-    #[test]
-    fn feature_fields_match_kafka_on_the_controller_listener() {
-        use krabka_protocol::owned::api_versions_response::{
-            FinalizedFeatureKey, SupportedFeatureKey,
-        };
-
-        struct Row<'a> {
-            version: i16,
-            kraft_version: u16,
-            levels: &'a [(&'a str, i16)],
-            want_supported: &'a Vec<SupportedFeatureKey>,
-            want_finalized: Vec<FinalizedFeatureKey>,
-        }
-
-        krabka_macros::supported_feature_fixture!(supported);
-        krabka_macros::supported_features_fixture!(modern_supported, supported);
-        krabka_macros::finalized_feature_fixture!(finalized);
-        // The listener's default, `unstable.api.versions.enable=false`, caps
-        // metadata.version at 4.3.1's latest production level.
-        let metadata_max = LATEST_PRODUCTION_METADATA_VERSION;
-        let legacy = vec![supported(
-            "metadata.version",
-            METADATA_VERSION_MIN,
-            metadata_max,
-        )];
-        let modern = modern_supported(
-            supported("metadata.version", METADATA_VERSION_MIN, metadata_max),
-            1,
-        );
-        let rows = [
-            Row {
-                version: 3,
-                kraft_version: 0,
-                levels: &[("metadata.version", 25)],
-                want_supported: &legacy,
-                want_finalized: vec![finalized("metadata.version", 25)],
-            },
-            Row {
-                version: 4,
-                kraft_version: 0,
-                levels: &[("metadata.version", 25), ("group.version", 1)],
-                want_supported: &modern,
-                want_finalized: vec![
-                    finalized("group.version", 1),
-                    finalized("metadata.version", 25),
-                ],
-            },
-            Row {
-                version: 4,
-                kraft_version: 1,
-                levels: &[("metadata.version", 25)],
-                want_supported: &modern,
-                want_finalized: vec![
-                    finalized("kraft.version", 1),
-                    finalized("metadata.version", 25),
-                ],
-            },
-            Row {
-                version: 4,
-                kraft_version: 1,
-                levels: &[("metadata.version", 30), ("krabka.version", 1)],
-                want_supported: &modern,
-                want_finalized: vec![
-                    finalized("krabka.version", 1),
-                    finalized("kraft.version", 1),
-                    finalized("metadata.version", 30),
-                ],
-            },
-        ];
-        for Row {
-            version,
-            kraft_version,
-            levels,
-            want_supported,
-            want_finalized,
-        } in rows
-        {
-            let image = feature_image(kraft_version, levels);
-            let body = super::api_versions_response_body(version, view(&image, 1234));
-            let resp = ApiVersionsResponse::decode(&mut &body[..], version).expect("decode");
-            assert2::check!(
-                (
-                    &resp.supported_features,
-                    &resp.finalized_features,
-                    resp.finalized_features_epoch
-                ) == (want_supported, &want_finalized, 1234),
-                "v{version}, kraft.version {kraft_version}"
-            );
-        }
-    }
-
     /// #1344: before the first feature delta Kafka's controller answers from
     /// the initial state of `FeaturesPublisher`,
     /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
     /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
     /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
-    #[yare::parameterized(
-        kraft_version_0 = { 0, &[("metadata.version", METADATA_VERSION_MIN)] },
-        kraft_version_1 = {
-            1,
-            &[("kraft.version", 1), ("metadata.version", METADATA_VERSION_MIN)],
-        },
-    )]
-    fn a_fresh_controller_advertises_kafkas_minimum_metadata_version(
-        kraft_version: u16,
-        want: &[(&str, i16)],
-    ) {
-        krabka_macros::finalized_feature_fixture!(finalized);
-        let image = feature_image(kraft_version, &[]);
-        let body = super::api_versions_response_body(4, view(&image, -1));
-        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
-        let want_finalized: Vec<_> = want
-            .iter()
-            .map(|(name, level)| finalized(name, *level))
-            .collect();
-        assert2::check!(
-            (resp.finalized_features, resp.finalized_features_epoch) == (want_finalized, -1)
-        );
-    }
-
     /// Kafka's `ControllerServer` builds the listener's
     /// `SimpleApiVersionManager` with `unstable.api.versions.enable`, so that
     /// flag alone caps the supported `metadata.version` here. With only
@@ -853,5 +521,308 @@ mod tests {
             metadata_version.max_version == want_max,
             "unstable.api.versions.enable {unstable:?}"
         );
+    }
+    use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
+    #[derive(serde::Deserialize)]
+    struct VersionRequestInput {
+        unstable: bool,
+        version: i16,
+        body: Option<(String, String, Option<String>, i32)>,
+    }
+    #[derive(serde::Deserialize)]
+    struct VersionRequestExpected {
+        version: i16,
+        code: i16,
+        apis: Vec<(i16, i16, i16)>,
+        supported: Vec<(String, i16, i16)>,
+        finalized: Vec<(String, i16, i16)>,
+        epoch: i64,
+    }
+    impl VersionRequestExpected {
+        fn response(self) -> ApiVersionsResponse {
+            use krabka_protocol::owned::api_versions_response::{
+                FinalizedFeatureKey, SupportedFeatureKey,
+            };
+            ApiVersionsResponse {
+                error_code: self.code,
+                api_keys: self
+                    .apis
+                    .into_iter()
+                    .map(|(api_key, min_version, max_version)| ApiVersionEntry {
+                        api_key,
+                        min_version,
+                        max_version,
+                        ..Default::default()
+                    })
+                    .collect(),
+                supported_features: self
+                    .supported
+                    .into_iter()
+                    .map(|(name, min_version, max_version)| SupportedFeatureKey {
+                        name,
+                        min_version,
+                        max_version,
+                        ..Default::default()
+                    })
+                    .collect(),
+                finalized_features: self
+                    .finalized
+                    .into_iter()
+                    .map(
+                        |(name, min_version_level, max_version_level)| FinalizedFeatureKey {
+                            name,
+                            min_version_level,
+                            max_version_level,
+                            ..Default::default()
+                        },
+                    )
+                    .collect(),
+                finalized_features_epoch: self.epoch,
+                ..Default::default()
+            }
+        }
+    }
+
+    use {
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    struct TrunkOnlyRouter;
+    impl ControllerAdminRouter for TrunkOnlyRouter {
+        fn api_versions(&self) -> &[ControllerApiVersion] {
+            &[ControllerApiVersion {
+                api_key: 94,
+                min_version: 0,
+                max_version: 0,
+                released_max: None,
+                flexible_min: 0,
+            }]
+        }
+
+        fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
+            Box::pin(async { Ok(None) })
+        }
+    }
+    #[derive(Default)]
+    struct TrunkAdvertisement {
+        enabled: bool,
+        range: Slot<Option<(i16, i16)>>,
+        disabled: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn trunk_advertisement() -> TrunkAdvertisement {
+        // Start this scenario with fresh inputs and observations.
+        TrunkAdvertisement::default()
+    }
+    #[given("the controller router serves UnregisterController and unstable APIs are {enabled}")]
+    fn trunk_policy(trunk_advertisement: &mut TrunkAdvertisement, enabled: bool) {
+        trunk_advertisement.enabled = enabled;
+    }
+    #[when("the controller advertises and checks UnregisterController version 0")]
+    fn trunk_api(trunk_advertisement: &mut TrunkAdvertisement) {
+        let policy = if trunk_advertisement.enabled {
+            UnstableApiVersions::Enabled
+        } else {
+            UnstableApiVersions::Disabled
+        };
+        trunk_advertisement.range.set(
+            advertised_api_keys(Some(&TrunkOnlyRouter), policy)
+                .into_iter()
+                .find(|key| key.api_key == 94)
+                .map(|key| (key.min_version, key.max_version)),
+        );
+        trunk_advertisement.disabled =
+            Some(is_disabled_version(94, 0, Some(&TrunkOnlyRouter), policy));
+    }
+    #[then("UnregisterController is advertised {advertised} and disabled {disabled}")]
+    fn trunk_api_result(
+        trunk_advertisement: &TrunkAdvertisement,
+        advertised: bool,
+        disabled: bool,
+    ) {
+        assert2::check!(trunk_advertisement.range.get() == Some(advertised.then_some((0, 0))));
+        assert2::check!(trunk_advertisement.disabled == Some(disabled));
+    }
+
+    #[derive(Default)]
+    struct VersionRequest {
+        input: Option<VersionRequestInput>,
+        answer: Option<bytes::Bytes>,
+    }
+    #[rstest::fixture]
+    fn version_request() -> VersionRequest {
+        // Each handshake owns its version, native client fields and returned bytes.
+        VersionRequest::default()
+    }
+    #[given("an ApiVersions request with {request}")]
+    fn api_request_input(version_request: &mut VersionRequest, request: String) {
+        version_request.input = Some(
+            serde_json::from_str(&request)
+                .expect("ApiVersions version, policy and native body fields"),
+        );
+    }
+    #[when("the controller handles the ApiVersions request under its release policy")]
+    fn api_request_operation(version_request: &mut VersionRequest) {
+        let input = version_request.input.as_ref().expect("request prepared");
+        let body = input.body.as_ref().map_or_else(
+            || bytes::Bytes::from_static(&[0xff]),
+            |(name, software_version, cluster_id, node_id)| {
+                let request = ApiVersionsRequest {
+                    client_software_name: name.clone(),
+                    client_software_version: software_version.clone(),
+                    cluster_id: cluster_id.clone(),
+                    node_id: *node_id,
+                    ..Default::default()
+                };
+                let mut body = BytesMut::new();
+                request
+                    .encode(&mut body, input.version)
+                    .expect("encode request");
+                body.freeze()
+            },
+        );
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        let view = ApiVersionsView {
+            unstable: if input.unstable {
+                UnstableApiVersions::Enabled
+            } else {
+                UnstableApiVersions::Disabled
+            },
+            ..view(&image, -1)
+        };
+        version_request.answer = Some(
+            super::api_versions_response(input.version, &body, view).expect("controller answered"),
+        );
+    }
+    #[then(
+        "the ApiVersions answer consumes all bytes and matches its complete expected Kafka response {expected}"
+    )]
+    fn api_request_result(version_request: &VersionRequest, expected: String) {
+        let expected: VersionRequestExpected =
+            serde_json::from_str(&expected).expect("independent full ApiVersions response");
+        let version = expected.version;
+        let expected = expected.response();
+        let mut cursor = &version_request.answer.as_ref().expect("request handled")[..];
+        let decoded = ApiVersionsResponse::decode(&mut cursor, version).expect("decode answer");
+        assert2::check!(cursor.is_empty());
+        assert2::check!(decoded == expected);
+        if expected.error_code == 0 {
+            assert2::check!(!decoded.api_keys.is_empty());
+        }
+    }
+
+    #[derive(Default)]
+    struct FeatureAdvertisement {
+        image: Option<krabka_metadata::MetadataImage>,
+        epoch: i64,
+        response: Option<ApiVersionsResponse>,
+    }
+    #[rstest::fixture]
+    fn feature_advertisement() -> FeatureAdvertisement {
+        // Start this scenario with fresh inputs and observations.
+        FeatureAdvertisement::default()
+    }
+    fn advertised_levels(text: &str) -> Vec<(&str, i16)> {
+        if text == "none" {
+            return vec![];
+        }
+        text.split(',')
+            .map(|entry| {
+                let (name, level) = entry.split_once(':').expect("feature:level");
+                (name, level.parse().expect("feature level"))
+            })
+            .collect()
+    }
+    #[given(
+        "a controller at kraft version {kraft} with finalized levels {levels} and metadata epoch {epoch}"
+    )]
+    fn controller_feature_image(
+        feature_advertisement: &mut FeatureAdvertisement,
+        kraft: u16,
+        levels: String,
+        epoch: i64,
+    ) {
+        feature_advertisement.image = Some(feature_image(kraft, &advertised_levels(&levels)));
+        feature_advertisement.epoch = epoch;
+    }
+    #[when("the controller answers feature fields at ApiVersions version {version}")]
+    fn controller_feature_response(feature_advertisement: &mut FeatureAdvertisement, version: i16) {
+        let image = feature_advertisement
+            .image
+            .as_ref()
+            .expect("controller image prepared");
+        let body =
+            super::api_versions_response_body(version, view(image, feature_advertisement.epoch));
+        feature_advertisement.response = Some(
+            ApiVersionsResponse::decode(&mut &body[..], version).expect("decode feature response"),
+        );
+    }
+    #[then(
+        "supported features use modern minimums {modern} and finalized levels are {levels} at epoch {epoch}"
+    )]
+    fn controller_feature_fields(
+        feature_advertisement: &FeatureAdvertisement,
+        modern: bool,
+        levels: String,
+        epoch: i64,
+    ) {
+        krabka_macros::supported_feature_fixture!(supported);
+        krabka_macros::supported_features_fixture!(modern_supported, supported);
+        krabka_macros::finalized_feature_fixture!(finalized);
+        let metadata = supported(
+            "metadata.version",
+            METADATA_VERSION_MIN,
+            LATEST_PRODUCTION_METADATA_VERSION,
+        );
+        let expected = if modern {
+            modern_supported(metadata, 1)
+        } else {
+            vec![metadata]
+        };
+        let levels = advertised_levels(&levels)
+            .into_iter()
+            .map(|(name, level)| finalized(name, level))
+            .collect::<Vec<_>>();
+        let actual = feature_advertisement
+            .response
+            .as_ref()
+            .expect("feature response produced");
+        assert2::check!(
+            (
+                &actual.supported_features,
+                &actual.finalized_features,
+                actual.finalized_features_epoch
+            ) == (&expected, &levels, epoch)
+        );
+    }
+    #[then(
+        "the fresh controller finalizes the minimum metadata version and kraft version {kraft} at epoch minus one"
+    )]
+    fn fresh_feature_fields(feature_advertisement: &FeatureAdvertisement, kraft: u16) {
+        krabka_macros::finalized_feature_fixture!(finalized);
+        let mut expected = vec![];
+        if kraft == 1 {
+            expected.push(finalized("kraft.version", 1));
+        }
+        expected.push(finalized("metadata.version", METADATA_VERSION_MIN));
+        let actual = feature_advertisement
+            .response
+            .as_ref()
+            .expect("feature response produced");
+        assert2::check!(
+            (&actual.finalized_features, actual.finalized_features_epoch) == (&expected, -1)
+        );
+    }
+    mod trunk_cases {
+        use super::*;
+        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@trunk", fixtures=[trunk_advertisement: TrunkAdvertisement]);
+    }
+    mod request_cases {
+        use super::*;
+        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@request", fixtures=[version_request: VersionRequest]);
+    }
+    mod features_cases {
+        use super::*;
+        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@features", fixtures=[feature_advertisement: FeatureAdvertisement]);
     }
 }

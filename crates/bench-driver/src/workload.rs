@@ -1644,17 +1644,37 @@ mod tests {
         },
     };
 
-    #[test]
-    fn an_idempotent_producer_stays_within_kafka_s_in_flight_limit() {
-        // (enable_idempotence, expected cap)
-        let cases = [(true, 5), (false, 128)];
-        for (enable_idempotence, expected) in cases {
-            check!(
-                producer_max_in_flight(enable_idempotence) == expected,
-                "{enable_idempotence}"
-            );
+    struct InFlightScenario {
+        idempotent: bool,
+        cap: Option<usize>,
+    }
+
+    #[rstest::fixture]
+    fn in_flight() -> InFlightScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        InFlightScenario {
+            idempotent: false,
+            cap: None,
         }
     }
+
+    #[rstest_bdd_macros::given("producer idempotence is {enabled}")]
+    fn producer_idempotence(in_flight: &mut InFlightScenario, enabled: bool) {
+        in_flight.idempotent = enabled;
+    }
+
+    #[rstest_bdd_macros::when("the benchmark producer's in-flight limit is configured")]
+    fn configure_in_flight(in_flight: &mut InFlightScenario) {
+        in_flight.cap = Some(producer_max_in_flight(in_flight.idempotent));
+    }
+
+    #[rstest_bdd_macros::then("at most {maximum} produce requests are in flight")]
+    fn configured_cap(in_flight: &InFlightScenario, maximum: usize) {
+        check!(in_flight.cap == Some(maximum));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/producer_ordering", fixtures = [in_flight: InFlightScenario]);
 
     fn cfg(broker_count: u32) -> DriverConfig {
         DriverConfig {

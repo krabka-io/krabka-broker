@@ -156,72 +156,91 @@ fn check_replica_cases<E: fmt::Debug + PartialEq>(
     }
 }
 
-#[test]
-fn offline_replicas_matches_kafka_replica_state_rules() {
-    let (good, bad) = (dir(0x600d), dir(0xbad));
-    let first_broker_without_dirs = || {
-        vec![
-            Registered::new(NodeId(1), vec![]),
-            Registered::new(NodeId(2), vec![good]),
-        ]
-    };
-    let cases = vec![
-        replica_case()
-            .expected(vec![])
-            .name("every replica registered, online dir, unfenced")
-            .registrations(vec![
-                Registered::new(NodeId(1), vec![good, bad]),
-                Registered::new(NodeId(2), vec![good]),
-            ])
-            .call(),
-        replica_case()
-            .expected(vec![1])
-            .name("replica on a dir the registration no longer lists")
-            .directories(vec![bad, good])
-            .call(),
-        replica_case()
-            .expected(vec![2])
-            .name("fenced broker")
-            .unavailable(vec![NodeId(2)])
-            .call(),
-        replica_case()
-            .expected(vec![2])
-            .name("unregistered broker")
-            .registrations(vec![Registered::new(NodeId(1), vec![good])])
-            .call(),
-        replica_case()
-            .expected(vec![])
-            .name("unassigned directory id is online")
-            .directories(vec![Uuid::nil(), Uuid::nil()])
-            .call(),
-        replica_case()
-            .expected(vec![1])
-            .name("registration whose last online dir was retired offlines its replicas")
-            .registrations(first_broker_without_dirs())
-            .directories(vec![bad, good])
-            .call(),
-        replica_case()
-            .expected(vec![])
-            .name("registration with no online dir keeps an unassigned replica online")
-            .registrations(first_broker_without_dirs())
-            .directories(vec![Uuid::nil(), good])
-            .call(),
-        replica_case()
-            .expected(vec![])
-            .name("missing directory slot is online")
-            .directories(vec![])
-            .call(),
-        replica_case()
-            .expected(vec![2, 1])
-            .name("offline dir and fenced peer are both reported, in replica order")
-            .replicas(vec![NodeId(2), NodeId(1)])
-            .directories(vec![good, bad])
-            .unavailable(vec![NodeId(2)])
-            .call(),
-    ];
-
-    check_replica_cases(cases, offline_replicas);
+#[derive(Default)]
+struct OfflineReplicaScenario {
+    image: Option<MetadataImage>,
+    unavailable: HashSet<u64>,
+    offline: Option<Vec<i32>>,
 }
+#[rstest::fixture]
+fn offline_replica() -> OfflineReplicaScenario {
+    let image = None;
+    OfflineReplicaScenario {
+        image,
+        ..Default::default()
+    }
+}
+fn replica_directory_ids(text: &str) -> Vec<Uuid> {
+    if text == "none" {
+        return Vec::new();
+    }
+    text.split(',')
+        .map(|name| match name {
+            "good" => dir(0x600d),
+            "bad" => dir(0xbad),
+            "nil" => Uuid::nil(),
+            _ => panic!("unknown replica directory: {name}"),
+        })
+        .collect()
+}
+#[rstest_bdd_macros::given(
+    "replicas {replicas} use directories {directories} with registrations {registrations} and unavailable brokers {unavailable}"
+)]
+fn replica_availability_inputs(
+    offline_replica: &mut OfflineReplicaScenario,
+    replicas: String,
+    directories: String,
+    registrations: String,
+    unavailable: String,
+) {
+    let replicas: Vec<_> = replicas
+        .split(',')
+        .map(|id| NodeId(id.parse().unwrap()))
+        .collect();
+    let registrations: Vec<_> = registrations
+        .split(';')
+        .map(|spec| {
+            let (id, dirs) = spec.split_once('=').unwrap();
+            Registered::new(NodeId(id.parse().unwrap()), replica_directory_ids(dirs))
+        })
+        .collect();
+    offline_replica.image = Some(image(
+        &registrations,
+        &replicas,
+        &replica_directory_ids(&directories),
+    ));
+    offline_replica.unavailable = if unavailable == "none" {
+        HashSet::new()
+    } else {
+        unavailable
+            .split(',')
+            .map(|id| id.parse().unwrap())
+            .collect()
+    };
+}
+#[rstest_bdd_macros::when(
+    "the metadata response projects offline replicas for the PLAINTEXT listener"
+)]
+fn project_offline_replicas(offline_replica: &mut OfflineReplicaScenario) {
+    let image = offline_replica.image.as_ref().unwrap();
+    let record = image.partition("t", 0).expect("partition in image");
+    offline_replica.offline = Some(offline_replicas(
+        image,
+        record,
+        &offline_replica.unavailable,
+        LISTENER,
+    ));
+}
+#[rstest_bdd_macros::then("the offline replica IDs in replica order are {expected}")]
+fn check_offline_replicas(offline_replica: &OfflineReplicaScenario, expected: String) {
+    let expected: Vec<i32> = if expected == "none" {
+        Vec::new()
+    } else {
+        expected.split(',').map(|id| id.parse().unwrap()).collect()
+    };
+    assert!(offline_replica.offline.as_ref().unwrap() == &expected);
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_offline_replicas",fixtures=[offline_replica:OfflineReplicaScenario]);
 
 /// A replica on a directory its broker no longer lists online neither leads
 /// nor stays in the reported ISR -- and nothing else changes.

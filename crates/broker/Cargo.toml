@@ -192,6 +192,10 @@ rcgen = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 # An independent CRC-32C oracle for the checksums the broker computes with
 # `krabka_protocol::records::crc32c`.
 crc32c = { workspace = true }

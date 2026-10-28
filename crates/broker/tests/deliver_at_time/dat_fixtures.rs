@@ -101,3 +101,123 @@ pub fn batch_at(delivery_ms: i64, values: &[&str]) -> RecordBatch {
     }
     batch
 }
+
+use {
+    crate::{
+        dat_wire::{produce, ready_topic, visible},
+        support,
+    },
+    assert2::check,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid,
+    std::time::Duration,
+    tempfile::TempDir,
+};
+pub struct DeliveryScenario {
+    pub directory: Option<TempDir>,
+    pub broker: Option<BrokerHandle>,
+    pub client: Option<Client>,
+    pub topic: String,
+    pub topic_id: Option<Uuid>,
+    pub mode: Option<Mode>,
+    pub due_at: Option<i64>,
+    pub snapshot: Option<Visible>,
+    pub read_at: Option<i64>,
+    pub served_at: Option<i64>,
+    pub values: Option<Vec<String>>,
+    pub elapsed: Option<Duration>,
+}
+impl DeliveryScenario {
+    pub async fn shutdown(self) {
+        drop(self.client);
+        self.broker
+            .expect("delivery broker started")
+            .shutdown()
+            .await;
+    }
+}
+#[rstest::fixture]
+pub fn delivery() -> DeliveryScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    DeliveryScenario {
+        directory: None,
+        broker: None,
+        client: None,
+        topic: String::new(),
+        topic_id: None,
+        mode: None,
+        due_at: None,
+        snapshot: None,
+        read_at: None,
+        served_at: None,
+        values: None,
+        elapsed: None,
+    }
+}
+#[rstest_bdd_macros::given("topic {topic} has delivery mode {mode}")]
+async fn configured_delivery_mode(delivery: &mut DeliveryScenario, topic: String, mode: String) {
+    let mode = match mode.as_str() {
+        "scheduled" => SCHEDULED,
+        "immediate" => IMMEDIATE,
+        other => panic!("unknown delivery mode {other}"),
+    };
+    let directory = TempDir::new().expect("delivery directory");
+    let (broker, client) = support::start_with_dir(directory.path()).await;
+    delivery.topic_id = Some(ready_topic(&broker, &client, &topic, mode).await);
+    delivery.directory = Some(directory);
+    delivery.broker = Some(broker);
+    delivery.client = Some(client);
+    delivery.topic = topic;
+    delivery.mode = Some(mode);
+}
+async fn append_stamped_values(delivery: &DeliveryScenario, values: &str, timestamp_ms: i64) {
+    let values: Vec<_> = values.split(',').collect();
+    produce(
+        delivery.client.as_ref().expect("delivery client connected"),
+        &delivery.topic,
+        delivery.topic_id.expect("delivery topic created"),
+        batch_at(timestamp_ms, &values),
+    )
+    .await;
+}
+#[rstest_bdd_macros::when(
+    "the producer appends already-due values {values} stamped 60000 milliseconds in the past"
+)]
+async fn append_already_due(delivery: &mut DeliveryScenario, values: String) {
+    append_stamped_values(delivery, &values, now_ms() - ALREADY_DUE_MS).await;
+}
+#[rstest_bdd_macros::when(
+    "the producer appends pending values {values} stamped 3600000 milliseconds in the future"
+)]
+async fn append_pending(delivery: &mut DeliveryScenario, values: String) {
+    append_stamped_values(delivery, &values, now_ms() + PENDING_HORIZON_MS).await;
+}
+#[rstest_bdd_macros::when("a consumer reads ListOffsets LATEST and fetches from offset 0")]
+async fn read_delivery_visibility(delivery: &mut DeliveryScenario) {
+    delivery.snapshot = Some(
+        visible(
+            delivery.client.as_ref().expect("delivery client connected"),
+            &delivery.topic,
+            delivery.topic_id.expect("delivery topic created"),
+        )
+        .await,
+    );
+    delivery.read_at = Some(now_ms());
+}
+#[rstest_bdd_macros::then("LATEST is {latest} and fetched values are {values}")]
+fn delivery_visibility_result(delivery: &DeliveryScenario, latest: i64, values: String) {
+    let values: Vec<_> = if values == "empty" {
+        Vec::new()
+    } else {
+        values.split(',').collect()
+    };
+    check!(
+        delivery
+            .snapshot
+            .as_ref()
+            .expect("delivery visibility read")
+            == &Visible::of(latest, &values)
+    );
+}

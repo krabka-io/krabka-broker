@@ -66,67 +66,6 @@ async fn start() -> StartedBroker {
     StartedBroker { broker, dir }
 }
 
-/// One row: the group id, the member id, and the top-level error code of
-/// each API.
-struct Case {
-    name: &'static str,
-    group: Option<&'static str>,
-    member: Option<String>,
-    fetch_error: i16,
-    acknowledge_error: i16,
-}
-
-fn cases() -> Vec<Case> {
-    let valid = || Some("m".repeat(36));
-    vec![
-        Case {
-            name: "valid ids",
-            group: Some(READABLE),
-            member: valid(),
-            // The fetch at epoch 0 opens the session that the acknowledge at
-            // epoch 1 then continues.
-            fetch_error: codes::NONE,
-            acknowledge_error: codes::NONE,
-        },
-        Case {
-            name: "null group id",
-            group: None,
-            member: valid(),
-            fetch_error: codes::INVALID_REQUEST,
-            acknowledge_error: codes::INVALID_REQUEST,
-        },
-        Case {
-            name: "null member id",
-            group: Some(READABLE),
-            member: None,
-            fetch_error: codes::INVALID_REQUEST,
-            acknowledge_error: codes::INVALID_REQUEST,
-        },
-        Case {
-            name: "empty member id",
-            group: Some(READABLE),
-            member: Some(String::new()),
-            fetch_error: codes::INVALID_REQUEST,
-            acknowledge_error: codes::INVALID_REQUEST,
-        },
-        Case {
-            name: "37-character member id",
-            group: Some(READABLE),
-            member: Some("m".repeat(37)),
-            fetch_error: codes::INVALID_REQUEST,
-            acknowledge_error: codes::INVALID_REQUEST,
-        },
-        Case {
-            // Kafka checks the group `Read` before the member id.
-            name: "denied group and empty member id",
-            group: Some("other-group"),
-            member: Some(String::new()),
-            fetch_error: codes::GROUP_AUTHORIZATION_FAILED,
-            acknowledge_error: codes::GROUP_AUTHORIZATION_FAILED,
-        },
-    ]
-}
-
 /// The top-level shape Kafka answers: rows and a lock timeout only when the
 /// request got past every check.
 fn fetch_response(error_code: i16) -> ShareFetchResponse {
@@ -171,52 +110,119 @@ async fn dispatch_share_fetch(
     .expect("handle share fetch")
 }
 
-#[tokio::test]
-async fn group_and_member_ids_are_checked_in_kafka_order() {
-    let StartedBroker { broker, dir: _dir } = start().await;
-    let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
+#[derive(Default)]
+struct ShareRequestIdentityScenario {
+    started: Option<StartedBroker>,
+    group: Option<String>,
+    member: Option<String>,
+    fetch: Option<ShareFetchResponse>,
+    acknowledgement: Option<ShareAcknowledgeResponse>,
+}
+#[rstest::fixture]
+fn share_request_identity() -> ShareRequestIdentityScenario {
+    let started = None;
+    ShareRequestIdentityScenario {
+        started,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given("only share group readable-group grants the consumer Read permission")]
+async fn share_request_authorization(share_request_identity: &mut ShareRequestIdentityScenario) {
+    share_request_identity.started = Some(start().await);
+}
+#[rstest_bdd_macros::given("share requests name group {group} and member {member}")]
+fn share_request_ids(
+    share_request_identity: &mut ShareRequestIdentityScenario,
+    group: String,
+    member: String,
+) {
+    share_request_identity.group = if group == "null" { None } else { Some(group) };
+    share_request_identity.member = match member.as_str() {
+        "null" => None,
+        "empty" => Some(String::new()),
+        "36 characters" => Some("m".repeat(36)),
+        "37 characters" => Some("m".repeat(37)),
+        _ => panic!("unknown share member input: {member}"),
+    };
+}
+#[rstest_bdd_macros::when(
+    "the consumer sends ShareFetch at epoch 0 followed by ShareAcknowledge at epoch 1"
+)]
+async fn handle_share_request_ids(share_request_identity: &mut ShareRequestIdentityScenario) {
+    let broker = share_request_identity
+        .started
+        .as_ref()
+        .unwrap()
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! {bind(user,address,ctx);user ["share-consumer"];client ["share-client"];};
     let fetch_version = share_fetch_response::MAX_VERSION;
     let acknowledge_version = share_acknowledge_response::MAX_VERSION;
-
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for case in cases() {
-        let fetch = ShareFetchRequest {
-            group_id: case.group.map(str::to_owned),
-            member_id: case.member.clone(),
-            share_session_epoch: 0,
-            ..Default::default()
-        };
-        let fetched = dispatch_share_fetch(&shared, &fetch, fetch_version, &ctx).await;
-        let acknowledge = ShareAcknowledgeRequest {
-            group_id: case.group.map(str::to_owned),
-            member_id: case.member.clone(),
-            share_session_epoch: 1,
-            ..Default::default()
-        };
-        let acknowledged = try_dispatch_context(
-            &shared,
-            owned::share_acknowledge_request::API_KEY,
-            acknowledge_version,
-            &encode_request(&acknowledge, acknowledge_version),
-            &ctx,
-        )
-        .await
-        .expect("handle share acknowledge");
-        actual.push((
-            case.name,
-            decode_response::<ShareFetchResponse>(&fetched, fetch_version),
-            decode_response::<ShareAcknowledgeResponse>(&acknowledged, acknowledge_version),
-        ));
-        expected.push((
-            case.name,
-            fetch_response(case.fetch_error),
-            acknowledge_response(case.acknowledge_error),
-        ));
-    }
-    assert!(actual == expected);
-    broker.shutdown().await;
+    let fetch = ShareFetchRequest {
+        group_id: share_request_identity.group.clone(),
+        member_id: share_request_identity.member.clone(),
+        share_session_epoch: 0,
+        ..Default::default()
+    };
+    let fetched = dispatch_share_fetch(&broker, &fetch, fetch_version, &ctx).await;
+    share_request_identity.fetch = Some(decode_response::<ShareFetchResponse>(
+        &fetched,
+        fetch_version,
+    ));
+    let acknowledge = ShareAcknowledgeRequest {
+        group_id: share_request_identity.group.clone(),
+        member_id: share_request_identity.member.clone(),
+        share_session_epoch: 1,
+        ..Default::default()
+    };
+    let acknowledged = try_dispatch_context(
+        &broker,
+        owned::share_acknowledge_request::API_KEY,
+        acknowledge_version,
+        &encode_request(&acknowledge, acknowledge_version),
+        &ctx,
+    )
+    .await
+    .expect("handle share acknowledge");
+    share_request_identity.acknowledgement = Some(decode_response::<ShareAcknowledgeResponse>(
+        &acknowledged,
+        acknowledge_version,
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the complete ShareFetch response has error {fetch} and ShareAcknowledge has error {acknowledge}"
+)]
+async fn check_share_request_ids(
+    share_request_identity: &mut ShareRequestIdentityScenario,
+    fetch: i16,
+    acknowledge: i16,
+) {
+    assert!(share_request_identity.fetch.as_ref().unwrap() == &fetch_response(fetch));
+    assert!(
+        share_request_identity.acknowledgement.as_ref().unwrap()
+            == &acknowledge_response(acknowledge)
+    );
+    share_request_identity
+        .started
+        .take()
+        .unwrap()
+        .broker
+        .shutdown()
+        .await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_share_request_identity/identity.feature",
+    name = "Null group authorization and member validity are checked in Kafka order"
+)]
+#[tokio::test]
+async fn group_and_member_ids_are_checked_in_kafka_order(
+    share_request_identity: ShareRequestIdentityScenario,
+    group: String,
+    member: String,
+    fetch: i16,
+    acknowledge: i16,
+) {
+    let _ = (share_request_identity, group, member, fetch, acknowledge);
 }
 
 /// Kafka's `ShareFetch` does not look the member up in the group

@@ -274,15 +274,32 @@ fn jvm_console_consume(bootstrap: &str) -> Vec<String> {
     support::jvm_output_lines(&out)
 }
 
-// A stock JVM producer schedules a record and a stock JVM consumer waits for
-// it, with no client change on either side.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
-    let (broker, _dir) = start_host_broker().await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct ScheduledDelivery {
+    broker: Option<BrokerHandle>,
+    directory: Option<tempfile::TempDir>,
+    probe: Option<String>,
+    consumed: Option<Vec<String>>,
+}
+#[fixture]
+fn delivery() -> ScheduledDelivery {
+    // Start this scenario with fresh inputs and observations.
+
+    ScheduledDelivery {
+        broker: None,
+        directory: None,
+        probe: None,
+        consumed: None,
+    }
+}
+#[given("one broker hosts a scheduled topic and an immediate delivery control topic")]
+async fn modes(delivery: &mut ScheduledDelivery) {
+    let (broker, directory) = start_host_broker().await;
     // The name the broker advertises, which is what a container resolves
     // through `--add-host=host.docker.internal:host-gateway`.
-    let bootstrap = broker0_advertised();
 
     // Topic creation runs against the broker's own listener rather than the
     // advertised container name, because this client runs on the host.
@@ -292,12 +309,29 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
     wait_for_delivery_policy(&broker, SCHEDULED_TOPIC, DeliveryPolicy::Scheduled).await;
     wait_for_delivery_policy(&broker, IMMEDIATE_TOPIC, DeliveryPolicy::Immediate).await;
 
-    let stdout = task::spawn_blocking(move || run_probe(bootstrap))
-        .await
-        .expect("the probe task finishes");
-
-    let deliver_at = probe_number(&stdout, "deliverAt");
-    let early_ended_at = probe_number(&stdout, "earlyEndedAt");
+    delivery.broker = Some(broker);
+    delivery.directory = Some(directory);
+}
+#[when(
+    "a stock JVM producer schedules the same timestamped payload on both topics and polls before and after it is due"
+)]
+async fn probe(delivery: &mut ScheduledDelivery) {
+    delivery.probe = Some(
+        task::spawn_blocking(|| run_probe(broker0_advertised()))
+            .await
+            .expect("probe task finishes"),
+    );
+}
+#[then(
+    "only the scheduled topic withholds the record before its timestamp and both topics return the original timestamped payload afterward"
+)]
+fn scheduled(delivery: &ScheduledDelivery) {
+    let stdout = delivery
+        .probe
+        .as_ref()
+        .expect("stock client probe completed");
+    let deliver_at = probe_number(stdout, "deliverAt");
+    let early_ended_at = probe_number(stdout, "earlyEndedAt");
 
     // Without this the early poll could have run after the delivery time, and
     // an empty read would then say nothing about scheduled delivery.
@@ -313,18 +347,40 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
         format!("PROBE late {SCHEDULED_TOPIC} 1 {deliver_at} {PAYLOAD}"),
         format!("PROBE late {IMMEDIATE_TOPIC} 1 {deliver_at} {PAYLOAD}"),
     ];
-    check!(probe_readings(&stdout) == expected);
+    check!(probe_readings(stdout) == expected);
     check!(
         stdout.contains("PROBE OK"),
         "the probe did not run to completion: {stdout}"
     );
-
-    // The same record, through the tool an operator would reach for, with no
-    // property set on it at all.
-    let served = task::spawn_blocking(move || jvm_console_consume(bootstrap))
-        .await
-        .expect("the console-consumer task finishes");
-    check!(served == vec![PAYLOAD.to_owned()]);
-
-    broker.shutdown().await;
+}
+#[when("an unconfigured stock console consumer reads the now due scheduled record")]
+async fn console(delivery: &mut ScheduledDelivery) {
+    delivery.consumed = Some(
+        task::spawn_blocking(|| jvm_console_consume(broker0_advertised()))
+            .await
+            .expect("console consumer task finishes"),
+    );
+}
+#[then("the console consumer receives the scheduled payload")]
+fn served(delivery: &ScheduledDelivery) {
+    check!(
+        *delivery
+            .consumed
+            .as_ref()
+            .expect("console consumer completed")
+            == vec![PAYLOAD.to_owned()]
+    );
+}
+#[ignore = "requires docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_deliver_at_time.feature",
+    name = "Stock JVM clients schedule and consume records without client changes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stock_jvm_client_schedules_and_waits_with_no_change(delivery: ScheduledDelivery) {
+    delivery
+        .broker
+        .expect("scheduled broker started")
+        .shutdown()
+        .await;
 }

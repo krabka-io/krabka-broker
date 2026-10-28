@@ -117,7 +117,7 @@ pub fn should_abort_idle_txn(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::codes::INVALID_TRANSACTION_TIMEOUT, assert2::assert};
+    use {super::*, assert2::assert};
 
     #[yare::parameterized(
         normal = { 30_000, Ok(NO_TIMEOUT_MS) },
@@ -136,23 +136,76 @@ mod tests {
         );
     }
 
-    /// Kafka `validateTransactionTimeoutMs`.
-    #[yare::parameterized(
-        one = { 1, Ok(1) },
-        ordinary = { 5_000, Ok(5_000) },
-        at_maximum = { 8_000, Ok(8_000) },
-        above_maximum = { 8_001, Err(INVALID_TRANSACTION_TIMEOUT) },
-        zero = { 0, Err(INVALID_TRANSACTION_TIMEOUT) },
-        negative = { -1, Err(INVALID_TRANSACTION_TIMEOUT) },
-        minimum = { i32::MIN, Err(INVALID_TRANSACTION_TIMEOUT) },
-        maximum_i32 = { i32::MAX, Err(INVALID_TRANSACTION_TIMEOUT) },
-    )]
-    fn resolve_timeout_refuses_what_kafka_refuses(requested: i32, want: Result<i32, i16>) {
-        assert2::assert!(
-            resolve_txn_timeout(false, requested, 8_000) == want,
-            "{requested}"
-        );
+    #[derive(Default)]
+    struct OrdinaryTransactionTimeout {
+        maximum: Option<i32>,
+        requested: Option<i32>,
+        resolved: Option<Result<i32, i16>>,
     }
+
+    #[rstest::fixture]
+    fn ordinary_transaction_timeout() -> OrdinaryTransactionTimeout {
+        // Every ordinary transaction request resolves against its own timeout ceiling.
+        OrdinaryTransactionTimeout::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the maximum ordinary transaction timeout is {milliseconds} milliseconds"
+    )]
+    fn supplied_transaction_timeout_ceiling(
+        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
+        milliseconds: i32,
+    ) {
+        ordinary_transaction_timeout.maximum = Some(milliseconds);
+    }
+
+    #[rstest_bdd_macros::given(
+        "the producer requests transaction timeout {milliseconds} milliseconds"
+    )]
+    fn requested_transaction_timeout(
+        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
+        milliseconds: i32,
+    ) {
+        ordinary_transaction_timeout.requested = Some(milliseconds);
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves the non-two-phase-commit transaction timeout")]
+    fn resolve_ordinary_transaction_timeout(
+        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
+    ) {
+        ordinary_transaction_timeout.resolved = Some(resolve_txn_timeout(
+            false,
+            ordinary_transaction_timeout
+                .requested
+                .expect("producer timeout was given"),
+            ordinary_transaction_timeout
+                .maximum
+                .expect("broker timeout ceiling was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the configured ordinary transaction timeout is {milliseconds} milliseconds"
+    )]
+    fn accepted_ordinary_transaction_timeout(
+        ordinary_transaction_timeout: &OrdinaryTransactionTimeout,
+        milliseconds: i32,
+    ) {
+        assert2::assert!(ordinary_transaction_timeout.resolved == Some(Ok(milliseconds)));
+    }
+
+    #[rstest_bdd_macros::then("the transaction timeout is refused with Kafka error code {code}")]
+    fn refused_ordinary_transaction_timeout(
+        ordinary_transaction_timeout: &OrdinaryTransactionTimeout,
+        code: i16,
+    ) {
+        assert2::assert!(ordinary_transaction_timeout.resolved == Some(Err(code)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/txn/two_pc.feature",
+        fixtures = [ordinary_transaction_timeout: OrdinaryTransactionTimeout]
+    );
 
     #[test]
     fn non_2pc_resolution_never_collides_with_the_sentinel() {

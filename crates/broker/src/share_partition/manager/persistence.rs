@@ -164,73 +164,65 @@ mod tests {
         std::time::Instant,
     };
 
-    /// Kafka's `SharePartition.fetchPersisterError`, and whether
-    /// `SharePartitionManager.fencedSharePartitionHandler` drops the partition.
-    #[test]
-    fn persister_errors_map_as_kafka_maps_them() {
-        let partition_error = |code| BrokerError::SharePartitionState {
+    #[derive(Default)]
+    struct SharePersisterFailure {
+        error: Option<BrokerError>,
+        response: Option<(i16, bool)>,
+    }
+
+    #[rstest::fixture]
+    fn share_persister_failure() -> SharePersisterFailure {
+        // Each failed persistence call gets its own client code and cell-fencing decision.
+        SharePersisterFailure::default()
+    }
+
+    #[rstest_bdd_macros::given("the share state persister returned partition error code {code}")]
+    fn supplied_share_persister_error(
+        share_persister_failure: &mut SharePersisterFailure,
+        code: i16,
+    ) {
+        share_persister_failure.error = Some(BrokerError::SharePartitionState {
             code,
             message: String::new(),
-        };
-        let cases = [
-            (
-                partition_error(codes::NOT_COORDINATOR),
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (
-                partition_error(codes::COORDINATOR_NOT_AVAILABLE),
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (
-                partition_error(codes::COORDINATOR_LOAD_IN_PROGRESS),
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (
-                partition_error(codes::GROUP_ID_NOT_FOUND),
-                codes::GROUP_ID_NOT_FOUND,
-            ),
-            (
-                partition_error(codes::UNKNOWN_TOPIC_OR_PARTITION),
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-            ),
-            (
-                partition_error(codes::FENCED_LEADER_EPOCH),
-                codes::NOT_LEADER_OR_FOLLOWER,
-            ),
-            (
-                partition_error(codes::FENCED_STATE_EPOCH),
-                codes::NOT_LEADER_OR_FOLLOWER,
-            ),
-            (
-                partition_error(codes::INVALID_REQUEST),
-                codes::UNKNOWN_SERVER_ERROR,
-            ),
-            (
-                BrokerError::Share("no route".into()),
-                codes::UNKNOWN_SERVER_ERROR,
-            ),
-        ];
-        let actual: Vec<_> = cases
-            .iter()
-            .map(|(error, _)| {
-                let code = persister_error_code(error);
-                (code, fences_the_partition(code))
-            })
-            .collect();
-        let expected: Vec<_> = cases
-            .iter()
-            .map(|(_, code)| {
-                let fenced = matches!(
-                    *code,
-                    codes::NOT_LEADER_OR_FOLLOWER
-                        | codes::GROUP_ID_NOT_FOUND
-                        | codes::UNKNOWN_TOPIC_OR_PARTITION
-                );
-                (*code, fenced)
-            })
-            .collect();
-        assert!(actual == expected);
+        });
     }
+
+    #[rstest_bdd_macros::given(
+        "the share state persister could not route the request with {message}"
+    )]
+    fn unroutable_share_persister_error(
+        share_persister_failure: &mut SharePersisterFailure,
+        message: String,
+    ) {
+        share_persister_failure.error = Some(BrokerError::Share(message));
+    }
+
+    #[rstest_bdd_macros::when(
+        "the share partition maps the persister error and decides whether to fence its cell"
+    )]
+    fn map_share_persister_error(share_persister_failure: &mut SharePersisterFailure) {
+        let code = persister_error_code(
+            share_persister_failure
+                .error
+                .as_ref()
+                .expect("persister failure was given"),
+        );
+        share_persister_failure.response = Some((code, fences_the_partition(code)));
+    }
+
+    #[rstest_bdd_macros::then("the client receives code {code} and partition fencing is {fenced}")]
+    fn expected_share_persister_error(
+        share_persister_failure: &SharePersisterFailure,
+        code: i16,
+        fenced: bool,
+    ) {
+        assert!(share_persister_failure.response == Some((code, fenced)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_partition/manager/persistence.feature",
+        fixtures = [share_persister_failure: SharePersisterFailure]
+    );
 
     #[tokio::test]
     async fn persist_if_dirty_is_noop_when_clean() {

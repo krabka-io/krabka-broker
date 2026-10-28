@@ -338,23 +338,84 @@ pub async fn checkpoint(
 
 #[cfg(test)]
 mod tests {
-    use {super::config_mismatches, assert2::check, std::collections::BTreeMap};
+    use {
+        super::config_mismatches,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd_macros::{given, then, when},
+        std::collections::BTreeMap,
+    };
 
-    #[yare::parameterized(
-        held = { Some(Some("2")), None },
-        changed = { Some(Some("1")), Some("t min.insync.replicas is Some(\"1\"), not \"2\"") },
-        hidden = { Some(None), Some("t min.insync.replicas is None, not \"2\"") },
-        missing = { None, Some("t min.insync.replicas is not described; it was set to \"2\"") },
-    )]
-    fn a_configuration_holds_what_was_set(found: Option<Option<&str>>, mismatch: Option<&str>) {
-        let expected = BTreeMap::from([("min.insync.replicas".to_owned(), "2".to_owned())]);
-        let found: BTreeMap<String, Option<String>> = found
-            .map(|value| ("min.insync.replicas".to_owned(), value.map(str::to_owned)))
-            .into_iter()
-            .collect();
+    #[derive(Default)]
+    struct ConfigurationEvidence {
+        expected: BTreeMap<String, String>,
+        described: BTreeMap<String, Option<String>>,
+        mismatches: Option<Vec<String>>,
+    }
+
+    #[fixture]
+    fn configuration_evidence() -> ConfigurationEvidence {
+        // Expected configuration and described values are independent evidence.
+        ConfigurationEvidence::default()
+    }
+
+    #[given("the lifecycle set min.insync.replicas to 2")]
+    fn expected_configuration(configuration_evidence: &mut ConfigurationEvidence) {
+        configuration_evidence
+            .expected
+            .insert("min.insync.replicas".into(), "2".into());
+    }
+
+    #[given("DescribeConfigs reports min.insync.replicas as {description}")]
+    fn described_configuration(
+        configuration_evidence: &mut ConfigurationEvidence,
+        description: String,
+    ) {
+        match description.as_str() {
+            "missing" => {}
+            "hidden" => {
+                configuration_evidence
+                    .described
+                    .insert("min.insync.replicas".into(), None);
+            }
+            value => {
+                configuration_evidence
+                    .described
+                    .insert("min.insync.replicas".into(), Some(value.into()));
+            }
+        }
+    }
+
+    #[when("the lifecycle checkpoint compares expected and described topic configuration")]
+    fn compare_configuration(configuration_evidence: &mut ConfigurationEvidence) {
+        configuration_evidence.mismatches = Some(config_mismatches(
+            "t",
+            &configuration_evidence.expected,
+            &configuration_evidence.described,
+        ));
+    }
+
+    #[then("the topic configuration has no mismatches")]
+    fn held_configuration(configuration_evidence: &ConfigurationEvidence) {
         check!(
-            config_mismatches("t", &expected, &found)
-                == mismatch.map(str::to_owned).into_iter().collect::<Vec<_>>()
+            configuration_evidence
+                .mismatches
+                .as_ref()
+                .expect("configuration compared")
+                .is_empty()
         );
     }
+
+    #[then("the topic configuration mismatch is")]
+    fn mismatched_configuration(configuration_evidence: &ConfigurationEvidence, docstring: String) {
+        check!(
+            configuration_evidence
+                .mismatches
+                .as_ref()
+                .expect("configuration compared")
+                == &vec![docstring.trim().to_owned()]
+        );
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/tests/soak_contract/lifecycle_run.feature", fixtures = [configuration_evidence: ConfigurationEvidence]);
 }

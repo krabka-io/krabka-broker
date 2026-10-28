@@ -341,62 +341,7 @@ struct Cluster {
     _dir: tempfile::TempDir,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RejectArchiveSetup {
-    first: krabka_ids::Offset,
-    last: krabka_ids::Offset,
-    #[default(krabka_ids::Offset(1))]
-    expected_spso: krabka_ids::Offset,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DeadLetterReadSetup {
-    count: ShareRecordCount,
-    #[default(krabka_ids::Offset(1))]
-    expected_spso: krabka_ids::Offset,
-}
-
-/// The parts of a [`Cluster`] a test reads, borrowed.
-struct ClusterParts<'a> {
-    broker: &'a BrokerHandle,
-    client: &'a Arc<Client>,
-    tid: &'a uuid::Uuid,
-    member: &'a String,
-}
-
 impl Cluster {
-    async fn check_empty_dead_letter_topic(&self) {
-        check!(
-            dead_letter_records(&self.broker, &self.client)
-                .await
-                .is_empty()
-        );
-    }
-
-    async fn reject_and_archive(&self, setup: RejectArchiveSetup) {
-        self.reject_acquired(setup.first, setup.last).await;
-        self.broker
-            .wait_until_share_spso(GROUP, self.tid, 0, setup.expected_spso.0)
-            .await;
-    }
-
-    async fn dead_letters_after_archive(&self, setup: DeadLetterReadSetup) -> Vec<Record> {
-        let records = wait_for_dead_letters(&self.broker, &self.client, setup.count).await;
-        self.broker
-            .wait_until_share_spso(GROUP, self.tid, 0, setup.expected_spso.0)
-            .await;
-        records
-    }
-
-    fn parts(&self) -> ClusterParts<'_> {
-        ClusterParts {
-            broker: &self.broker,
-            client: &self.client,
-            tid: &self.tid,
-            member: &self.member,
-        }
-    }
-
     async fn reject_acquired(&self, first: krabka_ids::Offset, last: krabka_ids::Offset) {
         acknowledge_success(
             &self.client,
@@ -528,409 +473,6 @@ where
     }
 }
 
-/// Kafka's `initiateDLQAndArchive`, end to end: a rejected batch is written to
-/// the group's topic, one record for each offset, with the six headers and the
-/// copied key and value, and only then does the SPSO move past it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_rejected_batch_is_dead_lettered_then_archived() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters().customize(|_| {}).call().await;
-    let ClusterParts {
-        broker,
-        client,
-        tid,
-        ..
-    } = cluster.parts();
-
-    cluster
-        .reject_acquired(krabka_ids::Offset(0), krabka_ids::Offset(2))
-        .await;
-    let records = wait_for_dead_letters(broker, client, ShareRecordCount(3)).await;
-    broker.wait_until_share_spso(GROUP, *tid, 0, 3).await;
-
-    let seen: Vec<_> = records
-        .iter()
-        .map(|record| {
-            (
-                record.value.clone(),
-                header(record, "__dlq.errors.topic"),
-                header(record, "__dlq.errors.partition"),
-                header(record, "__dlq.errors.offset"),
-                header(record, "__dlq.errors.group"),
-                header(record, "__dlq.errors.delivery.count"),
-                header(record, "__dlq.errors.message"),
-            )
-        })
-        .collect();
-    let expected: Vec<_> = (0..3)
-        .map(|offset| {
-            (
-                Some(Bytes::from(format!("v{offset}"))),
-                Some("t".to_owned()),
-                Some("0".to_owned()),
-                Some(offset.to_string()),
-                Some(GROUP.to_owned()),
-                Some("1".to_owned()),
-                Some("Offset rejected by client.".to_owned()),
-            )
-        })
-        .collect();
-    check!(seen == expected);
-    let summary = broker.share_state_summary_for_test(GROUP, *tid, 0).await;
-    check!(summary.map(|(_, _, spso, _)| spso) == Some(3));
-    // Kafka's `recordDLQRecordWrite` and `recordDLQProduce`: the three records
-    // of the one round, and one attempt to produce it.
-    broker
-        .wait_for_metrics("the dead-letter meters", |metrics| {
-            meters(metrics, GROUP) == (3, 1, 0)
-        })
-        .await;
-    cluster.broker.shutdown().await;
-}
-
-/// Runs that are not neighbours are a write each. One record comes out for
-/// each offset, and the meters count each round as a produce, however the
-/// writes were packed into requests: Kafka's `recordDLQProduce` marks each
-/// handler, not each coalesced request. Whether the writes share a request is
-/// the race of the writers, so this does not assert it: the unit tests of
-/// `dlq::coalesce` and `dlq::writer` do.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters()
-        .customize(|_| {})
-        .records(5)
-        .call()
-        .await;
-    let ClusterParts {
-        broker,
-        client,
-        tid,
-        member,
-    } = cluster.parts();
-
-    reject_ranges()
-        .client(client)
-        .member(member)
-        .topic_id(*tid)
-        .ranges(&[
-            RejectedRange {
-                first: krabka_ids::Offset(0),
-                last: krabka_ids::Offset(0),
-            },
-            RejectedRange {
-                first: krabka_ids::Offset(2),
-                last: krabka_ids::Offset(2),
-            },
-            RejectedRange {
-                first: krabka_ids::Offset(4),
-                last: krabka_ids::Offset(4),
-            },
-        ])
-        .call()
-        .await;
-    let mut records = wait_for_dead_letters(broker, client, ShareRecordCount(3)).await;
-    broker
-        .wait_for_metrics("the dead-letter meters", |metrics| {
-            meters(metrics, GROUP) == (3, 3, 0)
-        })
-        .await;
-    // The records of the rounds that were packed into one request are one
-    // batch, and the order of the requests is the writers' race.
-    records.sort_by_key(|record| header(record, "__dlq.errors.offset"));
-
-    check!(
-        records
-            .iter()
-            .map(|record| (
-                header(record, "__dlq.errors.offset"),
-                record.value.clone(),
-                header(record, "__dlq.errors.delivery.count"),
-                header(record, "__dlq.errors.message"),
-            ))
-            .collect::<Vec<_>>()
-            == [0, 2, 4]
-                .map(|offset| (
-                    Some(offset.to_string()),
-                    Some(Bytes::from(format!("v{offset}"))),
-                    Some("1".to_owned()),
-                    Some("Offset rejected by client.".to_owned()),
-                ))
-                .to_vec()
-    );
-    cluster.broker.shutdown().await;
-}
-
-/// A write that the topic refuses counts as a failed write, and the run is
-/// archived regardless. The topic takes no more than 100 bytes for a message,
-/// and a dead-letter record with its six headers is more, so the leader answers
-/// `MESSAGE_TOO_LARGE`, which Kafka's `handleProduceResponse` does not retry.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters()
-        .customize(|_| {})
-        .records(1)
-        .topic_configs(&[ConfigEntry {
-            name: "max.message.bytes",
-            value: "100",
-        }])
-        .call()
-        .await;
-    let ClusterParts { broker, tid, .. } = cluster.parts();
-
-    cluster
-        .reject_acquired(krabka_ids::Offset(0), krabka_ids::Offset(0))
-        .await;
-    broker.wait_until_share_spso(GROUP, *tid, 0, 1).await;
-
-    broker
-        .wait_for_metrics("the dead-letter meters", |metrics| {
-            meters(metrics, GROUP) == (0, 1, 1)
-        })
-        .await;
-    cluster.check_empty_dead_letter_topic().await;
-    cluster.broker.shutdown().await;
-}
-
-/// A record that uses up `share.delivery.count.limit` goes to the queue too,
-/// with the delivery count as its cause: here its lock runs out on the second
-/// delivery, and the record is written with a delivery count of 2 and Kafka's
-/// message for the cause.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters()
-        .customize(|config| {
-            config.share_group.record_lock_duration = Duration::from_millis(150);
-            config.share_group.max_delivery_attempts = 2;
-        })
-        .records(1)
-        .call()
-        .await;
-    let ClusterParts {
-        broker,
-        client,
-        tid,
-        member,
-    } = cluster.parts();
-
-    // Delivery 1 was taken by the helper. Its lock runs out, and the record is
-    // available again for a second delivery, which nobody acknowledges.
-    broker
-        .wait_until_share_acquired_count(GROUP, *tid, 0, 0)
-        .await;
-    let second = share_fetch(
-        client,
-        ShareFetchSetup::from(ShareSessionSetup {
-            group: GROUP,
-            ..ShareSessionSetup::joined(member, *tid)
-        }),
-    )
-    .await;
-    assert!(
-        acquired_count(&second) == 1 && second.acquired_records[0].delivery_count == 2,
-        "{second:?}"
-    );
-    let records = cluster
-        .dead_letters_after_archive(DeadLetterReadSetup::default())
-        .await;
-
-    check!(
-        (
-            header(&records[0], "__dlq.errors.offset"),
-            header(&records[0], "__dlq.errors.delivery.count"),
-            header(&records[0], "__dlq.errors.message"),
-            records[0].value.clone(),
-        ) == (
-            Some("0".to_owned()),
-            Some("2".to_owned()),
-            Some("Offset delivery count exceeded the threshold.".to_owned()),
-            Some(Bytes::from_static(b"v0")),
-        )
-    );
-    cluster.broker.shutdown().await;
-}
-
-/// The queue is off below `share.version` 2, so a reject archives at once and
-/// nothing reaches the topic, even with the group and the topic set up: the
-/// gate is the finalized level, not the config.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reject_below_share_version_two_writes_nothing() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_dead_letters()
-        .customize(|_| {})
-        .records(2)
-        .version(DeadLetterShareVersion::One)
-        .call()
-        .await;
-
-    cluster
-        .reject_and_archive(RejectArchiveSetup {
-            last: krabka_ids::Offset(1),
-            expected_spso: krabka_ids::Offset(2),
-            ..Default::default()
-        })
-        .await;
-    // intentional: no signal says that a write that must not happen has not
-    // happened yet, so the test gives it time before it reads the topic.
-    time::sleep(Duration::from_millis(500)).await;
-
-    cluster.check_empty_dead_letter_topic().await;
-    cluster.broker.shutdown().await;
-}
-
-/// A group whose topic cannot be written still moves on: Kafka archives the
-/// record when the write fails, and logs the failure. Here the topic does not
-/// exist and the cluster does not create it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_write_still_archives_the_record() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_records(
-        ShareRecordCount(2),
-        |_| {},
-        async |client, _| {
-            finalize_share_version_two(client).await;
-            point_group_at_dead_letter_topic(client).await;
-        },
-    )
-    .await;
-    let ClusterParts { broker, .. } = cluster.parts();
-
-    cluster
-        .reject_and_archive(RejectArchiveSetup {
-            last: krabka_ids::Offset(1),
-            expected_spso: krabka_ids::Offset(2),
-            ..Default::default()
-        })
-        .await;
-
-    check!(
-        broker
-            .controller_image_for_test()
-            .topic(DLQ_TOPIC)
-            .is_none()
-    );
-    // A topic that fails validation is refused before any request is made, so
-    // no produce is counted, as in Kafka's `dlq`, which fails the future before
-    // the handler is queued.
-    broker
-        .wait_for_metrics("no dead-letter produce", |metrics| {
-            meters(metrics, GROUP) == (0, 0, 0)
-        })
-        .await;
-    cluster.broker.shutdown().await;
-}
-
-/// With `errors.deadletterqueue.auto.create.topics.enable`, a missing topic is
-/// created with the config that opts it in, and the records are written to it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_records(
-        ShareRecordCount(1),
-        |_| {},
-        async |client, _| {
-            finalize_share_version_two(client).await;
-            set_configs()
-                .client(client)
-                .target(DeadLetterConfigTarget::Broker)
-                .name("")
-                .values(&[ConfigEntry {
-                    name: "errors.deadletterqueue.auto.create.topics.enable",
-                    value: "true",
-                }])
-                .call()
-                .await;
-            point_group_at_dead_letter_topic(client).await;
-        },
-    )
-    .await;
-    let ClusterParts { broker, .. } = cluster.parts();
-
-    cluster
-        .reject_acquired(krabka_ids::Offset(0), krabka_ids::Offset(0))
-        .await;
-    broker.wait_until_partition_present(DLQ_TOPIC, 0).await;
-    let records = cluster
-        .dead_letters_after_archive(DeadLetterReadSetup::default())
-        .await;
-
-    check!(records[0].value == Some(Bytes::from_static(b"v0")));
-    check!(
-        broker
-            .controller_image_for_test()
-            .topic_config(DLQ_TOPIC)
-            .and_then(|configs| configs.get("errors.deadletterqueue.group.enable").cloned())
-            == Some("true".to_owned())
-    );
-    cluster.broker.shutdown().await;
-}
-
-/// A source record that fits the read budget can be over the topic's
-/// `max.message.bytes` once the six headers and the batch header are added. The
-/// copy is best effort, so the record is written with its headers alone rather
-/// than lost to the broker's `MESSAGE_TOO_LARGE`.
-///
-/// The source value is 1,000 bytes, which is about 1,010 bytes as a record and
-/// fits the topic's 1,100. With the headers, which take about 180 bytes, and
-/// the 61-byte batch header it is about 1,250 bytes as a batch, which does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
-    let _permit = broker_test_permit().await;
-    let cluster = acquired_records_from()
-        .records(1)
-        .hooks(AcquisitionHooks {
-            tweak: |_: &mut BrokerConfig| {},
-            configure: async |client: &Client, broker: &BrokerHandle| {
-                configure_dead_letters(client, broker, DeadLetterShareVersion::default(), &[
-                    ConfigEntry {
-                        name: "max.message.bytes",
-                        value: "1100",
-                    },
-                ])
-                .await;
-            },
-            produce: async |client: &Client, tid: uuid::Uuid| {
-                let values = vec![Bytes::from(vec![b'x'; 1_000])];
-                produce_values()
-                    .client(client)
-                    .values(values)
-                    .topic_id(tid)
-                    .call()
-                    .await;
-            },
-        })
-        .call()
-        .await;
-
-    cluster
-        .reject_acquired(krabka_ids::Offset(0), krabka_ids::Offset(0))
-        .await;
-    let records = cluster
-        .dead_letters_after_archive(DeadLetterReadSetup::default())
-        .await;
-
-    check!(
-        records
-            .iter()
-            .map(|record| (
-                record.key.clone(),
-                record.value.clone(),
-                header(record, "__dlq.errors.offset"),
-                header(record, "__dlq.errors.message"),
-            ))
-            .collect::<Vec<_>>()
-            == vec![(
-                None,
-                None,
-                Some("0".to_owned()),
-                Some("Offset rejected by client.".to_owned()),
-            )]
-    );
-    cluster.broker.shutdown().await;
-}
-
 /// Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP` (KIP-405).
 const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 
@@ -1013,14 +555,167 @@ async fn wait_until_local_log_start(client: &Client, offset: krabka_ids::Offset)
 // The member acquires the records out of the tier, with their values, and
 // rejects them, and the dead-letter records carry the values that the copy
 // read back from the tier.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered() {
-    let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let remote_dir = tempfile::TempDir::new().unwrap();
-    let mut config = trunk_config(&dir);
+#[bon::builder]
+async fn acquired_dead_letters(
+    customize: impl FnOnce(&mut BrokerConfig),
+    #[builder(into, default = ShareRecordCount(3))] records: ShareRecordCount,
+    #[builder(default)] version: DeadLetterShareVersion,
+    #[builder(default = & [])] topic_configs: &'_ [ConfigEntry<'_>],
+) -> Cluster {
+    let setup = DeadLetterQueueSetup {
+        records,
+        version,
+        topic_configs,
+    };
+    acquired_records(setup.records, customize, async |client, broker| {
+        configure_dead_letters(client, broker, setup.version, setup.topic_configs).await;
+    })
+    .await
+}
+
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+    tokio::sync::OwnedSemaphorePermit,
+};
+
+#[derive(Default)]
+struct DeadLetterScenario {
+    permit: Option<OwnedSemaphorePermit>,
+    cluster: Option<Cluster>,
+    remote_directory: Option<TempDir>,
+    records: Option<Vec<Record>>,
+    acquisition: Option<PartitionData>,
+}
+
+#[fixture]
+fn dead_letter_case() -> DeadLetterScenario {
+    // Keep original source records, DLQ output, and actual broker meters independent.
+    DeadLetterScenario::default()
+}
+
+#[given(
+    "an acquired DLQ batch has {records} records at share version {version} with message limit {limit}"
+)]
+async fn acquired_dlq_batch(
+    dead_letter_case: &mut DeadLetterScenario,
+    records: i64,
+    version: i16,
+    limit: String,
+) {
+    dead_letter_case.permit = Some(broker_test_permit().await);
+    let configs = if limit == "unlimited" {
+        vec![]
+    } else {
+        vec![ConfigEntry {
+            name: "max.message.bytes",
+            value: &limit,
+        }]
+    };
+    dead_letter_case.cluster = Some(
+        acquired_dead_letters()
+            .customize(|_| {})
+            .records(records)
+            .version(if version == 1 {
+                DeadLetterShareVersion::One
+            } else {
+                DeadLetterShareVersion::Two
+            })
+            .topic_configs(&configs)
+            .call()
+            .await,
+    );
+}
+
+#[given("one acquired DLQ record has a 150-millisecond lock and a two-delivery limit")]
+async fn delivery_limited_dlq_record(dead_letter_case: &mut DeadLetterScenario) {
+    dead_letter_case.permit = Some(broker_test_permit().await);
+    dead_letter_case.cluster = Some(
+        acquired_dead_letters()
+            .customize(|config| {
+                config.share_group.record_lock_duration = Duration::from_millis(150);
+                config.share_group.max_delivery_attempts = 2;
+            })
+            .records(1)
+            .call()
+            .await,
+    );
+}
+
+#[given(
+    "the DLQ topic is absent, automatic creation is {automatic}, and {records} source records are acquired"
+)]
+async fn missing_dlq_topic(
+    dead_letter_case: &mut DeadLetterScenario,
+    automatic: bool,
+    records: i64,
+) {
+    dead_letter_case.permit = Some(broker_test_permit().await);
+    dead_letter_case.cluster = Some(
+        acquired_records(
+            ShareRecordCount(records),
+            |_| {},
+            async |client, _| {
+                finalize_share_version_two(client).await;
+                if automatic {
+                    set_configs()
+                        .client(client)
+                        .target(DeadLetterConfigTarget::Broker)
+                        .name("")
+                        .values(&[ConfigEntry {
+                            name: "errors.deadletterqueue.auto.create.topics.enable",
+                            value: "true",
+                        }])
+                        .call()
+                        .await;
+                }
+                point_group_at_dead_letter_topic(client).await;
+            },
+        )
+        .await,
+    );
+}
+
+#[given("one acquired 1000-byte source record targets a DLQ topic with a 1100-byte message limit")]
+async fn oversized_dlq_copy(dead_letter_case: &mut DeadLetterScenario) {
+    dead_letter_case.permit = Some(broker_test_permit().await);
+    dead_letter_case.cluster = Some(
+        acquired_records_from()
+            .records(1)
+            .hooks(AcquisitionHooks {
+                tweak: |_: &mut BrokerConfig| {},
+                configure: async |client: &Client, broker: &BrokerHandle| {
+                    configure_dead_letters(client, broker, DeadLetterShareVersion::default(), &[
+                        ConfigEntry {
+                            name: "max.message.bytes",
+                            value: "1100",
+                        },
+                    ])
+                    .await;
+                },
+                produce: async |client: &Client, tid: uuid::Uuid| {
+                    produce_values()
+                        .client(client)
+                        .values(vec![Bytes::from(vec![b'x'; 1_000])])
+                        .topic_id(tid)
+                        .call()
+                        .await;
+                },
+            })
+            .call()
+            .await,
+    );
+}
+
+#[given("three source records have left local disk and are acquired from the remote tier")]
+async fn remote_dlq_source(dead_letter_case: &mut DeadLetterScenario) {
+    dead_letter_case.permit = Some(broker_test_permit().await);
+    let directory = TempDir::new().unwrap();
+    let remote = TempDir::new().unwrap();
+    let mut config = trunk_config(&directory);
     config.remote_storage_backend = Some(RemoteStorageBackend::Local {
-        dir: remote_dir.path().to_path_buf(),
+        dir: remote.path().to_path_buf(),
     });
     config.remote_log_manager_interval = krabka_units::millis(100);
     let StartedShareTopic {
@@ -1039,41 +734,444 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
         .call()
         .await;
     wait_until_local_log_start(&client, krabka_ids::Offset(3)).await;
-
     let AcquiredMember { member, row } = join_and_acquire(&broker, &client, tid).await;
-    let values = |records: &[Record]| -> Vec<Option<Bytes>> {
-        records.iter().map(|record| record.value.clone()).collect()
-    };
-    let produced: Vec<_> = (0..3)
-        .map(|offset| Some(Bytes::from(format!("v{offset}"))))
-        .collect();
-    check!(acquired_count(&row) == 3);
-    check!(values(&records_of(row.records.as_ref())) == produced);
-
-    acknowledge_success(
-        &client,
-        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
-    )
-    .await;
-    let dead_letters = wait_for_dead_letters(&broker, &client, ShareRecordCount(3)).await;
-    check!(values(&dead_letters) == produced);
-    broker.shutdown().await;
+    dead_letter_case.acquisition = Some(row);
+    dead_letter_case.cluster = Some(Cluster {
+        broker,
+        client,
+        tid,
+        member,
+        _dir: directory,
+    });
+    dead_letter_case.remote_directory = Some(remote);
 }
 
-#[bon::builder]
-async fn acquired_dead_letters(
-    customize: impl FnOnce(&mut BrokerConfig),
-    #[builder(into, default = ShareRecordCount(3))] records: ShareRecordCount,
-    #[builder(default)] version: DeadLetterShareVersion,
-    #[builder(default = & [])] topic_configs: &'_ [ConfigEntry<'_>],
-) -> Cluster {
-    let setup = DeadLetterQueueSetup {
-        records,
-        version,
-        topic_configs,
-    };
-    acquired_records(setup.records, customize, async |client, broker| {
-        configure_dead_letters(client, broker, setup.version, setup.topic_configs).await;
-    })
-    .await
+#[when("the member rejects source offsets {first} through {last}")]
+async fn reject_dlq_records(dead_letter_case: &DeadLetterScenario, first: i64, last: i64) {
+    dead_letter_case
+        .cluster()
+        .reject_acquired(krabka_ids::Offset(first), krabka_ids::Offset(last))
+        .await;
+}
+
+#[when("the member rejects the disjoint source offsets zero, two, and four")]
+async fn reject_disjoint_dlq_records(dead_letter_case: &DeadLetterScenario) {
+    reject_ranges()
+        .client(&dead_letter_case.cluster().client)
+        .member(&dead_letter_case.cluster().member)
+        .topic_id(dead_letter_case.cluster().tid)
+        .ranges(&[
+            RejectedRange {
+                first: krabka_ids::Offset(0),
+                last: krabka_ids::Offset(0),
+            },
+            RejectedRange {
+                first: krabka_ids::Offset(2),
+                last: krabka_ids::Offset(2),
+            },
+            RejectedRange {
+                first: krabka_ids::Offset(4),
+                last: krabka_ids::Offset(4),
+            },
+        ])
+        .call()
+        .await;
+}
+
+#[when("the first DLQ acquisition expires and the member fetches its second delivery")]
+async fn exhaust_dlq_delivery(dead_letter_case: &mut DeadLetterScenario) {
+    dead_letter_case
+        .cluster()
+        .broker
+        .wait_until_share_acquired_count(GROUP, dead_letter_case.cluster().tid, 0, 0)
+        .await;
+    dead_letter_case.acquisition = Some(
+        share_fetch(
+            &dead_letter_case.cluster().client,
+            ShareFetchSetup::from(ShareSessionSetup {
+                group: GROUP,
+                ..ShareSessionSetup::joined(
+                    &dead_letter_case.cluster().member,
+                    dead_letter_case.cluster().tid,
+                )
+            }),
+        )
+        .await,
+    );
+}
+
+#[then("the DLQ source is acquired once at delivery count two")]
+fn exhausted_dlq_delivery(dead_letter_case: &DeadLetterScenario) {
+    let response = dead_letter_case
+        .acquisition
+        .as_ref()
+        .expect("second delivery fetched");
+    assert!(
+        acquired_count(response) == 1 && response.acquired_records[0].delivery_count == 2,
+        "{response:?}"
+    );
+}
+
+#[when("the consumer waits for {records} dead-letter records")]
+async fn read_dlq_records(dead_letter_case: &mut DeadLetterScenario, records: i64) {
+    dead_letter_case.records = Some(
+        wait_for_dead_letters(
+            &dead_letter_case.cluster().broker,
+            &dead_letter_case.cluster().client,
+            ShareRecordCount(records),
+        )
+        .await,
+    );
+}
+
+#[then("the source share start offset reaches {offset}")]
+async fn dlq_source_archived(dead_letter_case: &DeadLetterScenario, offset: i64) {
+    dead_letter_case
+        .cluster()
+        .broker
+        .wait_until_share_spso(GROUP, dead_letter_case.cluster().tid, 0, offset)
+        .await;
+    check!(
+        dead_letter_case
+            .cluster()
+            .broker
+            .share_state_summary_for_test(GROUP, dead_letter_case.cluster().tid, 0)
+            .await
+            .map(|(_, _, start, _)| start)
+            == Some(offset)
+    );
+}
+
+#[then(
+    "the DLQ meters report {records} written records, {produces} produce attempts, and {failed} failures"
+)]
+async fn dlq_meters(
+    dead_letter_case: &DeadLetterScenario,
+    records: u64,
+    produces: u64,
+    failed: u64,
+) {
+    dead_letter_case
+        .cluster()
+        .broker
+        .wait_for_metrics("dead-letter meters", |metrics| {
+            meters(metrics, GROUP) == (records, produces, failed)
+        })
+        .await;
+}
+
+#[then("all three rejected records retain their source values and all six DLQ headers")]
+fn rejected_batch_dlq_headers(dead_letter_case: &DeadLetterScenario) {
+    let records = dead_letter_case.records.as_ref().expect("DLQ records read");
+    let seen: Vec<_> = records
+        .iter()
+        .map(|record| {
+            (
+                record.value.clone(),
+                header(record, "__dlq.errors.topic"),
+                header(record, "__dlq.errors.partition"),
+                header(record, "__dlq.errors.offset"),
+                header(record, "__dlq.errors.group"),
+                header(record, "__dlq.errors.delivery.count"),
+                header(record, "__dlq.errors.message"),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = (0..3)
+        .map(|offset| {
+            (
+                Some(Bytes::from(format!("v{offset}"))),
+                Some("t".to_owned()),
+                Some("0".to_owned()),
+                Some(offset.to_string()),
+                Some(GROUP.to_owned()),
+                Some("1".to_owned()),
+                Some("Offset rejected by client.".to_owned()),
+            )
+        })
+        .collect();
+    check!(seen == expected);
+}
+
+#[then(
+    "the disjoint DLQ records retain exactly offsets zero, two, and four with rejection metadata"
+)]
+fn disjoint_dlq_headers(dead_letter_case: &DeadLetterScenario) {
+    let mut records = dead_letter_case
+        .records
+        .as_ref()
+        .expect("DLQ records read")
+        .clone();
+    records.sort_by_key(|record| header(record, "__dlq.errors.offset"));
+    check!(
+        records
+            .iter()
+            .map(|record| (
+                header(record, "__dlq.errors.offset"),
+                record.value.clone(),
+                header(record, "__dlq.errors.delivery.count"),
+                header(record, "__dlq.errors.message"),
+            ))
+            .collect::<Vec<_>>()
+            == [0, 2, 4]
+                .map(|offset| (
+                    Some(offset.to_string()),
+                    Some(Bytes::from(format!("v{offset}"))),
+                    Some("1".to_owned()),
+                    Some("Offset rejected by client.".to_owned()),
+                ))
+                .to_vec()
+    );
+}
+
+#[then("the DLQ is empty")]
+async fn empty_dlq(dead_letter_case: &DeadLetterScenario) {
+    check!(
+        dead_letter_records(
+            &dead_letter_case.cluster().broker,
+            &dead_letter_case.cluster().client
+        )
+        .await
+        .is_empty()
+    );
+}
+
+#[when("500 milliseconds elapse for an intentionally disabled DLQ write")]
+async fn disabled_dlq_window() { time::sleep(Duration::from_millis(500)).await; }
+
+#[then("the delivery-limited DLQ record preserves v0 and threshold metadata at delivery count two")]
+fn delivery_limited_dlq_headers(dead_letter_case: &DeadLetterScenario) {
+    let record = &dead_letter_case.records.as_ref().expect("DLQ records read")[0];
+    check!(
+        (
+            header(record, "__dlq.errors.offset"),
+            header(record, "__dlq.errors.delivery.count"),
+            header(record, "__dlq.errors.message"),
+            record.value.clone()
+        ) == (
+            Some("0".to_owned()),
+            Some("2".to_owned()),
+            Some("Offset delivery count exceeded the threshold.".to_owned()),
+            Some(Bytes::from_static(b"v0")),
+        )
+    );
+}
+
+#[then("the missing DLQ topic has not been created")]
+fn missing_dlq_not_created(dead_letter_case: &DeadLetterScenario) {
+    check!(
+        dead_letter_case
+            .cluster()
+            .broker
+            .controller_image_for_test()
+            .topic(DLQ_TOPIC)
+            .is_none()
+    );
+}
+
+#[when("the automatically created DLQ topic appears in metadata")]
+async fn created_dlq_topic(dead_letter_case: &DeadLetterScenario) {
+    dead_letter_case
+        .cluster()
+        .broker
+        .wait_until_partition_present(DLQ_TOPIC, 0)
+        .await;
+}
+
+#[then("the created DLQ contains v0 and opts into group dead-letter writes")]
+fn created_dlq_record(dead_letter_case: &DeadLetterScenario) {
+    check!(
+        dead_letter_case.records.as_ref().expect("DLQ records read")[0].value
+            == Some(Bytes::from_static(b"v0"))
+    );
+    check!(
+        dead_letter_case
+            .cluster()
+            .broker
+            .controller_image_for_test()
+            .topic_config(DLQ_TOPIC)
+            .and_then(|configs| configs.get("errors.deadletterqueue.group.enable").cloned())
+            == Some("true".to_owned())
+    );
+}
+
+#[then(
+    "the oversized DLQ copy contains only its offset and rejection headers without key or value"
+)]
+fn header_only_dlq_record(dead_letter_case: &DeadLetterScenario) {
+    check!(
+        dead_letter_case
+            .records
+            .as_ref()
+            .expect("DLQ records read")
+            .iter()
+            .map(|record| (
+                record.key.clone(),
+                record.value.clone(),
+                header(record, "__dlq.errors.offset"),
+                header(record, "__dlq.errors.message"),
+            ))
+            .collect::<Vec<_>>()
+            == vec![(
+                None,
+                None,
+                Some("0".to_owned()),
+                Some("Offset rejected by client.".to_owned())
+            )]
+    );
+}
+
+#[then("the remote-tier acquisition contains all three original v0,v1,v2 values")]
+fn remote_dlq_acquisition(dead_letter_case: &DeadLetterScenario) {
+    let response = dead_letter_case
+        .acquisition
+        .as_ref()
+        .expect("remote source acquired");
+    check!(acquired_count(response) == 3);
+    check!(
+        records_of(response.records.as_ref())
+            .iter()
+            .map(|record| record.value.clone())
+            .collect::<Vec<_>>()
+            == source_values()
+    );
+}
+
+#[then("the remote-source DLQ contains all three original v0,v1,v2 values")]
+fn remote_dlq_values(dead_letter_case: &DeadLetterScenario) {
+    check!(
+        dead_letter_case
+            .records
+            .as_ref()
+            .expect("DLQ records read")
+            .iter()
+            .map(|record| record.value.clone())
+            .collect::<Vec<_>>()
+            == source_values()
+    );
+}
+
+impl DeadLetterScenario {
+    async fn shutdown(&mut self) {
+        self.cluster
+            .take()
+            .expect("DLQ cluster")
+            .broker
+            .shutdown()
+            .await;
+        self.remote_directory.take();
+        self.permit.take();
+    }
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a rejected batch is dead lettered then archived"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejected_batch_is_dead_lettered_then_archived(dead_letter_case: DeadLetterScenario) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "rejects that are not neighbours are all dead lettered and counted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a write the topic refuses counts as failed and still archives"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a record that uses up its deliveries is dead lettered"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_that_uses_up_its_deliveries_is_dead_lettered(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a reject below share version two writes nothing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reject_below_share_version_two_writes_nothing(dead_letter_case: DeadLetterScenario) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a failed write still archives the record"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_write_still_archives_the_record(dead_letter_case: DeadLetterScenario) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a missing topic is created when the cluster allows it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_topic_is_created_when_the_cluster_allows_it(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a copied record too big for the topic is written with headers alone"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "records that only the remote tier holds are acquired and dead lettered"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
+    dead_letter_case: DeadLetterScenario,
+) {
+    dead_letter_case.shutdown().await;
+    drop(dead_letter_case);
+}
+
+impl DeadLetterScenario {
+    fn cluster(&self) -> &Cluster { self.cluster.as_ref().expect("live scenario cluster") }
+}
+
+fn source_values() -> Vec<Option<Bytes>> {
+    (0..3)
+        .map(|offset| Some(Bytes::from(format!("v{offset}"))))
+        .collect()
 }

@@ -49,91 +49,237 @@ const REQUESTS: usize = 6;
 /// for a loaded runner. Only a stuck cluster reaches it.
 const FENCING_DEADLINE: Duration = Duration::from_secs(30);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
+#[derive(Default)]
+struct AdvertisedBrokerLiveness {
+    cluster: Vec<(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)>,
+    client: Option<Client>,
+    observer: u64,
+    victim: u64,
+    retired: Option<(krabka_broker::BrokerConfig, tempfile::TempDir)>,
+    survivors: BTreeSet<i32>,
+    responses: Vec<(MetadataResponse, DescribeClusterResponse)>,
+}
+#[rstest::fixture]
+fn advertised_liveness() -> AdvertisedBrokerLiveness {
+    let client = None;
+    AdvertisedBrokerLiveness {
+        client,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "three registered live brokers rotate all advertised controller identities through a follower observer"
+)]
+async fn live_advertised_controller_set(advertised_liveness: &mut AdvertisedBrokerLiveness) {
     support::init_tracing();
-
-    let mut cluster = registered_cluster(3).await;
-
-    // The node under test must not be the one holding the heartbeat registry,
-    // or the answer could come from local state rather than from the log.
+    let cluster = registered_cluster(3).await;
     let (leader, observer_index, victim_index) = support::two_controller_followers(&cluster).await;
-    let observer_addr = cluster[observer_index].0.listen_addr();
-    let victim_id = cluster[victim_index].0.node_id();
-    let everyone: BTreeSet<i32> = cluster.iter().map(|(h, _, _)| node_id_of(h)).collect();
-    let survivors: BTreeSet<i32> = everyone
+    let everyone = cluster
         .iter()
-        .copied()
-        .filter(|&id| id != node_id_of(&cluster[victim_index].0))
-        .collect();
-
-    let client = connect_client(observer_addr.to_string(), None).await;
-
-    let leader_index = (0..cluster.len())
-        .find(|&i| cluster[i].0.node_id() == leader.0)
-        .expect("the elected leader is one of the nodes under test");
+        .map(|(handle, _, _)| node_id_of(handle))
+        .collect::<BTreeSet<_>>();
+    let client = connect_client(cluster[observer_index].0.listen_addr().to_string(), None).await;
+    let leader_index = cluster
+        .iter()
+        .position(|(handle, _, _)| handle.node_id() == leader.0)
+        .expect("controller member");
     settle_unfenced(
         &cluster[leader_index].0,
         &cluster[observer_index].0,
         &everyone,
     )
     .await;
-
-    // Every broker is advertised while every broker is alive, so what the
-    // assertions after the death measure is the death, and not a rotation that
-    // was never going to name the victim.
     assert!(
         advertised_over_a_run(&client).await == everyone,
-        "a live cluster should advertise every one of its brokers"
+        "live rotation must include every broker"
     );
-
-    // The config and the log dir stay alive for the rest of the test: a
-    // crashed broker's teardown must not race a deleted directory.
-    let (victim, _victim_config, _victim_dir) = cluster.remove(victim_index);
+    advertised_liveness.observer = cluster[observer_index].0.node_id();
+    advertised_liveness.victim = cluster[victim_index].0.node_id();
+    advertised_liveness.survivors = everyone
+        .into_iter()
+        .filter(|id| {
+            i64::from(*id) != i64::try_from(advertised_liveness.victim).expect("broker ID")
+        })
+        .collect();
+    advertised_liveness.cluster = cluster;
+    advertised_liveness.client = Some(client);
+}
+#[rstest_bdd_macros::when(
+    "one other follower crashes, its fence is replicated and the observer serves six Metadata and DescribeCluster request pairs"
+)]
+async fn observe_dead_advertised_controller(advertised_liveness: &mut AdvertisedBrokerLiveness) {
+    let victim_index = advertised_liveness
+        .cluster
+        .iter()
+        .position(|(handle, _, _)| handle.node_id() == advertised_liveness.victim)
+        .expect("victim follower");
+    let (victim, config, directory) = advertised_liveness.cluster.remove(victim_index);
+    advertised_liveness.retired = Some((config, directory));
     victim.crash_for_test().await;
-
-    wait_until_fenced_set(&cluster[observer_index].0, &BTreeSet::from([victim_id])).await;
-
-    // From here the observer must name only survivors, on both APIs, for every
-    // turn of the rotation, and `Metadata` must stop listing the dead broker,
-    // as Kafka's `getAliveBrokerNodes` does, so a client does not dial it.
-    let dead_id = i32::try_from(victim_id).expect("node id fits an i32");
+    let observer = &advertised_liveness
+        .cluster
+        .iter()
+        .find(|(handle, _, _)| handle.node_id() == advertised_liveness.observer)
+        .expect("observer follower")
+        .0;
+    wait_until_fenced_set(observer, &BTreeSet::from([advertised_liveness.victim])).await;
+    let client = advertised_liveness
+        .client
+        .as_ref()
+        .expect("observer client");
     for _ in 0..REQUESTS {
-        let resp: MetadataResponse = client
+        let metadata = client
             .send(topic_metadata_request(Some(vec![])))
             .await
-            .unwrap();
-        assert!(
-            resp.brokers.iter().all(|row| row.node_id != dead_id),
-            "the dead broker is not listed in Metadata: {:?}",
-            resp.brokers
-        );
-        assert!(
-            survivors.contains(&resp.controller_id),
-            "Metadata advertised {} as controller_id; only {survivors:?} are alive",
-            resp.controller_id
-        );
-
-        let resp: DescribeClusterResponse = client
+            .expect("Metadata");
+        let cluster = client
             .send(DescribeClusterRequest::default())
             .await
-            .unwrap();
+            .expect("DescribeCluster");
+        advertised_liveness.responses.push((metadata, cluster));
+    }
+}
+#[rstest_bdd_macros::then(
+    "every response advertises a surviving controller, Metadata excludes the dead broker and the observer remains a follower"
+)]
+async fn advertised_controller_survivors(advertised_liveness: &mut AdvertisedBrokerLiveness) {
+    assert!(advertised_liveness.responses.len() == REQUESTS);
+    let dead_id = i32::try_from(advertised_liveness.victim).expect("wire broker ID");
+    for (metadata, cluster) in &advertised_liveness.responses {
         assert!(
-            survivors.contains(&resp.controller_id),
-            "DescribeCluster advertised {} as controller_id; only {survivors:?} are alive",
-            resp.controller_id
+            metadata
+                .brokers
+                .iter()
+                .all(|broker| broker.node_id != dead_id),
+            "dead broker listed: {:?}",
+            metadata.brokers
+        );
+        assert!(
+            advertised_liveness
+                .survivors
+                .contains(&metadata.controller_id),
+            "Metadata controller {}",
+            metadata.controller_id
+        );
+        assert!(
+            advertised_liveness
+                .survivors
+                .contains(&cluster.controller_id),
+            "DescribeCluster controller {}",
+            cluster.controller_id
         );
     }
-
-    // The answers above are only worth anything if they came from a node that
-    // does not hold the heartbeat registry.
-    let observer = &cluster[observer_index].0;
+    let observer = &advertised_liveness
+        .cluster
+        .iter()
+        .find(|(handle, _, _)| handle.node_id() == advertised_liveness.observer)
+        .expect("observer follower")
+        .0;
     assert!(
         observer.controller_leader_id() != Some(krabka_raft::NodeId(observer.node_id())),
-        "the observer must still be a follower for this test to mean anything"
+        "observer must remain a follower"
     );
+    shutdown_cluster(mem::take(&mut advertised_liveness.cluster)).await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/advertised_liveness.feature",
+    name = "Follower discovery excludes a crashed broker after replicated fencing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_controller_node_stops_advertising_a_broker_that_died(
+    advertised_liveness: AdvertisedBrokerLiveness,
+) {
+}
 
-    shutdown_cluster(cluster).await;
+#[derive(Default)]
+struct RestartedHeartbeatSession {
+    directory: Option<tempfile::TempDir>,
+    config: Option<krabka_broker::BrokerConfig>,
+    broker: Option<BrokerHandle>,
+    initial: Option<SessionState>,
+    restarted: Option<SessionState>,
+}
+#[rstest::fixture]
+fn restarted_heartbeat() -> RestartedHeartbeatSession {
+    let directory = None;
+    RestartedHeartbeatSession {
+        directory,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a for-tests broker survives three heartbeat timeouts and a fencing publication on its ephemeral controller port"
+)]
+async fn initial_ephemeral_heartbeat_session(restarted_heartbeat: &mut RestartedHeartbeatSession) {
+    support::init_tracing();
+    let directory = tempfile::tempdir().expect("log directory");
+    let config = krabka_broker::BrokerConfig::for_tests(directory.path().to_path_buf());
+    let broker = krabka_broker::Broker::start(config.clone())
+        .await
+        .expect("start broker");
+    restarted_heartbeat.initial = Some(session_state(&broker, &config).await);
+    restarted_heartbeat.broker = Some(broker);
+    restarted_heartbeat.config = Some(config);
+    restarted_heartbeat.directory = Some(directory);
+}
+#[rstest_bdd_macros::when(
+    "the broker rejoins from the same log directory while its first controller port is held unavailable"
+)]
+async fn rejoin_ephemeral_heartbeat_session(restarted_heartbeat: &mut RestartedHeartbeatSession) {
+    let broker = restarted_heartbeat.broker.take().expect("initial broker");
+    let port = broker.controller_addr();
+    broker.shutdown().await;
+    let _held = TcpListener::bind(port).expect("hold first controller port");
+    let mut config = restarted_heartbeat
+        .config
+        .as_ref()
+        .expect("test configuration")
+        .clone();
+    config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let restarted = krabka_broker::Broker::start(config)
+        .await
+        .expect("rejoin broker");
+    restarted_heartbeat.restarted = Some(
+        session_state(
+            &restarted,
+            restarted_heartbeat
+                .config
+                .as_ref()
+                .expect("test configuration"),
+        )
+        .await,
+    );
+    restarted.shutdown().await;
+}
+#[rstest_bdd_macros::then(
+    "both initial and rejoined brokers have a live heartbeat session and no fenced brokers"
+)]
+fn retained_heartbeat_sessions(restarted_heartbeat: &RestartedHeartbeatSession) {
+    let healthy = SessionState {
+        alive: true,
+        fenced: BTreeSet::new(),
+    };
+    assert!(
+        (
+            restarted_heartbeat
+                .initial
+                .as_ref()
+                .expect("initial session"),
+            restarted_heartbeat
+                .restarted
+                .as_ref()
+                .expect("rejoined session")
+        ) == (&healthy, &healthy)
+    );
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/advertised_liveness.feature",
+    name = "A restarted ephemeral controller port keeps the broker heartbeat alive"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_for_tests_broker_keeps_its_heartbeat_session(
+    restarted_heartbeat: RestartedHeartbeatSession,
+) {
 }
 
 fn node_id_of(handle: &BrokerHandle) -> i32 {
@@ -232,49 +378,6 @@ async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) 
     }
 }
 
-/// A broker booted from `BrokerConfig::for_tests` must keep its heartbeat
-/// session, as a Kafka broker does, and so must the same broker restarted on
-/// its log directory.
-///
-/// `for_tests` asks for port 0 on the controller listener and names that same
-/// `127.0.0.1:0` as its own voter endpoint. The heartbeat client dials the
-/// controller leader through the voter endpoint, so if the broker does not
-/// publish the port it bound, no heartbeat ever arrives. The controller then
-/// fences the broker and expires its session one `heartbeat_timeout` after
-/// start, and every single-broker test runs against a fenced broker.
-///
-/// The restart holds the first controller port, so the second start must bind
-/// another one. The port the first start published must not survive in the
-/// recovered metadata.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_for_tests_broker_keeps_its_heartbeat_session() {
-    support::init_tracing();
-
-    let dir = tempfile::tempdir().expect("log dir");
-    let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
-    let broker = krabka_broker::Broker::start(config.clone())
-        .await
-        .expect("start broker");
-    let first_port = broker.controller_addr();
-    let started = session_state(&broker, &config).await;
-    broker.shutdown().await;
-
-    let _held = TcpListener::bind(first_port).expect("hold the first controller port");
-    let mut rejoin = config.clone();
-    rejoin.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let broker = krabka_broker::Broker::start(rejoin)
-        .await
-        .expect("restart broker");
-    let restarted = session_state(&broker, &config).await;
-    broker.shutdown().await;
-
-    let healthy = SessionState {
-        alive: true,
-        fenced: BTreeSet::new(),
-    };
-    assert!([started, restarted] == [healthy.clone(), healthy]);
-}
-
 /// Whether the controller holds a broker alive, and the brokers its image
 /// marks fenced.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -306,3 +409,7 @@ async fn session_state(
         fenced: broker.fenced_broker_ids_for_test(),
     }
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+
+use std::mem;

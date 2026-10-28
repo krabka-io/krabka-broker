@@ -94,120 +94,6 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
     resp.responses[0].partition_responses[0].error_code
 }
 
-#[tokio::test]
-async fn produce_to_partition_on_offline_dir_returns_storage_error() {
-    const TOPIC: &str = "kip112-offline";
-    // 6 partitions: jbod.rs shows this is enough to guarantee spread across
-    // both dirs under the least-loaded placement algorithm.
-    const N: i32 = 6;
-
-    let (handle, primary, extra, addr) = start()
-        .client_id(CLIENT_ID)
-        .topic(TOPIC)
-        .partitions(N)
-        .call()
-        .await;
-
-    // Confirm spread: both dirs must hold at least one partition of the topic.
-    let in_extra = partitions_in_dir(extra.path(), TOPIC);
-    let in_primary = partitions_in_dir(primary.path(), TOPIC);
-    assert!(
-        !in_extra.is_empty(),
-        "test premise: at least one partition must land on the extra dir \
-         (primary={} extra={})",
-        in_primary.len(),
-        in_extra.len()
-    );
-    assert!(
-        !in_primary.is_empty(),
-        "test premise: at least one partition must land on the primary dir"
-    );
-
-    // Pick the smallest partition index on each dir for determinism.
-    let mut extra_parts = in_extra.clone();
-    extra_parts.sort_unstable();
-    let offline_partition = extra_parts[0];
-
-    let mut primary_parts = in_primary.clone();
-    primary_parts.sort_unstable();
-    let online_partition = primary_parts[0];
-
-    // Flip ONLY the extra dir offline. The primary dir stays online, so the
-    // broker does NOT trigger the all-dirs-offline self-shutdown path.
-    assert!(
-        handle.test_mark_log_dir_offline(extra.path()),
-        "mark_offline must return true (dir was registered and online)"
-    );
-
-    // Case 1: Produce to the offline-dir partition must return KAFKA_STORAGE_ERROR (56).
-    let code = produce_and_get_error(addr, TOPIC, offline_partition).await;
-    assert!(
-        code == 56,
-        "partition {offline_partition} on offline extra dir must return \
-         KAFKA_STORAGE_ERROR (56); got {code}"
-    );
-
-    // Case 2 (sanity): Produce to the still-online primary-dir partition must succeed.
-    let code = produce_and_get_error(addr, TOPIC, online_partition).await;
-    assert!(
-        code == 0,
-        "partition {online_partition} on online primary dir must succeed (0); got {code}"
-    );
-
-    handle.shutdown().await;
-}
-
-/// KIP-112: when ALL configured log dirs go offline, the broker must shut
-/// itself down and latch `should_shutdown` to `true`. This test uses a
-/// single-dir broker, so flipping that one dir offline immediately satisfies
-/// the all-dirs condition.
-///
-/// The `for_tests` heartbeat interval is 200 ms, so the check fires well
-/// inside the 15-second timeout below.
-#[tokio::test]
-async fn all_log_dirs_offline_triggers_self_shutdown() {
-    let primary = tempfile::tempdir().unwrap();
-    // Single-dir broker: no extra_log_dirs.
-    let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("broker start");
-
-    // Subscribe before flipping so we can't miss the transition.
-    let mut shutdown_rx = handle.should_shutdown_rx();
-
-    // Flip the only log dir offline. This is the all-dirs condition.
-    assert!(
-        handle.test_mark_log_dir_offline(primary.path()),
-        "mark_offline must return true (dir was registered and online)"
-    );
-
-    // Wait up to 15 s for the heartbeat client to detect the all-dirs
-    // condition and latch should_shutdown to true.
-    let woke = time::timeout(Duration::from_secs(15), async {
-        loop {
-            if *shutdown_rx.borrow_and_update() {
-                return;
-            }
-            if shutdown_rx.changed().await.is_err() {
-                return;
-            }
-        }
-    })
-    .await;
-    assert!(
-        woke.is_ok(),
-        "broker did not signal self-shutdown when all log dirs went offline"
-    );
-    assert!(
-        *shutdown_rx.borrow(),
-        "should_shutdown must be true after all dirs offline"
-    );
-
-    // Shutdown should complete without hanging: the supervisor was already
-    // cancelled by the self-shutdown path, and cancelling an already-
-    // cancelled token is idempotent.
-    handle.shutdown().await;
-}
-
 /// A running broker, the directory that backs it, and its listen address.
 struct SingleDirectoryBroker {
     primary: tempfile::TempDir,
@@ -233,131 +119,278 @@ async fn single_directory_broker() -> SingleDirectoryBroker {
     }
 }
 
-#[tokio::test]
-async fn assign_replicas_to_dirs_reports_and_echoes() {
-    const VERSION: i16 = 0; // AssignReplicasToDirs only has version 0
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+    tokio::sync::watch,
+};
+struct DirectoryFailure {
+    paired: Option<(BrokerHandle, TempDir, TempDir, SocketAddr)>,
+    single: Option<SingleDirectoryBroker>,
+    topic: String,
+    primary_partition: Option<i32>,
+    extra_partition: Option<i32>,
+    marked: Option<bool>,
+    produced: Option<i16>,
+    shutdown: Option<watch::Receiver<bool>>,
+}
+#[fixture]
+fn failure() -> DirectoryFailure {
+    // Start this scenario with fresh inputs and observations.
 
-    const TOPIC: &str = "kip112-assign";
-    const N: i32 = 2;
-    // Use a single-dir broker so the broker IS the controller leader.
-    let SingleDirectoryBroker {
-        primary: _primary,
-        handle,
-        addr,
-    } = single_directory_broker().await;
+    DirectoryFailure {
+        paired: None,
+        single: None,
+        topic: String::new(),
+        primary_partition: None,
+        extra_partition: None,
+        marked: None,
+        produced: None,
+        shutdown: None,
+    }
+}
+#[given("topic {topic} has six partitions spread across primary and extra log directories")]
+async fn spread(failure: &mut DirectoryFailure, topic: String) {
+    let paired = start()
+        .client_id(CLIENT_ID)
+        .topic(&topic)
+        .partitions(6)
+        .call()
+        .await;
+    let mut primary = partitions_in_dir(paired.1.path(), &topic);
+    let mut extra = partitions_in_dir(paired.2.path(), &topic);
+    assert!(
+        !primary.is_empty(),
+        "test premise: primary directory hosts a partition"
+    );
+    assert!(
+        !extra.is_empty(),
+        "test premise: extra directory hosts a partition"
+    );
+    primary.sort_unstable();
+    extra.sort_unstable();
+    failure.primary_partition = Some(primary[0]);
+    failure.extra_partition = Some(extra[0]);
+    failure.topic = topic;
+    failure.paired = Some(paired);
+}
+#[given("a broker has exactly one registered log directory and its shutdown signal is observed")]
+async fn single(failure: &mut DirectoryFailure) {
+    let single = single_directory_broker().await;
+    failure.shutdown = Some(single.handle.should_shutdown_rx());
+    failure.single = Some(single);
+}
+#[when("the extra log directory goes offline")]
+fn fail_extra(failure: &mut DirectoryFailure) {
+    let (broker, _, extra, _) = failure.paired.as_ref().expect("paired directory broker");
+    failure.marked = Some(broker.test_mark_log_dir_offline(extra.path()));
+}
+#[when("the broker's only log directory goes offline")]
+fn fail_only(failure: &mut DirectoryFailure) {
+    let single = failure.single.as_ref().expect("single directory broker");
+    failure.marked = Some(
+        single
+            .handle
+            .test_mark_log_dir_offline(single.primary.path()),
+    );
+}
+#[then("the registered online directory transitions offline")]
+fn transitioned(failure: &DirectoryFailure) {
+    assert!(
+        failure.marked == Some(true),
+        "mark_offline must report an online registered directory transitioned"
+    );
+}
+#[when("a client produces to a partition in the {directory} directory")]
+async fn produce(failure: &mut DirectoryFailure, directory: String) {
+    let partition = match directory.as_str() {
+        "extra" => failure.extra_partition.expect("extra partition selected"),
+        "primary" => failure
+            .primary_partition
+            .expect("primary partition selected"),
+        _ => panic!("unknown directory {directory}"),
+    };
+    let address = failure.paired.as_ref().expect("paired directory broker").3;
+    failure.produced = Some(produce_and_get_error(address, &failure.topic, partition).await);
+}
+#[then("the partition produce returns Kafka error code {code}")]
+fn produce_result(failure: &DirectoryFailure, code: i16) {
+    assert!(failure.produced == Some(code));
+}
+#[then("within fifteen seconds the broker latches its self shutdown signal")]
+async fn shutdown_signal(failure: &mut DirectoryFailure) {
+    let receiver = failure
+        .shutdown
+        .as_mut()
+        .expect("shutdown subscribed before fault");
+    let woke = time::timeout(Duration::from_secs(15), async {
+        loop {
+            if *receiver.borrow_and_update() {
+                return;
+            }
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        woke.is_ok(),
+        "broker did not signal self shutdown when all log dirs went offline"
+    );
+    assert!(
+        *receiver.borrow(),
+        "should_shutdown must be true after all dirs offline"
+    );
+}
+async fn shutdown_failure(failure: DirectoryFailure) {
+    if let Some((broker, _primary, _extra, _address)) = failure.paired {
+        broker.shutdown().await;
+    }
+    if let Some(SingleDirectoryBroker {
+        handle, primary, ..
+    }) = failure.single
+    {
+        handle.shutdown().await;
+        drop(primary);
+    }
+}
 
-    create_and_wait(&handle, addr, Setup {
+struct DirectoryController {
+    broker: Option<SingleDirectoryBroker>,
+    topic: Option<uuid::Uuid>,
+    epoch: Option<i64>,
+    assignment: Option<AssignReplicasToDirsResponse>,
+    heartbeat: Option<BrokerHeartbeatResponse>,
+}
+#[fixture]
+fn controller() -> DirectoryController {
+    // Start this scenario with fresh inputs and observations.
+
+    DirectoryController {
+        broker: None,
+        topic: None,
+        epoch: None,
+        assignment: None,
+        heartbeat: None,
+    }
+}
+#[given("a controller leader broker has topic {topic} with two partitions")]
+async fn assignment_topic(controller: &mut DirectoryController, topic: String) {
+    let single = single_directory_broker().await;
+    create_and_wait(&single.handle, single.addr, Setup {
         client_id: CLIENT_ID,
-        topic: TOPIC,
-        partitions: TopicPartitionCount(N),
+        topic: &topic,
+        partitions: TopicPartitionCount(2),
         ..Default::default()
     })
     .await;
+    let (id, epoch) = {
+        let image = single.handle.controller_image_for_test();
+        let id = image
+            .topics()
+            .find(|entry| entry.name == topic)
+            .map(|entry| entry.topic_id)
+            .expect("topic published");
+        let epoch = image
+            .broker(krabka_raft::NodeId(1))
+            .expect("broker registered")
+            .broker_epoch;
+        (id, epoch)
+    };
+    controller.topic = Some(id);
+    controller.epoch = Some(epoch);
+    controller.broker = Some(single);
+}
+#[given("a single broker has registered its live epoch and become controller leader")]
+async fn heartbeat_controller(controller: &mut DirectoryController) {
+    let single = single_directory_broker().await;
+    single.handle.wait_until_controller_leader().await.unwrap();
+    controller.epoch = Some(
+        single
+            .handle
+            .controller_image_for_test()
+            .broker(krabka_raft::NodeId(single.handle.node_id()))
+            .expect("registered broker")
+            .broker_epoch,
+    );
+    controller.broker = Some(single);
+}
+impl DirectoryController {
+    async fn connect(&self) -> TcpStream {
+        TcpStream::connect(self.broker.as_ref().expect("controller broker").addr)
+            .await
+            .expect("controller connection")
+    }
+}
 
-    // Look up the topic UUID from the controller image so we can reference
-    // the partition correctly in the request.
-    let image = handle.controller_image_for_test();
-    let topic_uuid = image
-        .topics()
-        .find(|t| t.name == TOPIC)
-        .map(|t| t.topic_id)
-        .expect("topic must be in the image after wait_all_partitions");
-    let broker_epoch = image
-        .broker(krabka_raft::NodeId(1))
-        .expect("broker 1 is self-registered")
-        .broker_epoch;
-
-    // Choose an arbitrary dir UUID to assign partition 0 on broker 1.
-    let dir_uuid = uuid::Uuid::from_u128(0xCAFE_BABE);
-
-    // for_tests default broker_id; assign partition 0 to the arbitrary directory.
-    let req = assignment_dirs_request(DirectoryAssignmentSetup {
-        broker_epoch,
-        dir: dir_uuid,
-        topic: topic_uuid,
+#[when("broker one assigns partition zero to directory UUID hex {directory}")]
+async fn assign(controller: &mut DirectoryController, directory: String) {
+    let id =
+        uuid::Uuid::from_u128(u128::from_str_radix(&directory, 16).expect("hex directory UUID"));
+    let request = assignment_dirs_request(DirectoryAssignmentSetup {
+        broker_epoch: controller.epoch.expect("registered epoch"),
+        dir: id,
+        topic: controller.topic.expect("created topic"),
         ..Default::default()
     });
-
     let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION).unwrap();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp_bytes = round_trip(
+    request.encode(&mut body, 0).unwrap();
+    let mut stream = controller.connect().await;
+    let response = round_trip(
         &mut stream,
         ApiRequestSetup {
             api_key: WireApiKey(73),
-            version: WireApiVersion(VERSION),
+            version: WireApiVersion(0),
         },
         &body,
     )
     .await
     .unwrap();
-
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = AssignReplicasToDirsResponse::decode(&mut cur, VERSION).unwrap();
-
+    controller.assignment =
+        Some(AssignReplicasToDirsResponse::decode(&mut &response[..], 0).unwrap());
+}
+#[then(
+    "the assignment echoes a directory and reports success at both response and partition levels"
+)]
+fn assignment_echo(controller: &DirectoryController) {
+    let response = controller
+        .assignment
+        .as_ref()
+        .expect("AssignReplicasToDirs completed");
     check!(
-        resp.error_code == 0,
-        "AssignReplicasToDirs top-level error_code must be NONE (0), got {}",
-        resp.error_code
+        response.error_code == 0,
+        "top-level assignment must succeed"
     );
     assert!(
-        !resp.directories.is_empty(),
+        !response.directories.is_empty(),
         "response must echo at least one directory"
     );
     check!(
-        resp.directories[0].topics[0].partitions[0].error_code == 0,
-        "per-partition error_code must be NONE (0)"
+        response.directories[0].topics[0].partitions[0].error_code == 0,
+        "partition assignment must succeed"
     );
-
-    handle.shutdown().await;
 }
-
-/// KIP-112: the controller accepts a `BrokerHeartbeat` (`api_key=63`) that
-/// sets `offline_log_dirs`. In a single-broker cluster with no ISR peers, the
-/// failover scan finds no live ISR alternative, so `plan.changes` is empty,
-/// the handler skips `submit_change`, and the response carries
-/// `error_code=0`.
-///
-/// This exercises the heartbeat handler's offline-dir failover block end to
-/// end, on the no-change path.
-#[tokio::test]
-async fn heartbeat_with_offline_log_dirs_is_accepted() {
+#[when("broker one heartbeats with offline directory UUID hex {directory}")]
+async fn heartbeat(controller: &mut DirectoryController, directory: String) {
     use krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
-    let SingleDirectoryBroker {
-        primary: _primary,
-        handle,
-        addr,
-    } = single_directory_broker().await;
-
-    // Wait until the broker has registered itself and elected a raft leader
-    // (so the heartbeat handler reaches the leader branch, not NOT_CONTROLLER).
-    handle.wait_until_controller_leader().await.unwrap();
-    let broker_epoch = handle
-        .controller_image_for_test()
-        .broker(krabka_raft::NodeId(handle.node_id()))
-        .expect("registered broker")
-        .broker_epoch;
-
-    // Send a heartbeat with a made-up offline dir UUID. The broker is the
-    // only replica so alive_isr is empty → no change → no error.
-    let fake_offline_dir = uuid::Uuid::from_u128(0xDEAD_1234);
-    let req = BrokerHeartbeatRequest {
-        broker_id: 1, // for_tests default broker_id
-        broker_epoch,
+    let id =
+        uuid::Uuid::from_u128(u128::from_str_radix(&directory, 16).expect("hex directory UUID"));
+    let request = BrokerHeartbeatRequest {
+        broker_id: 1,
+        broker_epoch: controller.epoch.expect("registered epoch"),
         current_metadata_offset: 0,
         want_fence: false,
         want_shut_down: false,
-        offline_log_dirs: vec![ProtocolUuid(fake_offline_dir.into_bytes())],
+        offline_log_dirs: vec![ProtocolUuid(id.into_bytes())],
         cordoned_log_dirs: None,
         ..Default::default()
     };
-
     let mut body = BytesMut::new();
-    req.encode(&mut body, HB_MAX_VERSION).unwrap();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp_bytes = round_trip(
+    request.encode(&mut body, HB_MAX_VERSION).unwrap();
+    let mut stream = controller.connect().await;
+    let response = round_trip(
         &mut stream,
         ApiRequestSetup {
             api_key: WireApiKey(63),
@@ -367,15 +400,60 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
     )
     .await
     .unwrap();
-
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = BrokerHeartbeatResponse::decode(&mut cur, HB_MAX_VERSION).unwrap();
-
+    controller.heartbeat =
+        Some(BrokerHeartbeatResponse::decode(&mut &response[..], HB_MAX_VERSION).unwrap());
+}
+#[then("the controller accepts the offline directory heartbeat without an ISR alternative")]
+fn heartbeat_accepted(controller: &DirectoryController) {
     assert!(
-        resp.error_code == 0,
-        "BrokerHeartbeat with offline_log_dirs must be accepted (error_code=0), got {}",
-        resp.error_code
+        controller
+            .heartbeat
+            .as_ref()
+            .expect("heartbeat completed")
+            .error_code
+            == 0
     );
-
+}
+async fn shutdown_controller(controller: DirectoryController) {
+    let SingleDirectoryBroker {
+        handle, primary, ..
+    } = controller.broker.expect("controller broker started");
     handle.shutdown().await;
+    drop(primary);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "A directory failure rejects its partitions while the healthy directory still accepts writes"
+)]
+#[tokio::test]
+async fn produce_to_partition_on_offline_dir_returns_storage_error(failure: DirectoryFailure) {
+    shutdown_failure(failure).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "Losing the only log directory requests broker shutdown"
+)]
+#[tokio::test]
+async fn all_log_dirs_offline_triggers_self_shutdown(failure: DirectoryFailure) {
+    shutdown_failure(failure).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "A controller accepts and echoes a live broker directory assignment"
+)]
+#[tokio::test]
+async fn assign_replicas_to_dirs_reports_and_echoes(controller: DirectoryController) {
+    shutdown_controller(controller).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "A controller accepts an offline directory heartbeat with no alternative ISR"
+)]
+#[tokio::test]
+async fn heartbeat_with_offline_log_dirs_is_accepted(controller: DirectoryController) {
+    shutdown_controller(controller).await;
 }

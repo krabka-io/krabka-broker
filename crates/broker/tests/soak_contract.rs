@@ -531,20 +531,49 @@ fn grade(contract: &Contract, evidence: &Evidence, dir: &Path) -> bool {
     }
 }
 
-/// The sustained-load contract, executed against three broker containers and
-/// judged.
-///
-/// See the module documentation for what runs, what it writes and what fails
-/// it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "requires Docker and //packaging:image; runs in the container matrix and, with KRABKA_SOAK_CONTRACT, the scheduled soak"]
-async fn the_sustained_load_contract_holds() {
-    let source = contract_source();
-    let text = fs::read_to_string(&source)
-        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
-    let contract =
-        Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{}: {error}", source.display()));
-    let errors: Vec<String> = contract
+#[derive(Default)]
+struct ContractScenario {
+    contract: Option<Contract>,
+    source: PathBuf,
+    text: String,
+    schedule: Vec<ScheduledFault>,
+    dir: PathBuf,
+    image: String,
+    lifecycle: Option<Arc<LifecycleRun>>,
+    booted: Option<(SoakCluster, Option<tempfile::TempDir>, Arc<Nodes>)>,
+    evidence: Option<Evidence>,
+    log: Option<Arc<FaultLog>>,
+    recorders: Option<Recorders>,
+    load_start: Option<i64>,
+}
+
+#[rstest::fixture]
+fn soak_contract_run() -> ContractScenario {
+    // The declared contract, fault schedule and collected evidence remain inspectable across phases.
+    ContractScenario::default()
+}
+
+impl ContractScenario {
+    fn contract(&self) -> &Contract { self.contract.as_ref().expect("declared contract") }
+
+    fn booted(&self) -> &(SoakCluster, Option<tempfile::TempDir>, Arc<Nodes>) {
+        self.booted.as_ref().expect("contract cluster")
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "KRABKA_SOAK_CONTRACT or bench/soak/self-check.yaml declares a valid contract supported by this executor"
+)]
+fn declared_soak_contract(soak_contract_run: &mut ContractScenario) {
+    soak_contract_run.source = contract_source();
+    soak_contract_run.text = fs::read_to_string(&soak_contract_run.source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", soak_contract_run.source.display()));
+    soak_contract_run.contract = Some(
+        Contract::from_yaml(&soak_contract_run.text)
+            .unwrap_or_else(|error| panic!("{}: {error}", soak_contract_run.source.display())),
+    );
+    let errors: Vec<String> = soak_contract_run
+        .contract()
         .validate()
         .into_iter()
         .map(|error| error.0)
@@ -552,56 +581,106 @@ async fn the_sustained_load_contract_holds() {
     assert!(
         errors.is_empty(),
         "{} is not a runnable contract:\n{}",
-        source.display(),
+        soak_contract_run.source.display(),
         errors.join("\n")
     );
-    let refused = plan::unsupported(&contract);
+    let refused = plan::unsupported(soak_contract_run.contract());
     assert!(
         refused.is_empty(),
         "this executor cannot run {}:\n{}",
-        source.display(),
+        soak_contract_run.source.display(),
         refused.join("\n")
     );
-    let schedule: Vec<ScheduledFault> = expand(&contract).expect("a validated contract expands");
+    soak_contract_run.schedule =
+        expand(soak_contract_run.contract()).expect("a validated contract expands");
+}
 
-    let dir = evidence_dir();
+#[rstest_bdd_macros::given(
+    "the contract's broker, storage, security and lifecycle topology is running with its topics and full ISRs"
+)]
+async fn boot_declared_soak_contract(soak_contract_run: &mut ContractScenario) {
+    soak_contract_run.dir = evidence_dir();
     eprintln!(
         "soak-contract: running `{}` from {}; evidence in {}",
-        contract.name,
-        source.display(),
-        dir.display()
+        soak_contract_run.contract().name,
+        soak_contract_run.source.display(),
+        soak_contract_run.dir.display()
     );
-    fs::write(dir.join("contract.yaml"), &text).expect("write contract.yaml");
-    let log = Arc::new(FaultLog::create(&dir));
-
-    let image = image();
-    let lifecycle = contract
+    fs::write(
+        soak_contract_run.dir.join("contract.yaml"),
+        &soak_contract_run.text,
+    )
+    .expect("write contract.yaml");
+    soak_contract_run.log = Some(Arc::new(FaultLog::create(&soak_contract_run.dir)));
+    soak_contract_run.image = image();
+    soak_contract_run.lifecycle = soak_contract_run
+        .contract()
         .lifecycle
         .clone()
-        .map(|lifecycle| Arc::new(LifecycleRun::new(lifecycle, image.clone())));
-    let (cluster, _remote_tier, nodes) = boot(&contract, lifecycle.as_deref()).await;
-    let bootstrap = cluster.bootstrap();
-
-    let mut evidence = Evidence {
-        contract: contract.name.clone(),
-        contract_digest: contract.digest(),
-        seed: contract.seed,
-        broker_image: image_identity(&image),
-        environment: environment(cluster.brokers[0].root.path(), &image),
+        .map(|lifecycle| {
+            Arc::new(LifecycleRun::new(
+                lifecycle,
+                soak_contract_run.image.clone(),
+            ))
+        });
+    soak_contract_run.booted = Some(
+        boot(
+            soak_contract_run.contract(),
+            soak_contract_run.lifecycle.as_deref(),
+        )
+        .await,
+    );
+    soak_contract_run.evidence = Some(Evidence {
+        contract: soak_contract_run.contract().name.clone(),
+        contract_digest: soak_contract_run.contract().digest(),
+        seed: soak_contract_run.contract().seed,
+        broker_image: image_identity(&soak_contract_run.image),
+        environment: environment(
+            soak_contract_run.booted().0.brokers[0].root.path(),
+            &soak_contract_run.image,
+        ),
         ..Evidence::default()
-    };
-    if let Some(run) = &lifecycle {
-        record_releases(run, &nodes, &mut evidence).await;
+    });
+    if let Some(run) = &soak_contract_run.lifecycle {
+        record_releases(
+            run,
+            &soak_contract_run
+                .booted
+                .as_ref()
+                .expect("contract cluster")
+                .2,
+            soak_contract_run
+                .evidence
+                .as_mut()
+                .expect("initial evidence"),
+        )
+        .await;
     }
-    write_json(&dir, "schedule.json", &schedule);
+    write_json(
+        &soak_contract_run.dir,
+        "schedule.json",
+        &soak_contract_run.schedule,
+    );
+}
 
+#[rstest_bdd_macros::when(
+    "the declared load runs for its full duration while scheduled faults, recoveries and lifecycle checkpoints are recorded"
+)]
+async fn run_declared_soak_contract(soak_contract_run: &mut ContractScenario) {
+    let contract = soak_contract_run.contract().clone();
+    let bootstrap = soak_contract_run.booted().0.bootstrap();
+    let nodes = Arc::clone(&soak_contract_run.booted().2);
+    let lifecycle = soak_contract_run.lifecycle.clone();
+    let schedule = soak_contract_run.schedule.clone();
+    let dir = soak_contract_run.dir.clone();
+    let mut evidence = soak_contract_run.evidence.take().expect("initial evidence");
     let endpoint = Endpoint::plaintext(bootstrap.clone());
     let prepared = prepare(&contract, &endpoint)
         .await
         .expect("prepare the load consumers");
     let load_start = now_ms();
     evidence.started_unix_ms = load_start;
-    let recorders = Recorders::start(&nodes, &dir, load_start);
+    soak_contract_run.recorders = Some(Recorders::start(&nodes, &dir, load_start));
     let windows = Arc::new(Windows::new(
         schedule
             .iter()
@@ -622,7 +701,7 @@ async fn the_sustained_load_contract_holds() {
         contract: contract.clone(),
         nodes: Arc::clone(&nodes),
         windows: Arc::clone(&windows),
-        log,
+        log: soak_contract_run.log.take().expect("fault log"),
         trackers: trackers.clone(),
         endpoint: endpoint.clone(),
         lifecycle: lifecycle.clone(),
@@ -680,20 +759,49 @@ async fn the_sustained_load_contract_holds() {
         .map(|output| output.ledger)
         .collect();
 
+    soak_contract_run.load_start = Some(load_start);
+    soak_contract_run.evidence = Some(evidence);
+}
+
+#[rstest_bdd_macros::when(
+    "transactions settle, the self-check injects its declared loss, every path reads back and final commits and telemetry are saved"
+)]
+async fn read_back_declared_soak_contract(soak_contract_run: &mut ContractScenario) {
+    let contract = soak_contract_run.contract().clone();
+    let endpoint = Endpoint::plaintext(soak_contract_run.booted().0.bootstrap());
+    let nodes = Arc::clone(&soak_contract_run.booted().2);
+    let dir = soak_contract_run.dir.clone();
+    let load_start = soak_contract_run.load_start.expect("load started");
+    let mut evidence = soak_contract_run.evidence.take().expect("load evidence");
     inject_and_read_back(&contract, &endpoint, &nodes, &mut evidence).await;
     evidence.ended_unix_ms = now_ms();
     write_json(&dir, "evidence.json", &evidence);
 
-    let recorded = recorders.finish(&dir, load_start).await;
+    let recorded = soak_contract_run
+        .recorders
+        .take()
+        .expect("telemetry recorders")
+        .finish(&dir, load_start)
+        .await;
     for line in timing_summary(&evidence, load_start)
         .into_iter()
         .chain(recorded)
     {
         eprintln!("soak-contract: {line}");
     }
-    let passed = grade(&contract, &evidence, &dir);
+    soak_contract_run.evidence = Some(evidence);
+}
+
+#[rstest_bdd_macros::then(
+    "the contract judge accepts all declared path, recovery, lifecycle and self-check objectives and writes verdict.json"
+)]
+fn accepted_soak_contract(soak_contract_run: &ContractScenario) {
+    let contract = soak_contract_run.contract();
+    let evidence = soak_contract_run.evidence.as_ref().expect("final evidence");
+    let dir = &soak_contract_run.dir;
+    let passed = grade(contract, evidence, dir);
     if !passed {
-        for broker in &cluster.brokers {
+        for broker in &soak_contract_run.booted().0.brokers {
             eprintln!("--- {}\n{}", broker.name, broker.container_log());
         }
     }
@@ -705,19 +813,60 @@ async fn the_sustained_load_contract_holds() {
     );
 }
 
-/// The rollback the lifecycle contract may not take is refused by its source
-/// release before it changes the log, and the candidate reopens the log.
-///
-/// See the `rollback_guard` module documentation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker, //packaging:image and the lifecycle contract's source release image"]
-async fn an_unsupported_rollback_is_refused_before_it_damages_data() {
-    let contract = lifecycle_contract();
-    let dir = evidence_dir();
-    let outcome = rollback_guard::refuse_unsupported_rollback(&contract, &image())
+#[derive(Default)]
+struct RollbackScenario {
+    contract: Option<Contract>,
+    dir: PathBuf,
+    outcome: Option<rollback_guard::RefusedRollback>,
+}
+
+#[rstest::fixture]
+fn rollback_scenario() -> RollbackScenario {
+    // The source-release refusal is checked against the candidate's original record.
+    RollbackScenario::default()
+}
+
+#[rstest_bdd_macros::given(
+    "bench/soak/lifecycle.yaml declares the source release for an unsupported rollback"
+)]
+fn unsupported_rollback_contract(rollback_scenario: &mut RollbackScenario) {
+    rollback_scenario.contract = Some(lifecycle_contract());
+    rollback_scenario.dir = evidence_dir();
+}
+
+#[rstest_bdd_macros::when(
+    "the candidate finalizes metadata.version 4.4-IV2, the source release attempts rollback and the candidate reopens its record"
+)]
+async fn attempt_unsupported_rollback(rollback_scenario: &mut RollbackScenario) {
+    rollback_scenario.outcome = Some(
+        rollback_guard::refuse_unsupported_rollback(
+            rollback_scenario
+                .contract
+                .as_ref()
+                .expect("lifecycle contract"),
+            &image(),
+        )
         .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    write_json(&dir, "unsupported-rollback.json", &outcome);
+        .unwrap_or_else(|error| panic!("{error}")),
+    );
+    write_json(
+        &rollback_scenario.dir,
+        "unsupported-rollback.json",
+        rollback_scenario
+            .outcome
+            .as_ref()
+            .expect("rollback attempted"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the refused rollback changes no durable file and the candidate reads the original record back"
+)]
+fn unchanged_unsupported_rollback(rollback_scenario: &RollbackScenario) {
+    let outcome = rollback_scenario
+        .outcome
+        .as_ref()
+        .expect("rollback attempted");
     eprintln!("soak-contract: unsupported rollback: {outcome:?}");
     assert!(
         outcome.changed.is_empty(),
@@ -728,4 +877,26 @@ async fn an_unsupported_rollback_is_refused_before_it_damages_data() {
         outcome.record_read_back,
         "the candidate did not read the record back"
     );
+}
+
+#[ignore = "requires Docker and //packaging:image; runs in the container matrix and, with KRABKA_SOAK_CONTRACT, the scheduled soak"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_contract.feature",
+    name = "the sustained load contract holds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn the_sustained_load_contract_holds(soak_contract_run: ContractScenario) {
+    drop(soak_contract_run);
+}
+
+#[ignore = "requires Docker, //packaging:image and the lifecycle contract's source release image"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_contract.feature",
+    name = "an unsupported rollback is refused before it damages data"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unsupported_rollback_is_refused_before_it_damages_data(
+    rollback_scenario: RollbackScenario,
+) {
+    drop(rollback_scenario);
 }

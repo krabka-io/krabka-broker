@@ -35,6 +35,7 @@ mod broker;
 mod delegation_tokens;
 mod docker;
 mod minio;
+mod observations;
 mod ports;
 mod sasl;
 mod three_broker_cluster;
@@ -80,6 +81,7 @@ pub use self::{
         MinioContainer, minio_list_objects, minio_make_bucket, minio_make_locked_bucket,
         wait_for_minio_ready,
     },
+    observations::{assert_numbered_console_values, assert_successful_jvm_output},
     ports::{
         Ports, broker0_advertised, broker0_listen, broker1_advertised, broker1_listen,
         broker2_advertised, broker2_listen, controller_addr_0, controller_addr_1,

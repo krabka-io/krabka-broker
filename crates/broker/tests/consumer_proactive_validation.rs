@@ -148,24 +148,37 @@ async fn create_topic(client: &Client, name: &str) {
     assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");
 }
 
-/// PROACTIVE KIP-320 truncation detection.
-///
-/// See the module docs for the full rationale. The discriminating assertions
-/// are these:
-///   * `poll()` returns `ConsumerError::LogTruncation` with `fetch_offset = 4`,
-///     the consumer's pre-divergence position, and `safe_offset = 2`, the
-///     OFLE-derived epoch-0 boundary and NOT a fetch `log_start_offset`;
-///   * the broker's OFLE request counter strictly increased across the
-///     truncating poll, which proves that the validate pass sent the RPC.
-///
-/// The honesty check was verified by hand and then reverted. If either
-/// `validate_positions` or the `awaiting_validation` flagging in
-/// `refresh_leader_epochs` does nothing, this test FAILS, because no
-/// truncation is reported and the counter does not change. The test is
-/// therefore discriminating.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_proactively_validates_and_surfaces_truncation() {
-    let (_dir, broker) = standalone_broker().await;
+use krabka_client_consumer::{Consumer, ConsumerRecord};
+struct ProactiveValidation {
+    directory: Option<tempfile::TempDir>,
+    broker: Option<krabka_broker::BrokerHandle>,
+    bootstrap: String,
+    initial_partition: Option<PartitionRecord>,
+    consumer: Option<Consumer>,
+    before: Option<u64>,
+    error: Option<ConsumerError>,
+    delivered: Vec<ConsumerRecord>,
+}
+#[rstest::fixture]
+fn validation() -> ProactiveValidation {
+    // Start this scenario with fresh inputs and observations.
+
+    ProactiveValidation {
+        directory: None,
+        broker: None,
+        bootstrap: String::new(),
+        initial_partition: None,
+        consumer: None,
+        before: None,
+        error: None,
+        delivered: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "group proactive-grp consumed and committed all four epoch 0 records from proactive-trunc"
+)]
+async fn consumed_epoch_zero(validation: &mut ProactiveValidation) {
+    let (directory, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let topic = "proactive-trunc";
 
@@ -222,23 +235,38 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         seed.close().await.unwrap();
     }
 
-    // ── Induce the post-handoff divergence ────────────────────────────────
-    // (a) Truncate the leader's local log to offset 2. Its epoch-0 boundary is
-    //     now 2 — BELOW the consumer's position 4. The leader is genuinely
-    //     missing records the consumer already consumed.
+    validation.directory = Some(directory);
+    validation.broker = Some(broker);
+    validation.bootstrap = bootstrap;
+    validation.initial_partition = Some(pr0);
+}
+#[rstest_bdd_macros::when("the leader log is truncated to offset 2")]
+async fn truncate_consumed_log(validation: &mut ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    let topic = "proactive-trunc";
     broker
         .test_truncate_local_log(topic, 0, 2)
         .await
         .expect("truncate leader log");
+}
+#[rstest_bdd_macros::then("the leader log end offset is exactly 2")]
+fn truncated_leader_boundary(validation: &ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    let topic = "proactive-trunc";
     let leo = broker.local_log_end_offset(topic, 0).expect("leader LEO");
     assert!(
         leo == 2,
         "leader LEO should be 2 after truncation, got {leo}"
     );
-
-    // (b) Advance the metadata image's leader epoch to 1 (same leader/replicas/
-    //     ISR). This is the metadata event the consumer's refresh_leader_epochs
-    //     keys on to flag awaiting_validation.
+}
+#[rstest_bdd_macros::when("the same partition leader is published at epoch 1")]
+async fn advance_validation_epoch(validation: &mut ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    let pr0 = validation
+        .initial_partition
+        .as_ref()
+        .expect("epoch 0 partition");
+    let topic = "proactive-trunc";
     let forged = MetadataRecord::V1Partition(PartitionRecord {
         topic: topic.to_owned(),
         partition: 0,
@@ -258,14 +286,16 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     broker
         .wait_for_image(|img| img.partition(topic, 0).is_some_and(|p| p.leader_epoch >= 1))
         .await;
-
-    // The `None`-policy consumer under test. It inherits the group's committed
-    // position (offset 4, epoch 0): `next_offset = 4`, `offset_epoch = 0`. With
-    // `None` and no truncation it would simply park at the log-end and deliver
-    // nothing — so any surfaced `LogTruncation` is the proactive validation
-    // result, not a fetch-driven reset.
-    let mut consumer = routing_consumer(
-        &bootstrap,
+}
+#[rstest_bdd_macros::given(
+    "a None-reset consumer has inherited the committed epoch 0 position 4 and completed assignment"
+)]
+async fn inherited_validation_position(validation: &mut ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    let bootstrap = &validation.bootstrap;
+    let topic = "proactive-trunc";
+    let consumer = routing_consumer(
+        bootstrap,
         "c",
         "proactive-grp",
         topic,
@@ -304,36 +334,40 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         time::sleep(Duration::from_millis(1)).await;
     }
 
-    // Snapshot the OFLE counter immediately before the truncating poll.
-    let ofle_before = broker.offset_for_leader_epoch_count_for_test();
-
-    // ── The proactive validate pass fires on the next poll ────────────────
-    // refresh_leader_epochs: metadata epoch 1 > offset_epoch 0 → awaiting_validation.
-    // The partition is therefore EXCLUDED from the Fetch this round, so the
-    // truncation below cannot have come from a fetch response.
-    // validate_positions: OFLE → end_offset 2 → classify → Truncated{safe:2}.
-    // None policy → Err(LogTruncation{fetch_offset:4, safe_offset:2}).
-    //
-    // Tolerate empty/timeout polls (assignment churn), but the first non-empty
-    // outcome must be the proactive truncation error.
+    validation.consumer = Some(consumer);
+}
+#[rstest_bdd_macros::when(
+    "the consumer polls across the leader epoch advance for up to 15 seconds"
+)]
+async fn poll_proactive_validation(validation: &mut ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    validation.before = Some(broker.offset_for_leader_epoch_count_for_test());
+    let consumer = validation.consumer.as_mut().expect("consumer assigned");
     let deadline = Instant::now() + Duration::from_secs(15);
-    let mut got = None;
     while Instant::now() < deadline {
         match consumer.poll(krabka_units::millis(300)).await {
-            Ok(recs) => {
-                assert!(
-                    recs.is_empty(),
-                    "an awaiting_validation partition must not be fetched / deliver records; got {recs:?}"
-                );
-            }
-            Err(e) => {
-                got = Some(e);
+            Ok(records) => validation.delivered.extend(records),
+            Err(error) => {
+                validation.error = Some(error);
                 break;
             }
         }
     }
-
-    let err = got.expect("proactive validation must surface a truncation error within 15s");
+}
+#[rstest_bdd_macros::then(
+    "poll delivers no records and reports LogTruncation for position 4 with safe offset 2"
+)]
+fn proactive_truncation_observed(validation: &mut ProactiveValidation) {
+    let topic = "proactive-trunc";
+    assert!(
+        validation.delivered.is_empty(),
+        "an awaiting_validation partition must not be fetched / deliver records; got {:?}",
+        validation.delivered
+    );
+    let err = validation
+        .error
+        .take()
+        .expect("proactive validation must surface a truncation error within 15s");
     match err {
         ConsumerError::LogTruncation {
             topic: t,
@@ -361,16 +395,45 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         }
         other => panic!("expected proactive LogTruncation, got {other:?}"),
     }
-
-    // Discriminator: the validate pass must have issued at least one OFLE RPC.
-    // The reactive diverging_epoch / OFFSET_OUT_OF_RANGE paths issue none.
+}
+#[rstest_bdd_macros::then("the truncating poll issued at least one OffsetForLeaderEpoch request")]
+fn proactive_epoch_rpc(validation: &ProactiveValidation) {
+    let broker = validation.broker.as_ref().expect("broker started");
+    let ofle_before = validation.before.expect("counter captured before poll");
     let ofle_after = broker.offset_for_leader_epoch_count_for_test();
     assert!(
         ofle_after > ofle_before,
         "proactive validation must issue an OffsetForLeaderEpoch RPC \
          (before={ofle_before}, after={ofle_after})"
     );
-
-    consumer.close().await.unwrap();
-    broker.shutdown().await;
+}
+/// PROACTIVE KIP-320 truncation detection.
+///
+/// See the module docs for the full rationale. The discriminating assertions
+/// are these:
+///   * `poll()` returns `ConsumerError::LogTruncation` with `fetch_offset = 4`,
+///     the consumer's pre-divergence position, and `safe_offset = 2`, the
+///     OFLE-derived epoch-0 boundary and NOT a fetch `log_start_offset`;
+///   * the broker's OFLE request counter strictly increased across the
+///     truncating poll, which proves that the validate pass sent the RPC.
+///
+/// The honesty check was verified by hand and then reverted. If either
+/// `validate_positions` or the `awaiting_validation` flagging in
+/// `refresh_leader_epochs` does nothing, this test FAILS, because no
+/// truncation is reported and the counter does not change. The test is
+/// therefore discriminating.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_proactive_validation.feature",
+    name = "consumer proactively validates and surfaces truncation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_proactively_validates_and_surfaces_truncation(validation: ProactiveValidation) {
+    validation
+        .consumer
+        .expect("consumer assigned")
+        .close()
+        .await
+        .unwrap();
+    validation.broker.expect("broker started").shutdown().await;
 }

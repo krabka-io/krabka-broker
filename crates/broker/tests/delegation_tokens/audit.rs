@@ -17,23 +17,14 @@
 
 use {
     crate::{
-        cluster::start_broker,
-        rpc::{
-            send_create_delegation_token, send_expire_delegation_token, send_renew_delegation_token,
-        },
+        cluster::{TokenWorkflow, tokens},
+        rpc::send_renew_delegation_token,
         support,
-        wire::sasl_plain_authenticate,
     },
-    assert2::{assert, check},
+    assert2::check,
     base64::{Engine as _, engine::general_purpose},
-    krabka_broker::coordinator::AUDIT_TOPIC,
-    krabka_protocol::owned::{
-        create_delegation_token_request::CreateDelegationTokenRequest,
-        expire_delegation_token_request::ExpireDelegationTokenRequest,
-        renew_delegation_token_request::RenewDelegationTokenRequest,
-    },
+    krabka_protocol::owned::renew_delegation_token_request::RenewDelegationTokenRequest,
 };
-
 /// The OCSF class for an API Activity record.
 const API_ACTIVITY: i64 = 6003;
 /// The OCSF `status_id` for a success.
@@ -69,93 +60,70 @@ fn secret_spellings(hmac: &[u8]) -> Vec<String> {
     vec![general_purpose::STANDARD.encode(hmac), hex]
 }
 
-/// Mint, renew and expire one token over a SASL-authenticated connection, and
-/// prove each mutation reached the audit topic naming that token's id.
-///
-/// The expire case is the load-bearing one. Its record can only carry the id
-/// if the broker read the id off the metadata image before the delete, so a
-/// lookup that moved after the mutation would leave this waiting on a record
-/// that never arrives.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delegation_token_mutations_reach_the_audit_topic() {
-    let (handle, _dir, addr) = start_broker().await;
-    handle.wait_until_partition_present(AUDIT_TOPIC, 0).await;
-
-    let mut alice = sasl_plain_authenticate(addr, "alice", b"wonderland")
+#[rstest_bdd_macros::when("alice renews an unknown HMAC of 32 bytes 0x5a for 3600000 milliseconds")]
+async fn renew_missing_token(tokens: &mut TokenWorkflow) {
+    tokens.renewed = Some(
+        send_renew_delegation_token(
+            tokens
+                .sessions
+                .get_mut("alice")
+                .expect("alice authenticated"),
+            300,
+            &RenewDelegationTokenRequest {
+                hmac: bytes::Bytes::from_static(&[0x5a; 32]),
+                renew_period_ms: 3_600_000,
+                ..Default::default()
+            },
+        )
         .await
-        .expect("alice PLAIN auth");
-
-    let create = send_create_delegation_token(&mut alice, 100, &CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    })
-    .await
-    .expect("CreateDelegationToken");
-    assert!(create.error_code == 0, "{create:?}");
-    let token_id = create.token_id.clone();
-    let hmac = create.hmac.clone();
-
-    let renew = send_renew_delegation_token(&mut alice, 200, &RenewDelegationTokenRequest {
-        hmac: hmac.clone(),
-        renew_period_ms: 30 * 24 * 60 * 60 * 1_000,
-        ..Default::default()
-    })
-    .await
-    .expect("RenewDelegationToken");
-    assert!(renew.error_code == 0, "{renew:?}");
-
-    // A renew against an HMAC no token carries fails, and a failure is not an
-    // admin mutation: the count assertion below is what catches an audit call
-    // that drifted out from under the success guard.
-    let missing = send_renew_delegation_token(&mut alice, 300, &RenewDelegationTokenRequest {
-        hmac: bytes::Bytes::from_static(&[0x5a; 32]),
-        renew_period_ms: 3_600_000,
-        ..Default::default()
-    })
-    .await
-    .expect("RenewDelegationToken (unknown hmac)");
-    check!(
-        missing.error_code != 0,
-        "a renew against an unknown HMAC must fail"
+        .expect("RenewDelegationToken unknown HMAC"),
     );
-
-    let expire = send_expire_delegation_token(&mut alice, 400, &ExpireDelegationTokenRequest {
-        hmac: hmac.clone(),
-        expiry_time_period_ms: -1,
-        ..Default::default()
-    })
-    .await
-    .expect("ExpireDelegationToken");
-    assert!(expire.error_code == 0, "{expire:?}");
-    drop(alice);
-
-    let client = support::sasl_client(&addr.to_string(), "alice", "wonderland").await;
+}
+#[rstest_bdd_macros::then("renewal against the unknown HMAC fails")]
+fn missing_token_renewal_refused(tokens: &TokenWorkflow) {
+    check!(
+        tokens
+            .renewed
+            .as_ref()
+            .expect("unknown-HMAC renewal attempted")
+            .error_code
+            != 0
+    );
+}
+#[rstest_bdd_macros::then(
+    "the audit topic names token {alias} and alice in all three mutations audits one renewal and leaks no HMAC"
+)]
+async fn token_mutations_audited(tokens: &TokenWorkflow, alias: String) {
+    let created = tokens.tokens.get(&alias).expect("named token minted");
+    let client = support::sasl_client(&tokens.address().to_string(), "alice", "wonderland").await;
     for operation in [
         "CreateDelegationToken",
         "RenewDelegationToken",
         "ExpireDelegationToken",
     ] {
-        support::wait_for_audit_record(&client, operation, |j| {
-            names_token(j, operation, &token_id, "alice")
+        support::wait_for_audit_record(&client, operation, |row| {
+            names_token(row, operation, &created.token_id, "alice")
         })
         .await;
     }
-
     let records = support::consume_audit_records(&client).await;
     check!(
         records_for(&records, "RenewDelegationToken") == 1,
         "a renew that failed must not be audited"
     );
-
-    // Redaction: the audit topic carries the token's id and never the secret
-    // that authenticates as it.
     let dump = serde_json::to_string(&records).expect("audit records serialize");
-    for secret in secret_spellings(&hmac) {
+    for secret in secret_spellings(&created.hmac) {
         check!(
             !dump.contains(&secret),
-            "the token HMAC must never reach the audit topic"
+            "token HMAC leaked into audit topic"
         );
     }
-
-    handle.shutdown().await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/audit.feature",
+    name = "delegation token mutations reach the audit topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegation_token_mutations_reach_the_audit_topic(tokens: TokenWorkflow) {
+    tokens.shutdown().await;
 }

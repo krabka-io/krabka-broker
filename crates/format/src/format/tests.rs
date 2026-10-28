@@ -22,27 +22,6 @@ struct DirectoryWant<Dir, Expected> {
     expected: Expected,
 }
 
-/// A run's directory layout, and what each directory should hold: what it is,
-/// `--metadata-log-dir`, the `--log-dir` entries, the quorum flags, and the
-/// directories.
-struct DirectoryCase<'a, Expected> {
-    what: &'a str,
-    metadata: Option<&'a str>,
-    log_dirs: &'a [&'a str],
-    extra: &'a [&'a str],
-    want: &'a [DirectoryWant<&'a str, Expected>],
-}
-
-fn find_directory_case<'case, 'data, Expected>(
-    cases: &'case [DirectoryCase<'data, Expected>],
-    scenario: &str,
-) -> &'case DirectoryCase<'data, Expected> {
-    cases
-        .iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists")
-}
-
 /// A temporary root and the data directory path inside it.
 struct DataDirectory {
     root: tempfile::TempDir,
@@ -111,39 +90,239 @@ async fn exit_code_for_each_argv(extra: &[&str], want: i32) {
     assert2::check!(got == want, "exit {got}, want {want}");
 }
 
-/// `Formatter.run` resolves the release and the feature names before it
-/// reconciles `kraft.version` with the quorum flags, and it reconciles the mode
-/// before it checks that the feature defines the level. So the first error a
-/// command line with several wrong things reports is fixed.
-#[yare::parameterized(
-    unknown_release_first = {
-        &["--release-version", "9.9-IV0", "--feature", "kraft.version=9"],
-        "krabka format: Unknown metadata.version '9.9-IV0'.",
-    },
-    unknown_feature_first = {
-        &["--feature", "nope.version=1", "--feature", "kraft.version=9"],
-        "krabka format: Unsupported feature: nope.version.",
-    },
-    mode_conflict_first = {
-        &["--feature", "kraft.version=9"],
-        "krabka format: kraft.version=9 requires --standalone,",
-    },
-    undefined_kraft_level = {
-        &["--no-initial-controllers", "--feature", "kraft.version=9"],
-        "krabka format: No feature:kraft.version with feature level 9",
-    },
-)]
-fn the_first_error_follows_kafkas_order(extra: &[&str], want: &str) {
-    use clap::Parser as _;
-
-    let FreshArgv { dir: _tmp, argv } = fresh_argv(extra);
-    let cli = Cli::try_parse_from(argv).expect("parse");
-    let Err(Failure { code, message }) = plan(cli.args, Vec::new()) else {
-        panic!("the plan was accepted");
-    };
-    assert2::check!(code == EXIT_INVALID_FEATURE, "exit {code}");
-    assert2::check!(message.starts_with(want), "{message}");
+struct WholeFormatScenario {
+    root: tempfile::TempDir,
+    metadata: Option<String>,
+    log_dirs: Vec<String>,
+    flags: Vec<String>,
+    planned: Option<Result<Plan, Failure>>,
+    exit: Option<i32>,
 }
+#[rstest::fixture]
+fn whole_format() -> WholeFormatScenario {
+    let root = tempfile::tempdir().expect("formatter root");
+    WholeFormatScenario {
+        root,
+        metadata: None,
+        log_dirs: vec!["a".into()],
+        flags: Vec::new(),
+        planned: None,
+        exit: None,
+    }
+}
+impl WholeFormatScenario {
+    fn argv(&self) -> Vec<String> {
+        let logs: Vec<&str> = self.log_dirs.iter().map(String::as_str).collect();
+        let flags: Vec<&str> = self.flags.iter().map(String::as_str).collect();
+        argv_under()
+            .root(self.root.path())
+            .maybe_metadata(self.metadata.as_deref())
+            .log_dirs(&logs)
+            .extra(&flags)
+            .call()
+    }
+}
+#[rstest_bdd_macros::given("format flags {flags}")]
+fn format_validation_flags(whole_format: &mut WholeFormatScenario, flags: String) {
+    whole_format.flags = flags.split_whitespace().map(str::to_owned).collect();
+}
+#[rstest_bdd_macros::given(
+    "log directories {directories} with metadata directory {metadata} in {mode} mode"
+)]
+fn format_directory_selection(
+    whole_format: &mut WholeFormatScenario,
+    directories: String,
+    metadata: String,
+    mode: String,
+) {
+    whole_format.log_dirs = directories.split(',').map(str::to_owned).collect();
+    whole_format.metadata = (metadata != "first-log-dir").then_some(metadata);
+    whole_format.flags = match mode.as_str() {
+        "static" => Vec::new(),
+        "standalone" => STANDALONE.iter().map(|flag| (*flag).to_owned()).collect(),
+        "nonvoter" => vec!["--no-initial-controllers".into()],
+        _ => panic!("unknown format mode {mode}"),
+    };
+}
+#[rstest_bdd_macros::given("directory {directory} contains unreadable meta.properties")]
+fn unreadable_format_directory(whole_format: &mut WholeFormatScenario, directory: String) {
+    let broken = whole_format.root.path().join(directory);
+    fs::create_dir_all(&broken).expect("unreadable directory");
+    fs::write(broken.join(META_PROPERTIES), UNREADABLE)
+        .expect("unreadable meta.properties fixture");
+}
+#[rstest_bdd_macros::when("the formatter plans the run")]
+fn plan_format_run(whole_format: &mut WholeFormatScenario) {
+    whole_format.planned = Some(plan_of(whole_format.argv()));
+}
+#[rstest_bdd_macros::then(
+    "the first formatter failure has Kafka feature exit code and begins {message}"
+)]
+fn first_formatter_error(whole_format: &WholeFormatScenario, message: String) {
+    let Err(Failure {
+        code,
+        message: actual,
+    }) = whole_format.planned.as_ref().expect("format planned")
+    else {
+        panic!("invalid format plan was accepted")
+    };
+    assert2::check!(*code == EXIT_INVALID_FEATURE, "exit {code}");
+    assert2::check!(actual.starts_with(&message), "{actual}");
+}
+#[rstest_bdd_macros::then("the ordered format targets and directory kinds are")]
+fn ordered_format_targets(whole_format: &WholeFormatScenario, datatable: Vec<Vec<String>>) {
+    let plan = whole_format
+        .planned
+        .as_ref()
+        .expect("format planned")
+        .as_ref()
+        .unwrap_or_else(|Failure { code, message }| panic!("exit {code}: {message}"));
+    let got: Vec<DirectoryWant<PathBuf, DirectoryKind>> = plan
+        .targets
+        .iter()
+        .map(|target| DirectoryWant {
+            dir: target.dir.clone(),
+            expected: target.kind,
+        })
+        .collect();
+    let want: Vec<DirectoryWant<PathBuf, DirectoryKind>> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [directory, kind] = row.as_slice() else {
+                panic!("directory and kind columns required")
+            };
+            let expected = match kind.as_str() {
+                "data" => DirectoryKind::Data,
+                "static-metadata" => DirectoryKind::StaticMetadata,
+                "dynamic-metadata" => DirectoryKind::DynamicMetadata,
+                "dynamic-voter" => DirectoryKind::DynamicMetadataVoter,
+                _ => panic!("unknown directory kind {kind}"),
+            };
+            DirectoryWant {
+                dir: whole_format.root.path().join(directory),
+                expected,
+            }
+        })
+        .collect();
+    check!(got == want);
+    let ids: HashSet<DirectoryId> = plan
+        .targets
+        .iter()
+        .map(|target| target.directory_id)
+        .collect();
+    check!(ids.len() == plan.targets.len(), "{ids:?}");
+}
+#[rstest_bdd_macros::then("formatting refuses unreadable metadata directory {directory}")]
+fn refused_metadata_directory(whole_format: &WholeFormatScenario, directory: String) {
+    let expected = Failure {
+        code: EXIT_DIRTY_LOG_DIR,
+        message: format!(
+            "Encountered I/O error in metadata log directory {}. Cannot continue.",
+            whole_format.root.path().join(directory).display()
+        ),
+    };
+    let actual = whole_format.planned.as_ref().expect("format planned");
+    let Err(actual) = actual else {
+        panic!("unreadable metadata directory was accepted")
+    };
+    check!(*actual == expected);
+}
+#[rstest_bdd_macros::then(
+    "the formatter keeps target directories {targets} and reports unreadable directories {errors}"
+)]
+fn skipped_data_directory(whole_format: &WholeFormatScenario, targets: String, errors: String) {
+    let plan = whole_format
+        .planned
+        .as_ref()
+        .expect("format planned")
+        .as_ref()
+        .unwrap_or_else(|failure| panic!("unexpected refusal: {}", failure.message));
+    let got_targets: Vec<PathBuf> = plan
+        .targets
+        .iter()
+        .map(|target| target.dir.clone())
+        .collect();
+    let expected_targets: Vec<PathBuf> = targets
+        .split(',')
+        .map(|directory| whole_format.root.path().join(directory))
+        .collect();
+    let expected_errors: Vec<PathBuf> = errors
+        .split(',')
+        .map(|directory| whole_format.root.path().join(directory))
+        .collect();
+    check!(got_targets == expected_targets);
+    check!(plan.errors == expected_errors);
+}
+#[rstest_bdd_macros::when("the formatter writes all selected directories")]
+async fn run_whole_format(whole_format: &mut WholeFormatScenario) {
+    whole_format.exit = Some(run_from_args(whole_format.argv()).await);
+}
+#[rstest_bdd_macros::then("the selected directories contain exactly these format files")]
+fn whole_format_files(whole_format: &WholeFormatScenario, datatable: Vec<Vec<String>>) {
+    check!(whole_format.exit == Some(EXIT_OK));
+    let expected: Vec<DirectoryWant<String, Vec<String>>> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [directory, files] = row.as_slice() else {
+                panic!("directory and files columns required")
+            };
+            DirectoryWant {
+                dir: directory.clone(),
+                expected: files.split(',').map(str::to_owned).collect(),
+            }
+        })
+        .collect();
+    let got: Vec<DirectoryWant<String, Vec<String>>> = expected
+        .iter()
+        .map(|wanted| DirectoryWant {
+            dir: wanted.dir.clone(),
+            expected: files_under(&whole_format.root.path().join(&wanted.dir)),
+        })
+        .collect();
+    check!(got == expected);
+    let directories: Vec<PathBuf> = expected
+        .iter()
+        .map(|wanted| whole_format.root.path().join(&wanted.dir))
+        .collect();
+    let ensemble = Ensemble::load(&directories).expect("survey formatted directories");
+    check!(ensemble.formatted.len() == directories.len());
+    check!(
+        ensemble.verify(None, 1).is_ok_and(|id| id.is_some()),
+        "one cluster id, node 1, and distinct directory ids"
+    );
+}
+
+rstest_bdd_macros::scenarios!("tests/features/formatter_planning", fixtures = [whole_format: WholeFormatScenario]);
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
+    name = "Static bootstrap files belong only to a separate metadata directory"
+)]
+#[tokio::test]
+async fn only_the_metadata_log_directory_gets_the_bootstrap_files(
+    whole_format: WholeFormatScenario,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
+    name = "Dynamic bootstrap and the zero checkpoint belong only to the metadata directory"
+)]
+#[tokio::test]
+async fn separate_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
+    name = "The first log directory is the default dynamic metadata directory"
+)]
+#[tokio::test]
+async fn default_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
+    name = "A metadata directory that is also a log directory is formatted once"
+)]
+#[tokio::test]
+async fn shared_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
 
 /// The exit code of a run, and the directory it formatted.
 struct FormatRun {
@@ -516,172 +695,6 @@ fn plan_of(argv: Vec<String>) -> Result<Plan, Failure> {
     plan(Cli::try_parse_from(argv).expect("parse").args, Vec::new())
 }
 
-/// The run writes the metadata log directory first and then each `--log-dir`
-/// in the order given, every path once. Only the metadata log directory is a
-/// metadata directory, of the kind the quorum flags select. Each directory
-/// gets its own id.
-#[yare::parameterized(
-    default_first_log_dir = { "the first --log-dir by default" },
-    separate_metadata_dir = { "a separate metadata log directory" },
-    metadata_is_log_dir = { "a metadata log directory that is also a log directory" },
-    metadata_is_only_log_dir = { "a metadata log directory that is the only log directory" },
-    duplicate_log_dir = { "a log directory named twice" },
-    voter = { "a voter" },
-    non_voting_controller = { "a dynamic controller that is not a voter" },
-)]
-fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
-    use DirectoryKind::{Data, DynamicMetadata, DynamicMetadataVoter, StaticMetadata};
-
-    // (what, --metadata-log-dir, --log-dir entries, quorum flags, the targets)
-    let cases: &[DirectoryCase<DirectoryKind>] = &[
-        DirectoryCase {
-            what: "the first --log-dir by default",
-            metadata: None,
-            log_dirs: &["a", "b"],
-            extra: &[],
-            want: &[
-                DirectoryWant {
-                    dir: "a",
-                    expected: StaticMetadata,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: Data,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "a separate metadata log directory",
-            metadata: Some("m"),
-            log_dirs: &["a", "b"],
-            extra: &[],
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: StaticMetadata,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: Data,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: Data,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "a metadata log directory that is also a log directory",
-            metadata: Some("b"),
-            log_dirs: &["a", "b"],
-            extra: &[],
-            want: &[
-                DirectoryWant {
-                    dir: "b",
-                    expected: StaticMetadata,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: Data,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "a metadata log directory that is the only log directory",
-            metadata: Some("a"),
-            log_dirs: &["a"],
-            extra: &[],
-            want: &[DirectoryWant {
-                dir: "a",
-                expected: StaticMetadata,
-            }],
-        },
-        DirectoryCase {
-            what: "a log directory named twice",
-            metadata: Some("m"),
-            log_dirs: &["a", "a"],
-            extra: &[],
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: StaticMetadata,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: Data,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "a voter",
-            metadata: Some("m"),
-            log_dirs: &["a"],
-            extra: STANDALONE,
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: DynamicMetadataVoter,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: Data,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "a dynamic controller that is not a voter",
-            metadata: Some("m"),
-            log_dirs: &["a"],
-            extra: &["--no-initial-controllers"],
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: DynamicMetadata,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: Data,
-                },
-            ],
-        },
-    ];
-    let case = find_directory_case(cases, scenario);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let plan = plan_of(
-        argv_under()
-            .root(tmp.path())
-            .maybe_metadata(case.metadata)
-            .log_dirs(case.log_dirs)
-            .extra(case.extra)
-            .call(),
-    )
-    .unwrap_or_else(|Failure { code, message }| panic!("{}: exit {code}: {message}", case.what));
-
-    let got: Vec<DirectoryWant<PathBuf, DirectoryKind>> = plan
-        .targets
-        .iter()
-        .map(|target| DirectoryWant {
-            dir: target.dir.clone(),
-            expected: target.kind,
-        })
-        .collect();
-    let want: Vec<DirectoryWant<PathBuf, DirectoryKind>> = case
-        .want
-        .iter()
-        .map(|wanted| DirectoryWant {
-            dir: tmp.path().join(wanted.dir),
-            expected: wanted.expected,
-        })
-        .collect();
-    check!(got == want, "{}", case.what);
-    let ids: HashSet<DirectoryId> = plan
-        .targets
-        .iter()
-        .map(|target| target.directory_id)
-        .collect();
-    check!(ids.len() == plan.targets.len(), "{}: {ids:?}", case.what);
-}
-
 /// `--directory-id` and the local `--initial-controllers` entry name the id of
 /// the metadata log directory, also when `--metadata-log-dir` puts it apart
 /// from the log directories. A data directory gets another id.
@@ -743,264 +756,6 @@ krabka_macros::directory_tree_fixture!(
                 parts.join("/")
     })
 );
-
-/// Only the metadata log directory gets the bootstrap files, and with a
-/// dynamic format the offset-zero checkpoint in `__cluster_metadata-0`, as
-/// Kafka trunk writes its bootstrap snapshot only into a metadata directory.
-/// A data directory gets `meta.properties` and nothing else. The set shares
-/// one cluster id and one node id, and each directory has its own id.
-#[yare::parameterized(
-    static_separate_metadata = { "static, a separate metadata log directory" },
-    dynamic_separate_metadata = { "standalone, a separate metadata log directory" },
-    dynamic_first_log_dir = { "standalone, the first --log-dir" },
-    dynamic_metadata_is_log_dir = {
-        "standalone, a metadata log directory that is also a log directory",
-    },
-)]
-#[test_macro(tokio::test)]
-async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str) {
-    const META: &[&str] = &[META_PROPERTIES];
-    const STATIC: &[&str] = &["bootstrap.json", "bootstrap.records.bin", META_PROPERTIES];
-    const DYNAMIC: &[&str] = &[
-        "__cluster_metadata-0/00000000000000000000-0000000000.checkpoint",
-        "bootstrap.json",
-        "bootstrap.records.bin",
-        META_PROPERTIES,
-    ];
-
-    // (what, --metadata-log-dir, --log-dir entries, quorum flags, the files
-    // in each directory)
-    let cases: &[DirectoryCase<&[&str]>] = &[
-        DirectoryCase {
-            what: "static, a separate metadata log directory",
-            metadata: Some("m"),
-            log_dirs: &["a", "b"],
-            extra: &[],
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: STATIC,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: META,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: META,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "standalone, a separate metadata log directory",
-            metadata: Some("m"),
-            log_dirs: &["a", "b"],
-            extra: STANDALONE,
-            want: &[
-                DirectoryWant {
-                    dir: "m",
-                    expected: DYNAMIC,
-                },
-                DirectoryWant {
-                    dir: "a",
-                    expected: META,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: META,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "standalone, the first --log-dir",
-            metadata: None,
-            log_dirs: &["a", "b"],
-            extra: STANDALONE,
-            want: &[
-                DirectoryWant {
-                    dir: "a",
-                    expected: DYNAMIC,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: META,
-                },
-            ],
-        },
-        DirectoryCase {
-            what: "standalone, a metadata log directory that is also a log directory",
-            metadata: Some("b"),
-            log_dirs: &["a", "b"],
-            extra: STANDALONE,
-            want: &[
-                DirectoryWant {
-                    dir: "a",
-                    expected: META,
-                },
-                DirectoryWant {
-                    dir: "b",
-                    expected: DYNAMIC,
-                },
-            ],
-        },
-    ];
-    let case = find_directory_case(cases, scenario);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let code = run_from_args(
-        argv_under()
-            .root(tmp.path())
-            .maybe_metadata(case.metadata)
-            .log_dirs(case.log_dirs)
-            .extra(case.extra)
-            .call(),
-    )
-    .await;
-    check!(code == EXIT_OK, "{}", case.what);
-
-    let got: Vec<DirectoryWant<String, Vec<String>>> = case
-        .want
-        .iter()
-        .map(|wanted| DirectoryWant {
-            dir: wanted.dir.to_owned(),
-            expected: files_under(&tmp.path().join(wanted.dir)),
-        })
-        .collect();
-    let want: Vec<DirectoryWant<String, Vec<String>>> = case
-        .want
-        .iter()
-        .map(|wanted| DirectoryWant {
-            dir: wanted.dir.to_owned(),
-            expected: wanted
-                .expected
-                .iter()
-                .map(|file| (*file).to_owned())
-                .collect(),
-        })
-        .collect();
-    check!(got == want, "{}", case.what);
-
-    let dirs: Vec<PathBuf> = got
-        .iter()
-        .map(|wanted| tmp.path().join(&wanted.dir))
-        .collect();
-    let ensemble = Ensemble::load(&dirs).expect("survey");
-    check!(ensemble.formatted.len() == dirs.len(), "{}", case.what);
-    check!(
-        ensemble.verify(None, 1).is_ok_and(|id| id.is_some()),
-        "{}: one cluster id, node 1, and distinct directory ids",
-        case.what
-    );
-}
-
-/// The run stops on an unreadable `meta.properties` in the metadata log
-/// directory, and names that directory, wherever `--metadata-log-dir` puts
-/// it. An unreadable data directory is skipped, and the rest are formatted.
-#[yare::parameterized(
-    unreadable_first_log_dir = { "the first --log-dir" },
-    unreadable_separate_metadata_dir = { "a separate metadata log directory" },
-    unreadable_data_dir = { "a data directory" },
-)]
-fn an_unreadable_metadata_log_directory_is_named(scenario: &str) {
-    /// The target and the error directories of a plan.
-    #[derive(Debug, PartialEq, Eq)]
-    struct PlannedDirs<Dir> {
-        targets: Vec<Dir>,
-        errors: Vec<Dir>,
-    }
-    /// The exit code of a refusal and the directory the message names.
-    struct Refusal {
-        code: i32,
-        dir: &'static str,
-    }
-    type Want = Result<PlannedDirs<&'static str>, Refusal>;
-    /// What, `--metadata-log-dir`, the `--log-dir` entries, the unreadable
-    /// directory, and the outcome.
-    struct Case {
-        what: &'static str,
-        metadata: Option<&'static str>,
-        log_dirs: &'static [&'static str],
-        unreadable: &'static str,
-        want: Want,
-    }
-    let cases = [
-        Case {
-            what: "the first --log-dir",
-            metadata: None,
-            log_dirs: &["a", "b"],
-            unreadable: "a",
-            want: Err(Refusal {
-                code: EXIT_DIRTY_LOG_DIR,
-                dir: "a",
-            }),
-        },
-        Case {
-            what: "a separate metadata log directory",
-            metadata: Some("m"),
-            log_dirs: &["a"],
-            unreadable: "m",
-            want: Err(Refusal {
-                code: EXIT_DIRTY_LOG_DIR,
-                dir: "m",
-            }),
-        },
-        Case {
-            what: "a data directory",
-            metadata: Some("m"),
-            log_dirs: &["a", "b"],
-            unreadable: "a",
-            want: Ok(PlannedDirs {
-                targets: vec!["m", "b"],
-                errors: vec!["a"],
-            }),
-        },
-    ];
-    let Case {
-        what,
-        metadata,
-        log_dirs,
-        unreadable,
-        want,
-    } = cases
-        .into_iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists");
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let broken = tmp.path().join(unreadable);
-    fs::create_dir_all(&broken).expect("mkdir");
-    fs::write(broken.join(META_PROPERTIES), UNREADABLE).expect("write");
-
-    let got = plan_of(
-        argv_under()
-            .root(tmp.path())
-            .maybe_metadata(metadata)
-            .log_dirs(log_dirs)
-            .call(),
-    )
-    .map(|plan| PlannedDirs {
-        targets: plan
-            .targets
-            .into_iter()
-            .map(|target| target.dir)
-            .collect::<Vec<_>>(),
-        errors: plan.errors,
-    });
-    let at = |dirs: Vec<&str>| -> Vec<PathBuf> {
-        dirs.into_iter().map(|dir| tmp.path().join(dir)).collect()
-    };
-    let want = want
-        .map(|PlannedDirs { targets, errors }| PlannedDirs {
-            targets: at(targets),
-            errors: at(errors),
-        })
-        .map_err(|Refusal { code, dir }| Failure {
-            code,
-            message: format!(
-                "Encountered I/O error in metadata log directory {}. Cannot continue.",
-                tmp.path().join(dir).display()
-            ),
-        });
-    check!(got == want, "{what}");
-}
 
 /// A formatted directory of another node refuses the run, `--ignore-formatted`
 /// or not, with Kafka's message: `Formatter.doFormat` verifies the set against

@@ -1,107 +1,5 @@
 use {super::*, assert2::assert};
 
-/// Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`, in
-/// its order of checks.
-#[test]
-fn a_verify_only_answer_follows_kafka() {
-    let producer = ProducerId(7);
-    let cases = [
-        (
-            "another producer id",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: ProducerId(8),
-                    producer_epoch: 3,
-                },
-                state: TxnState::Ongoing,
-            },
-            true,
-            codes::INVALID_PRODUCER_ID_MAPPING,
-        ),
-        (
-            "another epoch",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 4,
-                },
-                state: TxnState::Ongoing,
-            },
-            true,
-            codes::PRODUCER_FENCED,
-        ),
-        (
-            "prepare commit",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 3,
-                },
-                state: TxnState::PrepareCommit,
-            },
-            true,
-            codes::CONCURRENT_TRANSACTIONS,
-        ),
-        (
-            "prepare abort",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 3,
-                },
-                state: TxnState::PrepareAbort,
-            },
-            false,
-            codes::CONCURRENT_TRANSACTIONS,
-        ),
-        (
-            "partition in the transaction",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 3,
-                },
-                state: TxnState::Ongoing,
-            },
-            true,
-            codes::NONE,
-        ),
-        (
-            "partition not in the transaction",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 3,
-                },
-                state: TxnState::Ongoing,
-            },
-            false,
-            codes::TRANSACTION_ABORTABLE,
-        ),
-        (
-            "complete commit",
-            HeldTransaction {
-                identity: ProducerIdentity {
-                    producer_id: producer,
-                    producer_epoch: 3,
-                },
-                state: TxnState::CompleteCommit,
-            },
-            false,
-            codes::TRANSACTION_ABORTABLE,
-        ),
-    ];
-    for (name, entry, contains, want) in cases {
-        assert!(
-            verification_code(entry, contains, ProducerIdentity {
-                producer_id: producer,
-                producer_epoch: 3
-            }) == want,
-            "{name}"
-        );
-    }
-}
-
 /// `transaction.partition.verification.enable` is a dynamic broker config
 /// with a static layer: the broker's own dynamic value beats the cluster-wide
 /// one, which beats the static value of `server.properties`, which beats
@@ -243,3 +141,86 @@ fn only_a_verify_only_call_skips_the_coordinator_and_only_with_the_knob_off() {
         );
     }
 }
+
+#[derive(Default)]
+struct TransactionPartitionVerification {
+    requested: Option<ProducerIdentity>,
+    held: Option<HeldTransaction>,
+    contains: Option<bool>,
+    code: Option<i16>,
+}
+
+#[rstest::fixture]
+fn transaction_partition_verification() -> TransactionPartitionVerification {
+    // Each producer request is checked against one independent held transaction.
+    TransactionPartitionVerification::default()
+}
+
+#[rstest_bdd_macros::given("producer 7 at epoch 3 requests transaction partition verification")]
+fn requested_transaction_verification(
+    transaction_partition_verification: &mut TransactionPartitionVerification,
+) {
+    transaction_partition_verification.requested = Some(ProducerIdentity {
+        producer_id: ProducerId(7),
+        producer_epoch: 3,
+    });
+}
+
+#[rstest_bdd_macros::given(
+    "the held transaction has producer {producer}, epoch {epoch}, state {state}, and partition membership {contains}"
+)]
+fn held_transaction_verification(
+    transaction_partition_verification: &mut TransactionPartitionVerification,
+    producer: i64,
+    epoch: i16,
+    state: String,
+    contains: bool,
+) {
+    let state = match state.as_str() {
+        "Ongoing" => TxnState::Ongoing,
+        "PrepareCommit" => TxnState::PrepareCommit,
+        "PrepareAbort" => TxnState::PrepareAbort,
+        "CompleteCommit" => TxnState::CompleteCommit,
+        _ => panic!("unknown held transaction state {state}"),
+    };
+    transaction_partition_verification.held = Some(HeldTransaction {
+        identity: ProducerIdentity {
+            producer_id: ProducerId(producer),
+            producer_epoch: epoch,
+        },
+        state,
+    });
+    transaction_partition_verification.contains = Some(contains);
+}
+
+#[rstest_bdd_macros::when("the transaction coordinator verifies the requested partition")]
+fn verify_held_transaction_partition(
+    transaction_partition_verification: &mut TransactionPartitionVerification,
+) {
+    transaction_partition_verification.code = Some(verification_code(
+        transaction_partition_verification
+            .held
+            .take()
+            .expect("held transaction was given"),
+        transaction_partition_verification
+            .contains
+            .expect("partition membership was given"),
+        transaction_partition_verification
+            .requested
+            .take()
+            .expect("producer request was given"),
+    ));
+}
+
+#[rstest_bdd_macros::then("transaction partition verification returns Kafka code {code}")]
+fn expected_transaction_partition_verification(
+    transaction_partition_verification: &TransactionPartitionVerification,
+    code: i16,
+) {
+    assert!(transaction_partition_verification.code == Some(code));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/txn/coordinator/produce_verification/tests.feature",
+    fixtures = [transaction_partition_verification: TransactionPartitionVerification]
+);

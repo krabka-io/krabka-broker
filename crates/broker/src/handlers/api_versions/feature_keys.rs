@@ -45,53 +45,116 @@ pub(super) fn finalized_feature_keys(
 mod tests {
     use {
         super::*,
-        crate::{
-            features,
-            features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION_MIN},
-        },
+        crate::features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION_MIN},
         assert2::check,
-        krabka_metadata::{FeatureLevelRecord, KRaftVersionRecord, MetadataRecord},
+        krabka_metadata::{FeatureLevelRecord, KRaftVersionRecord, MetadataImage, MetadataRecord},
+        rstest_bdd::datatable::Rows,
+        uuid::Uuid,
     };
 
     krabka_macros::supported_feature_fixture!(supported);
-    krabka_macros::supported_features_fixture!(modern_supported, supported);
 
     krabka_macros::finalized_feature_fixture!(finalized);
 
-    /// #783: below v4 only `metadata.version` stays, because every other
-    /// feature's minimum is 0; from v4 each feature carries Kafka's
-    /// `minimumProduction`.
-    #[test]
-    fn supported_features_follow_kafkas_minimums() {
-        let metadata_version = supported(
-            "metadata.version",
-            METADATA_VERSION_MIN,
-            LATEST_PRODUCTION_METADATA_VERSION,
-        );
-        let modern = modern_supported(metadata_version.clone(), 1);
-        let legacy = vec![metadata_version];
-        for (api_version, expected) in [(0, &legacy), (3, &legacy), (4, &modern), (5, &modern)] {
-            check!(
-                supported_feature_keys(api_version, krabka_raft::UnstableFeatureVersions::Disabled)
-                    == *expected,
-                "v{api_version}"
-            );
+    struct FeatureDiscoveryContract {
+        version: i16,
+        image: Option<MetadataImage>,
+        supported: Option<Vec<SupportedFeatureKey>>,
+        finalized: Option<Vec<FinalizedFeatureKey>>,
+    }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ExpectedFeatureRange {
+        feature: String,
+        minimum: String,
+        maximum: String,
+    }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ExpectedFinalizedLevel {
+        feature: String,
+        level: String,
+    }
+
+    #[rstest::fixture]
+    fn feature_discovery() -> FeatureDiscoveryContract {
+        // Start this scenario with fresh inputs and observations.
+
+        FeatureDiscoveryContract {
+            version: 0,
+            image: None,
+            supported: None,
+            finalized: None,
         }
     }
 
-    /// A fresh image follows Kafka's initial `FeaturesPublisher` state: the
-    /// minimum metadata version is finalized, while `kraft.version` 0 is no row.
-    #[test]
-    fn a_fresh_image_advertises_kafkas_minimum_metadata_version() {
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        check!(
-            finalized_feature_keys(&image)
-                == vec![finalized(
-                    "metadata.version",
-                    features::METADATA_VERSION_MIN
-                )]
-        );
+    fn feature_contract_level(value: &str) -> i16 {
+        match value {
+            "minimum-metadata" => METADATA_VERSION_MIN,
+            "production-metadata" => LATEST_PRODUCTION_METADATA_VERSION,
+            _ => value.parse().expect("an explicit feature level"),
+        }
     }
+
+    #[rstest_bdd_macros::given("the client uses ApiVersions version {version}")]
+    fn feature_request_version(feature_discovery: &mut FeatureDiscoveryContract, version: i16) {
+        feature_discovery.version = version;
+    }
+
+    #[rstest_bdd_macros::given("the broker has a fresh metadata image")]
+    fn fresh_feature_image(feature_discovery: &mut FeatureDiscoveryContract) {
+        feature_discovery.image = Some(MetadataImage::new(Uuid::nil()));
+    }
+
+    #[rstest_bdd_macros::when("the broker advertises production supported feature ranges")]
+    fn advertise_supported_ranges(feature_discovery: &mut FeatureDiscoveryContract) {
+        feature_discovery.supported = Some(supported_feature_keys(
+            feature_discovery.version,
+            krabka_raft::UnstableFeatureVersions::Disabled,
+        ));
+    }
+
+    #[rstest_bdd_macros::when("the broker advertises the finalized feature levels")]
+    fn advertise_finalized_levels(feature_discovery: &mut FeatureDiscoveryContract) {
+        feature_discovery.finalized = Some(finalized_feature_keys(
+            feature_discovery
+                .image
+                .as_ref()
+                .expect("a metadata image was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the complete supported feature ranges are:")]
+    fn feature_ranges(
+        feature_discovery: &FeatureDiscoveryContract,
+        #[datatable] rows: Rows<ExpectedFeatureRange>,
+    ) {
+        let expected: Vec<_> = rows
+            .into_iter()
+            .map(|row| {
+                supported(
+                    &row.feature,
+                    feature_contract_level(&row.minimum),
+                    feature_contract_level(&row.maximum),
+                )
+            })
+            .collect();
+        check!(feature_discovery.supported.as_ref() == Some(&expected));
+    }
+
+    #[rstest_bdd_macros::then("the complete finalized feature levels are:")]
+    fn feature_levels(
+        feature_discovery: &FeatureDiscoveryContract,
+        #[datatable] rows: Rows<ExpectedFinalizedLevel>,
+    ) {
+        let expected: Vec<_> = rows
+            .into_iter()
+            .map(|row| finalized(&row.feature, feature_contract_level(&row.level)))
+            .collect();
+        check!(feature_discovery.finalized.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/api_versions/feature_keys.feature", fixtures = [feature_discovery: FeatureDiscoveryContract]);
 
     #[test]
     fn finalized_feature_keys_keep_levels_above_zero() {

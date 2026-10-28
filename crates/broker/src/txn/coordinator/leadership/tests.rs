@@ -1,12 +1,4 @@
-use {
-    super::*,
-    crate::{
-        codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
-        txn::coordinator::test_support::state_image,
-    },
-    assert2::assert,
-    uuid::Uuid,
-};
+use {super::*, crate::txn::coordinator::test_support::state_image, assert2::assert, uuid::Uuid};
 
 const THIS_BROKER: NodeId = NodeId(1);
 const OTHER_BROKER: NodeId = NodeId(2);
@@ -294,22 +286,58 @@ fn an_election_before_the_log_opens_loads_once_it_opens() {
     ]);
 }
 
-#[test]
-fn the_load_status_gives_the_kafka_error_code() {
-    let cases = [
-        (None, Some(NOT_COORDINATOR)),
-        (
-            Some(LoadStatus::Pending),
-            Some(COORDINATOR_LOAD_IN_PROGRESS),
-        ),
-        (
-            Some(LoadStatus::Loading),
-            Some(COORDINATOR_LOAD_IN_PROGRESS),
-        ),
-        (Some(LoadStatus::Loaded), None),
-        (Some(LoadStatus::Failed), Some(NOT_COORDINATOR)),
-    ];
-    for (status, expected) in cases {
-        assert!(coordinator_error(status) == expected, "{status:?}");
-    }
+#[derive(Default)]
+struct TransactionPartitionLoad {
+    status: rstest_bdd::Slot<Option<LoadStatus>>,
+    response: rstest_bdd::Slot<Option<i16>>,
 }
+
+#[rstest::fixture]
+fn transaction_partition_load() -> TransactionPartitionLoad {
+    // Every routing decision observes its own transaction-state replay status.
+    TransactionPartitionLoad::default()
+}
+
+#[rstest_bdd_macros::given("the transaction state partition load status is {status}")]
+fn supplied_transaction_load_status(
+    transaction_partition_load: &mut TransactionPartitionLoad,
+    status: String,
+) {
+    transaction_partition_load
+        .status
+        .set(match status.as_str() {
+            "not led locally" => None,
+            "Pending" => Some(LoadStatus::Pending),
+            "Loading" => Some(LoadStatus::Loading),
+            "Loaded" => Some(LoadStatus::Loaded),
+            "Failed" => Some(LoadStatus::Failed),
+            _ => panic!("unknown transaction partition load status {status}"),
+        });
+}
+
+#[rstest_bdd_macros::when(
+    "the transaction coordinator checks whether its partition can serve requests"
+)]
+fn query_transaction_load_status(transaction_partition_load: &TransactionPartitionLoad) {
+    transaction_partition_load.response.set(coordinator_error(
+        transaction_partition_load
+            .status
+            .get()
+            .expect("partition load observation was given"),
+    ));
+}
+
+#[rstest_bdd_macros::then("the transaction coordinator availability error is JSON {error}")]
+fn expected_transaction_load_error(
+    transaction_partition_load: &TransactionPartitionLoad,
+    error: String,
+) {
+    let expected: Option<i16> =
+        serde_json::from_str(&error).expect("independent nullable coordinator error code");
+    assert!(transaction_partition_load.response.get() == Some(expected));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/txn/coordinator/leadership/tests.feature",
+    fixtures = [transaction_partition_load: TransactionPartitionLoad]
+);

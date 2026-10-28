@@ -21,8 +21,14 @@ use {
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials},
-    krabka_protocol::{owned::create_topics_request::CreateTopicsRequest, records::RecordBatch},
+    krabka_protocol::{
+        owned::{create_topics_request::CreateTopicsRequest, produce_response::ProduceResponse},
+        primitives::uuid::Uuid,
+        records::RecordBatch,
+    },
     krabka_security::{ListenerProtocol, SaslMechanism},
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
     rustls::crypto::aws_lc_rs,
     std::{
         net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -178,61 +184,99 @@ async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
 /// Start two brokers with a `SASL_PLAINTEXT` inter-broker listener,
 /// create a topic with rf=2, produce, and check that the follower
 /// converges.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/two_broker_sasl.feature",
+    name = "two broker sasl plaintext replication"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_broker_sasl_plaintext_replication() {
-    let cluster = start_two_node_sasl().await;
+async fn two_broker_sasl_plaintext_replication(replication: SaslReplication) {
+    shutdown_cluster(replication.cluster).await;
+}
 
-    // Wait for both brokers to register in each other's image.
-    for (h, _, _) in &cluster {
-        h.wait_until_brokers_registered(2).await;
+struct SaslReplication {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    topic_id: Option<Uuid>,
+    produced: Option<ProduceResponse>,
+}
+
+#[fixture]
+fn replication() -> SaslReplication {
+    // Start this scenario with fresh inputs and observations.
+
+    SaslReplication {
+        cluster: Vec::new(),
+        topic_id: None,
+        produced: None,
     }
+}
 
-    let leader_addr = cluster[0].1.listen_addr.to_string();
-    let admin = connect_client(leader_addr.clone(), None).await;
-    let resp = admin
+#[given("two registered brokers authenticate inter-broker fetch and heartbeat with PLAIN")]
+async fn sasl_replication_cluster(replication: &mut SaslReplication) {
+    replication.cluster = start_two_node_sasl().await;
+    for (broker, _, _) in &replication.cluster {
+        broker.wait_until_brokers_registered(2).await;
+    }
+}
+
+#[given("topic sasl-repl has replicas 1 and 2 with broker 1 as leader")]
+async fn replicated_sasl_topic(replication: &mut SaslReplication) {
+    let admin = connect_client(replication.cluster[0].1.listen_addr.to_string(), None).await;
+    let response = admin
         .send(CreateTopicsRequest {
-            // Node 1, which the produce below goes to, leads the partition.
             topics: vec![support::topic_on("sasl-repl", &[&[1, 2]])],
             timeout_ms: 5_000,
             ..Default::default()
         })
         .await
         .unwrap();
-    assert!(resp.topics[0].error_code == 0);
-    let topic_id = resp.topics[0].topic_id;
-
-    // Wait for the topic to propagate to every broker's image.
-    for (h, _, _) in &cluster {
-        h.wait_until_partition_present("sasl-repl", 0).await;
+    assert!(response.topics[0].error_code == 0);
+    replication.topic_id = Some(response.topics[0].topic_id);
+    for (broker, _, _) in &replication.cluster {
+        broker.wait_until_partition_present("sasl-repl", 0).await;
     }
+}
 
-    // Produce 10 records to the leader.
-    let producer = connect_client(leader_addr, None).await;
+#[when("10 records are produced to broker 1 over the data-plane listener")]
+async fn produce_replicated_sasl_records(replication: &mut SaslReplication) {
+    let producer = connect_client(replication.cluster[0].1.listen_addr.to_string(), None).await;
     let batch = RecordBatch {
         base_offset: 0,
         last_offset_delta: 9,
         ..batch_from_records(
             (0..10)
-                .map(|i| value_record(i, Some(bytes::Bytes::from(format!("v{i}")))))
+                .map(|index| value_record(index, Some(bytes::Bytes::from(format!("v{index}")))))
                 .collect(),
         )
     };
-    let prod = producer
-        .send(batch_request(
-            batch,
-            replicated_topic_produce_for("sasl-repl", topic_id.0),
-        ))
-        .await
-        .unwrap();
-    assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    replication.produced = Some(
+        producer
+            .send(batch_request(
+                batch,
+                replicated_topic_produce_for(
+                    "sasl-repl",
+                    replication.topic_id.expect("the replicated topic id").0,
+                ),
+            ))
+            .await
+            .unwrap(),
+    );
+}
 
-    // Wait until every broker's local log reaches >= 10. The SASL
-    // inter-broker handshake on each follower-fetch round trip is the
-    // critical path here — a misconfigured replicator would never
-    // commit a record and this awaiter would time out.
-    for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset("sasl-repl", 0, 10).await;
+#[then("the replicated produce is acknowledged without error")]
+fn replicated_sasl_produce_accepted(replication: &SaslReplication) {
+    let response = replication
+        .produced
+        .as_ref()
+        .expect("records were produced");
+    assert!(response.responses[0].partition_responses[0].error_code == 0);
+}
+
+#[then("both authenticated replicas reach log end offset 10")]
+async fn authenticated_replication_caught_up(replication: &SaslReplication) {
+    for (broker, _, _) in &replication.cluster {
+        broker
+            .wait_until_local_log_end_offset("sasl-repl", 0, 10)
+            .await;
     }
-
-    shutdown_cluster(cluster).await;
 }

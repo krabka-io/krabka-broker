@@ -22,24 +22,80 @@ mod support;
 mod wire;
 
 use {
-    crate::wire::{FetchFacts, HELD_AT_LEAST, min_bytes_exchange},
+    crate::{
+        support::InProcess,
+        wire::{FetchFacts, SeededTopic},
+    },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::time::Duration,
 };
 
-#[tokio::test]
-async fn a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers() {
+#[derive(Default)]
+struct FetchFloor {
+    broker: Option<InProcess>,
+    topic: Option<SeededTopic>,
+    observed: Option<(Duration, FetchFacts)>,
+}
+
+#[fixture]
+fn floor() -> FetchFloor {
+    // Start this scenario with fresh inputs and observations.
+
+    FetchFloor {
+        broker: None,
+        topic: None,
+        observed: None,
+    }
+}
+
+#[given("a broker topic {topic} containing the first small record")]
+async fn seeded(floor: &mut FetchFloor, topic: String) {
     let broker = support::start().await;
-    let bootstrap = broker.broker.listen_addr().to_string();
+    floor.topic = Some(SeededTopic::create(&broker.broker.listen_addr().to_string(), &topic).await);
+    floor.broker = Some(broker);
+}
 
-    let (held, facts) = min_bytes_exchange(&bootstrap, "fetch-min-bytes").await;
+#[when(
+    "Fetch requests at least {minimum} bytes for {wait} ms while a second small record arrives after {delay} ms"
+)]
+async fn fetch(floor: &mut FetchFloor, minimum: i32, wait: i32, delay: u64) {
+    floor.observed = Some(
+        floor
+            .topic
+            .as_ref()
+            .unwrap()
+            .fetch(minimum, wait, delay)
+            .await,
+    );
+}
 
-    assert!(held >= HELD_AT_LEAST);
+#[then(
+    "the answer waits at least {minimum_wait} ms and returns error {error}, watermark {watermark}, and batch offsets {offsets}"
+)]
+fn answer(floor: &FetchFloor, minimum_wait: u64, error: i16, watermark: i64, offsets: String) {
+    let (held, facts) = floor.observed.as_ref().unwrap();
+    assert!(*held >= Duration::from_millis(minimum_wait));
     assert!(
-        facts
+        *facts
             == FetchFacts {
-                error_code: 0,
-                high_watermark: 2,
-                base_offsets: vec![0, 1],
+                error_code: error,
+                high_watermark: watermark,
+                base_offsets: offsets
+                    .split(',')
+                    .map(|value| value.parse().unwrap())
+                    .collect(),
             }
     );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/fetch_min_bytes.feature",
+    name = "a fetch below its min bytes is held until max wait and then answers"
+)]
+#[tokio::test]
+async fn a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers(floor: FetchFloor) {
+    drop(floor.topic);
+    floor.broker.unwrap().broker.shutdown().await;
 }

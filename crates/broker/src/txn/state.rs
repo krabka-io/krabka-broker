@@ -189,35 +189,98 @@ mod tests {
         assert!(TxnState::CompleteCommit.can_transition_to(TxnState::Empty));
     }
 
-    #[yare::parameterized(
-        empty = { TxnState::Empty },
-        ongoing = { TxnState::Ongoing },
-        prepare_commit = { TxnState::PrepareCommit },
-        prepare_abort = { TxnState::PrepareAbort },
-        complete_commit = { TxnState::CompleteCommit },
-        complete_abort = { TxnState::CompleteAbort },
-        dead = { TxnState::Dead },
-    )]
-    fn kafka_status_round_trips_all_states(state: TxnState) {
-        assert2::assert!(TxnState::from_kafka_status(state.to_kafka_status()) == Some(state));
+    #[derive(Default)]
+    struct TransactionStatusRecord {
+        state: Option<TxnState>,
+        status: Option<i8>,
+        recovered: rstest_bdd::Slot<Option<TxnState>>,
     }
 
-    #[yare::parameterized(
-        ongoing = { TxnState::Ongoing, 1 },
-        empty = { TxnState::Empty, 0 },
-        dead = { TxnState::Dead, 6 },
-    )]
-    fn kafka_status_values_match_kafka(state: TxnState, want: i8) {
-        // Empirically pinned: cp-kafka 4.0 Ongoing record had TransactionStatus=1.
-        assert2::assert!(state.to_kafka_status() == want, "{state:?}");
+    #[rstest::fixture]
+    fn transaction_status_record() -> TransactionStatusRecord {
+        // Each persistence record starts without a recovered transaction state.
+        TransactionStatusRecord::default()
     }
 
-    // PrepareEpochFence (7) and out-of-range are not modeled.
-    #[yare::parameterized(
-        prepare_epoch_fence = { 7 },
-        below_range = { -1 },
-    )]
-    fn kafka_status_values_outside_model_are_absent(status: i8) {
-        assert2::assert!(TxnState::from_kafka_status(status).is_none(), "{status}");
+    fn named_transaction_state(name: &str) -> TxnState {
+        match name {
+            "Empty" => TxnState::Empty,
+            "Ongoing" => TxnState::Ongoing,
+            "PrepareCommit" => TxnState::PrepareCommit,
+            "PrepareAbort" => TxnState::PrepareAbort,
+            "CompleteCommit" => TxnState::CompleteCommit,
+            "CompleteAbort" => TxnState::CompleteAbort,
+            "Dead" => TxnState::Dead,
+            _ => panic!("unknown expected transaction state {name}"),
+        }
     }
+
+    #[rstest_bdd_macros::given("a transaction is in state {state}")]
+    fn supplied_transaction_state(
+        transaction_status_record: &mut TransactionStatusRecord,
+        state: String,
+    ) {
+        transaction_status_record.state = Some(named_transaction_state(&state));
+    }
+
+    #[rstest_bdd_macros::given("a transaction log record contains Kafka status byte {status}")]
+    fn supplied_transaction_status(
+        transaction_status_record: &mut TransactionStatusRecord,
+        status: i8,
+    ) {
+        transaction_status_record.status = Some(status);
+    }
+
+    #[rstest_bdd_macros::when(
+        "the transaction state is persisted and recovered through its Kafka status byte"
+    )]
+    fn persist_transaction_status(transaction_status_record: &mut TransactionStatusRecord) {
+        let status = transaction_status_record
+            .state
+            .expect("transaction state was given")
+            .to_kafka_status();
+        transaction_status_record.status = Some(status);
+        transaction_status_record
+            .recovered
+            .set(TxnState::from_kafka_status(status));
+    }
+
+    #[rstest_bdd_macros::when("the Kafka transaction status byte is recovered")]
+    fn recover_transaction_status(transaction_status_record: &mut TransactionStatusRecord) {
+        transaction_status_record
+            .recovered
+            .set(TxnState::from_kafka_status(
+                transaction_status_record
+                    .status
+                    .expect("record status was given"),
+            ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the persisted status byte is {status} and the recovered state is {state}"
+    )]
+    fn expected_transaction_status(
+        transaction_status_record: &TransactionStatusRecord,
+        status: i8,
+        state: String,
+    ) {
+        assert2::assert!(transaction_status_record.status == Some(status));
+        assert2::assert!(
+            transaction_status_record.recovered.get()
+                == Some(Some(named_transaction_state(&state)))
+        );
+        assert2::assert!(
+            transaction_status_record.recovered.get() == Some(transaction_status_record.state)
+        );
+    }
+
+    #[rstest_bdd_macros::then("the status byte has no modeled transaction state")]
+    fn unmodeled_transaction_status(transaction_status_record: &TransactionStatusRecord) {
+        assert2::assert!(transaction_status_record.recovered.get() == Some(None));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/txn/state.feature",
+        fixtures = [transaction_status_record: TransactionStatusRecord]
+    );
 }

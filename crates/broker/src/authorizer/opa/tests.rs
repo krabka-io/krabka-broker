@@ -333,24 +333,35 @@ async fn decision_ttl_reports_the_configured_cache_expiry() {
     assert!(auth.decision_ttl() == Some(Duration::from_secs(60)));
 }
 
-/// A policy matching the published plugin's action and principal paths must
-/// receive those fields, rather than an undefined custom `input.request`.
-#[tokio::test(flavor = "multi_thread")]
-async fn published_kafka_plugin_policy_receives_action_and_context() {
-    let mock = MockServer::start().await;
-    let expected = serde_json::json!({"input": {
-        "action": { "operation": "READ", "resourcePattern": {
-            "resourceType": "TOPIC", "name": "orders", "patternType": "LITERAL", "unknown": false
-        }, "resourceReferenceCount": 1, "logIfAllowed": true, "logIfDenied": true },
-        "requestContext": { "principal": { "principalType": "User", "name": "alice" },
-            "clientAddress": "/1.2.3.4" }
-    }});
+#[derive(Default)]
+struct OpaPolicyRequest {
+    server: Option<MockServer>,
+    authorization: Option<(OpaAuthorizer, RequestFixture)>,
+    decision: Option<AuthorizationResult>,
+}
+
+#[rstest::fixture]
+fn opa_policy_request() -> OpaPolicyRequest {
+    // A fresh OPA endpoint verifies one request independently of other policies.
+    OpaPolicyRequest::default()
+}
+
+#[rstest_bdd_macros::given("an OPA policy permits only this published Kafka plugin request:")]
+async fn published_opa_policy(opa_policy_request: &mut OpaPolicyRequest, docstring: String) {
+    let server = MockServer::start().await;
+    let expected = serde_json::from_str(&docstring).expect("published Kafka plugin envelope JSON");
     mount_decision()
-        .mock(&mock)
+        .mock(&server)
         .allow(true)
         .body(expected)
         .call()
         .await;
+    opa_policy_request.authorization = Some(alice_authorization_context(&server));
+    opa_policy_request.server = Some(server);
+}
+
+#[rstest_bdd_macros::when("alice at 1.2.3.4 requests permission to read topic orders")]
+fn authorize_published_opa_request(opa_policy_request: &mut OpaPolicyRequest) {
     let (
         auth,
         RequestFixture {
@@ -358,8 +369,31 @@ async fn published_kafka_plugin_policy_receives_action_and_context() {
             principal,
             host,
         },
-    ) = alice_authorization_context(&mock);
-    assert!(
-        auth.authorize(&image, &req(&principal, &host, "orders")) == AuthorizationResult::Allow
-    );
+    ) = opa_policy_request
+        .authorization
+        .as_ref()
+        .expect("OPA endpoint and Alice context were configured");
+    opa_policy_request.decision = Some(auth.authorize(image, &req(principal, host, "orders")));
+}
+
+#[rstest_bdd_macros::then("OPA receives the action and principal context once and allows the read")]
+async fn published_opa_request_allowed(opa_policy_request: &OpaPolicyRequest) {
+    assert!(opa_policy_request.decision == Some(AuthorizationResult::Allow));
+    opa_policy_request
+        .server
+        .as_ref()
+        .expect("policy endpoint was started")
+        .verify()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/authorizer/opa/tests.feature",
+    name = "Published Kafka plugin policy receives action and context"
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn published_kafka_plugin_policy_receives_action_and_context(
+    opa_policy_request: OpaPolicyRequest,
+) {
+    let _ = opa_policy_request;
 }

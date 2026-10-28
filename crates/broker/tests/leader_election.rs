@@ -16,11 +16,12 @@ use {
         shutdown_cluster,
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole},
-    krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord},
+    krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, NodeId, config::NodeRole},
+    krabka_metadata::{LeaderRecoveryState, MetadataRecord, PartitionRecord, TopicConfigRecord},
+    krabka_protocol::owned::metadata_response::MetadataResponse,
     krabka_raft::reconfig::ReconfigOutcome,
     std::{
-        iter,
+        iter, mem,
         net::SocketAddr,
         time::{Duration, Instant},
     },
@@ -29,7 +30,7 @@ use {
         durability::{produce_acks, time_acks_after_isr_shrink},
     },
     tempfile::TempDir,
-    tokio::{net::TcpListener, time},
+    tokio::{net::TcpListener, sync::MutexGuard, time},
 };
 
 mod support;
@@ -63,273 +64,6 @@ async fn wait_for_controller_leader_other_than(
         )
         .await;
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_death_elects_new_leader() {
-    let _g = cluster_lock().lock().await;
-    let (mut cluster, _bootstrap_1) = replicated_topic_fixture().topic("elect").call().await;
-
-    // Kill broker 1 (the partition leader by round-robin).
-    let (killed_broker, killed_cfg, _dead_dir) = cluster.remove(0);
-    let killed_id = killed_cfg.node_id;
-    killed_broker.shutdown().await;
-
-    // Wait for election: first a controller leader among the survivors, then
-    // the partition failover it drives. cluster[0] is now broker 2 (broker 1
-    // was removed above).
-    wait_for_controller_leader_other_than(&cluster, killed_id).await;
-    cluster[0]
-        .0
-        .wait_until_partition_leader_changed("elect", 0, killed_id)
-        .await;
-    let client = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
-    let resp = client
-        .send(named_topic_metadata("elect"))
-        .await
-        .expect("metadata");
-    let t = resp
-        .topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some("elect"))
-        .expect("topic");
-    let p = t.partitions.first().expect("partition");
-    let (new_leader, new_epoch) = (p.leader_id, p.leader_epoch);
-    assert!(
-        new_leader == 2 || new_leader == 3,
-        "unexpected new leader: {new_leader}"
-    );
-    assert!(new_epoch > 0, "leader_epoch should bump after election");
-
-    // Clean up surviving brokers.
-    shutdown_cluster(cluster).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_failover_recovers_after_a_real_broker_restart() {
-    let _g = cluster_lock().lock().await;
-    let (mut cluster, _bootstrap) = replicated_topic_fixture()
-        .topic("kip704-restart")
-        .call()
-        .await;
-
-    cluster[0]
-        .0
-        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "kip704-restart".into(),
-            overrides: iter::once(("unclean.leader.election.enable".into(), "true".into()))
-                .collect(),
-        }))
-        .await
-        .expect("enable unclean election");
-    let mut partition = cluster[0]
-        .0
-        .partition_record_for_test("kip704-restart", 0)
-        .expect("partition");
-    let victim = partition.leader;
-    partition.isr = vec![victim];
-    cluster[0]
-        .0
-        .submit_metadata_record_for_test(MetadataRecord::V1Partition(partition))
-        .await
-        .expect("make the leader the only ISR member");
-    cluster[0]
-        .0
-        .wait_for_image(|image| {
-            image
-                .partition("kip704-restart", 0)
-                .is_some_and(|partition| partition.isr == [victim])
-        })
-        .await;
-
-    let victim_idx = cluster
-        .iter()
-        .position(|(_, config, _)| config.node_id == victim)
-        .expect("leader broker");
-    let (dead, mut reborn_config, dead_dir) = cluster.remove(victim_idx);
-    let survivor = &cluster[0].0;
-    tokio::join!(
-        survivor.wait_for_image(|image| {
-            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovering
-        }),
-        dead.shutdown()
-    );
-    survivor
-        .wait_for_image(|image| {
-            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovered
-                && image
-                    .partition("kip704-restart", 0)
-                    .is_some_and(|partition| partition.leader != victim)
-        })
-        .await;
-
-    reborn_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let reborn = support::start_reusing_addrs(&reborn_config, "KIP-704 broker restart").await;
-    reborn
-        .wait_for_image(|image| {
-            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovered
-        })
-        .await;
-
-    reborn.shutdown().await;
-    drop(dead_dir);
-    shutdown_cluster(cluster).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_completes_after_isr_shrink() {
-    let _g = cluster_lock().lock().await;
-    let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("shrink2").call().await;
-
-    // Freeze broker 3 by shutting it down.
-    let dead = cluster.pop().expect("3rd broker");
-    dead.0.shutdown().await;
-
-    // Produce acks=-1. ISR should shrink to {1,2} within
-    // replica_lag_time_max (2s on CI) + heartbeat_timeout (2s); produce
-    // completes after.
-    let (offset, elapsed) = time_acks_after_isr_shrink(
-        &bootstrap_1,
-        "shrink2",
-        &["a", "b", "c"],
-        ProduceTimeoutMillis(15_000),
-    )
-    .await;
-    assert!(offset == 0);
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "shrink should be quick on for_tests config; took {elapsed:?}"
-    );
-
-    shutdown_cluster(cluster).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isr_expand_on_catchup() {
-    let _g = cluster_lock().lock().await;
-    let (mut cluster, _bootstrap_1) = replicated_topic_fixture().topic("expand").call().await;
-
-    // 1. Find the controller leader so we can activate dynamic membership.
-    let leader_idx = find_controller_leader(&cluster).await;
-    let leader_node_id = cluster[leader_idx].1.node_id;
-    eprintln!("KRABKA[test] controller leader is node_id={leader_node_id}");
-
-    let outcome = cluster[leader_idx]
-        .0
-        .finalize_kraft_version_for_test(1)
-        .await
-        .expect("activate kraft.version 1");
-    assert!(
-        matches!(outcome, ReconfigOutcome::Committed),
-        "kraft.version activation was not committed: {outcome:?}"
-    );
-
-    // Prefer the highest-numbered follower so this test never removes the
-    // active controller leader and normally leaves partition leader 1 alone.
-    let leader_idx = find_controller_leader(&cluster).await;
-    let victim_idx = (0..cluster.len())
-        .rev()
-        .find(|&idx| idx != leader_idx)
-        .expect("a follower controller");
-    let victim_node_id = cluster[victim_idx].1.node_id;
-
-    // 2. Remove the victim from the voter set before killing it.
-    cluster[leader_idx]
-        .0
-        .change_membership(
-            cluster
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| *idx != victim_idx)
-                .map(|(_, (_, cfg, _))| cfg.node_id)
-                .collect(),
-        )
-        .await
-        .expect("remove follower from voter set");
-
-    // 3. Capture the victim's config, then kill it.
-    let (dead_h, mut reborn_cfg, _dead_dir) = cluster.remove(victim_idx);
-    // Reserve while the old listeners still hold their addresses.
-    let occupied = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("reserve the occupied client port");
-    reborn_cfg.listen_addr = occupied.local_addr().expect("occupied client address");
-    reborn_cfg.advertised_listener = reborn_cfg.listen_addr.to_string();
-    dead_h.shutdown().await;
-    cluster[0].0.wait_until_isr_len("expand", 0, 2).await;
-
-    // 4. Reboot the victim through the production KIP-853 join path. It must
-    //    catch up as an observer before auto-join promotes it to a voter.
-    let reborn_dir = TempDir::new().unwrap();
-    let leader_idx = find_controller_leader(&cluster).await;
-    let bootstrap_node_id = cluster[leader_idx].1.node_id;
-    let bootstrap_controller = cluster[leader_idx].1.controller_listen_addr;
-    reborn_cfg.log_dir = reborn_dir.path().to_path_buf();
-    reborn_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Join;
-    reborn_cfg.controller_quorum_voters =
-        vec![(bootstrap_node_id, bootstrap_controller.to_string())];
-    // Exercise the unresolved-hostname path used by a Kubernetes Service,
-    // rather than passing the already-bound IP address back to the joiner.
-    reborn_cfg.bootstrap_servers = vec![format!("localhost:{}", bootstrap_controller.port())];
-    reborn_cfg.auto_join = true;
-    let release = tokio::spawn(async move {
-        time::sleep(Duration::from_secs(1)).await;
-        drop(occupied);
-    });
-    let reborn = support::start_reusing_addrs(&reborn_cfg, "reborn follower").await;
-    release.await.expect("release the occupied port");
-    eprintln!("KRABKA[test] reborn follower {victim_node_id} started");
-
-    // 5. Wait for the partition's ISR to expand back to {1, 2, 3}.
-    cluster[0].0.wait_until_isr_len("expand", 0, 3).await;
-
-    reborn.shutdown().await;
-    shutdown_cluster(cluster).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_during_leader_failover() {
-    let _g = cluster_lock().lock().await;
-    let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("failover").call().await;
-
-    // Produce 5 records with acks=1, kill broker 1 mid-burst, produce 5
-    // more pointed at broker 2's bootstrap (clients will re-fetch
-    // metadata on NOT_LEADER_OR_FOLLOWER).
-    for v in &["a", "b", "c", "d", "e"] {
-        produce_acks(&bootstrap_1, &[v], BatchProduceSetup {
-            topic: "failover",
-            ..Default::default()
-        })
-        .await
-        .expect("pre");
-    }
-    let bootstrap_2 = cluster[1].1.listen_addr.to_string();
-    let (dead, dead_cfg, _dead_dir) = cluster.remove(0);
-    let victim = dead_cfg.node_id;
-    dead.shutdown().await;
-
-    // Wait for the new partition leader. The victim may also have been the
-    // controller leader, so first wait for the survivors to elect one.
-    wait_for_controller_leader_other_than(&cluster, victim).await;
-    cluster[0]
-        .0
-        .wait_until_partition_leader_changed("failover", 0, victim)
-        .await;
-
-    // Continue producing. The first attempt may hit NOT_LEADER_OR_FOLLOWER;
-    // retry via bootstrap_2.
-    for v in &["f", "g", "h", "i", "j"] {
-        let res = produce_acks(&bootstrap_2, &[v], BatchProduceSetup {
-            topic: "failover",
-            ..Default::default()
-        })
-        .await;
-        // Either success (election done) or NOT_LEADER_OR_FOLLOWER if metadata still stale.
-        // For test purposes, accept either; just verify the cluster keeps serving.
-        let _ = res;
-    }
-
-    shutdown_cluster(cluster).await;
 }
 
 /// The heartbeat session of the soak cluster and of Kafka's default
@@ -368,168 +102,6 @@ async fn produce_to_current_leader(
     .await
 }
 
-/// krabka-io/krabka-broker#1450: a partition leader that is killed and comes
-/// back inside its heartbeat session is a new process, and Kafka treats it as
-/// one.
-///
-/// A Kafka broker draws a new incarnation id at every start.
-/// `ClusterControlManager.registerBroker` refuses that incarnation with
-/// `DUPLICATE_BROKER_REGISTRATION` while the previous one still holds a
-/// session. Once the session expires, either the expiry fences the old
-/// registration (`ReplicationControlManager.handleBrokerFenced`) or the new
-/// registration runs `handleBrokerShutdown` first. Both take the broker out of
-/// its ISRs and elect another leader at a new leader epoch, so the restarted
-/// process does not resume a leadership whose log it may not hold. The
-/// restarted broker then catches up and is unfenced as a follower. A krabka
-/// broker's self-registration takes the second path at once, so the deadline
-/// is Kafka's worst case, not krabka's.
-///
-/// The victim is not the controller leader, so nothing here waits on a
-/// controller failover.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() {
-    const TOPIC: &str = "restart-fencing";
-    let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with(3, |_, config| {
-        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
-    })
-    .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let controller = find_controller_leader(&cluster).await;
-    let victim_idx = (controller + 1) % cluster.len();
-    let victim = cluster[victim_idx].1.node_id;
-    let mut replicas = vec![i32::try_from(victim.0).expect("node id")];
-    replicas.extend(
-        cluster
-            .iter()
-            .map(|(_, config, _)| config.node_id)
-            .filter(|node| *node != victim)
-            .map(|node| i32::try_from(node.0).expect("node id")),
-    );
-    let addresses: Vec<_> = cluster
-        .iter()
-        .map(|(_, config, _)| (config.node_id, config.listen_addr))
-        .collect();
-    let client = connect_client(cluster[controller].1.listen_addr.to_string(), None).await;
-    let created = client
-        .send(support::topics::create_topic_request(support::topic_on(
-            TOPIC,
-            &[&replicas],
-        )))
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == 0, "{created:?}");
-    for (handle, _, _) in &cluster {
-        handle
-            .wait_for_image(|image| {
-                image
-                    .partition(TOPIC, 0)
-                    .is_some_and(|partition| partition.leader == victim && partition.isr.len() == 3)
-            })
-            .await;
-    }
-    // The image names the victim leader before its partition runtime installs
-    // that leadership, and until it does a Produce answers
-    // NOT_LEADER_OR_FOLLOWER, as Kafka's does while ReplicaManager applies the
-    // delta. The acks below must not race that.
-    cluster[victim_idx]
-        .0
-        .wait_until_local_partition_leader(TOPIC, 0, victim)
-        .await;
-    let observer = &cluster[controller].0;
-
-    let mut acked = Vec::new();
-    for value in ["a", "b", "c", "d", "e"] {
-        produce_to_current_leader(observer, &addresses, TOPIC, value)
-            .await
-            .expect("acks=all before the kill");
-        acked.push(value.to_owned());
-    }
-    let before = observer
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition");
-
-    let (victim_handle, mut victim_config, victim_dir) = cluster.remove(victim_idx);
-    let observer_idx = if controller > victim_idx {
-        controller - 1
-    } else {
-        controller
-    };
-    let killed_at = Instant::now();
-    victim_handle.crash_for_test().await;
-    victim_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let observer = &cluster[observer_idx].0;
-
-    let restart = support::start_reusing_addrs(&victim_config, "restart the killed leader");
-    let failover = async {
-        let moved = time::timeout(
-            RESTART_FAILOVER_DEADLINE,
-            observer.wait_for_image(|image| leadership_moved_off(image, TOPIC, victim, &before)),
-        )
-        .await;
-        assert!(
-            moved.is_ok(),
-            "leadership did not move off the restarted broker within {RESTART_FAILOVER_DEADLINE:?}; before the kill {before:?}, now {:?}, victim registration {:?}",
-            observer.partition_record_for_test(TOPIC, 0),
-            observer.controller_image_for_test().broker(victim),
-        );
-        let elected = killed_at.elapsed();
-        let deadline = killed_at + RESTART_FAILOVER_DEADLINE;
-        let offset = loop {
-            match produce_to_current_leader(observer, &addresses, TOPIC, "after").await {
-                Ok(offset) => break offset,
-                Err(code) => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "acks=all still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
-                        observer.partition_record_for_test(TOPIC, 0)
-                    );
-                    time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        };
-        (elected, offset)
-    };
-    let (reborn, (elected, after_offset)) = tokio::join!(restart, failover);
-    acked.push("after".to_owned());
-    tracing::info!(
-        ?elected,
-        after_offset,
-        "leadership moved off the restarted broker"
-    );
-
-    let partition = observer
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition");
-    let leader = cluster
-        .iter()
-        .find(|(_, config, _)| config.node_id == partition.leader)
-        .map(|(handle, _, _)| handle)
-        .expect("a survivor leads");
-    let held: Vec<String> = leader
-        .local_batches_for_test(TOPIC, 0)
-        .expect("leader log")
-        .iter()
-        .flat_map(|batch| batch.records.iter())
-        .filter_map(|record| record.value.as_ref())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
-        .collect();
-    assert!(
-        held == acked,
-        "every acknowledged record survives the failover"
-    );
-
-    // The restarted broker catches up and rejoins the ISR as a follower.
-    observer
-        .wait_for_image(|image| rejoined_as_follower(image, TOPIC, victim))
-        .await;
-
-    reborn.shutdown().await;
-    drop(victim_dir);
-    shutdown_cluster(cluster).await;
-}
-
 /// Whether `image` has partition 0 of `topic` led by a broker other than
 /// `victim`, at a leader epoch past the one `before` records.
 fn leadership_moved_off(
@@ -558,31 +130,600 @@ fn rejoined_as_follower(
         && image.broker(victim).is_some_and(|broker| !broker.fenced)
 }
 
-/// krabka-io/krabka-broker#1442: the partition leader killed and restarted
-/// inside its heartbeat session is also the active controller.
-///
-/// A combined node registers its broker before its broker layer is built, so
-/// a restarted node that wins the controller election first admits its own
-/// registration before anything else can. That batch still has to retire the
-/// previous incarnation, as Kafka's `registerBroker` does on any active
-/// controller: the broker leaves the ISR and another replica leads at a new
-/// leader epoch. The victim here is the whole voter set, so its restart always
-/// takes that path, and two broker-only nodes are the other replicas.
+#[derive(Default)]
+struct ElectionBehavior {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    bootstrap: String,
+    topic: String,
+    victim: Option<NodeId>,
+    dead_config: Option<BrokerConfig>,
+    directories: Vec<TempDir>,
+    reborn: Option<BrokerHandle>,
+    metadata: Option<MetadataResponse>,
+    timed_append: Option<(i64, Duration)>,
+    reconfiguration: Option<ReconfigOutcome>,
+    occupied: Option<TcpListener>,
+    pre_offsets: Vec<i64>,
+    post_attempts: Vec<Result<i64, i16>>,
+    observer_index: usize,
+    addresses: Vec<(NodeId, SocketAddr)>,
+    before_partition: Option<PartitionRecord>,
+    killed_at: Option<Instant>,
+    acked: Vec<String>,
+    after_offset: Option<i64>,
+}
+
+#[rstest::fixture]
+fn election_behavior() -> ElectionBehavior {
+    // Election operations and all wire/log observations belong to one fresh topic.
+    ElectionBehavior::default()
+}
+
+impl ElectionBehavior {
+    async fn create_session_partition(&self, controller: usize, replicas: &[i32]) {
+        let client = connect_client(self.cluster[controller].1.listen_addr.to_string(), None).await;
+        let created = client
+            .send(support::topics::create_topic_request(support::topic_on(
+                &self.topic,
+                &[replicas],
+            )))
+            .await
+            .expect("CreateTopics");
+        assert!(created.topics[0].error_code == 0, "{created:?}");
+        client.close();
+        let victim = self.victim.expect("victim leader");
+        for (broker, _, _) in &self.cluster {
+            broker
+                .wait_for_image(|image| {
+                    image.partition(&self.topic, 0).is_some_and(|partition| {
+                        partition.leader == victim && partition.isr.len() == 3
+                    })
+                })
+                .await;
+        }
+    }
+
+    async fn await_session_leader_replacement(&self) {
+        let victim = self.victim.expect("victim leader");
+        let before = self.before_partition.as_ref().expect("pre-crash partition");
+        let moved = time::timeout(
+            RESTART_FAILOVER_DEADLINE,
+            self.cluster[self.observer_index]
+                .0
+                .wait_for_image(|image| leadership_moved_off(image, &self.topic, victim, before)),
+        )
+        .await;
+        assert!(
+            moved.is_ok(),
+            "leadership did not move off the restarted broker within {RESTART_FAILOVER_DEADLINE:?}; before the kill {before:?}, now {:?}, victim registration {:?}",
+            self.cluster[self.observer_index]
+                .0
+                .partition_record_for_test(&self.topic, 0),
+            self.cluster[self.observer_index]
+                .0
+                .controller_image_for_test()
+                .broker(victim)
+        );
+    }
+
+    fn current_surviving_leader(&self) -> &BrokerHandle {
+        let leader = self.cluster[self.observer_index]
+            .0
+            .partition_record_for_test(&self.topic, 0)
+            .expect("partition")
+            .leader;
+        self.cluster
+            .iter()
+            .find(|(_, config, _)| config.node_id == leader)
+            .map(|(broker, _, _)| broker)
+            .expect("survivor leader")
+    }
+
+    async fn shutdown(&mut self) {
+        let Self {
+            guard,
+            cluster,
+            reborn,
+            directories,
+            occupied,
+            ..
+        } = mem::take(self);
+        drop(occupied);
+        if let Some(broker) = reborn {
+            broker.shutdown().await;
+        }
+        shutdown_cluster(cluster).await;
+        drop(directories);
+        drop(guard);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "a registered three-broker RF3 topic named {topic} has elected leadership and ISR"
+)]
+async fn elected_replicated_topic(election_behavior: &mut ElectionBehavior, topic: String) {
+    election_behavior.guard = Some(cluster_lock().lock().await);
+    election_behavior.topic = topic;
+    let (cluster, bootstrap) = replicated_topic_fixture()
+        .topic(&election_behavior.topic)
+        .call()
+        .await;
+    election_behavior.cluster = cluster;
+    election_behavior.bootstrap = bootstrap;
+}
+
+#[rstest_bdd_macros::when("broker {node} shuts down")]
+async fn stop_election_broker(election_behavior: &mut ElectionBehavior, node: u64) {
+    let index = election_behavior
+        .cluster
+        .iter()
+        .position(|(broker, _, _)| broker.node_id() == node)
+        .expect("election broker");
+    let (broker, config, directory) = election_behavior.cluster.remove(index);
+    election_behavior.victim = Some(config.node_id);
+    election_behavior.dead_config = Some(config);
+    election_behavior.directories.push(directory);
+    broker.shutdown().await;
+}
+
+#[rstest_bdd_macros::when(
+    "the survivors elect a controller and a partition leader and Metadata reads that partition"
+)]
+async fn read_new_election_leader(election_behavior: &mut ElectionBehavior) {
+    let victim = election_behavior.victim.expect("stopped broker");
+    wait_for_controller_leader_other_than(&election_behavior.cluster, victim).await;
+    election_behavior.cluster[0]
+        .0
+        .wait_until_partition_leader_changed(&election_behavior.topic, 0, victim)
+        .await;
+    let client = connect_client(election_behavior.cluster[0].1.listen_addr.to_string(), None).await;
+    election_behavior.metadata = Some(
+        client
+            .send(named_topic_metadata(&election_behavior.topic))
+            .await
+            .expect("metadata"),
+    );
+    client.close();
+}
+
+#[rstest_bdd_macros::then(
+    "the new partition leader is broker 2 or 3 and its leader epoch is greater than zero"
+)]
+fn observed_new_election_leader(election_behavior: &ElectionBehavior) {
+    let topic = election_behavior
+        .metadata
+        .as_ref()
+        .expect("metadata read")
+        .topics
+        .iter()
+        .find(|topic| topic.name.as_deref() == Some(election_behavior.topic.as_str()))
+        .expect("topic");
+    let partition = topic.partitions.first().expect("partition");
+    assert!(
+        partition.leader_id == 2 || partition.leader_id == 3,
+        "unexpected new leader: {}",
+        partition.leader_id
+    );
+    assert!(
+        partition.leader_epoch > 0,
+        "leader_epoch should bump after election"
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "acks all appends a,b,c with a 15000-millisecond timeout while ISR shrinks"
+)]
+async fn append_across_isr_shrink(election_behavior: &mut ElectionBehavior) {
+    election_behavior.timed_append = Some(
+        time_acks_after_isr_shrink(
+            &election_behavior.bootstrap,
+            &election_behavior.topic,
+            &["a", "b", "c"],
+            ProduceTimeoutMillis(15_000),
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the append starts at offset 0 and completes in less than ten seconds")]
+fn completed_isr_shrink_append(election_behavior: &ElectionBehavior) {
+    let (offset, elapsed) = election_behavior.timed_append.expect("timed append");
+    assert!(offset == 0);
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "shrink should be quick on for_tests config; took {elapsed:?}"
+    );
+}
+
+#[rstest_bdd_macros::given(
+    "unclean leader election is enabled and the current leader is the only ISR member"
+)]
+async fn unclean_election_premise(election_behavior: &mut ElectionBehavior) {
+    election_behavior.cluster[0]
+        .0
+        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: election_behavior.topic.clone(),
+            overrides: iter::once(("unclean.leader.election.enable".into(), "true".into()))
+                .collect(),
+        }))
+        .await
+        .expect("enable unclean election");
+    let mut partition = election_behavior.cluster[0]
+        .0
+        .partition_record_for_test(&election_behavior.topic, 0)
+        .expect("partition");
+    let victim = partition.leader;
+    election_behavior.victim = Some(victim);
+    partition.isr = vec![victim];
+    election_behavior.cluster[0]
+        .0
+        .submit_metadata_record_for_test(MetadataRecord::V1Partition(partition))
+        .await
+        .expect("make leader only ISR member");
+    election_behavior.cluster[0]
+        .0
+        .wait_for_image(|image| {
+            image
+                .partition(&election_behavior.topic, 0)
+                .is_some_and(|partition| partition.isr == [victim])
+        })
+        .await;
+}
+
+#[rstest_bdd_macros::when("the sole ISR leader shuts down while a survivor observes Recovering")]
+async fn stop_unclean_election_leader(election_behavior: &mut ElectionBehavior) {
+    let victim = election_behavior.victim.expect("unclean leader");
+    let index = election_behavior
+        .cluster
+        .iter()
+        .position(|(_, config, _)| config.node_id == victim)
+        .expect("leader broker");
+    let (broker, config, directory) = election_behavior.cluster.remove(index);
+    election_behavior.dead_config = Some(config);
+    election_behavior.directories.push(directory);
+    tokio::join!(
+        election_behavior.cluster[0].0.wait_for_image(|image| image
+            .leader_recovery_state(&election_behavior.topic, 0)
+            == LeaderRecoveryState::Recovering),
+        broker.shutdown()
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the survivor reports Recovered with a leader different from the stopped broker"
+)]
+async fn recovered_unclean_election(election_behavior: &ElectionBehavior) {
+    election_behavior.cluster[0]
+        .0
+        .wait_for_image(|image| {
+            image.leader_recovery_state(&election_behavior.topic, 0)
+                == LeaderRecoveryState::Recovered
+                && image
+                    .partition(&election_behavior.topic, 0)
+                    .is_some_and(|partition| Some(partition.leader) != election_behavior.victim)
+        })
+        .await;
+}
+
+#[rstest_bdd_macros::when("the stopped broker rejoins from its original log and addresses")]
+async fn rejoin_unclean_election_broker(election_behavior: &mut ElectionBehavior) {
+    election_behavior
+        .dead_config
+        .as_mut()
+        .expect("stopped config")
+        .bootstrap_mode = BootstrapMode::Rejoin;
+    election_behavior.reborn = Some(
+        support::start_reusing_addrs(
+            election_behavior
+                .dead_config
+                .as_ref()
+                .expect("stopped config"),
+            "KIP-704 broker restart",
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the restarted broker also reports Recovered")]
+async fn restarted_unclean_election_state(election_behavior: &ElectionBehavior) {
+    election_behavior
+        .reborn
+        .as_ref()
+        .expect("rejoined broker")
+        .wait_for_image(|image| {
+            image.leader_recovery_state(&election_behavior.topic, 0)
+                == LeaderRecoveryState::Recovered
+        })
+        .await;
+}
+
+#[rstest_bdd_macros::when("the controller finalizes kraft.version 1")]
+async fn enable_dynamic_election_membership(election_behavior: &mut ElectionBehavior) {
+    let controller = find_controller_leader(&election_behavior.cluster).await;
+    election_behavior.reconfiguration = Some(
+        election_behavior.cluster[controller]
+            .0
+            .finalize_kraft_version_for_test(1)
+            .await
+            .expect("activate kraft.version 1"),
+    );
+}
+
+#[rstest_bdd_macros::then("the version activation is committed")]
+fn committed_dynamic_election_membership(election_behavior: &ElectionBehavior) {
+    assert!(matches!(
+        election_behavior
+            .reconfiguration
+            .as_ref()
+            .expect("version activation"),
+        ReconfigOutcome::Committed
+    ));
+}
+
+#[rstest_bdd_macros::when(
+    "the highest-numbered non-controller follower leaves the voter set, reserves a replacement client address and shuts down"
+)]
+async fn remove_election_follower(election_behavior: &mut ElectionBehavior) {
+    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let index = (0..election_behavior.cluster.len())
+        .rev()
+        .find(|&index| index != controller)
+        .expect("follower controller");
+    election_behavior.cluster[controller]
+        .0
+        .change_membership(
+            election_behavior
+                .cluster
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, (_, config, _))| config.node_id)
+                .collect(),
+        )
+        .await
+        .expect("remove follower from voter set");
+    let (broker, config, directory) = election_behavior.cluster.remove(index);
+    election_behavior.victim = Some(config.node_id);
+    election_behavior.dead_config = Some(config);
+    election_behavior.directories.push(directory);
+    election_behavior.occupied = Some(
+        TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve occupied client port"),
+    );
+    let listen = election_behavior
+        .occupied
+        .as_ref()
+        .expect("occupied port")
+        .local_addr()
+        .expect("occupied address");
+    election_behavior
+        .dead_config
+        .as_mut()
+        .expect("joiner config")
+        .listen_addr = listen;
+    election_behavior
+        .dead_config
+        .as_mut()
+        .expect("joiner config")
+        .advertised_listener = listen.to_string();
+    broker.shutdown().await;
+}
+
+#[rstest_bdd_macros::then("the remaining partition ISR has two members")]
+async fn shrunken_election_isr(election_behavior: &ElectionBehavior) {
+    election_behavior.cluster[0]
+        .0
+        .wait_until_isr_len(&election_behavior.topic, 0, 2)
+        .await;
+}
+
+#[rstest_bdd_macros::when(
+    "the follower starts on an empty log through localhost KIP-853 auto-join, with the occupied client port released after one second"
+)]
+async fn join_election_follower(election_behavior: &mut ElectionBehavior) {
+    election_behavior.directories.push(TempDir::new().unwrap());
+    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let bootstrap_node = election_behavior.cluster[controller].1.node_id;
+    let bootstrap = election_behavior.cluster[controller]
+        .1
+        .controller_listen_addr;
+    let config = election_behavior
+        .dead_config
+        .as_mut()
+        .expect("joiner config");
+    config.log_dir = election_behavior
+        .directories
+        .last()
+        .expect("empty joiner log")
+        .path()
+        .to_path_buf();
+    config.bootstrap_mode = BootstrapMode::Join;
+    config.controller_quorum_voters = vec![(bootstrap_node, bootstrap.to_string())];
+    config.bootstrap_servers = vec![format!("localhost:{}", bootstrap.port())];
+    config.auto_join = true;
+    let occupied = election_behavior
+        .occupied
+        .take()
+        .expect("occupied client port");
+    let release = tokio::spawn(async move {
+        time::sleep(Duration::from_secs(1)).await;
+        drop(occupied);
+    });
+    election_behavior.reborn = Some(
+        support::start_reusing_addrs(
+            election_behavior
+                .dead_config
+                .as_ref()
+                .expect("joiner config"),
+            "reborn follower",
+        )
+        .await,
+    );
+    release.await.expect("release occupied port");
+}
+
+#[rstest_bdd_macros::then("the partition ISR expands back to three members")]
+async fn expanded_election_isr(election_behavior: &ElectionBehavior) {
+    election_behavior.cluster[0]
+        .0
+        .wait_until_isr_len(&election_behavior.topic, 0, 3)
+        .await;
+}
+
+#[rstest_bdd_macros::when("acks one writes a,b,c,d,e before the leader is lost")]
+async fn pre_election_records(election_behavior: &mut ElectionBehavior) {
+    for value in ["a", "b", "c", "d", "e"] {
+        election_behavior.pre_offsets.push(
+            produce_acks(&election_behavior.bootstrap, &[value], BatchProduceSetup {
+                topic: &election_behavior.topic,
+                ..Default::default()
+            })
+            .await
+            .expect("pre"),
+        );
+    }
+}
+
+#[rstest_bdd_macros::when("acks one attempts f,g,h,i,j through the first surviving broker")]
+async fn post_election_records(election_behavior: &mut ElectionBehavior) {
+    let bootstrap = election_behavior.cluster[0].1.listen_addr.to_string();
+    for value in ["f", "g", "h", "i", "j"] {
+        election_behavior.post_attempts.push(
+            produce_acks(&bootstrap, &[value], BatchProduceSetup {
+                topic: &election_behavior.topic,
+                ..Default::default()
+            })
+            .await,
+        );
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "all five pre-loss writes were acknowledged and each post-loss attempt either succeeds or requests a leader refresh with code 6"
+)]
+fn served_election_attempts(election_behavior: &ElectionBehavior) {
+    assert!(election_behavior.pre_offsets.len() == 5);
+    assert!(election_behavior.post_attempts.len() == 5);
+    assert!(
+        election_behavior
+            .post_attempts
+            .iter()
+            .all(|answer| matches!(answer, Ok(_) | Err(6))),
+        "post-failover answers: {:?}",
+        election_behavior.post_attempts
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "broker death elects new leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership() {
-    const TOPIC: &str = "controller-restart-fencing";
-    const NODES: usize = 3;
-    let _g = cluster_lock().lock().await;
-    support::init_tracing();
-    let (endpoints, mut data_listeners, mut controller_listeners) =
-        support::single_controller_endpoints(NODES).await;
-    let topology = endpoints.topology();
-    let dirs: Vec<TempDir> = iter::repeat_with(|| TempDir::new().expect("dir"))
-        .take(NODES)
+async fn broker_death_elects_new_leader(election_behavior: ElectionBehavior) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "unclean failover recovers after a real broker restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_failover_recovers_after_a_real_broker_restart(
+    election_behavior: ElectionBehavior,
+) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "acks all completes after isr shrink"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_completes_after_isr_shrink(election_behavior: ElectionBehavior) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "isr expand on catchup"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn isr_expand_on_catchup(election_behavior: ElectionBehavior) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "produce during leader failover"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn produce_during_leader_failover(election_behavior: ElectionBehavior) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::given(
+    "three brokers use nine-second heartbeat sessions and an RF3 restart-fencing partition is led by a non-controller broker"
+)]
+async fn session_fenced_leader(election_behavior: &mut ElectionBehavior) {
+    election_behavior.guard = Some(cluster_lock().lock().await);
+    election_behavior.topic = "restart-fencing".into();
+    election_behavior.cluster = support::start_n_node_with(3, |_, config| {
+        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
+    })
+    .await
+    .expect("start the cluster");
+    support::wait_for_all_brokers_registered(&election_behavior.cluster, 3).await;
+    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let victim_index = (controller + 1) % election_behavior.cluster.len();
+    let victim = election_behavior.cluster[victim_index].1.node_id;
+    election_behavior.victim = Some(victim);
+    election_behavior.observer_index = controller;
+    election_behavior.addresses = election_behavior
+        .cluster
+        .iter()
+        .map(|(_, config, _)| (config.node_id, config.listen_addr))
         .collect();
-    let configs: Vec<BrokerConfig> = (0..NODES)
+    let mut replicas = vec![i32::try_from(victim.0).expect("node id")];
+    replicas.extend(
+        election_behavior
+            .cluster
+            .iter()
+            .map(|(_, config, _)| config.node_id)
+            .filter(|node| *node != victim)
+            .map(|node| i32::try_from(node.0).expect("node id")),
+    );
+    election_behavior
+        .create_session_partition(controller, &replicas)
+        .await;
+    election_behavior.cluster[victim_index]
+        .0
+        .wait_until_local_partition_leader(&election_behavior.topic, 0, victim)
+        .await;
+}
+
+#[rstest_bdd_macros::given(
+    "node 1 alone votes as controller and leads RF3 controller-restart-fencing with broker-only replicas 2 and 3 and nine-second heartbeat sessions"
+)]
+async fn session_fenced_controller(election_behavior: &mut ElectionBehavior) {
+    election_behavior.guard = Some(cluster_lock().lock().await);
+    support::init_tracing();
+    election_behavior.topic = "controller-restart-fencing".into();
+    let (endpoints, mut data_listeners, mut controller_listeners) =
+        support::single_controller_endpoints(3).await;
+    let topology = endpoints.topology();
+    let directories: Vec<TempDir> = iter::repeat_with(|| TempDir::new().expect("dir"))
+        .take(3)
+        .collect();
+    let configs: Vec<BrokerConfig> = (0..3)
         .map(|index| {
-            let mut config = topology.config(dirs[index].path(), RoleNodeSetup {
+            let mut config = topology.config(directories[index].path(), RoleNodeSetup {
                 index: NodeIndex(index),
                 mode: if index == 0 {
                     BootstrapMode::Bootstrap
@@ -598,9 +739,9 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
             config
         })
         .collect();
-    let mut nodes = Vec::with_capacity(NODES);
+    let mut brokers = Vec::new();
     for config in &configs {
-        nodes.push(
+        brokers.push(
             Box::pin(support::start_held_node(
                 config.clone(),
                 &mut controller_listeners,
@@ -610,57 +751,217 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
             .await,
         );
     }
-    nodes[0].wait_until_brokers_registered(NODES).await;
-    let victim = configs[0].node_id;
-    let client = connect_client(configs[0].listen_addr.to_string(), None).await;
-    let created = client
-        .send(support::topics::create_topic_request(support::topic_on(
-            TOPIC,
-            &[&[1, 2, 3]],
-        )))
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == 0, "{created:?}");
-    for node in &nodes {
-        node.wait_for_image(|image| {
-            image
-                .partition(TOPIC, 0)
-                .is_some_and(|partition| partition.leader == victim && partition.isr.len() == NODES)
-        })
+    election_behavior.cluster = brokers
+        .into_iter()
+        .zip(configs)
+        .zip(directories)
+        .map(|((broker, config), directory)| (broker, config, directory))
+        .collect();
+    election_behavior.cluster[0]
+        .0
+        .wait_until_brokers_registered(3)
         .await;
-    }
-    let before = nodes[1]
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition");
-
-    let mut nodes = nodes.into_iter();
-    nodes.next().expect("the victim").crash_for_test().await;
-    let mut victim_config = configs[0].clone();
-    victim_config.bootstrap_mode = BootstrapMode::Rejoin;
-    let reborn = support::start_reusing_addrs(&victim_config, "restart the controller").await;
-    let survivors: Vec<BrokerHandle> = nodes.collect();
-    let observer = &survivors[0];
-
-    let moved = time::timeout(
-        RESTART_FAILOVER_DEADLINE,
-        observer.wait_for_image(|image| leadership_moved_off(image, TOPIC, victim, &before)),
-    )
-    .await;
-    assert!(
-        moved.is_ok(),
-        "the restarted controller kept its leadership; before the kill {before:?}, now {:?}",
-        observer.partition_record_for_test(TOPIC, 0),
+    let victim = election_behavior.cluster[0].1.node_id;
+    election_behavior.victim = Some(victim);
+    election_behavior.observer_index = 1;
+    election_behavior
+        .create_session_partition(0, &[1, 2, 3])
+        .await;
+    election_behavior.before_partition = Some(
+        election_behavior.cluster[1]
+            .0
+            .partition_record_for_test(&election_behavior.topic, 0)
+            .expect("partition"),
     );
-    assert!(reborn.controller_leader_id() == Some(victim));
+}
+
+#[rstest_bdd_macros::when(
+    "acks all commits a,b,c,d,e and the observer records the leader epoch before restart"
+)]
+async fn acknowledged_session_fencing_records(election_behavior: &mut ElectionBehavior) {
+    for value in ["a", "b", "c", "d", "e"] {
+        produce_to_current_leader(
+            &election_behavior.cluster[election_behavior.observer_index].0,
+            &election_behavior.addresses,
+            &election_behavior.topic,
+            value,
+        )
+        .await
+        .expect("acks=all before the kill");
+        election_behavior.acked.push(value.to_owned());
+    }
+    election_behavior.before_partition = Some(
+        election_behavior.cluster[election_behavior.observer_index]
+            .0
+            .partition_record_for_test(&election_behavior.topic, 0)
+            .expect("partition"),
+    );
+}
+
+#[rstest_bdd_macros::when("the partition leader crashes inside its existing heartbeat session")]
+async fn crash_session_fenced_leader(election_behavior: &mut ElectionBehavior) {
+    let victim = election_behavior.victim.expect("victim leader");
+    let index = election_behavior
+        .cluster
+        .iter()
+        .position(|(_, config, _)| config.node_id == victim)
+        .expect("victim broker");
+    let (broker, mut config, directory) = election_behavior.cluster.remove(index);
+    if election_behavior.observer_index > index {
+        election_behavior.observer_index -= 1;
+    }
+    config.bootstrap_mode = BootstrapMode::Rejoin;
+    election_behavior.dead_config = Some(config);
+    election_behavior.directories.push(directory);
+    election_behavior.killed_at = Some(Instant::now());
+    broker.crash_for_test().await;
+}
+
+#[rstest_bdd_macros::when(
+    "the leader restarts concurrently with failover and an acks all after record must commit within twenty-five seconds of the crash"
+)]
+async fn restart_and_write_session_fenced_leader(election_behavior: &mut ElectionBehavior) {
+    let killed_at = election_behavior.killed_at.expect("crash instant");
+    let failover = async {
+        election_behavior.await_session_leader_replacement().await;
+        let elected = killed_at.elapsed();
+        let deadline = killed_at + RESTART_FAILOVER_DEADLINE;
+        let offset = loop {
+            match produce_to_current_leader(
+                &election_behavior.cluster[election_behavior.observer_index].0,
+                &election_behavior.addresses,
+                &election_behavior.topic,
+                "after",
+            )
+            .await
+            {
+                Ok(offset) => break offset,
+                Err(code) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "acks=all still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
+                        election_behavior.cluster[election_behavior.observer_index]
+                            .0
+                            .partition_record_for_test(&election_behavior.topic, 0)
+                    );
+                    time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        (elected, offset)
+    };
+    let (reborn, (elected, after_offset)) = tokio::join!(
+        support::start_reusing_addrs(
+            election_behavior
+                .dead_config
+                .as_ref()
+                .expect("victim config"),
+            "restart the killed leader"
+        ),
+        failover
+    );
+    election_behavior.reborn = Some(reborn);
+    election_behavior.after_offset = Some(after_offset);
+    election_behavior.acked.push("after".to_owned());
+    tracing::info!(
+        ?elected,
+        after_offset,
+        "leadership moved off the restarted broker"
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after"
+)]
+fn durable_session_fencing_records(election_behavior: &ElectionBehavior) {
+    let image = election_behavior.cluster[election_behavior.observer_index]
+        .0
+        .controller_image_for_test();
+    assert!(leadership_moved_off(
+        &image,
+        &election_behavior.topic,
+        election_behavior.victim.expect("victim leader"),
+        election_behavior
+            .before_partition
+            .as_ref()
+            .expect("pre-crash partition")
+    ));
+    let held: Vec<String> = election_behavior
+        .current_surviving_leader()
+        .local_batches_for_test(&election_behavior.topic, 0)
+        .expect("leader log")
+        .iter()
+        .flat_map(|batch| &batch.records)
+        .filter_map(|record| record.value.as_ref())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect();
+    assert!(
+        held == election_behavior.acked,
+        "every acknowledged record survives the failover"
+    );
+    assert!(election_behavior.after_offset.is_some());
+}
+
+#[rstest_bdd_macros::then(
+    "within twenty-five seconds partition leadership moves off the restarted controller at a higher epoch while it remains controller leader"
+)]
+async fn fenced_controller_partition_leadership(election_behavior: &ElectionBehavior) {
+    let victim = election_behavior.victim.expect("victim controller");
+    election_behavior.await_session_leader_replacement().await;
+    assert!(
+        election_behavior
+            .reborn
+            .as_ref()
+            .expect("restarted controller")
+            .controller_leader_id()
+            == Some(victim)
+    );
+}
+
+#[rstest_bdd_macros::then("the restarted broker rejoins the ISR unfenced as a follower")]
+async fn rejoined_session_fenced_broker(election_behavior: &ElectionBehavior) {
+    let victim = election_behavior.victim.expect("victim broker");
+    election_behavior.cluster[election_behavior.observer_index]
+        .0
+        .wait_for_image(|image| rejoined_as_follower(image, &election_behavior.topic, victim))
+        .await;
+}
+
+#[rstest_bdd_macros::then(
+    "the restarted controller rejoins the ISR unfenced as a follower within twenty-five seconds"
+)]
+async fn rejoined_session_fenced_controller(election_behavior: &ElectionBehavior) {
+    let victim = election_behavior.victim.expect("victim controller");
     time::timeout(
         RESTART_FAILOVER_DEADLINE,
-        observer.wait_for_image(|image| rejoined_as_follower(image, TOPIC, victim)),
+        election_behavior.cluster[election_behavior.observer_index]
+            .0
+            .wait_for_image(|image| rejoined_as_follower(image, &election_behavior.topic, victim)),
     )
     .await
     .expect("the restarted broker rejoins the ISR as a follower");
+}
 
-    for survivor in survivors {
-        survivor.shutdown().await;
-    }
-    reborn.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a leader restarted inside its session is fenced and loses leadership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership(
+    election_behavior: ElectionBehavior,
+) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a controller leader restarted inside its session loses its partition leadership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership(
+    election_behavior: ElectionBehavior,
+) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
 }

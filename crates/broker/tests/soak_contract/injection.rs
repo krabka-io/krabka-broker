@@ -139,17 +139,29 @@ mod tests {
         krabka_bench_driver::soak::{
             contract::Semantics, evidence::ProducerLedger, ledger::SeqSet,
         },
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, then, when},
         std::iter,
     };
 
-    #[yare::parameterized(
-        acknowledged_once = { 3, true },
-        never_acknowledged = { 12, false },
-        failed_then_acknowledged = { 5, false },
-        resent = { 6, false },
+    #[derive(Default)]
+    struct DeletionEligibility {
+        ledger: Option<ProducerLedger>,
+        eligible: Slot<bool>,
+    }
+
+    #[fixture]
+    fn deletion_eligibility() -> DeletionEligibility {
+        // A candidate's eligibility is observed only after evaluating its producer history.
+        DeletionEligibility::default()
+    }
+
+    #[given(
+        "an idempotent producer attempted 13 sequences, acknowledged 0 through 9, failed 5, and retried 6"
     )]
-    fn only_a_record_sent_once_and_acknowledged_is_deleted(seq: u64, expected: bool) {
-        let ledger = ProducerLedger {
+    fn deletion_history(deletion_eligibility: &mut DeletionEligibility) {
+        deletion_eligibility.ledger = Some(ProducerLedger {
             path: "p".into(),
             producer: "p-0".into(),
             semantics: Semantics::Idempotent,
@@ -158,7 +170,30 @@ mod tests {
             failed: iter::once(5).collect(),
             retried: iter::once(6).collect(),
             transactions: Vec::new(),
-        };
-        check!(deletable(&ledger, seq) == expected);
+        });
     }
+
+    #[when("the loss injector considers deleting sequence {sequence}")]
+    fn evaluate_deletion(deletion_eligibility: &DeletionEligibility, sequence: u64) {
+        deletion_eligibility.eligible.set(deletable(
+            deletion_eligibility
+                .ledger
+                .as_ref()
+                .expect("producer ledger"),
+            sequence,
+        ));
+    }
+
+    #[then("the record is eligible for deliberate deletion: {eligible}")]
+    fn deletion_candidate(deletion_eligibility: &DeletionEligibility, eligible: bool) {
+        check!(
+            deletion_eligibility
+                .eligible
+                .get()
+                .expect("deletion evaluated")
+                == eligible
+        );
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/tests/soak_contract/injection.feature", fixtures = [deletion_eligibility: DeletionEligibility]);
 }

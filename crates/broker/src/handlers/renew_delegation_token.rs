@@ -173,18 +173,11 @@ pub fn admit_token_request<'a>(
 mod tests {
     use {
         super::*,
-        crate::{
-            codes::DELEGATION_TOKEN_EXPIRED,
-            handlers::{
-                delegation_token_test_support as token_fixtures,
-                delegation_token_test_support::{
-                    DAY_MS, ExpiryExpectation, MutationExecution, SeededToken, TokenExpirySetup,
-                    TokenFixture, TokenMutationRefusalSetup, TokenPeriodMillis, authed,
-                    in_mutation_window, mutation_credential_refusals, ordinary_ownership_refusals,
-                    stored_expiry as stored_expiry_fixture,
-                },
+        crate::handlers::{
+            delegation_token_test_support as token_fixtures,
+            delegation_token_test_support::{
+                in_mutation_window, stored_expiry as stored_expiry_fixture,
             },
-            test_support::{KafkaErrorCode, UnixMillis},
         },
         assert2::assert,
         krabka_raft::ControllerHandle,
@@ -194,198 +187,264 @@ mod tests {
         stored_expiry_fixture(controller, token_id).expect("token remains")
     }
 
-    /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
-    /// stored expiry alone. A super user that is neither owner nor renewer
-    /// gets `DELEGATION_TOKEN_OWNER_MISMATCH`, as `allowedToRenew` gives it,
-    /// and an expired token answers `DELEGATION_TOKEN_EXPIRED` before the
-    /// owner check.
-    #[tokio::test]
-    async fn refusals_follow_kafka_order() {
-        token_fixtures::check_refusals()
-            .cases(|live, expired| {
-                mutation_credential_refusals(&live.hmac)
-                    .chain([
-                        TokenMutationRefusalSetup {
-                            name: "expired token, foreign caller",
-                            authentication: authed("eve"),
-                            hmac: expired.hmac.clone(),
-                            error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
-                            ..Default::default()
-                        },
-                        TokenMutationRefusalSetup {
-                            name: "expired token, owner",
-                            hmac: expired.hmac.clone(),
-                            error: KafkaErrorCode(DELEGATION_TOKEN_EXPIRED),
-                            ..Default::default()
-                        },
-                    ])
-                    .chain(ordinary_ownership_refusals(&live.hmac))
-                    .collect::<Vec<_>>()
-            })
-            .mutation(async |controller, secret, case| {
-                let resp = handle(
-                    &RenewDelegationTokenRequest {
-                        hmac: case.hmac.into(),
-                        renew_period_ms: 1_000,
-                        ..Default::default()
-                    },
-                    &case.authentication,
-                    case.secret.get(secret),
-                    DAY_MS,
-                    controller,
-                )
-                .await;
-                krabka_macros::token_refusal_result!(RenewDelegationTokenResponse, case, resp)
-            })
-            .verify(|controller, live, expired| {
-                assert!(
-                    stored_expiry(controller, "live") == live.expires_at
-                        && stored_expiry(controller, "expired") == expired.expires_at
-                );
-            })
-            .call()
-            .await;
-    }
-
-    /// The owner or a renewer renews to `min(max, now + min(default,
-    /// period))` for a positive period and `min(max, now + default)`
-    /// otherwise, even when that is earlier than the current expiry.
-    #[tokio::test]
-    async fn renews_to_kafka_capped_expiry() {
-        let TokenFixture {
-            directory: _dir,
-            controller,
-            secret,
-        } = TokenFixture::new().await;
-        let hour: i64 = 60 * 60 * 1_000;
-        let default_period = 2 * hour;
-
-        // (case, caller, renew_period_ms, current expiry delta, max delta,
-        //  expected expiry delta, where a delta of `None` means the max)
-        let cases = [
-            (
-                "owner, shorter period",
-                "alice",
-                hour,
-                hour,
-                DAY_MS,
-                Some(hour),
-            ),
-            (
-                "renewer, shorter period",
-                "bob",
-                hour,
-                hour,
-                DAY_MS,
-                Some(hour),
-            ),
-            (
-                "period above the default is capped",
-                "alice",
-                10 * hour,
-                hour,
-                DAY_MS,
-                Some(default_period),
-            ),
-            (
-                "-1 takes the default",
-                "alice",
-                -1,
-                hour,
-                DAY_MS,
-                Some(default_period),
-            ),
-            (
-                "0 takes the default",
-                "alice",
-                0,
-                hour,
-                DAY_MS,
-                Some(default_period),
-            ),
-            (
-                "-5 takes the default",
-                "alice",
-                -5,
-                hour,
-                DAY_MS,
-                Some(default_period),
-            ),
-            (
-                "shortens a later expiry",
-                "alice",
-                60_000,
-                20 * hour,
-                DAY_MS,
-                Some(60_000),
-            ),
-            (
-                "capped at the max timestamp",
-                "alice",
-                -1,
-                60_000,
-                30 * 60_000,
-                None,
-            ),
-            (
-                "period near i64::MAX",
-                "alice",
-                i64::MAX,
-                60_000,
-                30 * 60_000,
-                None,
-            ),
-        ];
-        for (index, (case, caller, period, expiry_delta, max_delta, expected_delta)) in
-            cases.into_iter().enumerate()
-        {
-            let SeededToken {
-                token_id,
-                hmac,
-
-                maximum: max_timestamp_ms,
-            } = token_fixtures::mutation_token_for_case(
-                &controller,
-                index,
-                TokenPeriodMillis(expiry_delta),
-                TokenPeriodMillis(max_delta),
-            )
-            .await;
-
-            let MutationExecution {
-                window,
-                response: resp,
-            } = in_mutation_window(handle(
-                &RenewDelegationTokenRequest {
-                    hmac: hmac.into(),
-                    renew_period_ms: period,
-                    ..Default::default()
-                },
-                &authed(caller),
-                Some(&secret),
-                default_period,
-                &*controller,
-            ))
-            .await;
-            let expiry_setup = TokenExpirySetup {
-                window,
-                expectation: ExpiryExpectation::for_period(
-                    expected_delta.map(TokenPeriodMillis),
-                    UnixMillis(max_timestamp_ms),
-                ),
-            };
-            expiry_setup.check(
-                case,
-                token_fixtures::TokenMutationOutcome::from_wire(
-                    resp.error_code,
-                    resp.expiry_timestamp_ms,
-                ),
-            );
-            assert!(
-                stored_expiry(&controller, &token_id) == resp.expiry_timestamp_ms,
-                "{case}"
-            );
+    type RenewTokenScenario = token_fixtures::TokenMutationContext<RenewDelegationTokenResponse>;
+    #[rstest::fixture]
+    fn renew_token() -> RenewTokenScenario {
+        let refusals = None;
+        token_fixtures::TokenMutationContext {
+            refusals,
+            ..Default::default()
         }
-        controller.cancel().await;
     }
+    #[rstest_bdd_macros::given(
+        "the renew request names a {token} token using {caller} {credential} authentication with secret {secret} and period {period}"
+    )]
+    async fn renew_refusal_inputs(
+        renew_token: &mut RenewTokenScenario,
+        token: String,
+        caller: String,
+        credential: String,
+        secret: String,
+        period: i64,
+    ) {
+        *renew_token = token_fixtures::TokenMutationContext::refusal_request(
+            &token,
+            &caller,
+            &credential,
+            &secret,
+            period,
+        )
+        .await;
+    }
+    #[rstest_bdd_macros::given(
+        "{caller} may renew a token expiring in {expiry} milliseconds with maximum lifetime {maximum} milliseconds using period {period}"
+    )]
+    async fn renew_mutation_inputs(
+        renew_token: &mut RenewTokenScenario,
+        caller: String,
+        expiry: i64,
+        maximum: i64,
+        period: i64,
+    ) {
+        *renew_token =
+            token_fixtures::TokenMutationContext::allowed_request(&caller, expiry, maximum, period)
+                .await;
+    }
+    #[rstest_bdd_macros::when("the controller handles the renew token request")]
+    async fn renew_requested_token(renew_token: &mut RenewTokenScenario) {
+        let resources = renew_token.resources();
+        let request = RenewDelegationTokenRequest {
+            hmac: renew_token.hmac.clone().into(),
+            renew_period_ms: renew_token.period,
+            ..Default::default()
+        };
+        renew_token.execution = Some(
+            in_mutation_window(handle(
+                &request,
+                renew_token.authentication.as_ref().unwrap(),
+                renew_token.secret.get(&resources.secret),
+                2 * 60 * 60 * 1000,
+                &*resources.controller,
+            ))
+            .await,
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the renew refusal has error {code} expiry {expiry} and leaves both token deadlines unchanged"
+    )]
+    async fn check_renew_refusal(renew_token: &mut RenewTokenScenario, code: i16, expiry: i64) {
+        let response = &renew_token.execution.as_ref().unwrap().response;
+        let observation = token_fixtures::MutationResponse {
+            actual: response.clone(),
+            expected: RenewDelegationTokenResponse {
+                error_code: code,
+                expiry_timestamp_ms: expiry,
+                ..Default::default()
+            },
+            case: "renew token refusal",
+        };
+        assert!(
+            observation.actual == observation.expected,
+            "{}",
+            observation.case
+        );
+        renew_token.check_refusal_deadlines().await;
+    }
+    #[rstest_bdd_macros::then(
+        "the renew expiry follows {deadline} milliseconds and the token is {persistence}"
+    )]
+    async fn check_renew_mutation(
+        renew_token: &mut RenewTokenScenario,
+        deadline: String,
+        persistence: String,
+    ) {
+        let execution = renew_token.execution.as_ref().unwrap();
+        let seeded = renew_token.seeded.as_ref().unwrap();
+        let resources = renew_token.fixture.as_ref().unwrap();
+        renew_token.expiry_setup(&deadline).check(
+            "renew token expiry",
+            token_fixtures::TokenMutationOutcome::from_wire(
+                execution.response.error_code,
+                execution.response.expiry_timestamp_ms,
+            ),
+        );
+        assert!(persistence == "stored");
+        assert!(
+            stored_expiry(&resources.controller, &seeded.token_id)
+                == execution.response.expiry_timestamp_ms
+        );
+        resources.controller.cancel().await;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=alice, credential=delegation-token (1)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=alice, credential=delegation-token (2)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_2(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=alice, credential=password (3)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_3(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=missing, caller=alice, credential=password (4)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_4(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=wrong-secret, caller=alice, credential=password (5)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_5(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=eve, credential=password (6)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_6(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=admin, credential=password (7)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_7(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=live, caller=minter, credential=password (8)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_8(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=expired, caller=eve, credential=password (9)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_9(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Credential ownership and token expiry checks preserve Kafka refusal ordering: token=expired, caller=alice, credential=password (10)"
+    )]
+    #[tokio::test]
+    async fn refusals_follow_kafka_order_case_10(renew_token: RenewTokenScenario) {
+        let _ = (renew_token,);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=3600000, maximum=86400000 (1)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=bob, expiry=3600000, maximum=86400000 (2)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_2(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=3600000, maximum=86400000 (3)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_3(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=3600000, maximum=86400000 (4)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_4(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=3600000, maximum=86400000 (5)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_5(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=3600000, maximum=86400000 (6)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_6(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=72000000, maximum=86400000 (7)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_7(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=60000, maximum=1800000 (8)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_8(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_renew_token/tokens.feature",
+        name = "Token mutation deadlines follow the requested period and lifetime cap: caller=alice, expiry=60000, maximum=1800000 (9)"
+    )]
+    #[tokio::test]
+    async fn renew_deadlines_case_9(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
 }

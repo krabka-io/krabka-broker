@@ -23,11 +23,11 @@
 use {
     crate::{
         jvm_acceptance::{
-            KAFKA_IMAGE_TXN, broker0_advertised, broker0_listen, create_console_topic,
-            docker_run_kafka_tool_with_image_and_mounts, host_broker_config, nc_check_connectivity,
-            prepare_jks_truststore, produce_console, write_client_props,
+            ClientPropsFile, KAFKA_IMAGE_TXN, broker0_advertised, broker0_listen, consume_console,
+            host_broker_config, nc_check_connectivity, prepare_jks_truststore, produce_console,
+            write_client_props,
         },
-        support::{fixture_cache_dir, init_jvm_tracing, manifest_dir},
+        support::{fixture_cache_dir, init_jvm_tracing, jvm_docker_command, manifest_dir},
     },
     assert2::assert,
     krabka_broker::{
@@ -157,14 +157,38 @@ async fn start_mtls_broker() -> StartedBroker {
     }
 }
 
-/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=krabka` is
-/// authorized as `test-client\`, the name the listener's rule maps that DN to.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
-    const TOPIC: &str = "krabka-mtls-mapping-itest";
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+};
+const TOPIC: &str = "krabka-mtls-mapping-itest";
+struct MappedCertificate {
+    broker: Option<StartedBroker>,
+    properties: Option<ClientPropsFile>,
+    mounts: Vec<String>,
+    created: Option<Output>,
+    produced: Option<Output>,
+    consumed: Option<Output>,
+}
+#[fixture]
+fn certificate() -> MappedCertificate {
+    // Start this scenario with fresh inputs and observations.
 
-    let StartedBroker { broker, dir: _dir } = start_mtls_broker().await;
+    MappedCertificate {
+        broker: None,
+        properties: None,
+        mounts: Vec::new(),
+        created: None,
+        produced: None,
+        consumed: None,
+    }
+}
+#[given(
+    "the fixture client certificate is trusted and its mapped short name is the only data listener superuser"
+)]
+async fn identity(certificate: &mut MappedCertificate) {
+    certificate.broker = Some(start_mtls_broker().await);
     nc_check_connectivity();
     let truststore_path = prepare_jks_truststore();
     let keystore_path = prepare_client_keystore();
@@ -183,58 +207,94 @@ async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
          enable.idempotence=false\n\
          acks=1\n",
     );
-    let props_mount = props.mount_str();
-
-    // `CreateTopics` needs `Cluster Create`, which only the super-user has.
-    // It passes only if the broker resolved this connection to the mapped
-    // short name rather than to `CLIENT_DN`.
-    create_console_topic(
-        KAFKA_IMAGE_TXN,
-        &[&props_mount, &ts_mount, &ks_mount],
-        TOPIC,
-        1,
-        1,
+    certificate.mounts = vec![props.mount_str(), ts_mount, ks_mount];
+    certificate.properties = Some(props);
+}
+#[when(
+    "the certificate authenticated stock admin creates a topic and its producer writes msg zero"
+)]
+fn create_and_write(certificate: &mut MappedCertificate) {
+    let mounts: Vec<&str> = certificate.mounts.iter().map(String::as_str).collect();
+    certificate.created = Some(
+        jvm_docker_command()
+            .image(KAFKA_IMAGE_TXN)
+            .mounts(&mounts)
+            .args(&[
+                "kafka-topics",
+                "--create",
+                "--if-not-exists",
+                "--topic",
+                TOPIC,
+                "--partitions",
+                "1",
+                "--replication-factor",
+                "1",
+                "--bootstrap-server",
+                broker0_advertised(),
+                "--command-config",
+                "/client.properties",
+            ])
+            .call()
+            .output()
+            .expect("spawn certificate topic creation"),
     );
-
-    let producer_out = produce_console(
+    certificate.produced = Some(produce_console(
         KAFKA_IMAGE_TXN,
-        &[&props_mount, &ts_mount, &ks_mount],
+        &mounts,
         TOPIC,
         false,
         b"msg-0\n",
-    );
-    assert!(
-        producer_out.status.success(),
-        "producer failed for {CLIENT_DN}: stdout={} stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr),
-    );
-
-    let consumer_out = docker_run_kafka_tool_with_image_and_mounts(
+    ));
+}
+#[then("both privileged topic creation and record production succeed under the mapped identity")]
+fn authorized(certificate: &MappedCertificate) {
+    for output in [&certificate.created, &certificate.produced] {
+        let output = output
+            .as_ref()
+            .expect("authenticated admin and producer completed");
+        assert!(
+            output.status.success(),
+            "operation failed for {CLIENT_DN}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+#[when("the certificate authenticated stock consumer reads the first record")]
+fn read(certificate: &mut MappedCertificate) {
+    let mounts: Vec<&str> = certificate.mounts.iter().map(String::as_str).collect();
+    certificate.consumed = Some(consume_console(
         KAFKA_IMAGE_TXN,
-        &[&props_mount, &ts_mount, &ks_mount],
-        &[
-            "kafka-console-consumer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--partition",
-            "0",
-            "--from-beginning",
-            "--max-messages",
-            "1",
-            "--timeout-ms",
-            "20000",
-            "--consumer.config",
-            "/client.properties",
-        ],
+        &mounts,
+        TOPIC,
+        None,
+        1,
+        20_000,
+        false,
+    ));
+}
+#[then("the authorized consumer succeeds and receives msg zero")]
+fn decoded(certificate: &MappedCertificate) {
+    let output = certificate.consumed.as_ref().expect("consumer completed");
+    assert!(
+        output.status.success(),
+        "consumer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let consumed = String::from_utf8_lossy(&consumer_out.stdout);
+    let consumed = String::from_utf8_lossy(&output.stdout);
     assert!(
         consumed.contains("msg-0"),
         "consumer missing msg-0: {consumed:?}"
     );
-
+}
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tls/mtls_principal_mapping.feature",
+    name = "A JVM client certificate gains privileges through the configured DN mapping"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn(certificate: MappedCertificate) {
+    let StartedBroker { broker, dir } = certificate.broker.expect("mTLS broker started");
     broker.shutdown().await;
+    drop(dir);
 }

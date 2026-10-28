@@ -35,7 +35,7 @@ use {
     bytes::Bytes,
     krabka_broker::metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel},
     krabka_protocol::{
-        owned::fetch_request::FetchRequest,
+        owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
         records::{Record, RecordBatch},
     },
     support::topic_id_for,
@@ -118,44 +118,89 @@ fn one_drain_on(path: FetchDrainPath) -> [u64; 3] {
     FetchDrainPath::ALL.map(|p| u64::from(p == path))
 }
 
-#[tokio::test]
-async fn large_message_fetch_round_trips_byte_exact() {
-    let p = support::start().await;
-    create_topic(&p.client, "big", 1).await;
-    let tid = topic_id_for(&p.client, "big").await;
+#[derive(Default)]
+struct LargeFetch {
+    broker: Option<support::InProcess>,
+    topic: String,
+    batch: Option<RecordBatch>,
+    expected: Vec<Bytes>,
+    produced: Option<i16>,
+    response: Option<FetchResponse>,
+    before: [u64; 3],
+}
 
-    // 64 records × 2 KiB ≈ 128 KiB of records — far over `sendfile_min`, so
-    // the Linux plaintext fetch goes zero-copy.
-    let LargeRecords { batch, expected } = large_records(64, 2 * 1024);
+#[rstest::fixture]
+fn large_fetch() -> LargeFetch {
+    // Start this scenario with fresh inputs and observations.
 
-    let prod = send_batch(&p.client, batch, SinglePartitionProduceSetup {
-        topic: ("big").into(),
-        topic_id: tid,
-        ..Default::default()
-    })
+    LargeFetch {
+        broker: None,
+        topic: String::new(),
+        batch: None,
+        expected: Vec::new(),
+        produced: None,
+        response: None,
+        before: [0; 3],
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "a plaintext topic {topic} and {count} distinct records of {value_len} bytes"
+)]
+async fn large_payload(large_fetch: &mut LargeFetch, topic: String, count: i32, value_len: usize) {
+    let broker = support::start().await;
+    create_topic(&broker.client, &topic, 1).await;
+    let LargeRecords { batch, expected } = large_records(count, value_len);
+    large_fetch.topic = topic;
+    large_fetch.batch = Some(batch);
+    large_fetch.expected = expected;
+    large_fetch.broker = Some(broker);
+}
+
+#[rstest_bdd_macros::when(
+    "the records are produced and fetched with byte budget {budget} and wait {wait} ms"
+)]
+async fn fetch_large(large_fetch: &mut LargeFetch, budget: i32, wait: i32) {
+    let p = large_fetch.broker.as_ref().unwrap();
+    let tid = topic_id_for(&p.client, &large_fetch.topic).await;
+    let prod = send_batch(
+        &p.client,
+        large_fetch.batch.take().unwrap(),
+        SinglePartitionProduceSetup {
+            topic: large_fetch.topic.clone(),
+            topic_id: tid,
+            ..Default::default()
+        },
+    )
     .await;
-    assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    large_fetch.produced = Some(prod.responses[0].partition_responses[0].error_code);
+    large_fetch.before = drain_counts(p.broker.metrics());
+    large_fetch.response = Some(
+        p.client
+            .send(FetchRequest {
+                session_id: 0,
+                session_epoch: -1,
+                ..single_partition_fetch()
+                    .topic(large_fetch.topic.clone())
+                    .topic_id(tid)
+                    .partition(fetch_partition().maximum(budget).call())
+                    .limits(FetchLimits::wait_for_data_with_maximum(
+                        RequestWaitMillis(wait),
+                        FetchByteLimit(budget),
+                    ))
+                    .call()
+            })
+            .await
+            .expect("Fetch"),
+    );
+}
 
-    // Fetch with a generous byte budget so the whole run comes back in one go.
-    let before = drain_counts(p.broker.metrics());
-    let r = p
-        .client
-        .send(FetchRequest {
-            session_id: 0,
-            session_epoch: -1,
-            ..single_partition_fetch()
-                .topic("big".into())
-                .topic_id(tid)
-                .partition(fetch_partition().maximum(8 * 1024 * 1024).call())
-                .limits(FetchLimits::wait_for_data_with_maximum(
-                    RequestWaitMillis(200),
-                    FetchByteLimit(8 * 1024 * 1024),
-                ))
-                .call()
-        })
-        .await
-        .expect("Fetch");
-
+#[rstest_bdd_macros::then(
+    "Produce and Fetch succeed and every record value matches its original bytes"
+)]
+fn exact_values(large_fetch: &LargeFetch) {
+    assert!(large_fetch.produced == Some(0));
+    let r = large_fetch.response.as_ref().unwrap();
     assert!(r.error_code == 0);
     assert!(r.responses.len() == 1);
     let batches = r.responses[0].partitions[0]
@@ -163,14 +208,12 @@ async fn large_message_fetch_round_trips_byte_exact() {
         .as_ref()
         .and_then(RecordsPayload::as_v2)
         .expect("v2 records decoded from the fetch response");
-
-    // Flatten all returned records and compare their values byte-for-byte to
-    // what we produced. Any sendfile range/partial-write bug corrupts this.
     let got_values: Vec<&Bytes> = batches
         .iter()
         .flat_map(|b| b.records.iter())
         .filter_map(|rec| rec.value.as_ref())
         .collect();
+    let expected = &large_fetch.expected;
     assert!(
         got_values.len() == expected.len(),
         "expected {} records, got {}",
@@ -183,11 +226,14 @@ async fn large_message_fetch_round_trips_byte_exact() {
             "record {i} value mismatch (sendfile byte corruption?)"
         );
     }
+}
 
-    // The bytes above are identical on every path, so they cannot say which
-    // one served them. This can: exactly one response was drained, and it went
-    // out the way this target is supposed to send it.
-    let after = drain_counts(p.broker.metrics());
+#[rstest_bdd_macros::then(
+    "exactly one response uses the platform plaintext drain path and no fallback path"
+)]
+fn drain_path(large_fetch: &LargeFetch) {
+    let after = drain_counts(large_fetch.broker.as_ref().unwrap().broker.metrics());
+    let before = large_fetch.before;
     let drained = [
         after[0] - before[0],
         after[1] - before[1],
@@ -198,6 +244,13 @@ async fn large_message_fetch_round_trips_byte_exact() {
         "the fetch must drain once on the {} path",
         EXPECTED_DRAIN_PATH.as_str()
     );
+}
 
-    p.broker.shutdown().await;
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_large_message_sendfile.feature",
+    name = "large message fetch round trips byte exact"
+)]
+#[tokio::test]
+async fn large_message_fetch_round_trips_byte_exact(large_fetch: LargeFetch) {
+    large_fetch.broker.unwrap().broker.shutdown().await;
 }

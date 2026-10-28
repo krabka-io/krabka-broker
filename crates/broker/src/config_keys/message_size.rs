@@ -44,19 +44,41 @@ mod tests {
         uuid::Uuid,
     };
 
-    #[yare::parameterized(
-        zero = { "0", true },
-        positive = { "1048588", true },
-        i32_max = { "2147483647", true },
-        negative = { "-1", false },
-        above_i32_max = { "2147483648", false },
-        non_integer = { "abc", false },
-        empty = { "", false },
-    )]
-    fn max_message_bytes_matches_kafkas_int_at_least_zero(value: &str, accepted: bool) {
-        assert2::assert!(
-            validate_topic_config(MAX_MESSAGE_BYTES, value).is_ok() == accepted,
-            "max.message.bytes={value}"
+    #[derive(Default)]
+    struct MessageSizeValidation {
+        value: String,
+        result: Option<Result<(), String>>,
+    }
+
+    #[rstest::fixture]
+    fn message_size() -> MessageSizeValidation {
+        // Keep message size inputs and observations fresh for each scenario.
+        MessageSizeValidation::default()
+    }
+
+    #[rstest_bdd_macros::given("the quoted max.message.bytes override is {value}")]
+    fn message_size_value(message_size: &mut MessageSizeValidation, value: String) {
+        message_size.value = serde_json::from_str(&value).expect("the config value is quoted");
+    }
+
+    #[rstest_bdd_macros::when("the topic max.message.bytes override is validated")]
+    fn validate_message_size(message_size: &mut MessageSizeValidation) {
+        message_size.result = Some(validate_topic_config(
+            MAX_MESSAGE_BYTES,
+            &message_size.value,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the max.message.bytes override is accepted {accepted}")]
+    fn message_size_acceptance(message_size: &MessageSizeValidation, accepted: bool) {
+        let result = message_size
+            .result
+            .as_ref()
+            .expect("the override was validated");
+        assert!(
+            result.is_ok() == accepted,
+            "max.message.bytes={}",
+            message_size.value
         );
     }
 
@@ -97,4 +119,6 @@ mod tests {
         let default = bytes(4096);
         assert!(resolve_max_message_bytes(&image_with(None), "ghost", default) == default);
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config_keys/message_size.feature", fixtures = [message_size: MessageSizeValidation]);
 }

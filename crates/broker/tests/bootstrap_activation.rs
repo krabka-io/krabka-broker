@@ -43,6 +43,7 @@ use {
     },
     std::{
         collections::BTreeMap,
+        mem,
         net::SocketAddr,
         path::{Path, PathBuf},
         slice,
@@ -379,6 +380,7 @@ const TWO_BROKERS: &[NodeSpec] = &[
     },
 ];
 
+#[derive(Clone, Copy)]
 struct Case {
     what: &'static str,
     quorum: Quorum,
@@ -388,86 +390,110 @@ struct Case {
     min_insync_replicas: MinimumInsyncReplicas,
 }
 
-/// The active controller writes the bootstrap records once, as the first
-/// metadata batch of the log, on a dynamic quorum, on a static quorum of
-/// isolated controllers, and on a combined node. When the bootstrap records
-/// enable ELR, the same batch ends with the cluster-level
-/// `min.insync.replicas` at the controller's static value, as Kafka's
-/// `ActivationRecordsGenerator.recordsForEmptyLog` writes it, and
-/// `DescribeConfigs` reports it as Kafka does. No broker writes a second copy,
-/// and every node's image takes the records.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_active_controller_writes_the_bootstrap_records_once() {
-    support::init_tracing();
-    let cases = [
-        Case {
-            what: "a dynamic quorum of a standalone controller and two brokers",
-            quorum: Quorum::Dynamic,
-            controllers: &[NodeSpec {
-                id: NodeId(3001),
-                roles: CONTROLLER,
-            }],
-            brokers: TWO_BROKERS,
-            eligible_leader_replicas: EligibleLeaderReplicas::Enabled,
-            min_insync_replicas: MinimumInsyncReplicas(2),
-        },
-        Case {
-            what: "a static quorum of three isolated controllers and two brokers",
-            quorum: Quorum::Static,
-            controllers: &[
-                NodeSpec {
-                    id: NodeId(3001),
-                    roles: CONTROLLER,
-                },
-                NodeSpec {
-                    id: NodeId(3002),
-                    roles: CONTROLLER,
-                },
-                NodeSpec {
-                    id: NodeId(3003),
-                    roles: CONTROLLER,
-                },
-            ],
-            brokers: TWO_BROKERS,
-            eligible_leader_replicas: EligibleLeaderReplicas::Enabled,
-            min_insync_replicas: MinimumInsyncReplicas(1),
-        },
-        Case {
-            what: "one combined node",
-            quorum: Quorum::Static,
-            controllers: &[NodeSpec {
-                id: NodeId(1),
-                roles: COMBINED,
-            }],
-            brokers: &[],
-            eligible_leader_replicas: EligibleLeaderReplicas::Enabled,
-            min_insync_replicas: MinimumInsyncReplicas(2),
-        },
-        Case {
-            what: "one combined node formatted without ELR",
-            quorum: Quorum::Static,
-            controllers: &[NodeSpec {
-                id: NodeId(1),
-                roles: COMBINED,
-            }],
-            brokers: &[],
-            eligible_leader_replicas: EligibleLeaderReplicas::Disabled,
-            min_insync_replicas: MinimumInsyncReplicas(2),
-        },
-    ];
-    for case in cases {
-        run_case(case).await;
+struct BootstrapActivation {
+    case: Option<Case>,
+    pending_controllers: Vec<Node>,
+    pending_brokers: Vec<Node>,
+    addresses: Vec<ControllerAddress>,
+    controllers: Vec<StartedNode>,
+    brokers: Vec<StartedNode>,
+    expected_activation: Vec<MetadataRecord>,
+    expected_levels: BTreeMap<String, i16>,
+    expected_minimum: Option<MinimumInsyncReplicas>,
+    committed: Option<Vec<Batch>>,
+    config: Option<DescribeConfigsResult>,
+}
+#[rstest::fixture]
+fn activation() -> BootstrapActivation {
+    // Start this scenario with fresh inputs and observations.
+
+    BootstrapActivation {
+        case: None,
+        pending_controllers: Vec::new(),
+        pending_brokers: Vec::new(),
+        addresses: Vec::new(),
+        controllers: Vec::new(),
+        brokers: Vec::new(),
+        expected_activation: Vec::new(),
+        expected_levels: BTreeMap::new(),
+        expected_minimum: None,
+        committed: None,
+        config: None,
     }
 }
-
-async fn run_case(case: Case) {
-    let Case {
+#[rstest_bdd_macros::given(
+    "formatted {quorum_name} quorum nodes with topology {topology} ELR {elr} and static minimum ISR {minimum}"
+)]
+async fn formatted_activation_nodes(
+    activation: &mut BootstrapActivation,
+    quorum_name: String,
+    topology: String,
+    elr: String,
+    minimum: i32,
+) {
+    support::init_tracing();
+    let (what, controllers, brokers): (&'static str, &'static [NodeSpec], &'static [NodeSpec]) =
+        match topology.as_str() {
+            "one-controller-two-brokers" => (
+                "a standalone controller and two brokers",
+                &[NodeSpec {
+                    id: NodeId(3001),
+                    roles: CONTROLLER,
+                }],
+                TWO_BROKERS,
+            ),
+            "three-controllers-two-brokers" => (
+                "three isolated controllers and two brokers",
+                &[
+                    NodeSpec {
+                        id: NodeId(3001),
+                        roles: CONTROLLER,
+                    },
+                    NodeSpec {
+                        id: NodeId(3002),
+                        roles: CONTROLLER,
+                    },
+                    NodeSpec {
+                        id: NodeId(3003),
+                        roles: CONTROLLER,
+                    },
+                ],
+                TWO_BROKERS,
+            ),
+            "one-combined-node" => (
+                "one combined node",
+                &[NodeSpec {
+                    id: NodeId(1),
+                    roles: COMBINED,
+                }],
+                &[],
+            ),
+            other => panic!("unknown activation topology {other}"),
+        };
+    let case = Case {
         what,
+        controllers,
+        brokers,
+        quorum: match quorum_name.as_str() {
+            "dynamic" => Quorum::Dynamic,
+            "static" => Quorum::Static,
+            other => panic!("unknown quorum {other}"),
+        },
+        eligible_leader_replicas: match elr.as_str() {
+            "enabled" => EligibleLeaderReplicas::Enabled,
+            "disabled" => EligibleLeaderReplicas::Disabled,
+            other => panic!("unknown ELR mode {other}"),
+        },
+        min_insync_replicas: MinimumInsyncReplicas(minimum),
+    };
+
+    let Case {
         quorum,
         controllers: controller_specs,
         brokers: broker_specs,
         eligible_leader_replicas,
         min_insync_replicas,
+        ..
     } = case;
     // A default format finalizes every feature at the default level of the
     // latest production release, `metadata.version` first. That enables ELR.
@@ -484,8 +510,8 @@ async fn run_case(case: Case) {
     );
     let cluster_min_isr = matches!(eligible_leader_replicas, EligibleLeaderReplicas::Enabled)
         .then_some(min_insync_replicas);
-    let mut activation = bootstrap.clone();
-    activation.extend(cluster_min_isr.map(|value| {
+    let mut activation_records = bootstrap.clone();
+    activation_records.extend(cluster_min_isr.map(|value| {
         MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
             config_name: MIN_INSYNC_REPLICAS.to_owned(),
@@ -547,11 +573,27 @@ async fn run_case(case: Case) {
         format(&node.log_dir, node.id, &flags).await;
     }
 
-    let brokers = nodes.split_off(controller_specs.len());
+    activation.pending_brokers = nodes.split_off(controller_specs.len());
+    activation.pending_controllers = nodes;
+    activation.addresses = controllers;
+    activation.expected_activation = activation_records;
+    activation.expected_levels = expected_levels;
+    activation.expected_minimum = cluster_min_isr;
+    activation.case = Some(case);
+}
+#[rstest_bdd_macros::when("the formatted controllers activate before the brokers join")]
+async fn activate_formatted_controllers(activation: &mut BootstrapActivation) {
+    let Case {
+        quorum,
+        min_insync_replicas,
+        controllers: controller_specs,
+        brokers: broker_specs,
+        ..
+    } = activation.case.expect("nodes formatted");
     let started_controllers = start_all()
-        .nodes(nodes)
+        .nodes(mem::take(&mut activation.pending_controllers))
         .quorum(quorum)
-        .controllers(&controllers)
+        .controllers(&activation.addresses)
         .min_insync_replicas(min_insync_replicas)
         .call()
         .await;
@@ -561,9 +603,9 @@ async fn run_case(case: Case) {
         .await
         .unwrap();
     let started_brokers = start_all()
-        .nodes(brokers)
+        .nodes(mem::take(&mut activation.pending_brokers))
         .quorum(quorum)
-        .controllers(&controllers)
+        .controllers(&activation.addresses)
         .min_insync_replicas(min_insync_replicas)
         .call()
         .await;
@@ -581,23 +623,45 @@ async fn run_case(case: Case) {
         .wait_until_brokers_registered(broker_role_count)
         .await;
 
-    let committed = committed_batches(leader.controller_addr()).await;
+    activation.controllers = started_controllers;
+    activation.brokers = started_brokers;
+}
+#[rstest_bdd_macros::when("a client reads the active controller committed metadata log")]
+async fn read_activation_log(activation: &mut BootstrapActivation) {
+    let leader = activation
+        .controllers
+        .iter()
+        .map(|node| &node.handle)
+        .find(|handle| handle.controller_leader_id() == Some(krabka_raft::NodeId(handle.node_id())))
+        .expect("active controller leader");
+    activation.committed = Some(committed_batches(leader.controller_addr()).await);
+}
+#[rstest_bdd_macros::then(
+    "bootstrap features occur exactly once in the first metadata batch after the leader control batch"
+)]
+fn bootstrap_seeded_once(activation: &BootstrapActivation) {
+    let committed = activation.committed.as_ref().expect("committed log read");
+    let expected = &activation.expected_activation;
+    let what = activation.case.expect("nodes formatted").what;
     check!(
-        seeding(&committed)
+        seeding(committed)
             == Seeding {
                 follows_control_batch: true,
-                first_metadata_batch: Some(Batch::Metadata(activation.clone())),
-                finalizing: vec![activation],
+                first_metadata_batch: Some(Batch::Metadata(expected.clone())),
+                finalizing: vec![expected.clone()]
             },
         "{what}: {committed:#?}"
     );
-    // The wait fails the test when a node's image does not take the feature
-    // levels and the cluster-level `min.insync.replicas` of the activation.
-    let expected_min_isr = cluster_min_isr.map(|value| value.to_string());
-    for node in started_controllers.iter().chain(&started_brokers) {
+}
+#[rstest_bdd_macros::then(
+    "every controller and broker image converges to those feature levels and cluster minimum ISR"
+)]
+async fn activation_image_convergence(activation: &BootstrapActivation) {
+    let expected_min_isr = activation.expected_minimum.map(|value| value.to_string());
+    for node in activation.controllers.iter().chain(&activation.brokers) {
         node.handle
             .wait_for_image(|image| {
-                *image.finalized_features() == expected_levels
+                *image.finalized_features() == activation.expected_levels
                     && image
                         .default_broker_config()
                         .and_then(|configs| configs.get(MIN_INSYNC_REPLICAS))
@@ -605,19 +669,43 @@ async fn run_case(case: Case) {
             })
             .await;
     }
-    let broker = started_brokers
+}
+#[rstest_bdd_macros::when("a broker describes its cluster default minimum ISR configuration")]
+async fn read_activated_minimum(activation: &mut BootstrapActivation) {
+    let broker = activation
+        .brokers
         .iter()
-        .chain(&started_controllers)
+        .chain(&activation.controllers)
         .map(|node| &node.handle)
         .find(|handle| handle.listen_addr().port() != 0)
         .expect("a node with the broker role");
+    activation.config = Some(describe_cluster_min_insync_replicas(broker.listen_addr()).await);
+}
+#[rstest_bdd_macros::then(
+    "DescribeConfigs matches Kafka cluster minimum ISR value source type and synonyms"
+)]
+fn activated_minimum_described(activation: &BootstrapActivation) {
     check!(
-        describe_cluster_min_insync_replicas(broker.listen_addr()).await
-            == kafkas_cluster_min_insync_replicas(cluster_min_isr),
-        "{what}"
+        activation.config.as_ref().expect("minimum ISR described")
+            == &kafkas_cluster_min_insync_replicas(activation.expected_minimum)
     );
-
-    for StartedNode { handle, dir, .. } in started_brokers.into_iter().chain(started_controllers) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_activation.feature",
+    name = "the active controller writes the bootstrap records once"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_active_controller_writes_the_bootstrap_records_once(
+    activation: BootstrapActivation,
+    quorum_name: String,
+    topology: String,
+    elr: String,
+    minimum: i32,
+) {
+    let _ = (quorum_name, topology, elr, minimum);
+    for StartedNode { handle, dir, .. } in
+        activation.brokers.into_iter().chain(activation.controllers)
+    {
         handle.shutdown().await;
         drop(dir);
     }

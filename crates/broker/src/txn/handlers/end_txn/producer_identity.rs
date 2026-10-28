@@ -295,38 +295,90 @@ mod tests {
         );
     }
 
-    /// Kafka's `prepareFenceProducerEpoch` followed by the server's
-    /// `endTransaction`: `TV_2` bumps the epoch once, at completion, and keeps
-    /// the epoch the producer holds; below it the fence bumps once and keeps no
-    /// last epoch. `endTransactionWithTV1` stamps `TV_0` on the record at every
-    /// level below `TV_2`, `TV_1` included.
-    #[test]
-    fn a_server_abort_bumps_the_epoch_once_and_stamps_the_version_kafka_stamps() {
-        let ongoing = entry(7, 3, TxnState::Ongoing);
-        // (cluster level, epoch after the abort, last epoch, stamped version)
-        let cases = [
-            (TxnVersion::Classic, 4, -1, 0),
-            (TxnVersion::Flexible, 4, -1, 0),
-            (TxnVersion::Verified, 4, 3, 2),
-        ];
-        for (version, epoch, last_epoch, stamp) in cases {
-            let mut aborted = ongoing.clone();
-            assert!(
-                prepare_server_abort_identities_with_fresh(&mut aborted, version, None).is_some()
-            );
-            let expected = TxnEntry {
-                producer_epoch: epoch,
-                last_producer_epoch: last_epoch,
-                client_transaction_version: stamp,
-                ..ongoing.clone()
-            };
-            assert!(aborted == expected, "{version:?}");
-            assert!(
-                completion_producer_identity(&aborted) == (ProducerId(7), epoch),
-                "{version:?}: the identity the abort completes with"
-            );
-        }
+    #[derive(Default)]
+    struct ServerTransactionAbort {
+        initial: Option<TxnEntry>,
+        aborted: Option<TxnEntry>,
+        version: Option<TxnVersion>,
+        preparation: rstest_bdd::Slot<Option<()>>,
+        completion: Option<(ProducerId, i16)>,
     }
+
+    #[rstest::fixture]
+    fn server_transaction_abort() -> ServerTransactionAbort {
+        // Each timeout abort keeps an independent original entry for full-state comparison.
+        ServerTransactionAbort::default()
+    }
+
+    #[rstest_bdd_macros::given("producer 7 has an ongoing transaction at producer epoch 3")]
+    fn supplied_server_abort_transaction(server_transaction_abort: &mut ServerTransactionAbort) {
+        let ongoing = entry(7, 3, TxnState::Ongoing);
+        server_transaction_abort.aborted = Some(ongoing.clone());
+        server_transaction_abort.initial = Some(ongoing);
+    }
+
+    #[rstest_bdd_macros::given("the cluster transaction version is {level}")]
+    fn supplied_server_abort_version(
+        server_transaction_abort: &mut ServerTransactionAbort,
+        level: i16,
+    ) {
+        server_transaction_abort.version = Some(match level {
+            0 => TxnVersion::Classic,
+            1 => TxnVersion::Flexible,
+            2 => TxnVersion::Verified,
+            _ => panic!("unknown transaction version level {level}"),
+        });
+    }
+
+    #[rstest_bdd_macros::when(
+        "the server prepares the transaction abort without allocating a fresh producer identity"
+    )]
+    fn prepare_supplied_server_abort(server_transaction_abort: &mut ServerTransactionAbort) {
+        let aborted = server_transaction_abort
+            .aborted
+            .as_mut()
+            .expect("ongoing transaction was given");
+        server_transaction_abort
+            .preparation
+            .set(prepare_server_abort_identities_with_fresh(
+                aborted,
+                server_transaction_abort
+                    .version
+                    .expect("cluster transaction version was given"),
+                None,
+            ));
+        server_transaction_abort.completion = Some(completion_producer_identity(aborted));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the abort succeeds at producer epoch {epoch}, retains previous epoch {previous}, stamps transaction version {stamp}, and completes as producer {producer}"
+    )]
+    fn expected_server_transaction_abort(
+        server_transaction_abort: &ServerTransactionAbort,
+        epoch: i16,
+        previous: i16,
+        stamp: i16,
+        producer: i64,
+    ) {
+        assert!(server_transaction_abort.preparation.get() == Some(Some(())));
+        let expected = TxnEntry {
+            producer_epoch: epoch,
+            last_producer_epoch: previous,
+            client_transaction_version: stamp,
+            ..server_transaction_abort
+                .initial
+                .as_ref()
+                .expect("original transaction was given")
+                .clone()
+        };
+        assert!(server_transaction_abort.aborted.as_ref() == Some(&expected));
+        assert!(server_transaction_abort.completion == Some((ProducerId(producer), epoch)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/txn/handlers/end_txn/producer_identity.feature",
+        fixtures = [server_transaction_abort: ServerTransactionAbort]
+    );
 
     #[test]
     fn a_server_abort_at_the_epoch_boundary_rotates_the_producer_id_at_tv2_only() {

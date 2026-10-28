@@ -1,9 +1,4 @@
-//! The two batches the broker must refuse before either append path runs: a
-//! client-authored control batch, and a structurally malformed record body
-//! whose CRC has been recomputed so the checksum alone cannot vouch for it.
-//!
-//! Both cases assert `INVALID_RECORD` (87) and a log end offset that is still
-//! 0, which is what proves the rejection happened ahead of the append.
+//! Invalid producer batches are refused before either append path writes them.
 
 use {
     crate::{
@@ -14,67 +9,151 @@ use {
     },
     assert2::check,
     bytes::Bytes,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
     krabka_compression::CompressionType,
-    krabka_protocol::records::{
-        Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload,
+    krabka_protocol::{
+        primitives::uuid::Uuid,
+        records::{
+            Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload,
+        },
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-/// Control batches are broker-internal transaction markers. A client-authored
-/// control batch must be rejected before either the verbatim or owned append
-/// path can write it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_control_batch_is_rejected() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "ctrl").await;
+enum CandidateBatch {
+    Control(RecordBatch),
+    Raw(Bytes),
+}
 
-    let client = connect_client(bootstrap.clone(), None).await;
-    let topic_id = topic_id_for(&client, "ctrl").await;
+struct RejectedBatch {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Client>,
+    topic: String,
+    topic_id: Uuid,
+    candidate: Option<CandidateBatch>,
+    answer: Option<Result<i64, i16>>,
+}
 
-    // A (non-compressed) control batch with one marker-shaped record.
-    let mut b = RecordBatch {
+#[fixture]
+fn rejection() -> RejectedBatch {
+    // Start this scenario with fresh inputs and observations.
+
+    RejectedBatch {
+        broker: None,
+        directory: None,
+        client: None,
+        topic: String::new(),
+        topic_id: Uuid::ZERO,
+        candidate: None,
+        answer: None,
+    }
+}
+
+async fn rejection_topic(rejection: &mut RejectedBatch, topic: &str) {
+    let (broker, bootstrap, directory) = boot().await;
+    create_topic(&broker, &bootstrap, topic).await;
+    let client = connect_client(bootstrap, None).await;
+    rejection.topic_id = topic_id_for(&client, topic).await;
+    rejection.broker = Some(broker);
+    rejection.directory = Some(directory);
+    rejection.client = Some(client);
+    rejection.topic = topic.into();
+}
+
+#[given("a client authored a control batch containing one transaction marker-shaped record")]
+async fn client_control(rejection: &mut RejectedBatch) {
+    rejection_topic(rejection, "ctrl").await;
+    let mut batch = RecordBatch {
         last_offset_delta: 0,
         max_timestamp: 99,
         producer_id: -1,
-        ..RecordBatch::default()
+        ..Default::default()
     };
-    b.attributes = Attributes::default().with_control(true);
-    b.records.push(Record {
+    batch.attributes = Attributes::default().with_control(true);
+    batch.records.push(Record {
         key: Some(Bytes::from_static(&[0, 0, 0, 0])),
         ..value_record(0, Some(Bytes::from_static(&[0, 0, 0, 0])))
     });
-
-    let error = produce_one(&client, "ctrl", topic_id, b)
-        .await
-        .expect_err("clients cannot append control batches");
-    check!(error == 87);
-    check!(broker.local_log_end_offset("ctrl", 0) == Some(0));
-
-    broker.shutdown().await;
+    rejection.candidate = Some(CandidateBatch::Control(batch));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn crc_valid_malformed_record_body_is_rejected() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "malformed-body").await;
-
-    let client = connect_client(bootstrap, None).await;
-    let topic_id = topic_id_for(&client, "malformed-body").await;
+#[given("a producer batch has a zero-length record body but a recomputed valid CRC")]
+async fn crc_valid_bad_body(rejection: &mut RejectedBatch) {
+    rejection_topic(rejection, "malformed-body").await;
     let mut wire = encode_batch(&batch(CompressionType::None, 1, b"valid")).to_vec();
-    wire[HEADER_LEN] = 0; // zero-length first record body
+    wire[HEADER_LEN] = 0;
     let crc = crc32c::crc32c(&wire[CRC_COVERAGE_START..]);
     wire[CRC_COVERAGE_START - 4..CRC_COVERAGE_START].copy_from_slice(&crc.to_be_bytes());
+    rejection.candidate = Some(CandidateBatch::Raw(Bytes::from(wire)));
+}
 
-    let error = produce_payload(
-        &client,
-        "malformed-body",
-        topic_id,
-        RecordsPayload::Raw(Bytes::from(wire)),
-    )
-    .await
-    .expect_err("CRC alone cannot make a malformed record body valid");
-    check!(error == 87);
-    check!(broker.local_log_end_offset("malformed-body", 0) == Some(0));
+#[when("the client submits this candidate producer batch")]
+async fn submit_candidate(rejection: &mut RejectedBatch) {
+    let client = rejection
+        .client
+        .as_ref()
+        .expect("a producer topic was created");
+    rejection.answer = Some(
+        match rejection
+            .candidate
+            .take()
+            .expect("a candidate batch was supplied")
+        {
+            CandidateBatch::Control(batch) => {
+                produce_one(client, &rejection.topic, rejection.topic_id, batch).await
+            }
+            CandidateBatch::Raw(bytes) => {
+                produce_payload(
+                    client,
+                    &rejection.topic,
+                    rejection.topic_id,
+                    RecordsPayload::Raw(bytes),
+                )
+                .await
+            }
+        },
+    );
+}
 
-    broker.shutdown().await;
+#[then("the batch is refused as INVALID_RECORD 87 without appending anything")]
+fn refused_before_append(rejection: &RejectedBatch) {
+    check!(rejection.answer.as_ref().expect("Produce completed") == &Err(87));
+    check!(
+        rejection
+            .broker
+            .as_ref()
+            .expect("a broker was started")
+            .local_log_end_offset(&rejection.topic, 0)
+            == Some(0)
+    );
+}
+
+async fn stop_rejection(rejection: RejectedBatch) {
+    rejection
+        .broker
+        .expect("a broker was started")
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/rejection.feature",
+    name = "Clients cannot append broker-only transaction control batches"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_control_batch_is_rejected(rejection: RejectedBatch) {
+    stop_rejection(rejection).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/rejection.feature",
+    name = "A valid checksum cannot make an invalid record body appendable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn crc_valid_malformed_record_body_is_rejected(rejection: RejectedBatch) {
+    stop_rejection(rejection).await;
 }

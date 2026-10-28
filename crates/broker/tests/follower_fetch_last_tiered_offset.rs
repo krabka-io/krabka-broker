@@ -69,14 +69,6 @@ use {
 const KEY: &str = "follower.fetch.last.tiered.offset.enable";
 /// Kafka's `ListOffsetsRequest.EARLIEST_PENDING_UPLOAD_TIMESTAMP`.
 const EARLIEST_PENDING_UPLOAD_TIMESTAMP: i64 = -6;
-/// Records produced into each partition, one batch each, so the 1 KiB segments
-/// roll many times.
-const RECORDS: usize = 60;
-/// The payload each record carries.
-const PAYLOAD: usize = 256;
-/// Local retention wide enough to keep a few sealed, already-tiered segments
-/// on the leader's disk, and narrow enough to evict the oldest ones.
-const LOCAL_RETENTION_BYTES: u64 = 4096;
 /// The broker added as a replica.
 const NEW_REPLICA: i32 = 3;
 
@@ -90,32 +82,6 @@ enum Flag {
     /// Broker 3's own dynamic config, with the cluster default removed.
     NewReplicaOnly,
 }
-
-/// One partition, the flag setting broker 3 joins it under, and whether that
-/// setting turns KIP-1023 on.
-struct Case {
-    topic: &'static str,
-    flag: Flag,
-    from_last_tiered: bool,
-}
-
-const CASES: [Case; 3] = [
-    Case {
-        topic: "kip1023-flag-unset",
-        flag: Flag::Unset,
-        from_last_tiered: false,
-    },
-    Case {
-        topic: "kip1023-cluster-default",
-        flag: Flag::ClusterDefault,
-        from_last_tiered: true,
-    },
-    Case {
-        topic: "kip1023-new-replica-only",
-        flag: Flag::NewReplicaOnly,
-        from_last_tiered: true,
-    },
-];
 
 /// The base offsets of the `*.log` files one [`local_log_files`] listing
 /// holds, ascending.
@@ -135,26 +101,28 @@ fn sealed_bytes(files: &[(i64, u64)]) -> u64 {
 /// segment, so it is done once the oldest sealed segment holds more bytes than
 /// the log has over the budget. Nothing is produced after the setup, so a log
 /// in that state keeps its segments.
-fn local_retention_done(files: &[(i64, u64)]) -> bool {
+fn local_retention_done(files: &[(i64, u64)], local_retention_bytes: u64) -> bool {
     let total: u64 = files.iter().map(|(_, len)| len).sum();
     match files {
-        [(_, oldest), _, ..] => *oldest > total.saturating_sub(LOCAL_RETENTION_BYTES),
+        [(_, oldest), _, ..] => *oldest > total.saturating_sub(local_retention_bytes),
         _ => true,
     }
 }
 
 /// Creates `topic` on broker 1 alone, tiered, with partial local retention.
-async fn create_tiered_topic(admin: &mut AdminClient, leader: &BrokerHandle, topic: &str) {
+async fn create_tiered_topic(
+    admin: &mut AdminClient,
+    leader: &BrokerHandle,
+    topic: &str,
+    local_retention: u64,
+) {
     let response = admin
         .create_topics(
             &[CreateTopicSpec::builder()
                 .name(topic)
                 .configs(BTreeMap::from([
                     ("remote.storage.enable".into(), "true".into()),
-                    (
-                        "local.retention.bytes".into(),
-                        LOCAL_RETENTION_BYTES.to_string(),
-                    ),
+                    ("local.retention.bytes".into(), local_retention.to_string()),
                     ("retention.bytes".into(), "-1".into()),
                     ("retention.ms".into(), "-1".into()),
                 ]))
@@ -205,7 +173,12 @@ struct SettledLeader {
 /// still be evicting. A measurement taken then counted sealed bytes the new
 /// replica never saw, and the case without the flag failed its check that the
 /// replica pulled them all (#1831).
-async fn await_settled_leader(admin: &Client, leader_dir: &Path, topic: &str) -> SettledLeader {
+async fn await_settled_leader(
+    admin: &Client,
+    leader_dir: &Path,
+    topic: &str,
+    local_retention_bytes: u64,
+) -> SettledLeader {
     let deadline = Instant::now() + Duration::from_mins(3);
     loop {
         let files = local_log_files(leader_dir);
@@ -216,7 +189,7 @@ async fn await_settled_leader(admin: &Client, leader_dir: &Path, topic: &str) ->
         if let [local_log_start, .., active] = segment_bases(&files)[..]
             && local_log_start > 0
             && pending_upload == active
-            && local_retention_done(&files)
+            && local_retention_done(&files, local_retention_bytes)
         {
             return SettledLeader {
                 local_log_start,
@@ -329,120 +302,201 @@ async fn await_caught_up(b3: &BrokerHandle, topic: &str, leader_end: i64) {
     }
 }
 
-/// A new replica of a tiered partition skips the leader's tiered local
-/// segments exactly when `follower.fetch.last.tiered.offset.enable` is set for
-/// it, at the cluster default or for that broker alone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+#[derive(Default)]
+struct TieredFollower {
+    brokers: Option<[BrokerHandle; 3]>,
+    log_dirs: Vec<TempDir>,
+    remote_dir: Option<TempDir>,
+    admin: Option<Client>,
+    new_replica_client: Option<Client>,
+    controller: Option<Client>,
+    settled: BTreeMap<String, SettledLeader>,
+    topic: String,
+    new_replica_start: Option<i64>,
+    replicated: Option<u64>,
+}
+
+#[fixture]
+fn tiered() -> TieredFollower {
+    // Start this scenario with fresh inputs and observations.
+
+    TieredFollower {
+        brokers: None,
+        log_dirs: Vec::new(),
+        remote_dir: None,
+        admin: None,
+        new_replica_client: None,
+        controller: None,
+        settled: BTreeMap::new(),
+        topic: String::new(),
+        new_replica_start: None,
+        replicated: None,
+    }
+}
+
+#[given("three tiered brokers with one-KiB segments and a thirty-second heartbeat timeout")]
+async fn cluster(tiered: &mut TieredFollower) {
     let TieredCluster {
-        brokers: [b1, b2, b3],
+        brokers,
         log_dirs,
+        remote_dir,
         ..
     } = start_tiered_cluster_with([krabka_units::kibibytes(1); 3], |_, config| {
-        // Every sole replica stays alive in this case. Tolerate delayed
-        // heartbeats while parallel suites exercise disk I/O on the runner.
         config.heartbeat_timeout = krabka_units::secs(30);
     })
     .await;
-    let admin = ready_admin([&b1, &b2, &b3], "kip1023-admin").await;
-    let mut topic_admin = AdminClient::connect(&[b1.listen_addr().to_string()])
+    let [b1, b2, b3] = &brokers;
+    tiered.admin = Some(ready_admin([b1, b2, b3], "kip1023-admin").await);
+    tiered.new_replica_client = Some(
+        connect_owned(
+            &format!("127.0.0.1:{}", b3.listen_addr().port()),
+            "kip1023-new-replica",
+            "new replica client",
+        )
+        .await,
+    );
+    let controller_addr = controller_leader_addr([b1, b2, b3]).await;
+    tiered.controller =
+        Some(connect_owned(&controller_addr, "kip1023-controller", "controller").await);
+    tiered.brokers = Some(brokers);
+    tiered.log_dirs = log_dirs;
+    tiered.remote_dir = Some(remote_dir);
+}
+
+#[given(
+    "topics {topics} on broker one each archive {records} records of {payload} bytes with local retention {retention} bytes"
+)]
+async fn archived_topics(
+    tiered: &mut TieredFollower,
+    topics: String,
+    records: usize,
+    payload: usize,
+    retention: u64,
+) {
+    let leader = &tiered.brokers.as_ref().unwrap()[0];
+    let admin = tiered.admin.as_ref().unwrap();
+    let mut topic_admin = AdminClient::connect(&[leader.listen_addr().to_string()])
         .await
         .expect("topic admin client");
-    let new_replica_client = connect_owned(
-        &format!("127.0.0.1:{}", b3.listen_addr().port()),
-        "kip1023-new-replica",
-        "new replica client",
-    )
-    .await;
-
-    // Every partition is archived before the first replica joins, so the
-    // cases share one wait for the copy pass.
-    for case in &CASES {
-        create_tiered_topic(&mut topic_admin, &b1, case.topic).await;
-        let topic_id = topic_id_for(&admin, case.topic).await;
+    for topic in topics.split(',') {
+        create_tiered_topic(&mut topic_admin, leader, topic, retention).await;
+        let topic_id = topic_id_for(admin, topic).await;
         produce_records()
-            .client(&admin)
+            .client(admin)
             .value(|index| {
                 let mut value = format!("record-{index}-").into_bytes();
-                value.resize(PAYLOAD, b'x');
+                value.resize(payload, b'x');
                 bytes::Bytes::from(value)
             })
-            .topic(case.topic)
+            .topic(topic)
             .topic_id(topic_id)
-            .count(RECORDS)
+            .count(records)
             .call()
             .await;
     }
+    for topic in topics.split(',') {
+        let leader_dir = tiered.log_dirs[0].path().join(format!("{topic}-0"));
+        tiered.settled.insert(
+            topic.to_owned(),
+            await_settled_leader(admin, &leader_dir, topic, retention).await,
+        );
+    }
+}
 
-    let controller_addr = controller_leader_addr([&b1, &b2, &b3]).await;
-    let controller = connect_owned(&controller_addr, "kip1023-controller", "controller").await;
-
-    for case in &CASES {
-        let leader_dir = log_dirs[0].path().join(format!("{}-0", case.topic));
-        let new_replica_dir = log_dirs[2].path().join(format!("{}-0", case.topic));
-        let settled = await_settled_leader(&admin, &leader_dir, case.topic).await;
-        eprintln!("ITEST: {}: the leader settled at {settled:?}", case.topic);
-        // The band the flag decides about must exist: tiered segments the
-        // leader still holds locally.
-        assert!(settled.local_log_start < settled.pending_upload);
-        assert!(settled.sealed_local_bytes > 0);
-
-        apply_flag(&admin, &new_replica_client, &b3, case.flag).await;
-        add_new_replica(&controller, case.topic).await;
-        let leader_end = b1
-            .local_log_end_offset(case.topic, 0)
-            .expect("the leader holds the partition");
-        await_caught_up(&b3, case.topic, leader_end).await;
-
-        let new_replica_files = local_log_files(&new_replica_dir);
-        let new_replica_start = segment_bases(&new_replica_files)
+#[when("broker three joins topic {topic} with last-tiered-offset config scope {scope}")]
+async fn join_replica(tiered: &mut TieredFollower, topic: String, scope: String) {
+    let flag = match scope.as_str() {
+        "unset" => Flag::Unset,
+        "cluster-default" => Flag::ClusterDefault,
+        "broker-three-only" => Flag::NewReplicaOnly,
+        _ => panic!("unknown dynamic config scope {scope}"),
+    };
+    let [b1, _, b3] = tiered.brokers.as_ref().unwrap();
+    apply_flag(
+        tiered.admin.as_ref().unwrap(),
+        tiered.new_replica_client.as_ref().unwrap(),
+        b3,
+        flag,
+    )
+    .await;
+    add_new_replica(tiered.controller.as_ref().unwrap(), &topic).await;
+    let leader_end = b1
+        .local_log_end_offset(&topic, 0)
+        .expect("leader holds partition");
+    await_caught_up(b3, &topic, leader_end).await;
+    let new_replica_dir = tiered.log_dirs[2].path().join(format!("{topic}-0"));
+    let new_replica_files = local_log_files(&new_replica_dir);
+    tiered.new_replica_start = Some(
+        segment_bases(&new_replica_files)
             .first()
             .copied()
-            .expect("the new replica holds a segment");
-        let replicated = b3
-            .metrics()
+            .expect("new replica holds a segment"),
+    );
+    tiered.replicated = Some(
+        b3.metrics()
             .replication_bytes_in
             .get_or_create(&PartitionLabel {
-                topic: Arc::from(case.topic),
+                topic: Arc::from(topic.as_str()),
                 partition: 0,
             })
-            .get();
-        eprintln!(
-            "ITEST: {}: the new replica starts at {new_replica_start} and pulled {replicated} \
-             bytes; its files are {new_replica_files:?}",
-            case.topic,
-        );
-        if case.from_last_tiered {
-            check!(
-                new_replica_start >= settled.pending_upload,
-                "{}: the new replica starts at {new_replica_start}, below the leader's earliest \
-                 pending upload {}",
-                case.topic,
-                settled.pending_upload,
-            );
-            check!(
-                replicated < settled.sealed_local_bytes,
-                "{}: the new replica pulled {replicated} bytes, the leader's tiered local \
-                 segments among them ({} bytes)",
-                case.topic,
-                settled.sealed_local_bytes,
-            );
-        } else {
-            check!(
-                replicated >= settled.sealed_local_bytes,
-                "{}: without the flag the new replica pulled only {replicated} bytes, not the \
-                 leader's {} bytes of tiered local segments",
-                case.topic,
-                settled.sealed_local_bytes,
-            );
-        }
-    }
+            .get(),
+    );
+    tiered.topic = topic;
+}
 
-    drop(admin);
-    drop(topic_admin);
-    drop(new_replica_client);
-    drop(controller);
-    b1.shutdown().await;
-    b2.shutdown().await;
-    b3.shutdown().await;
+#[then("the leader retains sealed tiered bytes below its pending upload offset")]
+fn discriminatory_band(tiered: &TieredFollower) {
+    let settled = &tiered.settled[&tiered.topic];
+    assert!(settled.local_log_start < settled.pending_upload);
+    assert!(settled.sealed_local_bytes > 0);
+}
+
+#[then("the new replica pulls at least the leader's sealed local byte count")]
+fn includes_tiered(tiered: &TieredFollower) {
+    let settled = &tiered.settled[&tiered.topic];
+    let replicated = tiered.replicated.unwrap();
+    check!(
+        replicated >= settled.sealed_local_bytes,
+        "unflagged follower pulled {replicated} bytes instead of at least {}",
+        settled.sealed_local_bytes
+    );
+}
+
+#[then(
+    "the new replica starts at or above pending upload and pulls fewer bytes than the leader's sealed local byte count"
+)]
+fn skips_tiered(tiered: &TieredFollower) {
+    let settled = &tiered.settled[&tiered.topic];
+    let start = tiered.new_replica_start.unwrap();
+    let replicated = tiered.replicated.unwrap();
+    check!(
+        start >= settled.pending_upload,
+        "replica starts at {start}, below pending upload {}",
+        settled.pending_upload
+    );
+    check!(
+        replicated < settled.sealed_local_bytes,
+        "replica pulled {replicated} bytes; sealed local bytes {}",
+        settled.sealed_local_bytes
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/follower_fetch_last_tiered_offset.feature",
+    name = "a new replica starts at the last tiered offset only with the flag"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag(tiered: TieredFollower) {
+    drop(tiered.admin);
+    drop(tiered.new_replica_client);
+    drop(tiered.controller);
+    for broker in tiered.brokers.unwrap() {
+        broker.shutdown().await;
+    }
 }

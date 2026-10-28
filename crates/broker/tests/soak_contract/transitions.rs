@@ -431,11 +431,14 @@ async fn handshake(address: &str, ca: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{CertAuthority, on_planned_replicas, reassignment_plan},
-        crate::topology::PartitionState,
+        crate::{cluster::TlsFiles, topology::PartitionState},
         assert2::check,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
         std::collections::BTreeMap,
     };
 
@@ -449,48 +452,113 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        follower_moved_in_place = { state(0, 1, &[1, 4, 3]), Some(vec![1, 2, 3]) },
-        leader_moved_in_place = { state(0, 4, &[4, 2, 3]), Some(vec![1, 2, 3]) },
-        not_held = { state(0, 1, &[1, 2, 3]), None },
-        nowhere_to_go = { state(0, 1, &[1, 2, 3, 4]), None },
-    )]
-    fn a_reassignment_drains_the_target_onto_the_spare_node(
-        before: PartitionState,
-        after: Option<Vec<i32>>,
-    ) {
-        let plan = reassignment_plan(&[before], "t", 4, &[1, 2, 3, 4]);
-        check!(
-            plan == after
-                .into_iter()
-                .map(|replicas| (0, replicas))
-                .collect::<BTreeMap<_, _>>()
+    #[derive(Default)]
+    struct TransitionScenario {
+        partition: Option<PartitionState>,
+        plan: BTreeMap<i32, Vec<i32>>,
+        convergence: Option<Result<(), String>>,
+        authority: CertAuthority,
+        issued: Vec<TlsFiles>,
+    }
+
+    #[fixture]
+    fn transition() -> TransitionScenario {
+        // Each transition starts with an independent replica plan and CA history.
+        TransitionScenario {
+            partition: None,
+            ..Default::default()
+        }
+    }
+
+    fn replica_ids(text: &str) -> Vec<i32> {
+        text.split(',')
+            .map(|id| id.parse().expect("a replica node id"))
+            .collect()
+    }
+
+    #[given("partition t-0 has leader {leader} and replicas {replicas}")]
+    fn partition_placement(transition: &mut TransitionScenario, leader: i32, replicas: String) {
+        transition.partition = Some(state(0, leader, &replica_ids(&replicas)));
+    }
+
+    #[when("the executor plans draining broker four onto one of four nodes")]
+    fn plan_replica_drain(transition: &mut TransitionScenario) {
+        transition.plan = reassignment_plan(
+            &[transition.partition.clone().expect("partition t-0 exists")],
+            "t",
+            4,
+            &[1, 2, 3, 4],
         );
     }
 
-    #[yare::parameterized(
-        same_order = { &[1, 2, 4], true },
-        another_order = { &[4, 1, 2], false },
-        not_yet = { &[1, 2, 3], false },
-    )]
-    fn a_partition_is_on_its_plan_in_the_planned_order(replicas: &[i32], done: bool) {
-        let plan = BTreeMap::from([(0, vec![1, 2, 4])]);
-        check!(on_planned_replicas(&[state(0, 1, replicas)], "t", &plan).is_ok() == done);
+    #[then("the partition replica plan is {replicas}")]
+    fn replica_drain_plan(transition: &TransitionScenario, replicas: String) {
+        let expected = if replicas == "none" {
+            BTreeMap::new()
+        } else {
+            BTreeMap::from([(0, replica_ids(&replicas))])
+        };
+        check!(transition.plan == expected);
     }
 
-    #[test]
-    fn each_issue_comes_from_a_new_ca_and_trusts_every_earlier_one() {
-        let mut authority = CertAuthority::default();
-        let first = authority.issue().unwrap();
-        let second = authority.issue().unwrap();
+    #[given("the ordered plan for t-0 is replicas one two and four")]
+    fn ordered_replica_plan(transition: &mut TransitionScenario) {
+        transition.plan = BTreeMap::from([(0, vec![1, 2, 4])]);
+    }
+
+    #[when("the executor checks whether replicas match the planned order")]
+    fn check_replica_order(transition: &mut TransitionScenario) {
+        transition.convergence = Some(on_planned_replicas(
+            &[transition.partition.clone().expect("partition t-0 exists")],
+            "t",
+            &transition.plan,
+        ));
+    }
+
+    #[then("the ordered replica plan has converged: {converged}")]
+    fn replica_order_converged(transition: &TransitionScenario, converged: bool) {
+        check!(
+            transition
+                .convergence
+                .as_ref()
+                .expect("the plan was checked")
+                .is_ok()
+                == converged
+        );
+    }
+
+    #[given("no certificate authorities have yet issued node certificates")]
+    fn empty_certificate_history(transition: &mut TransitionScenario) {
+        transition.authority = CertAuthority::default();
+    }
+
+    #[when("the executor issues two successive certificate generations")]
+    fn issue_certificate_generations(transition: &mut TransitionScenario) {
+        transition
+            .issued
+            .push(transition.authority.issue().unwrap());
+        transition
+            .issued
+            .push(transition.authority.issue().unwrap());
+    }
+
+    #[then(
+        "the second generation trusts both CAs preserves the earlier trust and uses a new certificate"
+    )]
+    fn cumulative_certificate_trust(transition: &TransitionScenario) {
+        let first = &transition.issued[0];
+        let second = &transition.issued[1];
         check!(first.truststore.matches("BEGIN CERTIFICATE").count() == 1);
         check!(second.truststore.matches("BEGIN CERTIFICATE").count() == 2);
         check!(second.truststore.starts_with(&first.truststore));
         check!(first.cert != second.cert);
         check!(
-            authority
+            transition
+                .authority
                 .newest()
                 .is_some_and(|ca| second.truststore.ends_with(&ca))
         );
     }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/transitions.feature", fixtures = [transition: TransitionScenario]);
 }

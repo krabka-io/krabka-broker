@@ -760,65 +760,152 @@ mod tests {
         apply_node_file(&text)
     }
 
-    // `OpaAuthorizer::new` captures the current tokio runtime handle, so the
-    // apply step runs inside one, as it does in the binary.
-    #[yare::parameterized(
-        first = { 1, 30001 },
-        third = { 3, 30003 },
+    use {
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenario, then, when},
+    };
+
+    #[derive(Default)]
+    struct NodeConfiguration {
+        node_id: u32,
+        port: u16,
+        config: Option<BrokerConfig>,
+        token: String,
+        principal: Option<String>,
+        addresses: Option<io::Result<Vec<SocketAddr>>>,
+        gateway_problem: Slot<Option<String>>,
+    }
+
+    #[fixture]
+    fn node_configuration() -> NodeConfiguration {
+        // Retain the generated configuration and authentication observations separately.
+        NodeConfiguration::default()
+    }
+
+    #[given("a diskless quorum node {node_id} advertised on port {port}")]
+    fn quorum_node_input(node_configuration: &mut NodeConfiguration, node_id: u32, port: u16) {
+        node_configuration.node_id = node_id;
+        node_configuration.port = port;
+    }
+
+    #[when("the soak runner applies the generated diskless node configuration")]
+    async fn apply_quorum_node(node_configuration: &mut NodeConfiguration) {
+        node_configuration.config =
+            Some(applied(node_configuration.node_id, node_configuration.port));
+    }
+
+    #[then(
+        "the node authenticates inter-broker traffic with its OAuth identity and advertised port"
     )]
-    #[test_macro(tokio::test)]
-    async fn a_diskless_quorum_node_dials_its_peers_authenticated(node_id: u32, port: u16) {
-        let config = applied(node_id, port);
+    fn authenticated_quorum_node(node_configuration: &NodeConfiguration) {
+        let config = node_configuration
+            .config
+            .as_ref()
+            .expect("node configuration applied");
         check!(config.inter_broker_listener_name == INTER_BROKER_LISTENER);
-        check!(config.rack.as_deref() == Some(format!("rack-{node_id}").as_str()));
-        let inter_broker = config
+        check!(
+            config.rack.as_deref() == Some(format!("rack-{}", node_configuration.node_id).as_str())
+        );
+        let listener = config
             .listeners
             .iter()
             .find(|listener| listener.name == INTER_BROKER_LISTENER)
-            .expect("an inter-broker listener");
-        check!(inter_broker.protocol == ListenerProtocol::SaslPlaintext);
-        check!(inter_broker.advertised == format!("host.docker.internal:{port}"));
-        check!(inter_broker.sasl_mechanisms.as_deref() == Some(&[SaslMechanism::OAuthBearer][..]));
+            .expect("inter-broker listener");
+        check!(listener.protocol == ListenerProtocol::SaslPlaintext);
+        check!(listener.advertised == format!("host.docker.internal:{}", node_configuration.port));
+        check!(listener.sasl_mechanisms.as_deref() == Some(&[SaslMechanism::OAuthBearer][..]));
         check!(matches!(
             config.inter_broker_credentials,
             Some(InterBrokerCredentials::OAuthBearer { .. })
         ));
     }
 
-    #[yare::parameterized(
-        first = { 1, "broker-1" },
-        third = { 3, "broker-3" },
-    )]
-    fn the_token_names_the_principal_a_wal_leader_maps_to_the_node(node_id: u32, principal: &str) {
-        let outcome = UnsecuredJwsValidator::default()
-            .validate(&inter_broker_token(node_id), 1_800_000_000_000)
-            .expect("the development validator accepts the token");
-        check!(outcome.principal.name == principal);
+    #[given("an inter-broker token issued for node {node_id}")]
+    fn quorum_token(node_configuration: &mut NodeConfiguration, node_id: u32) {
+        node_configuration.token = inter_broker_token(node_id);
     }
 
-    // A host without the `/etc/hosts` line is refused before any container
-    // starts, with the fix in the message, rather than failing as a cluster
-    // whose clients all see closed connections.
-    #[yare::parameterized(
-        loopback = { Ok(vec!["127.0.0.1:0".parse().unwrap()]), None },
-        loopback_among_others = {
-            Ok(vec!["10.0.0.5:0".parse().unwrap(), "[::1]:0".parse().unwrap()]),
-            None
-        },
-        unresolved = {
-            Err(Error::other("failed to lookup address information")),
-            Some("does not resolve on this host")
-        },
-        elsewhere = { Ok(vec!["10.0.0.5:0".parse().unwrap()]), Some("not to loopback") },
-    )]
-    fn the_host_gateway_name_must_reach_loopback(
-        resolved: io::Result<Vec<SocketAddr>>,
-        problem: Option<&str>,
-    ) {
-        let found = host_gateway_problem(resolved);
-        check!(found.is_some() == problem.is_some(), "{found:?}");
-        let message = found.unwrap_or_default();
-        let fix = format!("127.0.0.1 {HOST_GATEWAY}");
-        check!(problem.is_none_or(|reason| message.contains(reason) && message.contains(&fix)));
+    #[when("the WAL leader validates that token at 1800000000000 milliseconds")]
+    fn validate_quorum_token(node_configuration: &mut NodeConfiguration) {
+        node_configuration.principal = Some(
+            UnsecuredJwsValidator::default()
+                .validate(&node_configuration.token, 1_800_000_000_000)
+                .expect("development validator accepts the token")
+                .principal
+                .name,
+        );
     }
+
+    #[then("the authenticated principal is {principal}")]
+    fn quorum_principal(node_configuration: &NodeConfiguration, principal: String) {
+        check!(
+            node_configuration
+                .principal
+                .as_ref()
+                .expect("token validated")
+                == &principal
+        );
+    }
+
+    #[given("the host gateway lookup returns addresses {addresses}")]
+    fn gateway_addresses(node_configuration: &mut NodeConfiguration, addresses: String) {
+        node_configuration.addresses = Some(Ok(addresses
+            .split(',')
+            .map(|address| address.parse().unwrap())
+            .collect()));
+    }
+
+    #[given("the host gateway lookup fails to resolve")]
+    fn gateway_unresolved(node_configuration: &mut NodeConfiguration) {
+        node_configuration.addresses =
+            Some(Err(Error::other("failed to lookup address information")));
+    }
+
+    #[when("the soak runner checks host gateway connectivity before starting containers")]
+    fn check_gateway(node_configuration: &mut NodeConfiguration) {
+        node_configuration.gateway_problem.set(host_gateway_problem(
+            node_configuration
+                .addresses
+                .take()
+                .expect("host resolution supplied"),
+        ));
+    }
+
+    #[then("the gateway configuration is accepted")]
+    fn gateway_accepted(node_configuration: &NodeConfiguration) {
+        check!(
+            node_configuration
+                .gateway_problem
+                .get()
+                .expect("gateway checked")
+                .is_none()
+        );
+    }
+
+    #[then("the gateway refusal explains {reason} and includes the loopback hosts entry")]
+    fn gateway_refused(node_configuration: &NodeConfiguration, reason: String) {
+        let message = node_configuration
+            .gateway_problem
+            .get()
+            .expect("gateway checked")
+            .expect("configuration refused");
+        check!(message.contains(&reason));
+        check!(message.contains(&format!("127.0.0.1 {HOST_GATEWAY}")));
+    }
+
+    #[scenario(
+        path = "tests/features/migrated/tests/soak/cluster_runtime.feature",
+        name = "tests: a diskless quorum node dials its peers authenticated"
+    )]
+    #[tokio::test]
+    async fn a_diskless_quorum_node_dials_its_peers_authenticated(
+        node_configuration: NodeConfiguration,
+        node_id: u32,
+        port: u16,
+    ) {
+        let _ = (node_configuration, node_id, port);
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/tests/soak/cluster.feature", fixtures = [node_configuration: NodeConfiguration]);
 }

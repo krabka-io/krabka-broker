@@ -70,145 +70,145 @@ krabka_macros::unix_millis_fixture!(
     "a millisecond clock reading fits in i64"
 );
 
-/// A `LogAppendTime` topic answers the clock reading it stamped, and stores
-/// that same reading rather than the producer's timestamp.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_append_time_topic_reports_the_stamp_it_wrote() {
-    let p = support::start().await;
-    let topic_id = ready_topic(&p.broker, &p.client, "audit", &[ConfigOverride {
-        key: "message.timestamp.type",
-        value: "LogAppendTime",
-    }])
-    .await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct TimestampPolicy {
+    process: Option<support::InProcess>,
+    topic: String,
+    id: WireUuid,
+    row: Option<PartitionProduceResponse>,
+    submitted: i64,
+    before: i64,
+    after: i64,
+}
+#[fixture]
+fn timestamps() -> TimestampPolicy {
+    // Start this scenario with fresh inputs and observations.
 
-    let before = now_ms();
-    let row = produce(&p.client, "audit", topic_id, PRODUCER_TIMESTAMP_MS).await;
-    let after = now_ms();
-
+    TimestampPolicy {
+        process: None,
+        topic: String::new(),
+        id: WireUuid::ZERO,
+        row: None,
+        submitted: 0,
+        before: 0,
+        after: 0,
+    }
+}
+#[given("topic {topic} uses the timestamp policy")]
+async fn policy(timestamps: &mut TimestampPolicy, topic: String, datatable: Vec<Vec<String>>) {
+    let settings: Vec<(String, String)> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let columns: [String; 2] = row.try_into().expect("config key and value");
+            columns.into()
+        })
+        .collect();
+    let overrides: Vec<ConfigOverride<'_>> = settings
+        .iter()
+        .map(|(key, value)| ConfigOverride { key, value })
+        .collect();
+    let process = support::start().await;
+    timestamps.id = ready_topic(&process.broker, &process.client, &topic, &overrides).await;
+    timestamps.process = Some(process);
+    timestamps.topic = topic;
+}
+#[when("a producer appends a record timestamped {time}")]
+async fn append(timestamps: &mut TimestampPolicy, time: String) {
+    let submitted = match time.as_str() {
+        "1000" => PRODUCER_TIMESTAMP_MS,
+        "now" => now_ms(),
+        "two-hours-ahead" => now_ms() + 2 * WINDOW_MS,
+        _ => panic!("unknown timestamp source {time}"),
+    };
+    let process = timestamps
+        .process
+        .as_ref()
+        .expect("timestamp policy configured");
+    timestamps.before = now_ms();
+    timestamps.row =
+        Some(produce(&process.client, &timestamps.topic, timestamps.id, submitted).await);
+    timestamps.after = now_ms();
+    timestamps.submitted = submitted;
+}
+#[then("the accepted response reports the broker's append clock reading")]
+fn append_clock(timestamps: &TimestampPolicy) {
+    let row = timestamps.row.as_ref().expect("produce completed");
+    check!((timestamps.before..=timestamps.after).contains(&row.log_append_time_ms));
+    assert!(*row == accepted(0, row.log_append_time_ms));
+}
+#[then("the accepted CreateTime response reports no append timestamp")]
+fn no_clock(timestamps: &TimestampPolicy) {
+    assert!(*timestamps.row.as_ref().expect("produce completed") == accepted(0, -1));
+}
+#[then("timestamp lookup observes the stored append timestamp and nothing after it")]
+async fn stored_append_clock(timestamps: &TimestampPolicy) {
+    let process = timestamps
+        .process
+        .as_ref()
+        .expect("timestamp policy configured");
+    let row = timestamps.row.as_ref().expect("produce completed");
+    process
+        .broker
+        .wait_until_high_watermark(&timestamps.topic, 0, 1)
+        .await;
     check!(
-        (before..=after).contains(&row.log_append_time_ms),
-        "the row's stamp is the broker's clock at append, not {}",
-        row.log_append_time_ms
-    );
-    assert!(row == accepted(0, row.log_append_time_ms));
-    p.broker.wait_until_high_watermark("audit", 0, 1).await;
-    // The stamp reached the records too, so a `ListOffsets` by time answers in
-    // append time: the producer's own timestamp finds the batch, because it is
-    // older than everything stored, and one millisecond past the stamp finds
-    // nothing.
-    check!(
-        offset_for_time(&p.client, "audit", PRODUCER_TIMESTAMP_MS).await
+        offset_for_time(&process.client, &timestamps.topic, PRODUCER_TIMESTAMP_MS).await
             == Some(TimestampedOffset {
                 offset: 0,
-                timestamp: row.log_append_time_ms,
+                timestamp: row.log_append_time_ms
             })
     );
-    check!(offset_for_time(&p.client, "audit", row.log_append_time_ms + 1).await == None);
-
-    p.broker.shutdown().await;
-}
-
-/// The default topic stamps nothing: the row carries `-1` and the records keep
-/// the producer's own timestamp.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_create_time_topic_reports_no_stamp() {
-    let p = support::start().await;
-    let topic_id = ready_topic(&p.broker, &p.client, "orders", &[]).await;
-
-    let row = produce(&p.client, "orders", topic_id, PRODUCER_TIMESTAMP_MS).await;
-
-    assert!(row == accepted(0, -1));
-    // `ListOffsets` answers out of the committed prefix, so the query waits for
-    // the high watermark to cover the append rather than racing it.
-    p.broker.wait_until_high_watermark("orders", 0, 1).await;
     check!(
-        offset_for_time(&p.client, "orders", PRODUCER_TIMESTAMP_MS).await
+        offset_for_time(
+            &process.client,
+            &timestamps.topic,
+            row.log_append_time_ms + 1
+        )
+        .await
+            == None
+    );
+}
+#[then("timestamp lookup retains the producer's original timestamp")]
+async fn stored_create_clock(timestamps: &TimestampPolicy) {
+    let process = timestamps
+        .process
+        .as_ref()
+        .expect("timestamp policy configured");
+    process
+        .broker
+        .wait_until_high_watermark(&timestamps.topic, 0, 1)
+        .await;
+    check!(
+        offset_for_time(&process.client, &timestamps.topic, PRODUCER_TIMESTAMP_MS).await
             == Some(TimestampedOffset {
                 offset: 0,
-                timestamp: PRODUCER_TIMESTAMP_MS,
-            }),
-        "a CreateTime topic keeps the producer's timestamp"
+                timestamp: PRODUCER_TIMESTAMP_MS
+            })
     );
-
-    p.broker.shutdown().await;
 }
-
-/// `message.timestamp.before.max.ms` refuses a record older than the window
-/// and admits one inside it, which is Kafka's `INVALID_TIMESTAMP` (32) over
-/// the whole batch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_timestamp_older_than_the_window_is_refused() {
-    let p = support::start().await;
-    let topic_id = ready_topic(&p.broker, &p.client, "metrics", &[ConfigOverride {
-        key: "message.timestamp.before.max.ms",
-        value: &WINDOW_MS.to_string(),
-    }])
-    .await;
-
-    let refused = produce(&p.client, "metrics", topic_id, PRODUCER_TIMESTAMP_MS).await;
-    check!(refused == refusal(PRODUCER_TIMESTAMP_MS, &refused));
-    check!(
-        p.broker.local_log_end_offset("metrics", 0) == Some(0),
-        "a refused batch must not have appended"
-    );
-
-    let accepted_row = produce(&p.client, "metrics", topic_id, now_ms()).await;
-    assert!(accepted_row.error_code == codes::NONE);
-    assert!(accepted_row.base_offset == 0);
-
-    p.broker.shutdown().await;
+#[then("the batch is refused with the complete invalid timestamp response")]
+fn invalid(timestamps: &TimestampPolicy) {
+    let row = timestamps.row.as_ref().expect("produce completed");
+    check!(*row == refusal(timestamps.submitted, row));
 }
-
-/// `message.timestamp.after.max.ms` refuses a record further ahead of the
-/// broker's clock than the window allows.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_timestamp_newer_than_the_window_is_refused() {
-    let p = support::start().await;
-    let topic_id = ready_topic(&p.broker, &p.client, "forecasts", &[ConfigOverride {
-        key: "message.timestamp.after.max.ms",
-        value: &WINDOW_MS.to_string(),
-    }])
-    .await;
-
-    let ahead_ms = now_ms() + 2 * WINDOW_MS;
-    let refused = produce(&p.client, "forecasts", topic_id, ahead_ms).await;
-    check!(refused == refusal(ahead_ms, &refused));
-
-    let accepted_row = produce(&p.client, "forecasts", topic_id, now_ms()).await;
-    assert!(accepted_row.error_code == codes::NONE);
-
-    p.broker.shutdown().await;
+#[then("the refused batch leaves the log empty")]
+fn unappended(timestamps: &TimestampPolicy) {
+    let process = timestamps
+        .process
+        .as_ref()
+        .expect("timestamp policy configured");
+    check!(process.broker.local_log_end_offset(&timestamps.topic, 0) == Some(0));
 }
-
-/// A `LogAppendTime` topic ignores the windows, as Kafka's `validateTimestamp`
-/// does: it tests a record's timestamp only under `CreateTime`, because the
-/// stamp overwrites every producer timestamp anyway.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn log_append_time_ignores_the_timestamp_windows() {
-    let p = support::start().await;
-    let topic_id = ready_topic(&p.broker, &p.client, "traces", &[
-        ConfigOverride {
-            key: "message.timestamp.type",
-            value: "LogAppendTime",
-        },
-        ConfigOverride {
-            key: "message.timestamp.before.max.ms",
-            value: &WINDOW_MS.to_string(),
-        },
-    ])
-    .await;
-
-    let before = now_ms();
-    // Older than `before.max.ms` allows, and admitted regardless.
-    let row = produce(&p.client, "traces", topic_id, PRODUCER_TIMESTAMP_MS).await;
-    let after = now_ms();
-
-    check!((before..=after).contains(&row.log_append_time_ms));
-    assert!(row == accepted(0, row.log_append_time_ms));
-
-    p.broker.shutdown().await;
+#[then("a timestamp inside the configured window is accepted at offset zero")]
+fn valid(timestamps: &TimestampPolicy) {
+    let row = timestamps.row.as_ref().expect("produce completed");
+    assert!(row.error_code == codes::NONE);
+    assert!(row.base_offset == 0);
 }
-
 /// The partition row an accepted produce answers with.
 fn accepted(base_offset: i64, log_append_time_ms: i64) -> PartitionProduceResponse {
     PartitionProduceResponse {
@@ -396,4 +396,74 @@ async fn offset_for_time(
         offset: row.offset,
         timestamp: row.timestamp,
     })
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "Append time replaces the producer timestamp in responses and storage"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_append_time_topic_reports_the_stamp_it_wrote(timestamps: TimestampPolicy) {
+    timestamps
+        .process
+        .expect("timestamp broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "Create time retains the producer timestamp"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_create_time_topic_reports_no_stamp(timestamps: TimestampPolicy) {
+    timestamps
+        .process
+        .expect("timestamp broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "Create time rejects an expired producer timestamp"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timestamp_older_than_the_window_is_refused(timestamps: TimestampPolicy) {
+    timestamps
+        .process
+        .expect("timestamp broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "Create time rejects a future producer timestamp"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timestamp_newer_than_the_window_is_refused(timestamps: TimestampPolicy) {
+    timestamps
+        .process
+        .expect("timestamp broker started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "Append time accepts timestamps outside the CreateTime window"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn log_append_time_ignores_the_timestamp_windows(timestamps: TimestampPolicy) {
+    timestamps
+        .process
+        .expect("timestamp broker started")
+        .broker
+        .shutdown()
+        .await;
 }

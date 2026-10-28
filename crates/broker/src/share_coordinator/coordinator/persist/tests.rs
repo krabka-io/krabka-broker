@@ -26,40 +26,6 @@ use {
     tempfile::tempdir,
 };
 
-/// Kafka's `handleOperationException` codes for each append failure,
-/// with the message of the error before the mapping.
-#[test]
-fn append_errors_answer_as_kafka() {
-    let rows = [
-        (
-            AppendError::NeedsReplay(PartitionIndex(3)),
-            codes::COORDINATOR_LOAD_IN_PROGRESS,
-            message::COORDINATOR_LOAD_IN_PROGRESS,
-        ),
-        (
-            AppendError::NotLocal(PartitionIndex(3)),
-            codes::COORDINATOR_NOT_AVAILABLE,
-            message::UNKNOWN_TOPIC_OR_PARTITION,
-        ),
-        (
-            AppendError::NotLeader(PartitionIndex(3)),
-            codes::NOT_COORDINATOR,
-            message::NOT_COORDINATOR,
-        ),
-        (
-            AppendError::TimedOut,
-            codes::COORDINATOR_NOT_AVAILABLE,
-            message::REQUEST_TIMED_OUT,
-        ),
-    ];
-    for (error, code, message) in rows {
-        check!(
-            error.share_error() == ShareStateError::Operation { code, message },
-            "{error}"
-        );
-    }
-}
-
 /// A coordinator with one state partition, open locally, and its term at
 /// leader epoch 0. The write timeout is `timeout`.
 /// A coordinator and its one state partition.
@@ -303,3 +269,67 @@ async fn a_prune_trims_only_committed_snapshots() {
         );
     }
 }
+
+#[derive(Default)]
+struct ShareStateAppendFailure {
+    error: Option<AppendError>,
+    mapped: Option<ShareStateError>,
+}
+
+#[rstest::fixture]
+fn share_state_append_failure() -> ShareStateAppendFailure {
+    // Each append failure is mapped independently of prior coordinator operations.
+    ShareStateAppendFailure::default()
+}
+
+#[rstest_bdd_macros::given("share state partition 3 rejects append because it is {condition}")]
+fn supplied_share_append_failure(
+    share_state_append_failure: &mut ShareStateAppendFailure,
+    condition: String,
+) {
+    share_state_append_failure.error = Some(match condition.as_str() {
+        "awaiting replay" => AppendError::NeedsReplay(PartitionIndex(3)),
+        "not local" => AppendError::NotLocal(PartitionIndex(3)),
+        "not the leader" => AppendError::NotLeader(PartitionIndex(3)),
+        _ => panic!("unknown actual append failure {condition}"),
+    });
+}
+
+#[rstest_bdd_macros::given("the share state append timed out")]
+fn timed_out_share_append(share_state_append_failure: &mut ShareStateAppendFailure) {
+    share_state_append_failure.error = Some(AppendError::TimedOut);
+}
+
+#[rstest_bdd_macros::when(
+    "the coordinator maps the append failure to a share state operation error"
+)]
+fn map_share_append_failure(share_state_append_failure: &mut ShareStateAppendFailure) {
+    share_state_append_failure.mapped = Some(
+        share_state_append_failure
+            .error
+            .as_ref()
+            .expect("append failure was given")
+            .share_error(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the share state operation error has code {expected_code} and message {expected_message}"
+)]
+fn expected_share_append_failure(
+    share_state_append_failure: &ShareStateAppendFailure,
+    expected_code: i16,
+    expected_message: String,
+) {
+    let Some(ShareStateError::Operation { code, message }) = &share_state_append_failure.mapped
+    else {
+        panic!("append failure must map to a share operation error");
+    };
+    check!(*code == expected_code);
+    check!(*message == expected_message.as_str());
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/share_coordinator/coordinator/persist/tests.feature",
+    fixtures = [share_state_append_failure: ShareStateAppendFailure]
+);

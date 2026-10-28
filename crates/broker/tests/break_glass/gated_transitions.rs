@@ -1,11 +1,4 @@
-//! Every gated transition, refused with no proposal and run with one.
-//!
-//! The five handlers each carry their own gate call, target spelling and
-//! refusal counter, so the table drives all five rather than trusting one to
-//! stand for the rest. Two of the five complete on a one-broker cluster; the
-//! other three answer a question about the partition's own state once the gate
-//! opens, and that change of answer is the proof it opened.
-
+//! Every gated Kafka transition must reject absent authority and honor valid approvals.
 use {
     crate::{
         cluster::{Cluster, boot},
@@ -18,123 +11,125 @@ use {
         transitions::{Transition, refusals},
     },
     assert2::check,
-    krabka_broker::codes,
     krabka_client_core::Client,
-    krabka_metadata::BreakGlassAction as GatedAction,
+    krabka_metadata::BreakGlassAction,
+    krabka_protocol::primitives::uuid::Uuid,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
-/// One row of the gated-transition table.
-struct GatedCase {
-    /// What the row is about. First, so a failure names it.
-    label: &'static str,
-    /// The transition, as a request makes it.
-    transition: Transition,
-    /// The `action` wire value a proposal must carry to authorize it.
+#[derive(Default)]
+struct GatedTransition {
+    cluster: Option<Cluster>,
+    alice: Option<Client>,
+    topic: String,
+    transition: Option<Transition>,
+    metric: Option<BreakGlassAction>,
     action: i8,
-    /// The same action, as the metric families label it.
-    metric: GatedAction,
-    /// What the broker answers once an approved proposal covers the request.
-    ///
-    /// Two of the five complete on a one-broker cluster. The other three then
-    /// answer a question about the partition's own state instead — there is no
-    /// reassignment to cancel and no election to hold — and that change of
-    /// answer is itself the proof that the authority gate opened. The gate runs
-    /// before any of those state questions, exactly so that "does this need an
-    /// approval" cannot depend on state a concurrent request can move.
-    approved: i16,
+    refusals_before: Option<u64>,
+    answered: Option<i16>,
+    proposal: Option<Uuid>,
 }
 
-/// Every transition the two-person rule gates through a Kafka API.
-///
-/// The unregistration is last on purpose: it drops the one broker registration
-/// this cluster has, and a later row would then find no broker to place a
-/// replica on.
-const GATED: [GatedCase; 5] = [
-    GatedCase {
-        label: "an unclean leader election",
-        transition: Transition::UncleanElection,
-        action: ACTION_UNCLEAN_ELECT_LEADERS,
-        metric: GatedAction::UncleanElectLeaders,
-        approved: codes::ELECTION_NOT_NEEDED,
-    },
-    GatedCase {
-        label: "a reassignment cancel",
-        transition: Transition::CancelReassignment,
-        action: ACTION_CANCEL_REASSIGNMENT,
-        metric: GatedAction::CancelReassignment,
-        approved: codes::NO_REASSIGNMENT_IN_PROGRESS,
-    },
-    GatedCase {
-        label: "a record trim",
-        transition: Transition::TrimRecords,
-        action: ACTION_DELETE_RECORDS,
-        metric: GatedAction::DeleteRecords,
-        approved: codes::NONE,
-    },
-    GatedCase {
-        label: "a topic deletion",
-        transition: Transition::DeleteTopic,
-        action: ACTION_DELETE_TOPIC,
-        metric: GatedAction::DeleteTopic,
-        approved: codes::NONE,
-    },
-    GatedCase {
-        label: "a broker unregistration",
-        transition: Transition::Unregister,
-        action: ACTION_UNREGISTER_BROKER,
-        metric: GatedAction::UnregisterBroker,
-        approved: codes::NONE,
-    },
-];
+#[fixture]
+fn gate() -> GatedTransition {
+    // Start this scenario with fresh inputs and observations.
 
-/// Run one row: refuse it with no proposal, then run it with one.
-async fn run_gated_case(cluster: &Cluster, alice: &Client, case: &GatedCase, topic: &str) {
-    let label = case.label;
-    let before = refusals(&cluster.broker, case.metric);
-    check!(
-        case.transition.run(alice, topic).await == codes::POLICY_VIOLATION,
-        "case {label}: refused while no proposal covers it"
-    );
-    check!(
-        refusals(&cluster.broker, case.metric) == before + 1,
-        "case {label}: the refusal is counted"
-    );
-
-    let id = approved_proposal(cluster, case.action, &case.transition.target(topic)).await;
-    check!(
-        case.transition.run(alice, topic).await == case.approved,
-        "case {label}: the approval opened the gate"
-    );
-
-    // The approval is spent exactly when the transition ran. A request that
-    // gets past the gate and then fails on the partition's own state leaves the
-    // proposal usable, so an operator does not have to gather two signatures
-    // again over a typo.
-    check!(
-        (stored(alice, id).await.consumed_at_ms != 0) == (case.approved == codes::NONE),
-        "case {label}: an approval is spent exactly when the transition ran"
-    );
+    GatedTransition {
+        cluster: None,
+        alice: None,
+        topic: String::new(),
+        transition: None,
+        metric: None,
+        action: 0,
+        refusals_before: None,
+        answered: None,
+        proposal: None,
+    }
 }
 
-/// Every gated transition refuses without an approved proposal and runs with
-/// one, and each refusal reaches the caller as `POLICY_VIOLATION` (44).
-///
-/// The five handlers each carry their own copy of the gate call, their own
-/// target spelling, and their own refusal row, so a gate that was dropped from
-/// one of them would leave the other four green. Code 44 is load-bearing too:
-/// the design chose an existing Kafka code precisely so a JVM client classifies
-/// the refusal as non-retriable, and an unassigned code would map to
-/// `UNKNOWN_SERVER_ERROR` and be retried.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_gated_transition_refuses_without_a_proposal_and_runs_with_one() {
+#[given("a two-person-rule broker with topic {topic} and Kafka transition action {action}")]
+async fn gated_broker(gate: &mut GatedTransition, topic: String, action: i8) {
     let cluster = boot().await;
     let alice = cluster.client(ALICE).await;
+    create_topic(&alice, &topic, 1).await;
+    let (transition, metric) = match action {
+        ACTION_UNCLEAN_ELECT_LEADERS => (
+            Transition::UncleanElection,
+            BreakGlassAction::UncleanElectLeaders,
+        ),
+        ACTION_UNREGISTER_BROKER => (Transition::Unregister, BreakGlassAction::UnregisterBroker),
+        ACTION_CANCEL_REASSIGNMENT => (
+            Transition::CancelReassignment,
+            BreakGlassAction::CancelReassignment,
+        ),
+        ACTION_DELETE_TOPIC => (Transition::DeleteTopic, BreakGlassAction::DeleteTopic),
+        ACTION_DELETE_RECORDS => (Transition::TrimRecords, BreakGlassAction::DeleteRecords),
+        _ => panic!("unknown wire action {action}"),
+    };
+    gate.cluster = Some(cluster);
+    gate.alice = Some(alice);
+    gate.topic = topic;
+    gate.transition = Some(transition);
+    gate.metric = Some(metric);
+    gate.action = action;
+}
 
-    for (index, case) in GATED.iter().enumerate() {
-        let topic = format!("gated-{index}");
-        create_topic(&alice, &topic, 1).await;
-        run_gated_case(&cluster, &alice, case, &topic).await;
-    }
+#[when("alice invokes the Kafka transition")]
+async fn invoke(gate: &mut GatedTransition) {
+    gate.refusals_before = Some(refusals(
+        &gate.cluster.as_ref().unwrap().broker,
+        gate.metric.unwrap(),
+    ));
+    gate.answered = Some(
+        gate.transition
+            .unwrap()
+            .run(gate.alice.as_ref().unwrap(), &gate.topic)
+            .await,
+    );
+}
 
-    cluster.broker.shutdown().await;
+#[then("the transition returns error {error} and its refusal counter increases by {increase}")]
+fn refused(gate: &GatedTransition, error: i16, increase: u64) {
+    check!(gate.answered == Some(error));
+    check!(
+        refusals(&gate.cluster.as_ref().unwrap().broker, gate.metric.unwrap())
+            == gate.refusals_before.unwrap() + increase
+    );
+}
+
+#[when("alice proposes the transition target and bob and carol approve")]
+async fn authorize(gate: &mut GatedTransition) {
+    gate.proposal = Some(
+        approved_proposal(
+            gate.cluster.as_ref().unwrap(),
+            gate.action,
+            &gate.transition.unwrap().target(&gate.topic),
+        )
+        .await,
+    );
+}
+
+#[then("the transition returns error {error} and the proposal consumed state is {consumed}")]
+async fn authorized_result(gate: &GatedTransition, error: i16, consumed: bool) {
+    check!(gate.answered == Some(error));
+    let proposal = stored(gate.alice.as_ref().unwrap(), gate.proposal.unwrap()).await;
+    check!((proposal.consumed_at_ms != 0) == consumed);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/break_glass/gated_transitions.feature",
+    name = "every gated transition refuses without a proposal and runs with one"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_gated_transition_refuses_without_a_proposal_and_runs_with_one(
+    gate: GatedTransition,
+    topic: String,
+    action: i8,
+    approved: i16,
+    consumed: bool,
+) {
+    let _ = (topic, action, approved, consumed);
+    drop(gate.alice);
+    gate.cluster.unwrap().broker.shutdown().await;
 }

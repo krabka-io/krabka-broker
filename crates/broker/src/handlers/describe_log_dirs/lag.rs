@@ -143,23 +143,96 @@ mod tests {
             .expect("append records");
     }
 
-    /// `ReplicaManager.getLogEndOffsetLag` for a current log: `-1` with no
-    /// local partition, and `max(HW − LEO, 0)`, so 0, for a leader whose five
-    /// records are not replicated yet (a fresh HW is 0).
-    #[tokio::test]
-    async fn offset_lag_matches_kafka() {
+    struct LogDirectoryLagScenario {
+        dirs: Vec<tempfile::TempDir>,
+        registry: PartitionRegistry,
+        current: Option<Arc<Partition>>,
+        future_logs: dashmap::DashMap<(String, krabka_ids::PartitionIndex), Arc<FutureLogState>>,
+        lag: Option<i64>,
+    }
+    #[rstest::fixture]
+    fn directory_lag() -> LogDirectoryLagScenario {
+        let registry = PartitionRegistry::new();
+        LogDirectoryLagScenario {
+            dirs: Vec::new(),
+            registry,
+            current: None,
+            future_logs: dashmap::DashMap::new(),
+            lag: None,
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the current local log for topic t partition {partition} has five records"
+    )]
+    fn current_log_leo(directory_lag: &mut LogDirectoryLagScenario, partition: i32) {
         let dir = tempfile::tempdir().unwrap();
-        let reg = PartitionRegistry::new();
         let part = partition_with_leo()
             .log_dir(dir.path())
             .topic("t")
+            .partition(partition)
             .count(5)
             .call();
-        assert!(part.log_end_offset() == krabka_log::Offset(5));
-        reg.insert("t".into(), krabka_ids::PartitionIndex(0), part);
-        for (topic, expected) in [("ghost", INVALID_OFFSET_LAG), ("t", 0)] {
-            assert2::check!(offset_lag_for(&reg, topic, 0).await == expected, "{topic}");
-        }
+        directory_lag.registry.insert(
+            "t".into(),
+            krabka_ids::PartitionIndex(partition),
+            Arc::clone(&part),
+        );
+        directory_lag.current = Some(part);
+        directory_lag.dirs.push(dir);
+    }
+    #[rstest_bdd_macros::given(
+        "the future log for topic {topic} partition 3 has {records} records"
+    )]
+    fn future_log_leo(directory_lag: &mut LogDirectoryLagScenario, topic: String, records: i32) {
+        let dir = tempfile::tempdir().unwrap();
+        directory_lag.future_logs.insert(
+            (topic, krabka_ids::PartitionIndex(3)),
+            future_state_with_leo(dir.path(), RecordCount(records)),
+        );
+        directory_lag.dirs.push(dir);
+    }
+    #[rstest_bdd_macros::when("the current log lag is requested for topic {topic} partition 0")]
+    async fn current_log_lag(directory_lag: &mut LogDirectoryLagScenario, topic: String) {
+        directory_lag.lag = Some(offset_lag_for(&directory_lag.registry, &topic, 0).await);
+    }
+    #[rstest_bdd_macros::when("the future log lag is requested for topic {topic} partition 3")]
+    fn future_log_lag(directory_lag: &mut LogDirectoryLagScenario, topic: String) {
+        directory_lag.lag = Some(future_offset_lag(
+            &directory_lag.registry,
+            &directory_lag.future_logs,
+            &topic,
+            krabka_ids::PartitionIndex(3),
+        ));
+    }
+    #[rstest_bdd_macros::then("the log lag is {expected} and the current log end remains 5")]
+    fn check_log_lag(directory_lag: &LogDirectoryLagScenario, expected: i64) {
+        assert!(directory_lag.current.as_ref().unwrap().log_end_offset() == krabka_log::Offset(5));
+        assert2::check!(directory_lag.lag.unwrap() == expected);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_log_directory_lag/lag.feature",
+        name = "Current lag is unknown without a local log and otherwise clamps at zero"
+    )]
+    #[tokio::test]
+    async fn offset_lag_matches_kafka(
+        directory_lag: LogDirectoryLagScenario,
+        topic: String,
+        expected: i64,
+    ) {
+        let _ = (directory_lag, topic, expected);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_log_directory_lag/lag.feature",
+        name = "Future lag compares current and future ends without clamping"
+    )]
+    #[tokio::test]
+    async fn future_offset_lag_matches_kafka(
+        directory_lag: LogDirectoryLagScenario,
+        topic: String,
+        records: i32,
+        expected: i64,
+    ) {
+        let _ = (directory_lag, topic, records, expected);
     }
 
     /// Builds a `FutureLogState` whose future log has LEO `future_count`.
@@ -178,36 +251,5 @@ mod tests {
             cancel: CancellationToken::new(),
             task: Mutex::new(None::<JoinHandle<()>>),
         })
-    }
-
-    /// `ReplicaManager.getLogEndOffsetLag` for a future log:
-    /// `current LEO − future LEO` with no clamp, and `-1` with no local
-    /// current log.
-    #[yare::parameterized(
-        no_local_log = { "ghost", 2, INVALID_OFFSET_LAG },
-        three_records_behind = { "t", 2, 3 },
-        future_ahead = { "t", 7, -2 },
-    )]
-    #[test_macro(tokio::test)]
-    async fn future_offset_lag_matches_kafka(topic: &str, future_leo: i32, expected: i64) {
-        let cur_dir = tempfile::tempdir().unwrap();
-        let reg = PartitionRegistry::new();
-        let part = partition_with_leo()
-            .log_dir(cur_dir.path())
-            .topic("t")
-            .partition(3)
-            .count(5)
-            .call();
-        assert2::assert!(part.log_end_offset() == krabka_log::Offset(5));
-        reg.insert("t".into(), krabka_ids::PartitionIndex(3), part);
-
-        let fut_dir = tempfile::tempdir().unwrap();
-        let future_logs = dashmap::DashMap::new();
-        future_logs.insert(
-            (topic.to_owned(), krabka_ids::PartitionIndex(3)),
-            future_state_with_leo(fut_dir.path(), RecordCount(future_leo)),
-        );
-        let lag = future_offset_lag(&reg, &future_logs, topic, krabka_ids::PartitionIndex(3));
-        assert2::check!(lag == expected);
     }
 }

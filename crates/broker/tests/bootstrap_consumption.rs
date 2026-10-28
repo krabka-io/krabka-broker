@@ -64,8 +64,28 @@ async fn run_krabka_format(log_dir: &Path, add_scram: &str) {
     assert!(code == 0, "krabka-format exited {code}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bootstrap_records_provisions_scram_user() {
+use krabka_broker::{BrokerError, BrokerHandle};
+struct BootstrapConsumption {
+    directory: Option<tempfile::TempDir>,
+    config: Option<BrokerConfig>,
+    started: Option<Result<BrokerHandle, BrokerError>>,
+    authenticated: Option<io::Result<()>>,
+}
+#[rstest::fixture]
+fn bootstrap() -> BootstrapConsumption {
+    // Start this scenario with fresh inputs and observations.
+
+    BootstrapConsumption {
+        directory: None,
+        config: None,
+        started: None,
+        authenticated: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a formatted bootstrap log seeds alice wonderland with SCRAM SHA 512 at 4096 iterations"
+)]
+async fn scram_bootstrap_input(bootstrap: &mut BootstrapConsumption) {
     // The broker installs the rustls crypto provider in `Broker::start`,
     // but the SCRAM client side of this test also performs PBKDF2 / SHA
     // through the same provider. Install it defensively so the test is
@@ -92,19 +112,13 @@ async fn bootstrap_records_provisions_scram_user() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Bootstrap;
 
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
-    let result = drive_sasl_scram_session(addr, "alice", "wonderland").await;
-    handle.shutdown().await;
-    assert!(
-        result.is_ok(),
-        "alice/wonderland should authenticate via SCRAM: {result:?}"
-    );
+    bootstrap.directory = Some(dir);
+    bootstrap.config = Some(cfg);
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn corrupt_bootstrap_refuses_start() {
+#[rstest_bdd_macros::given(
+    "bootstrap records contain bytes that are not a length prefixed metadata record"
+)]
+fn corrupt_bootstrap_input(bootstrap: &mut BootstrapConsumption) {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("bootstrap.records.bin"),
@@ -112,11 +126,57 @@ async fn corrupt_bootstrap_refuses_start() {
     )
     .unwrap();
     let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
-    // `for_tests` already defaults `bootstrap_mode` to `Bootstrap`.
-    let result = Broker::start(cfg).await;
-    // `BrokerHandle` doesn't implement `Debug`, so a `Result<H, E>` can't
-    // be `{:?}`-formatted directly. Branch on the variant for the panic
-    // message instead.
+    bootstrap.directory = Some(dir);
+    bootstrap.config = Some(cfg);
+}
+#[rstest_bdd_macros::given("a fresh log directory has no bootstrap records file")]
+fn absent_bootstrap_input(bootstrap: &mut BootstrapConsumption) {
+    let dir = tempfile::tempdir().unwrap();
+    bootstrap.config = Some(BrokerConfig::for_tests(dir.path().to_path_buf()));
+    bootstrap.directory = Some(dir);
+}
+#[rstest_bdd_macros::when("the broker consumes its configured bootstrap log at startup")]
+async fn consume_bootstrap_log(bootstrap: &mut BootstrapConsumption) {
+    bootstrap.started =
+        Some(Broker::start(bootstrap.config.take().expect("bootstrap configuration")).await);
+}
+#[rstest_bdd_macros::then("the broker starts successfully")]
+fn bootstrap_broker_started(bootstrap: &BootstrapConsumption) {
+    assert!(
+        bootstrap
+            .started
+            .as_ref()
+            .expect("startup attempted")
+            .is_ok()
+    );
+}
+#[rstest_bdd_macros::when("alice authenticates through SCRAM and requests Metadata")]
+async fn bootstrap_scram_login(bootstrap: &mut BootstrapConsumption) {
+    let addr = bootstrap
+        .started
+        .as_ref()
+        .expect("startup attempted")
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    bootstrap.authenticated = Some(drive_sasl_scram_session(addr, "alice", "wonderland").await);
+}
+#[rstest_bdd_macros::then(
+    "the seeded credential authenticates and serves Metadata immediately after startup"
+)]
+fn bootstrap_scram_available(bootstrap: &BootstrapConsumption) {
+    let result = bootstrap
+        .authenticated
+        .as_ref()
+        .expect("SCRAM login attempted");
+    assert!(
+        result.is_ok(),
+        "alice/wonderland should authenticate via SCRAM: {result:?}"
+    );
+}
+#[rstest_bdd_macros::then("startup is refused specifically with a BootstrapFile error")]
+async fn bootstrap_corruption_refused(bootstrap: &mut BootstrapConsumption) {
+    let result = bootstrap.started.take().expect("startup attempted");
     match result {
         Err(krabka_broker::BrokerError::BootstrapFile { .. }) => {}
         Err(other) => panic!("expected BootstrapFile error, got {other:?}"),
@@ -127,14 +187,37 @@ async fn corrupt_bootstrap_refuses_start() {
     }
 }
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "bootstrap records provisions scram user"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bootstrap_absent_legacy_path() {
-    // No bootstrap.records.bin written. Existing fresh-bootstrap behavior
-    // unchanged — single-broker cluster comes up.
-    let dir = tempfile::tempdir().unwrap();
-    let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    handle.shutdown().await;
+async fn bootstrap_records_provisions_scram_user(bootstrap: BootstrapConsumption) {
+    if let Some(Ok(handle)) = bootstrap.started {
+        handle.shutdown().await;
+    }
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "corrupt bootstrap refuses start"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corrupt_bootstrap_refuses_start(bootstrap: BootstrapConsumption) {
+    if let Some(Ok(handle)) = bootstrap.started {
+        handle.shutdown().await;
+    }
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "bootstrap absent legacy path"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_absent_legacy_path(bootstrap: BootstrapConsumption) {
+    if let Some(Ok(handle)) = bootstrap.started {
+        handle.shutdown().await;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

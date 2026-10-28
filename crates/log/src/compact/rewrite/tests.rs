@@ -441,92 +441,127 @@ fn one_record_batch(base: i64, producer: ProducerIdAndEpoch, key: Option<&[u8]>)
     }
 }
 
-/// Which bare headers `Cleaner.cleanInto` keeps (#1198): a batch emptied by
-/// the pass is written again only when it is its producer's last data batch
-/// (or, for a producer that wrote only transaction markers, a marker of its
-/// current epoch), or when it is the last batch of the whole round. Each case
-/// is `(label, batches, the active producer, the base offsets that survive)`.
-#[test]
-fn retain_empty_follows_kafkas_cleaner_rules() {
-    // A commit marker whose delete horizon has elapsed, so the pass drops its
-    // record, from producer 1000 at epoch 7.
-    let mut marker = control_batch(0, 1000, 1 /* COMMIT */);
-    marker.producer_epoch = 7;
-    marker.base_timestamp = 100;
-    marker.attributes = marker.attributes.with_delete_horizon(true);
-    let anonymous = ProducerIdAndEpoch { id: -1, epoch: -1 };
-    let producer = ProducerIdAndEpoch { id: 1000, epoch: 7 };
-    let kept = |base| one_record_batch(base, anonymous, Some(b"k"));
-    let dropped = |base, producer| one_record_batch(base, producer, None);
-    let last = |last_data_offset, producer_epoch| ProducerLastRecord {
-        last_data_offset,
-        producer_epoch,
-    };
-    let cases = [
-        (
-            "the producer's last data batch keeps its header",
-            vec![dropped(0, producer), dropped(1, producer), kept(2)],
-            Some(last(Some(Offset(1)), 7)),
-            vec![1, 2],
-        ),
-        (
-            "a producer that is not active keeps nothing",
-            vec![dropped(0, producer), dropped(1, producer), kept(2)],
-            None,
-            vec![2],
-        ),
-        (
-            "a marker of the current epoch keeps a marker-only producer alive",
-            vec![marker.clone(), kept(1)],
-            Some(last(None, 7)),
-            vec![0, 1],
-        ),
-        (
-            "a marker of another epoch does not",
-            vec![marker, kept(1)],
-            Some(last(None, 8)),
-            vec![1],
-        ),
-        (
-            "a data batch of a marker-only producer does not",
-            vec![dropped(0, producer), kept(1)],
-            Some(last(None, 7)),
-            vec![1],
-        ),
-        (
-            "only the last batch of the round is kept empty",
-            vec![kept(0), dropped(1, anonymous), dropped(2, anonymous)],
-            None,
-            vec![0, 2],
-        ),
-    ];
-    for (label, batches, active, expected) in cases {
-        let dir = tempfile::tempdir().unwrap();
-        let seg = write_sealed_batches(dir.path(), &batches);
-        let segment_refs = vec![&seg];
-        let active: HashMap<_, _> = active
-            .into_iter()
-            .map(|last| (ProducerId(1000), last))
-            .collect();
-
-        let out = rewrite_all(
-            dir.path(),
-            &segment_refs,
-            &mut CleanedTransactionMetadata::default(),
-            RewriteRetention {
-                now_ms: 200,
-                delete_retention: millis(50),
-            },
-            &active,
-        );
-
-        let survivors: Vec<i64> = decode_all(&fs::read(&out.log_swap).unwrap())
+struct EmptyBatchCompactionScenario {
+    directory: tempfile::TempDir,
+    segment: Option<Segment>,
+    active: HashMap<ProducerId, ProducerLastRecord>,
+    now: i64,
+    retention: krabka_units::Time,
+    output: Option<RewriteOutput>,
+}
+#[rstest::fixture]
+fn empty_compaction() -> EmptyBatchCompactionScenario {
+    let directory = tempfile::tempdir().expect("compaction segment directory");
+    EmptyBatchCompactionScenario {
+        directory,
+        segment: None,
+        active: HashMap::new(),
+        now: 0,
+        retention: millis(0),
+        output: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a compaction pass at time {now} with delete retention {retention} milliseconds"
+)]
+fn empty_compaction_retention(
+    empty_compaction: &mut EmptyBatchCompactionScenario,
+    now: i64,
+    retention: u32,
+) {
+    empty_compaction.now = now;
+    empty_compaction.retention = millis(retention);
+}
+#[rstest_bdd_macros::given("compaction input batches")]
+fn empty_compaction_batches(
+    empty_compaction: &mut EmptyBatchCompactionScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let batches: Vec<RecordBatch> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [offset, kind, producer, epoch, key] = row.as_slice() else {
+                panic!("offset kind producer epoch and key columns required")
+            };
+            let offset = offset.parse().expect("batch base offset");
+            let producer = ProducerIdAndEpoch {
+                id: producer.parse().expect("producer ID"),
+                epoch: epoch.parse().expect("producer epoch"),
+            };
+            match kind.as_str() {
+                "data" => {
+                    one_record_batch(offset, producer, (key != "none").then_some(key.as_bytes()))
+                }
+                "expired-commit" => {
+                    let mut marker = control_batch(offset, producer.id, 1);
+                    marker.producer_epoch = producer.epoch;
+                    marker.base_timestamp = 100;
+                    marker.attributes = marker.attributes.with_delete_horizon(true);
+                    marker
+                }
+                _ => panic!("unknown compaction batch kind {kind}"),
+            }
+        })
+        .collect();
+    empty_compaction.segment = Some(write_sealed_batches(
+        empty_compaction.directory.path(),
+        &batches,
+    ));
+}
+#[rstest_bdd_macros::given("producer 1000 last data offset {offset} is active at epoch {epoch}")]
+fn active_compaction_producer(
+    empty_compaction: &mut EmptyBatchCompactionScenario,
+    offset: String,
+    epoch: i16,
+) {
+    empty_compaction
+        .active
+        .insert(ProducerId(1000), ProducerLastRecord {
+            last_data_offset: (offset != "none")
+                .then(|| Offset(offset.parse().expect("last producer data offset"))),
+            producer_epoch: epoch,
+        });
+}
+#[rstest_bdd_macros::given("producer 1000 is inactive")]
+fn inactive_compaction_producer(empty_compaction: &mut EmptyBatchCompactionScenario) {
+    empty_compaction.active.clear();
+}
+#[rstest_bdd_macros::when("the cleaner rewrites the compaction segment")]
+fn rewrite_empty_compaction(empty_compaction: &mut EmptyBatchCompactionScenario) {
+    let segment = empty_compaction
+        .segment
+        .as_ref()
+        .expect("compaction batches given");
+    empty_compaction.output = Some(rewrite_all(
+        empty_compaction.directory.path(),
+        &[segment],
+        &mut CleanedTransactionMetadata::default(),
+        RewriteRetention {
+            now_ms: empty_compaction.now,
+            delete_retention: empty_compaction.retention,
+        },
+        &empty_compaction.active,
+    ));
+}
+#[rstest_bdd_macros::then("the surviving batch headers have base offsets {offsets}")]
+fn compacted_empty_headers(empty_compaction: &EmptyBatchCompactionScenario, offsets: String) {
+    let output = empty_compaction
+        .output
+        .as_ref()
+        .expect("compaction rewrite performed");
+    let survivors: Vec<i64> =
+        decode_all(&fs::read(&output.log_swap).expect("compacted segment bytes"))
             .iter()
             .map(|batch| batch.base_offset)
             .collect();
-        assert2::assert!(survivors == expected, "{label}");
-    }
+    let expected: Vec<i64> = offsets
+        .split(',')
+        .map(|offset| offset.parse().expect("surviving batch offset"))
+        .collect();
+    assert2::assert!(survivors == expected);
 }
+rstest_bdd_macros::scenarios!("tests/features/compaction_empty_batches", fixtures = [empty_compaction: EmptyBatchCompactionScenario]);
 
 /// The bare header a `RETAIN_EMPTY` batch leaves is Kafka's
 /// `DefaultRecordBatch.writeEmptyHeader`: no compression, no delete horizon

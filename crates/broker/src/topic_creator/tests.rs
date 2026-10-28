@@ -779,32 +779,6 @@ fn the_create_topics_version_is_the_highest_that_both_sides_support() {
     }
 }
 
-#[test]
-fn each_error_reads_as_kafka_reports_it() {
-    let cases = [
-        (
-            TopicCreatorError::Timeout,
-            "CreateTopicsRequest to controller timed out",
-        ),
-        (
-            TopicCreatorError::Envelope(codes::CLUSTER_AUTHORIZATION_FAILED),
-            "Cluster authorization failed.",
-        ),
-        (
-            TopicCreatorError::Envelope(codes::PRINCIPAL_DESERIALIZATION_FAILURE),
-            "the controller refused the envelope with error code 97",
-        ),
-        (
-            TopicCreatorError::Protocol("codec: bad".to_owned()),
-            "codec: bad",
-        ),
-    ];
-
-    for (error, want) in cases {
-        check!(error.to_string() == want);
-    }
-}
-
 /// `ForwardedIdentity::of` takes the principal name, the client address and
 /// the client id and the correlation id of the request.
 #[test]
@@ -846,3 +820,62 @@ fn an_embedded_response_with_another_correlation_id_is_refused() {
             ))
     );
 }
+
+#[derive(Default)]
+struct ControllerTopicFailure {
+    error: Option<TopicCreatorError>,
+    rendered: Option<String>,
+}
+
+#[rstest::fixture]
+fn controller_topic_failure() -> ControllerTopicFailure {
+    // Each failed controller request has an independent client-facing message.
+    ControllerTopicFailure::default()
+}
+
+#[rstest_bdd_macros::given("the controller CreateTopics request timed out")]
+fn timed_out_controller_topic(controller_topic_failure: &mut ControllerTopicFailure) {
+    controller_topic_failure.error = Some(TopicCreatorError::Timeout);
+}
+
+#[rstest_bdd_macros::given(
+    "the controller refused the forwarded CreateTopics envelope with code {code}"
+)]
+fn refused_controller_topic_envelope(
+    controller_topic_failure: &mut ControllerTopicFailure,
+    code: i16,
+) {
+    controller_topic_failure.error = Some(TopicCreatorError::Envelope(code));
+}
+
+#[rstest_bdd_macros::given("the controller topic codec failed with {message}")]
+fn failed_controller_topic_codec(
+    controller_topic_failure: &mut ControllerTopicFailure,
+    message: String,
+) {
+    controller_topic_failure.error = Some(TopicCreatorError::Protocol(message));
+}
+
+#[rstest_bdd_macros::when("the broker renders the controller topic creation failure")]
+fn render_controller_topic_failure(controller_topic_failure: &mut ControllerTopicFailure) {
+    controller_topic_failure.rendered = Some(
+        controller_topic_failure
+            .error
+            .as_ref()
+            .expect("controller failure was given")
+            .to_string(),
+    );
+}
+
+#[rstest_bdd_macros::then("the topic creation failure message is {message}")]
+fn expected_controller_topic_failure(
+    controller_topic_failure: &ControllerTopicFailure,
+    message: String,
+) {
+    check!(controller_topic_failure.rendered.as_ref() == Some(&message));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/topic_creator/tests.feature",
+    fixtures = [controller_topic_failure: ControllerTopicFailure]
+);

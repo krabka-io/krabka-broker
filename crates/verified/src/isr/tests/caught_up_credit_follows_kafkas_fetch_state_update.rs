@@ -1,86 +1,97 @@
-use super::*;
+use {
+    super::*,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::vec,
+};
 
-/// `Replica.updateFetchStateOrThrow` over a leader whose log end was 100
-/// at the follower's previous fetch and is 120 now.
-#[yare::parameterized(
-    reaches_current_log_end = { 120, 100, CaughtUpCredit::ThisFetch },
-    reaches_previous_log_end = { 100, 100, CaughtUpCredit::PreviousFetch },
-    below_both_log_ends = { 99, 100, CaughtUpCredit::Unchanged },
-    first_fetch_after_leadership_change = { 0, -1, CaughtUpCredit::PreviousFetch },
-)]
-fn caught_up_credit_follows_kafkas_fetch_state_update(
-    fetch_offset: i64,
-    last_fetch_leader_log_end: i64,
-    expected: CaughtUpCredit,
-) {
-    assert2::check!(
-        follower_caught_up_credit(fetch_offset, 120, last_fetch_leader_log_end) == expected
-    );
+struct FollowerIsr {
+    current_end: i64,
+    previous_end: i64,
+    member: Option<IsrMemberFacts>,
+    credit: Option<CaughtUpCredit>,
+    selected: Option<bool>,
 }
 
-/// `Partition.getOutOfSyncReplicas` for the in-sync rows; krabka's
-/// expansion rule for the out-of-sync rows.
-fn member_facts(
-    role: IsrMemberRole,
-    log_end_matches_leader: bool,
-    caught_up_within_lag: bool,
-    fetch_within_lag: bool,
-) -> IsrMemberFacts {
-    IsrMemberFacts {
-        role,
-        log_end_matches_leader,
-        caught_up_within_lag,
-        fetch_within_lag,
+#[fixture]
+fn follower() -> FollowerIsr {
+    // Start this scenario with fresh inputs and observations.
+
+    FollowerIsr {
+        current_end: 0,
+        previous_end: 0,
+        member: None,
+        credit: None,
+        selected: None,
     }
 }
 
-#[yare::parameterized(
-    leader = { "the leader stays", member_facts(IsrMemberRole::Leader, false, false, false), true },
-    reassigned_away = {
-        "a reassigned-away member leaves",
-        member_facts(IsrMemberRole::Unassigned, true, true, true),
-        false,
-    },
-    idle_at_leader_end = {
-        "an idle follower at the leader's log end stays",
-        member_facts(IsrMemberRole::InSyncFollower, true, false, false),
-        true,
-    },
-    recently_caught_up = {
-        "a follower that caught up recently stays",
-        member_facts(IsrMemberRole::InSyncFollower, false, true, true),
-        true,
-    },
-    fetching_behind = {
-        "a follower fetching but behind for too long leaves",
-        member_facts(IsrMemberRole::InSyncFollower, false, false, true),
-        false,
-    },
-    stopped_fetching = {
-        "a follower that stopped fetching behind the leader leaves",
-        member_facts(IsrMemberRole::InSyncFollower, false, false, false),
-        false,
-    },
-    out_of_sync_caught_up = {
-        "a follower that fetched and caught up rejoins",
-        member_facts(IsrMemberRole::OutOfSyncFollower, false, true, true),
-        true,
-    },
-    old_catchup_fetching = {
-        "a follower caught up long ago but fetching again stays out",
-        member_facts(IsrMemberRole::OutOfSyncFollower, true, false, true),
-        false,
-    },
-    old_catchup_stopped = {
-        "a follower that caught up but stopped fetching stays out",
-        member_facts(IsrMemberRole::OutOfSyncFollower, false, true, false),
-        false,
-    },
+#[given(
+    "the leader log now ends at {current_end} after ending at {previous_end} on the previous fetch"
 )]
-fn isr_maintenance_keeps_caught_up_followers_and_drops_the_rest(
-    label: &str,
-    member: IsrMemberFacts,
-    expected: bool,
-) {
-    assert2::check!(isr_maintenance_selected(member) == expected, "{label}");
+fn leader_ends(follower: &mut FollowerIsr, current_end: i64, previous_end: i64) {
+    follower.current_end = current_end;
+    follower.previous_end = previous_end;
 }
+
+#[when("the follower fetches offset {fetch_offset}")]
+fn follower_fetch(follower: &mut FollowerIsr, fetch_offset: i64) {
+    follower.credit = Some(follower_caught_up_credit(
+        fetch_offset,
+        follower.current_end,
+        follower.previous_end,
+    ));
+}
+
+#[then("the follower receives caught-up credit for {credit}")]
+fn caught_up_time(follower: &FollowerIsr, credit: String) {
+    let expected = match credit.as_str() {
+        "this-fetch" => CaughtUpCredit::ThisFetch,
+        "the-previous-fetch" => CaughtUpCredit::PreviousFetch,
+        "neither-fetch" => CaughtUpCredit::Unchanged,
+        _ => panic!("unknown caught-up credit: {credit}"),
+    };
+    assert2::check!(follower.credit == Some(expected));
+}
+
+fn member_role(role: &str) -> IsrMemberRole {
+    match role {
+        "leader" => IsrMemberRole::Leader,
+        "unassigned" => IsrMemberRole::Unassigned,
+        "in-sync" => IsrMemberRole::InSyncFollower,
+        "out-of-sync" => IsrMemberRole::OutOfSyncFollower,
+        _ => panic!("unknown ISR member role: {role}"),
+    }
+}
+
+#[given(
+    "an ISR member with role {role}, matching log end {matching_end}, recent catch-up {recent_catchup}, and recent fetch {recent_fetch}"
+)]
+fn member_facts(
+    follower: &mut FollowerIsr,
+    role: String,
+    matching_end: bool,
+    recent_catchup: bool,
+    recent_fetch: bool,
+) {
+    follower.member = Some(IsrMemberFacts {
+        role: member_role(&role),
+        log_end_matches_leader: matching_end,
+        caught_up_within_lag: recent_catchup,
+        fetch_within_lag: recent_fetch,
+    });
+}
+
+#[when("the leader maintains ISR membership")]
+fn maintain_membership(follower: &mut FollowerIsr) {
+    follower.selected = Some(isr_maintenance_selected(
+        follower.member.expect("an ISR member was given"),
+    ));
+}
+
+#[then("the member is selected for the ISR: {selected}")]
+fn selected_member(follower: &FollowerIsr, selected: bool) {
+    assert2::check!(follower.selected == Some(selected));
+}
+
+scenarios!("tests/features/migrated/src/isr/tests/caught_up_credit_follows_kafkas_fetch_state_update.feature", fixtures = [follower: FollowerIsr]);

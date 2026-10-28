@@ -766,16 +766,47 @@ mod tests {
         assert2::assert!(cfg.assignor_enabled(name) == cfg.find_assignor(name).is_some());
     }
 
-    /// Kafka's `group.consumer.max.size` defaults to `Integer.MAX_VALUE`
-    /// (`CONSUMER_GROUP_MAX_SIZE_DEFAULT`), so a group of 201 members, or a
-    /// classic group of that size that upgrades, is not refused.
-    #[test]
-    fn default_member_cap_is_kafkas_integer_max() {
-        let max_size = NextGenConfig::default().max_size;
+    #[derive(Default)]
+    struct ConsumerMemberLimit {
+        config: Option<NextGenConfig>,
+        observed: Option<usize>,
+    }
 
+    #[rstest::fixture]
+    fn member_limit() -> ConsumerMemberLimit {
+        // Keep member limit inputs and observations fresh for each scenario.
+        ConsumerMemberLimit::default()
+    }
+
+    #[rstest_bdd_macros::given("no consumer-group member limit has been overridden")]
+    fn default_consumer_member_limit(member_limit: &mut ConsumerMemberLimit) {
+        member_limit.config = Some(NextGenConfig::default());
+    }
+
+    #[rstest_bdd_macros::when("the consumer coordinator reads its maximum group size")]
+    fn read_consumer_member_limit(member_limit: &mut ConsumerMemberLimit) {
+        member_limit.observed = Some(
+            member_limit
+                .config
+                .as_ref()
+                .expect("a coordinator config was given")
+                .max_size,
+        );
+    }
+
+    #[rstest_bdd_macros::then("the member limit is 2147483647 and permits more than 200 members")]
+    fn kafka_consumer_member_limit(member_limit: &ConsumerMemberLimit) {
+        let max_size = member_limit
+            .observed
+            .expect("the maximum group size was read");
         assert!(max_size == usize::try_from(i32::MAX).unwrap());
         assert!(max_size > 200);
     }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/config.feature",
+        fixtures = [member_limit: ConsumerMemberLimit]
+    );
 
     #[test]
     fn migration_policy_default_is_bidirectional() {

@@ -194,147 +194,151 @@ fn quoted_groups(line: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    /// The tool's own table, padded the way `%-30s` pads it, with the header
-    /// and a blank line the parser has to drop.
-    const RESET_TABLE: &str = "\n\
-        GROUP                          TOPIC                          PARTITION  NEW-OFFSET     \n\
-        krabka-grp                     krabka-topic                   0          7              \n\
-        krabka-grp                     krabka-topic                   1          0              \n";
-
-    #[test]
-    fn the_reset_table_keeps_only_numeric_rows_and_sorts_them() {
-        check!(
-            parse_reset_table(RESET_TABLE)
-                == vec![
-                    ResetRow {
-                        group: "krabka-grp".to_owned(),
-                        topic: "krabka-topic".to_owned(),
-                        partition: 0,
-                        new_offset: 7,
-                    },
-                    ResetRow {
-                        group: "krabka-grp".to_owned(),
-                        topic: "krabka-topic".to_owned(),
-                        partition: 1,
-                        new_offset: 0,
-                    },
-                ]
-        );
+    struct GroupToolOutput {
+        stdout: String,
+        reset_tables: Vec<Vec<ResetRow>>,
+        export_tables: Vec<Vec<ExportRow>>,
+        exceptions: Slot<BTreeSet<String>>,
+        deletion: Vec<DeleteOutcome>,
     }
 
-    #[test]
-    fn a_table_printed_in_another_order_parses_to_the_same_rows() {
-        let reversed: String = {
-            let mut lines: Vec<&str> = RESET_TABLE.lines().collect();
-            lines.reverse();
-            lines.join("\n")
-        };
-        check!(parse_reset_table(&reversed) == parse_reset_table(RESET_TABLE));
-    }
+    #[fixture]
+    fn output() -> GroupToolOutput {
+        // Start this scenario with fresh inputs and observations.
 
-    #[test]
-    fn lines_that_are_not_rows_are_not_rows() {
-        for text in [
-            "GROUP TOPIC PARTITION NEW-OFFSET",
-            "Error: Assignments can only be reset if the group is inactive",
-            "\tat org.apache.kafka.tools.ConsumerGroupCommand.main(x.java:1)",
-            "",
-        ] {
-            check!(
-                parse_reset_table(text).is_empty(),
-                "parsed a row from {text:?}"
-            );
+        GroupToolOutput {
+            stdout: String::new(),
+            reset_tables: Vec::new(),
+            export_tables: Vec::new(),
+            exceptions: Slot::new(),
+            deletion: Vec::new(),
         }
     }
 
-    #[test]
-    fn the_export_csv_parses_in_both_of_the_shapes_the_tool_writes() {
-        let three = ExportRow {
-            group: None,
-            topic: "t".to_owned(),
-            partition: 0,
-            offset: 12,
-        };
-        let four = ExportRow {
-            group: Some("g".to_owned()),
-            ..three.clone()
-        };
-        check!(parse_export_csv("t,0,12\n") == vec![three]);
-        check!(parse_export_csv("g,t,0,12\n") == vec![four]);
-        check!(parse_export_csv("\n\n") == Vec::new());
+    #[given("the consumer group tool printed")]
+    fn group_stdout(output: &mut GroupToolOutput, docstring: String) { output.stdout = docstring; }
+
+    #[given("the exported CSV consists of two blank lines")]
+    fn blank_csv(output: &mut GroupToolOutput) { output.stdout = "\n\n".into(); }
+
+    #[when("reset offsets are read from the table")]
+    fn read_reset(output: &mut GroupToolOutput) {
+        output.reset_tables = vec![parse_reset_table(&output.stdout)];
     }
 
-    /// apache/kafka:4.3.1 writes this file through a Jackson `CsvMapper` that
-    /// quotes the string columns and leaves the numeric ones bare, so the same
-    /// row arrives quoted from one side and plain from the other and the two
-    /// must still compare equal.
-    #[test]
-    fn a_quoted_export_row_reads_the_same_as_a_plain_one() {
-        check!(parse_export_csv("\"t\",0,12\n") == parse_export_csv("t,0,12\n"));
-        check!(parse_export_csv("\"g\",\"t\",0,12\n") == parse_export_csv("g,t,0,12\n"));
+    #[when("reset offsets are read with the table lines in either order")]
+    fn read_reset_orders(output: &mut GroupToolOutput) {
+        let reversed = output.stdout.lines().rev().collect::<Vec<_>>().join("\n");
+        output.reset_tables = vec![
+            parse_reset_table(&output.stdout),
+            parse_reset_table(&reversed),
+        ];
     }
 
-    /// A quote inside a quoted field is written doubled, and reads back as one.
-    #[test]
-    fn a_doubled_quote_inside_a_field_reads_back_as_one() {
-        check!(
-            parse_export_csv("\"a\"\"b\",0,12\n")
-                == vec![ExportRow {
-                    group: None,
-                    topic: "a\"b".to_owned(),
-                    partition: 0,
-                    offset: 12,
-                }]
-        );
+    #[then("every reset table contains exactly these sorted offsets")]
+    fn reset_rows(output: &GroupToolOutput, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [group, topic, partition, new_offset]: [String; 4] =
+                    row.try_into().expect("four reset table columns");
+                ResetRow {
+                    group,
+                    topic,
+                    partition: partition.parse().expect("partition index"),
+                    new_offset: new_offset.parse().expect("new offset"),
+                }
+            })
+            .collect::<Vec<_>>();
+        check!(!output.reset_tables.is_empty());
+        for actual in &output.reset_tables {
+            check!(*actual == expected);
+        }
     }
 
-    #[test]
-    fn every_kafka_exception_in_a_tool_dump_is_found_once() {
-        let text = "Error: org.apache.kafka.common.errors.GroupNotEmptyException: no\n\
-                    caused by org.apache.kafka.common.errors.GroupNotEmptyException\n\
-                    and org.apache.kafka.common.errors.GroupIdNotFoundException: gone";
-        check!(
-            kafka_exceptions(text)
-                == BTreeSet::from([
-                    "org.apache.kafka.common.errors.GroupIdNotFoundException".to_owned(),
-                    "org.apache.kafka.common.errors.GroupNotEmptyException".to_owned(),
-                ])
-        );
-        check!(kafka_exceptions("nothing here").is_empty());
+    #[when("exported offsets are read from CSV")]
+    fn read_exports(output: &mut GroupToolOutput) {
+        output.export_tables = vec![parse_export_csv(&output.stdout)];
     }
 
-    #[test]
-    fn delete_reports_reduce_to_one_outcome_per_group() {
-        let failed = "Error: Deletion of some consumer groups failed:\n\
-             * Group 'ghost' could not be deleted due to: \
-             org.apache.kafka.common.errors.GroupIdNotFoundException: The group id does not exist.\n\
-             * Group 'busy' could not be deleted due to: \
-             org.apache.kafka.common.errors.GroupNotEmptyException: The group is not empty.\n";
-        check!(
-            parse_delete_groups(failed)
-                == vec![
-                    DeleteOutcome {
-                        group: "busy".to_owned(),
-                        failure: Some(
-                            "org.apache.kafka.common.errors.GroupNotEmptyException".to_owned()
-                        ),
-                    },
-                    DeleteOutcome {
-                        group: "ghost".to_owned(),
-                        failure: Some(
-                            "org.apache.kafka.common.errors.GroupIdNotFoundException".to_owned()
-                        ),
-                    },
-                ]
-        );
-        check!(
-            parse_delete_groups("Deletion of requested consumer groups ('gone') was successful.\n")
-                == vec![DeleteOutcome {
-                    group: "gone".to_owned(),
-                    failure: None,
-                }]
-        );
+    #[when("the quoted and unquoted forms of the exported CSV are read")]
+    fn read_csv_quoting(output: &mut GroupToolOutput) {
+        output.export_tables = vec![
+            parse_export_csv(&output.stdout),
+            parse_export_csv(&output.stdout.replace('"', "")),
+        ];
     }
+
+    #[then("every exported table contains exactly")]
+    fn export_rows(output: &GroupToolOutput, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [group, topic, partition, offset]: [String; 4] =
+                    row.try_into().expect("four export table columns");
+                ExportRow {
+                    group: (group != "absent").then_some(group),
+                    topic,
+                    partition: partition.parse().expect("partition index"),
+                    offset: offset.parse().expect("exported offset"),
+                }
+            })
+            .collect::<Vec<_>>();
+        check!(!output.export_tables.is_empty());
+        for actual in &output.export_tables {
+            check!(*actual == expected);
+        }
+    }
+
+    #[when("Kafka exception classes are read from the output")]
+    fn read_exceptions(output: &mut GroupToolOutput) {
+        output.exceptions.set(kafka_exceptions(&output.stdout));
+    }
+
+    #[then("the unique Kafka exception classes are exactly")]
+    fn exception_classes(output: &GroupToolOutput, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [class]: [String; 1] = row.try_into().expect("one exception class");
+                class
+            })
+            .collect::<BTreeSet<_>>();
+        check!(output.exceptions.get() == Some(expected));
+    }
+
+    #[when("consumer group deletion outcomes are read")]
+    fn read_deletions(output: &mut GroupToolOutput) {
+        output.deletion = parse_delete_groups(&output.stdout);
+    }
+
+    #[then("the sorted group deletion outcomes are exactly")]
+    fn deletion_outcomes(output: &GroupToolOutput, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [group, failure]: [String; 2] =
+                    row.try_into().expect("group and deletion failure");
+                DeleteOutcome {
+                    group,
+                    failure: (failure != "success").then_some(failure),
+                }
+            })
+            .collect::<Vec<_>>();
+        check!(output.deletion == expected);
+    }
+
+    scenarios!("tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature", fixtures = [output: GroupToolOutput]);
 }

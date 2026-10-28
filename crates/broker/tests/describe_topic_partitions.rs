@@ -14,10 +14,7 @@
 #![cfg(test)]
 
 use {
-    crate::support::{
-        acl::TOPIC_FULL_MASK,
-        topics::{TopicPartitionCount, configured_topic_request},
-    },
+    crate::support::{acl::TOPIC_FULL_MASK, topics::configured_topic_request},
     assert2::{assert, check},
     krabka_protocol::owned::{
         create_topics_request::CreateTopicsRequest,
@@ -54,48 +51,77 @@ fn describe_topics_request(
     }
 }
 
-/// A started broker and the `DescribeTopicPartitions` response for its topic.
-struct DescribedTopic {
-    p: support::InProcess,
-    response: DescribeTopicPartitionsResponse,
-}
-
-async fn described_topic(name: &str, partitions: i32) -> DescribedTopic {
-    let p = support::start().await;
-    create_topic(
-        &p,
-        configured_topic_request()
-            .topic(name)
-            .num_partitions(partitions)
-            .call(),
-    )
-    .await;
-    let response = p
-        .client
-        .send(describe_topics_request(&[name], 2000, None))
-        .await
-        .expect("DescribeTopicPartitions");
-    DescribedTopic { p, response }
-}
-
-// Bit positions (subset; cross-check'd with the KIP-430 unit tests).
-
 async fn create_topic(p: &support::InProcess, request: CreateTopicsRequest) {
     let response = support::client::send_topic_creation(&p.client, request).await;
     assert!(response.topics[0].error_code == 0, "{response:?}");
 }
+use {
+    krabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
+    rstest_bdd::datatable::Rows, rstest_bdd_macros::DataTableRow,
+};
+struct TopicPartitions {
+    broker: Option<support::InProcess>,
+    response: Option<DescribeTopicPartitionsResponse>,
+    resumed: Option<DescribeTopicPartitionsResponse>,
+    downgrade: Option<UpdateFeaturesResponse>,
+}
+#[rstest::fixture]
+fn partitions() -> TopicPartitions {
+    // Start this scenario with fresh inputs and observations.
 
-#[tokio::test]
-async fn named_request_returns_listed_topics_with_partitions() {
-    let p = support::start().await;
-    create_alpha_beta().p(&p).alpha_partitions(2).call().await;
-
-    let resp = p
-        .client
-        .send(describe_topics_request(&["alpha", "beta"], 2000, None))
-        .await
-        .expect("DescribeTopicPartitions");
-
+    TopicPartitions {
+        broker: None,
+        response: None,
+        resumed: None,
+        downgrade: None,
+    }
+}
+#[derive(DataTableRow)]
+struct TopicInput {
+    name: String,
+    partitions: i32,
+}
+#[rstest_bdd_macros::given("an allow-all broker contains topics created in this order:")]
+async fn described_topic_inputs(
+    partitions: &mut TopicPartitions,
+    #[datatable] rows: Rows<TopicInput>,
+) {
+    let broker = support::start().await;
+    for row in rows {
+        create_topic(
+            &broker,
+            configured_topic_request()
+                .topic(&row.name)
+                .num_partitions(row.partitions)
+                .call(),
+        )
+        .await;
+    }
+    partitions.broker = Some(broker);
+}
+#[rstest_bdd_macros::when("the client describes topics {names} with partition limit {limit}")]
+async fn describe_topic_rows(partitions: &mut TopicPartitions, names: String, limit: i32) {
+    let names: Vec<_> = if names == "all" {
+        Vec::new()
+    } else {
+        names.split(',').collect()
+    };
+    partitions.response = Some(
+        partitions
+            .broker
+            .as_ref()
+            .expect("topics created")
+            .client
+            .send(describe_topics_request(&names, limit, None))
+            .await
+            .expect("DescribeTopicPartitions"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "alpha then beta include all partition rows and leaders without a cursor"
+)]
+fn named_partition_rows(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("topics described");
     assert!(resp.topics.len() == 2);
     // Named-request order preserves the request order.
     check!(resp.topics[0].name.as_deref() == Some("alpha"));
@@ -116,23 +142,10 @@ async fn named_request_returns_listed_topics_with_partitions() {
         "no cursor expected: {:?}",
         resp.next_cursor,
     );
-
-    p.broker.shutdown().await;
 }
-
-#[tokio::test]
-async fn fetch_all_returns_topics_in_alphabetical_order() {
-    let p = support::start().await;
-    // Create in non-alphabetical order to prove the broker sorts.
-    create_topic(&p, configured_topic_request().topic("gamma").call()).await;
-    create_alpha_beta().p(&p).call().await;
-
-    let resp = p
-        .client
-        .send(describe_topics_request(&[], 2000, None)) // empty → fetch-all
-        .await
-        .expect("DescribeTopicPartitions");
-
+#[rstest_bdd_macros::then("all user topics are alphabetically alpha beta gamma")]
+fn sorted_partition_rows(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("topics described");
     let names: Vec<&str> = resp
         .topics
         .iter()
@@ -145,24 +158,12 @@ async fn fetch_all_returns_topics_in_alphabetical_order() {
         .filter(|n| !n.starts_with("__"))
         .collect();
     assert!(user_topics == vec!["alpha", "beta", "gamma"]);
-
-    p.broker.shutdown().await;
 }
-
-#[tokio::test]
-async fn unknown_topic_in_named_request_returns_error_row() {
-    let p = support::start().await;
-    create_topic(&p, configured_topic_request().topic("real-topic").call()).await;
-
-    let resp = p
-        .client
-        .send(describe_topics_request(
-            &["ghost", "real-topic"],
-            2000,
-            None,
-        ))
-        .await
-        .expect("DescribeTopicPartitions");
+#[rstest_bdd_macros::then(
+    "ghost has error 3 and no partitions while real-topic is still described"
+)]
+fn unknown_partition_rows(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("topics described");
     assert!(resp.topics.len() == 2);
     // Unknown topic row carries UNKNOWN_TOPIC_OR_PARTITION (3).
     check!(resp.topics[0].name.as_deref() == Some("ghost"));
@@ -172,20 +173,10 @@ async fn unknown_topic_in_named_request_returns_error_row() {
     check!(resp.topics[1].name.as_deref() == Some("real-topic"));
     check!(resp.topics[1].error_code == 0);
     check!(resp.topics[1].partitions.len() == 1);
-
-    p.broker.shutdown().await;
 }
-
-/// The JVM 3.8 admin client NPEs when `eligibleLeaderReplicas` or
-/// `lastKnownElr` decode as `null`. The NPE happens in
-/// `DescribeTopicPartitionsResponse.partitionToTopicPartitionInfo`. The
-/// schema marks both nullable, but real Kafka brokers always emit empty
-/// lists. This test pins the empty-list shape so the broker does not
-/// regress.
-#[tokio::test]
-async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
-    let DescribedTopic { p, response: resp } = Box::pin(described_topic("t", 1)).await;
-
+#[rstest_bdd_macros::then("both ELR lists are present empty lists rather than null")]
+fn non_null_elr_rows(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("topics described");
     assert!(resp.topics.len() == 1);
     assert!(resp.topics[0].partitions.len() == 1);
     let part = &resp.topics[0].partitions[0];
@@ -199,29 +190,81 @@ async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
         part.last_known_elr.as_deref() == Some(&[][..]),
         "last_known_elr must be empty list, not null"
     );
-
-    p.broker.shutdown().await;
 }
-
-/// The `DescribeTopicPartitions` request the ELR-downgrade case sends twice,
-/// once on either side of the downgrade.
-fn describe_request() -> DescribeTopicPartitionsRequest {
-    describe_topics_request(&["t"], 2000, None)
+#[rstest_bdd_macros::then("the topic row succeeds and carries the full authorized operations mask")]
+fn authorized_partition_rows(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("topics described");
+    assert!(resp.topics.len() == 1);
+    let row = &resp.topics[0];
+    assert!(row.error_code == 0);
+    // `support::start` uses `AllowAllAuthorizer` by default, so every
+    // supported topic operation is authorized → full mask.
+    assert!(
+        row.topic_authorized_operations == TOPIC_FULL_MASK,
+        "expected full topic mask, got 0b{:b}",
+        row.topic_authorized_operations
+    );
 }
-
-/// KIP-966: a downgrade of `eligible.leader.replicas.version` to 0 clears the
-/// memberships the feature published, so `DescribeTopicPartitions` reports an
-/// empty `Elr` afterwards.
-///
-/// This is the read side of Kafka's `generateRecordsForCleaningElr`. The
-/// membership is seeded as the topic-config override the controller publishes,
-/// which is how krabka carries ELR, and the downgrade goes through
-/// `UpdateFeatures` exactly as `kafka-features downgrade` sends it.
-#[tokio::test]
-async fn a_feature_downgrade_empties_the_reported_elr() {
-    let p = support::start().await;
-    create_topic(&p, configured_topic_request().topic("t").call()).await;
-
+#[rstest_bdd_macros::then(
+    "the first page contains three big partitions and a cursor for big partition 3"
+)]
+fn partition_first_page(partitions: &TopicPartitions) {
+    let resp = partitions.response.as_ref().expect("first page requested");
+    assert!(resp.topics.len() == 1);
+    check!(resp.topics[0].name.as_deref() == Some("big"));
+    check!(resp.topics[0].partitions.len() == 3);
+    let cursor = resp.next_cursor.as_ref().expect("next_cursor must be set");
+    assert!(cursor.topic_name == "big");
+    assert!(cursor.partition_index == 3);
+}
+#[rstest_bdd_macros::when("the client resumes from the exact returned cursor with limit 2000")]
+async fn resume_partition_page(partitions: &mut TopicPartitions) {
+    let p = partitions.broker.as_ref().expect("topics created");
+    let cursor = partitions
+        .response
+        .as_ref()
+        .expect("first page requested")
+        .next_cursor
+        .as_ref()
+        .expect("next cursor returned");
+    let resp2 = p
+        .client
+        .send(describe_topics_request(
+            &["big"],
+            2000,
+            Some(RequestCursor {
+                topic_name: cursor.topic_name.clone(),
+                partition_index: cursor.partition_index,
+                ..Default::default()
+            }),
+        ))
+        .await
+        .expect("DescribeTopicPartitions (resume)");
+    partitions.resumed = Some(resp2);
+}
+#[rstest_bdd_macros::then(
+    "the resumed page contains exactly partitions 3 and 4 without another cursor"
+)]
+fn partition_last_page(partitions: &TopicPartitions) {
+    let resp2 = partitions.resumed.as_ref().expect("cursor resumed");
+    assert!(resp2.topics.len() == 1);
+    let parts: Vec<i32> = resp2.topics[0]
+        .partitions
+        .iter()
+        .map(|p| p.partition_index)
+        .collect();
+    assert!(parts == vec![3, 4]);
+    assert!(
+        resp2.next_cursor.is_none(),
+        "no more data should remain after the resume: {:?}",
+        resp2.next_cursor,
+    );
+}
+#[rstest_bdd_macros::given(
+    "ELR version 1 is finalized and t partition 0 has eligible nodes 2 and 3"
+)]
+async fn published_elr_input(partitions: &mut TopicPartitions) {
+    let p = partitions.broker.as_ref().expect("topics created");
     p.broker
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
@@ -245,12 +288,10 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
         ))
         .await
         .expect("publish an ELR");
-
-    let before = p
-        .client
-        .send(describe_request())
-        .await
-        .expect("describe before");
+}
+#[rstest_bdd_macros::then("t partition 0 reports eligible replicas 2 and 3 before downgrade")]
+fn published_elr_reported(partitions: &TopicPartitions) {
+    let before = partitions.response.as_ref().expect("ELR described");
     assert!(
         before.topics[0].partitions[0]
             .eligible_leader_replicas
@@ -259,7 +300,10 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
         "precondition: the published membership is reported: {:?}",
         before.topics[0].partitions[0]
     );
-
+}
+#[rstest_bdd_macros::when("the admin safely downgrades ELR version to 0")]
+async fn downgrade_partition_elr(partitions: &mut TopicPartitions) {
+    let p = partitions.broker.as_ref().expect("topics created");
     let downgrade = p
         .client
         .send(UpdateFeaturesRequest {
@@ -275,17 +319,19 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
         })
         .await
         .expect("UpdateFeatures");
+    partitions.downgrade = Some(downgrade);
+}
+#[rstest_bdd_macros::then("the ELR feature downgrade succeeds")]
+fn partition_elr_downgraded(partitions: &TopicPartitions) {
+    let downgrade = partitions.downgrade.as_ref().expect("downgrade requested");
     assert!(
         downgrade.error_code == 0,
         "UpdateFeatures rejected the request: {downgrade:?}"
     );
-
-    // The clearing records ride in the same batch as the feature record, so
-    // they are committed together; the describe below waits only for this
-    // broker to have applied that batch.
-    //
-    // intentional poll: the only signal that the batch applied is the state
-    // it changes, which is what is being asserted.
+}
+#[rstest_bdd_macros::when("the client retries describing t until the clearing batch is applied")]
+async fn read_cleared_partition_elr(partitions: &mut TopicPartitions) {
+    let p = partitions.broker.as_ref().expect("topics created");
     let deadline = Instant::now() + Duration::from_secs(10);
     let after = loop {
         let resp = p
@@ -302,6 +348,15 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
         }
         task::yield_now().await;
     };
+    partitions.response = Some(after);
+}
+#[rstest_bdd_macros::then("both ELR lists are empty and the finalized ELR feature is absent")]
+fn cleared_partition_elr(partitions: &TopicPartitions) {
+    let p = partitions.broker.as_ref().expect("topics created");
+    let after = partitions
+        .response
+        .as_ref()
+        .expect("post-downgrade topics described");
     let part = &after.topics[0].partitions[0];
     check!(
         part.eligible_leader_replicas.as_deref() == Some(&[][..]),
@@ -318,105 +373,107 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
             == None,
         "the downgrade must remove the finalized feature"
     );
-
-    p.broker.shutdown().await;
+}
+fn describe_request() -> DescribeTopicPartitionsRequest {
+    describe_topics_request(&["t"], 2000, None)
 }
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "named request returns listed topics with partitions"
+)]
 #[tokio::test]
-async fn topic_authorized_operations_populated_for_super_user() {
-    let DescribedTopic { p, response: resp } = Box::pin(described_topic("t", 1)).await;
-
-    assert!(resp.topics.len() == 1);
-    let row = &resp.topics[0];
-    assert!(row.error_code == 0);
-    // `support::start` uses `AllowAllAuthorizer` by default, so every
-    // supported topic operation is authorized → full mask.
-    assert!(
-        row.topic_authorized_operations == TOPIC_FULL_MASK,
-        "expected full topic mask, got 0b{:b}",
-        row.topic_authorized_operations
-    );
-
-    p.broker.shutdown().await;
+async fn named_request_returns_listed_topics_with_partitions(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
 }
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "fetch all returns topics in alphabetical order"
+)]
 #[tokio::test]
-async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
-    let p = support::start().await;
-    create_topic(
-        &p,
-        configured_topic_request()
-            .topic("big")
-            .num_partitions(5)
-            .call(),
-    )
-    .await;
-
-    // Cap response to 3 partitions; expect 3 returned + a cursor pointing
-    // at "big" / partition 3.
-    let resp = p
-        .client
-        .send(describe_topics_request(&["big"], 3, None))
-        .await
-        .expect("DescribeTopicPartitions");
-
-    assert!(resp.topics.len() == 1);
-    check!(resp.topics[0].name.as_deref() == Some("big"));
-    check!(resp.topics[0].partitions.len() == 3);
-    let cursor = resp.next_cursor.expect("next_cursor must be set");
-    assert!(cursor.topic_name == "big");
-    assert!(cursor.partition_index == 3);
-
-    // Resume from the cursor — should return partitions 3 and 4 only.
-    let resp2 = p
-        .client
-        .send(describe_topics_request(
-            &["big"],
-            2000,
-            Some(RequestCursor {
-                topic_name: cursor.topic_name.clone(),
-                partition_index: cursor.partition_index,
-                ..Default::default()
-            }),
-        ))
-        .await
-        .expect("DescribeTopicPartitions (resume)");
-    assert!(resp2.topics.len() == 1);
-    let parts: Vec<i32> = resp2.topics[0]
-        .partitions
-        .iter()
-        .map(|p| p.partition_index)
-        .collect();
-    assert!(parts == vec![3, 4]);
-    assert!(
-        resp2.next_cursor.is_none(),
-        "no more data should remain after the resume: {:?}",
-        resp2.next_cursor,
-    );
-
-    p.broker.shutdown().await;
+async fn fetch_all_returns_topics_in_alphabetical_order(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct AlphaBetaTopicsSetup {
-    #[default(TopicPartitionCount(1))]
-    alpha_partitions: TopicPartitionCount,
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "unknown topic in named request returns error row"
+)]
+#[tokio::test]
+async fn unknown_topic_in_named_request_returns_error_row(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
 }
 
-/// Keep the shared alpha-before-beta creation order with each case's alpha partition count.
-#[bon::builder]
-async fn create_alpha_beta(
-    p: &support::InProcess,
-    #[builder(into, default = TopicPartitionCount(1))] alpha_partitions: TopicPartitionCount,
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "elr lists are empty not null for jvm 3 8 admin compatibility"
+)]
+#[tokio::test]
+async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "a feature downgrade empties the reported elr"
+)]
+#[tokio::test]
+async fn a_feature_downgrade_empties_the_reported_elr(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "topic authorized operations populated for super user"
+)]
+#[tokio::test]
+async fn topic_authorized_operations_populated_for_super_user(partitions: TopicPartitions) {
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "pagination caps response at partition limit and returns next cursor"
+)]
+#[tokio::test]
+async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor(
+    partitions: TopicPartitions,
 ) {
-    let setup = AlphaBetaTopicsSetup { alpha_partitions };
-    create_topic(
-        p,
-        configured_topic_request()
-            .topic("alpha")
-            .num_partitions(setup.alpha_partitions.0)
-            .call(),
-    )
-    .await;
-    create_topic(p, configured_topic_request().topic("beta").call()).await;
+    partitions
+        .broker
+        .expect("topics created")
+        .broker
+        .shutdown()
+        .await;
 }

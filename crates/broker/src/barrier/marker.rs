@@ -183,15 +183,71 @@ mod tests {
         assert!(built.max_timestamp == 1_724_500_000_000);
     }
 
-    #[test]
-    fn the_key_is_the_kafka_control_layout() {
-        let built = batch();
-        let key = built.records[0].key.as_ref().expect("marker has a key");
-        let mut expected = Vec::new();
-        put_i16(&mut expected, 0);
-        put_i16(&mut expected, 1000);
-        assert!(&key[..] == &expected[..]);
+    #[derive(Default)]
+    struct BarrierControlRecord {
+        marker: Option<BarrierMarker>,
+        batch: Option<RecordBatch>,
     }
+
+    #[rstest::fixture]
+    fn barrier_control_record() -> BarrierControlRecord {
+        // Building one control record cannot reuse a previous marker batch.
+        BarrierControlRecord::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "barrier group {group} at epoch {epoch} was triggered at {timestamp}"
+    )]
+    fn supplied_barrier_marker(
+        barrier_control_record: &mut BarrierControlRecord,
+        group: String,
+        epoch: i64,
+        timestamp: i64,
+    ) {
+        barrier_control_record.marker = Some(BarrierMarker {
+            group,
+            epoch,
+            triggered_at: timestamp,
+        });
+    }
+
+    #[rstest_bdd_macros::when(
+        "the barrier control batch is built at offset {offset} in leader epoch {epoch}"
+    )]
+    fn build_supplied_barrier(
+        barrier_control_record: &mut BarrierControlRecord,
+        offset: i64,
+        epoch: i32,
+    ) {
+        barrier_control_record.batch = Some(
+            build_barrier_batch(
+                barrier_control_record
+                    .marker
+                    .as_ref()
+                    .expect("barrier was given"),
+                Offset(offset),
+                epoch,
+            )
+            .expect("valid marker builds"),
+        );
+    }
+
+    #[rstest_bdd_macros::then(
+        "the control record key contains Kafka version 0 and barrier type 1000"
+    )]
+    fn barrier_control_key_layout(barrier_control_record: &BarrierControlRecord) {
+        let batch = barrier_control_record
+            .batch
+            .as_ref()
+            .expect("control batch was built");
+        let key = batch.records[0].key.as_ref().expect("marker has a key");
+        assert!(&key[..] == &[0, 0, 3, 232]);
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/barrier/marker.feature",
+        fixtures = [barrier_control_record: BarrierControlRecord]
+    );
 
     /// The builder here and the classifier in `krabka-log` each encode the
     /// control-record key themselves. This test is the seam between them: it

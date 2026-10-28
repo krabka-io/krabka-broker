@@ -222,74 +222,6 @@ fn a_fenced_broker_is_a_last_resort_and_never_the_leader() {
 }
 
 #[test]
-fn fenced_brokers_are_counted_and_refused_as_kafkas_placer_does() {
-    let three = vec![
-        broker(1, None, false),
-        fenced(broker(2, None, false)),
-        fenced(broker(3, None, false)),
-    ];
-    let all_fenced = vec![
-        fenced(broker(1, None, false)),
-        fenced(broker(2, None, false)),
-    ];
-    let cases = [
-        // (label, brokers, replication factor, placed, reason)
-        (
-            "the replication factor is the broker count, fenced included",
-            &three,
-            3,
-            true,
-            String::new(),
-        ),
-        (
-            "the replication factor exceeds the broker count",
-            &three,
-            4,
-            false,
-            "The target replication factor of 4 cannot be reached because only 3 broker(s) are \
-             registered or some brokers have all their log directories cordoned."
-                .to_owned(),
-        ),
-        (
-            "every broker is fenced",
-            &all_fenced,
-            1,
-            false,
-            "All brokers are currently fenced, or have all their log directories cordoned."
-                .to_owned(),
-        ),
-        (
-            "every broker is fenced and the replication factor is too high",
-            &all_fenced,
-            3,
-            false,
-            "All brokers are currently fenced, or have all their log directories cordoned."
-                .to_owned(),
-        ),
-        (
-            "no broker at all",
-            &Vec::new(),
-            1,
-            false,
-            "All brokers are currently fenced, or have all their log directories cordoned."
-                .to_owned(),
-        ),
-    ];
-
-    for (label, brokers, replication_factor, placed, reason) in cases {
-        let placement = place(brokers, 2, replication_factor, None, 0);
-
-        assert!(!placement.is_empty() == placed, "{label}");
-        if !placed {
-            assert!(
-                placement_failure_reason(replication_factor, brokers) == reason,
-                "{label}"
-            );
-        }
-    }
-}
-
-#[test]
 fn one_broker_per_site_rotates_the_replica_list_from_a_random_site() {
     let brokers = vec![replica(1, "a"), replica(2, "b"), replica(3, "c")];
 
@@ -533,3 +465,80 @@ fn the_entropy_seed_is_not_a_constant() {
 
     assert!(seeds.len() > 1);
 }
+
+#[derive(Default)]
+struct FencedReplicaPlacement {
+    brokers: Vec<SiteBrokerView>,
+    placement: Option<Vec<Vec<NodeId>>>,
+    refusal: Option<String>,
+}
+
+#[rstest::fixture]
+fn fenced_replica_placement() -> FencedReplicaPlacement {
+    // Every placement uses its own registration and fencing snapshot.
+    FencedReplicaPlacement::default()
+}
+
+#[rstest_bdd_macros::given("registered broker ids and fenced flags are JSON {registrations}")]
+fn supplied_placement_registrations(
+    fenced_replica_placement: &mut FencedReplicaPlacement,
+    registrations: String,
+) {
+    let registrations: Vec<(u64, bool)> =
+        serde_json::from_str(&registrations).expect("explicit broker fencing inputs");
+    fenced_replica_placement.brokers = registrations
+        .into_iter()
+        .map(|(id, is_fenced)| SiteBrokerView {
+            fenced: is_fenced,
+            ..broker(id, None, false)
+        })
+        .collect();
+}
+
+#[rstest_bdd_macros::when(
+    "the Kafka placer assigns two partitions at replication factor {replication} with seed 0"
+)]
+fn place_with_fenced_brokers(
+    fenced_replica_placement: &mut FencedReplicaPlacement,
+    replication: i16,
+) {
+    let placement = place(&fenced_replica_placement.brokers, 2, replication, None, 0);
+    if placement.is_empty() {
+        fenced_replica_placement.refusal = Some(placement_failure_reason(
+            replication,
+            &fenced_replica_placement.brokers,
+        ));
+    }
+    fenced_replica_placement.placement = Some(placement);
+}
+
+#[rstest_bdd_macros::then("the placer returns replica assignments")]
+fn successful_fenced_replica_placement(fenced_replica_placement: &FencedReplicaPlacement) {
+    assert!(
+        !fenced_replica_placement
+            .placement
+            .as_ref()
+            .expect("placement was attempted")
+            .is_empty()
+    );
+}
+
+#[rstest_bdd_macros::then("the placer returns no assignments and refuses with {reason}")]
+fn refused_fenced_replica_placement(
+    fenced_replica_placement: &FencedReplicaPlacement,
+    reason: String,
+) {
+    assert!(
+        fenced_replica_placement
+            .placement
+            .as_ref()
+            .expect("placement was attempted")
+            .is_empty()
+    );
+    assert!(fenced_replica_placement.refusal.as_ref() == Some(&reason));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/site_placement/tests.feature",
+    fixtures = [fenced_replica_placement: FencedReplicaPlacement]
+);
