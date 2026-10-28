@@ -6,7 +6,11 @@
 //! and takes a visitor.
 
 use {
-    super::Segment,
+    super::{
+        Segment,
+        io::SourceIo,
+        read_source::{IndexHint, ReadSource},
+    },
     crate::{
         config::{DEFAULT_INDEX_INTERVAL, DEFAULT_TIMESTAMP_SCAN_WINDOW},
         error::LogError,
@@ -78,16 +82,22 @@ impl Segment {
             self.read_log_range(pos, buf, len)
         })
     }
+}
 
+/// The header walks of a [`ReadSource`]: the lookup of a read's start
+/// position, and the step over batch boundaries behind it. Provided for every
+/// source, so they run the same over a live segment and over a view of one.
+pub trait HeaderWalk: ReadSource {
     /// [`Segment::read_start_position`] over the positional reads of
     /// `read_range`, so a caller can count the I/O of the lookup.
-    pub(super) fn read_start_position_with(
+    fn read_start_position_with(
         &self,
         target_rel: u32,
         mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
     ) -> Result<u64, LogError> {
-        let target = self.base_offset.0 + i64::from(target_rel);
-        let position = match self.offset_index.floor_entry(target_rel) {
+        let target = self.base().0 + i64::from(target_rel);
+        let IndexHint { floor, bound } = self.index_hint(target_rel);
+        let position = match floor {
             Some(OffsetIndexEntry {
                 relative_offset,
                 position,
@@ -115,10 +125,6 @@ impl Segment {
         };
         // The first index entry at or past the target holds a batch whose
         // last offset reaches it, so the walk stops at or before that entry.
-        let bound = self
-            .offset_index
-            .position_at_or_after(target_rel)
-            .map(u64::from);
         let window = first_header_walk_window(position, bound);
         self.walk_batch_headers_with(position, window, read_range, |view| {
             if view.last_offset.0 >= target {
@@ -162,7 +168,7 @@ impl Segment {
         let next = u64::try_from(total)
             .ok()
             .and_then(|length| position.checked_add(length));
-        Ok(next.filter(|&next| next <= self.log_size))
+        Ok(next.filter(|&next| next <= self.log_size()))
     }
 
     /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
@@ -174,7 +180,7 @@ impl Segment {
     /// segment full of small batches would otherwise cost one `pread` per
     /// batch. The first window is [`initial_header_walk_window`]. It ends at the end of the file, at a torn trailing batch, or
     /// when `visit` breaks, and returns the byte position where it stopped.
-    pub(super) fn walk_batch_headers(
+    fn walk_batch_headers(
         &self,
         start_pos: u64,
         visit: impl FnMut(&BatchHeaderView) -> ControlFlow<()>,
@@ -187,7 +193,7 @@ impl Segment {
         )
     }
 
-    /// [`Segment::walk_batch_headers`] over the positional reads of
+    /// [`Self::walk_batch_headers`] over the positional reads of
     /// `read_range`, starting with a `first_window`-byte read.
     ///
     /// Each later window doubles the one before, up to
@@ -205,7 +211,7 @@ impl Segment {
         let mut window = first_window.clamp(HEADER_LEN, max_window);
         let mut buf: Vec<u8> = Vec::with_capacity(window);
         let mut pos = start_pos;
-        while pos < self.log_size {
+        while pos < self.log_size() {
             buf.clear();
             read_range(pos, &mut buf, window)?;
             let mut at = 0usize;
@@ -241,6 +247,8 @@ impl Segment {
         Ok(pos)
     }
 }
+
+impl<S: ReadSource + ?Sized> HeaderWalk for S {}
 
 #[cfg(test)]
 mod tests {

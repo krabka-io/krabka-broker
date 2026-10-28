@@ -405,7 +405,10 @@ fn many_partitions_share_a_fixed_worker_pool() {
     for (_, _, gate, _) in &partitions {
         gate.open_gate();
     }
-    let mut threads: HashSet<_> = started.into_iter().map(Result::unwrap).collect();
+    let mut threads = HashSet::new();
+    for thread in started {
+        threads.insert(thread.unwrap());
+    }
     assert!(
         pending
             .iter()

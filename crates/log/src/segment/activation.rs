@@ -6,7 +6,7 @@
 //! why they sit together.
 
 use {
-    super::{ActivationScan, Segment},
+    super::{ActivationScan, Segment, header_walk::HeaderWalk as _},
     crate::error::LogError,
     krabka_ids::Offset,
     std::ops::ControlFlow,

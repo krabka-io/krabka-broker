@@ -7,10 +7,14 @@ use krabka_protocol::records::FileRegion;
 use {
     super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read},
     crate::{
-        blocking::run_page_cache_io, codes, diskless::hot_tail::HotTailCache, error::BrokerError,
-        log_dir_status::LogDirRegistry, partition::Partition,
+        blocking::{run_blocking, run_page_cache_io},
+        codes,
+        diskless::hot_tail::HotTailCache,
+        error::BrokerError,
+        log_dir_status::LogDirRegistry,
+        partition::Partition,
     },
-    krabka_log::{Log, LogError, Offset},
+    krabka_log::{Log, LogError, Offset, RawReadPlan},
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
         records::RecordsPayload,
@@ -246,7 +250,8 @@ struct ServedRecords {
 }
 
 /// The records a blocking read copied or described, and the aborted
-/// transactions that overlap them.
+/// transactions that overlap them: what the tests compare one read to.
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 struct RawServed {
     records: RecordsPayload,
@@ -256,6 +261,7 @@ struct RawServed {
 /// Everything the blocking half of one partition's read needs, decided by
 /// `plan_read` while it held the log mutex and carried across the point where
 /// that mutex was released.
+#[derive(Clone, Copy)]
 struct BlockingRead {
     fetch_offset: Offset,
     limit_offset: Offset,
@@ -326,16 +332,39 @@ async fn run_blocking_read(
     read: &BlockingRead,
 ) -> Result<ServedRecords, BrokerError> {
     let read = BlockingRead { ..*read };
-    let fetch_offset = read.fetch_offset;
-    // The active segment can serve recent bytes from the page cache or its direct-write tail cache. Older reads still run away from the runtime worker.
-    let served = run_page_cache_io(
+    // Under the log mutex, the plan alone: index lookups and handle clones,
+    // which never wait on storage, so it runs on the calling task whenever
+    // the mutex is free and hands off only to wait for a holder.
+    let plan = run_page_cache_io(
         log,
-        |log| !log.read_may_block(fetch_offset),
-        move |log| read_records(log, &read),
+        |_| true,
+        move |log| log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max),
     )
     .await
-    .map_err(|error| read_task_panicked(&error))?;
-    let RawServed { records, aborted } = served?;
+    .map_err(|error| read_task_panicked(&error))??;
+    // Off the mutex, the read: the header walks, the readahead hints and the
+    // copy or description of the run, which the producer's appends to the
+    // partition no longer wait behind. The page cache and the direct-write
+    // tail cache serve a recent read on the calling task; a read that may
+    // wait on the disk runs away from the runtime worker.
+    let (records, served_upper_bound) = if plan.may_block() {
+        run_blocking(move || run_read(&plan, &read))
+            .await
+            .map_err(|error| read_task_panicked(&error))??
+    } else {
+        run_read(&plan, &read)?
+    };
+    let aborted = if read.read_committed_aborts {
+        run_page_cache_io(
+            log,
+            |_| true,
+            move |log| aborted_for(log, &read, served_upper_bound),
+        )
+        .await
+        .map_err(|error| read_task_panicked(&error))?
+    } else {
+        Vec::new()
+    };
     let records = (records.payload_len() > 0).then_some(records);
     Ok(ServedRecords { records, aborted })
 }
@@ -346,17 +375,66 @@ fn read_task_panicked(cause: &impl fmt::Display) -> BrokerError {
     )))
 }
 
-/// The blocking body of one partition's read, under the log mutex: seek, and
-/// either describe or copy the records run out of it.
+/// One partition's read in full, under the log mutex: the plan, the read of
+/// it and the aborted-transaction scan that [`run_blocking_read`] splits
+/// around the mutex, in one call for a test that holds the log anyway.
+#[cfg(test)]
 fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError> {
+    let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
+    let (records, served_upper_bound) = run_read(&plan, read)?;
+    let aborted = aborted_for(log, read, served_upper_bound);
+    Ok(RawServed { records, aborted })
+}
+
+/// The aborted transactions a `read_committed` fetch reports beside the
+/// bytes it served, which end at `served_upper_bound`; none for any other
+/// fetch.
+///
+/// `read_committed` does NO server-side batch filtering: verbatim bytes
+/// (including aborted/control batches) are returned and the consumer drops
+/// them client-side via `aborted_transactions`, matching Apache Kafka's
+/// behavior. The scan is bounded by the offset just past the bytes the read
+/// actually served, not by `effective_lso`: `partition_max_bytes` (or KFC-1's
+/// delivery watermark) can clip the read well short of the LSO, and Kafka's
+/// `LocalLog.addAbortedTransactions` bounds the same scan by
+/// `fetchUpperBoundOffset`, the position the read stopped at, for exactly
+/// that reason. A read that served nothing scans nothing.
+fn aborted_for(
+    log: &Log,
+    read: &BlockingRead,
+    served_upper_bound: Option<Offset>,
+) -> Vec<AbortedTransaction> {
+    if !read.read_committed_aborts {
+        return Vec::new();
+    }
+    let upper_bound =
+        served_upper_bound.map_or(read.fetch_offset, |served| served.min(read.effective_lso));
+    log.aborted_in_range(read.fetch_offset, upper_bound)
+        .into_iter()
+        .map(|e| AbortedTransaction {
+            // Unwrap the log-layer `ProducerId` into the wire `i64` field.
+            producer_id: e.producer_id.get(),
+            // Unwrap the log-layer `Offset` into the wire `i64` field.
+            first_offset: e.start_offset.0,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+}
+
+/// The read of one partition's plan, with no lock held: describe or copy the
+/// records run out of its segments. Beside the records it returns the offset
+/// just past the last batch the byte-copy path served, for the
+/// aborted-transaction scan; the sendfile path, which `read_committed` never
+/// takes, leaves it `None`.
+fn run_read(
+    plan: &RawReadPlan,
+    read: &BlockingRead,
+) -> Result<(RecordsPayload, Option<Offset>), BrokerError> {
     let &BlockingRead {
-        fetch_offset,
-        limit_offset,
-        effective_lso,
-        read_max,
         read_committed_aborts,
         sendfile_capable,
         sendfile_min_bytes,
+        ..
     } = read;
 
     // Zero-copy (Increments D + E): on a plaintext connection
@@ -414,7 +492,7 @@ fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError
         // from the metadata frame and leave a fresh stable-topic reader
         // with HW/LSO but no decoded batches.
         if sendfile_capable && !read_committed_aborts {
-            let desc = log.read_raw_desc(fetch_offset, limit_offset, read_max)?;
+            let desc = plan.read_regions()?;
             if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
                 chosen = Some(RecordsPayload::FileRegions(desc.regions));
             } else if !desc.regions.is_empty() {
@@ -432,7 +510,7 @@ fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError
         if let Some(p) = chosen {
             p
         } else {
-            let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
+            let raw = plan.read_bytes()?;
             served_upper_bound = raw.last_offset.map(|o| o + 1);
             RecordsPayload::Raw(raw.bytes)
         }
@@ -452,42 +530,13 @@ fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError
         // Both sendfile inputs are consumed only by the platform
         // branch above, so discard them here or `-D warnings` fails
         // the build on this target.
-        let _ = (sendfile_capable, sendfile_min_bytes);
-        let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
+        let _ = (sendfile_capable, sendfile_min_bytes, read_committed_aborts);
+        let raw = plan.read_bytes()?;
         served_upper_bound = raw.last_offset.map(|o| o + 1);
         RecordsPayload::Raw(raw.bytes)
     };
 
-    // read_committed does NO server-side batch filtering: verbatim
-    // bytes (including aborted/control batches) are returned and the
-    // consumer drops them client-side via `aborted_transactions`,
-    // matching Apache Kafka's behavior. Skip the Vec allocation
-    // entirely when there are no aborted txns in range.
-    //
-    // The scan is bounded by the offset just past the bytes this call
-    // actually served, not by `effective_lso`: `partition_max_bytes` (or
-    // KFC-1's delivery watermark) can clip the read well short of the LSO,
-    // and Kafka's `LocalLog.addAbortedTransactions` bounds the same scan by
-    // `fetchUpperBoundOffset`, the position the read stopped at, for
-    // exactly that reason. A read that served nothing scans nothing.
-    let aborted = if read_committed_aborts {
-        let upper_bound =
-            served_upper_bound.map_or(fetch_offset, |served| served.min(effective_lso));
-        log.aborted_in_range(fetch_offset, upper_bound)
-            .into_iter()
-            .map(|e| AbortedTransaction {
-                // Unwrap the log-layer `ProducerId` into the wire `i64` field.
-                producer_id: e.producer_id.get(),
-                // Unwrap the log-layer `Offset` into the wire `i64` field.
-                first_offset: e.start_offset.0,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    Ok::<_, BrokerError>(RawServed { records, aborted })
+    Ok((records, served_upper_bound))
 }
 
 fn finish_read(

@@ -122,8 +122,8 @@ pub use {
     log::{
         ActiveProducer, ActiveSegmentExport, BARRIER_CONTROL_TYPE, BuiltCompaction,
         CompactionContext, CompactionJob, CompactionOutcome, DueDeletions, FailedDeletion, Log,
-        RawRead, ReadOutput, SegmentExport, TransactionAppendRefusal, TransactionalBatch,
-        VerbatimBatch, VerificationGuard,
+        RawRead, RawReadPlan, ReadOutput, SegmentExport, TransactionAppendRefusal,
+        TransactionalBatch, VerbatimBatch, VerificationGuard,
     },
     producer_snapshot::{
         NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,

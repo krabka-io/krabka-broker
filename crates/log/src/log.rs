@@ -70,7 +70,7 @@ pub use self::{
     compaction::{BuiltCompaction, CompactionContext, CompactionJob, CompactionOutcome},
     control::BARRIER_CONTROL_TYPE,
     maintenance::{DueDeletions, FailedDeletion},
-    read::{RawRead, ReadOutput},
+    read::{RawRead, RawReadPlan, ReadOutput},
     tiering::{ActiveSegmentExport, SegmentExport},
     verbatim::VerbatimBatch,
     verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},

@@ -13,7 +13,10 @@
 use super::page_cache;
 use {
     super::Log,
-    crate::{error::LogError, segment::Segment},
+    crate::{
+        error::LogError,
+        segment::{RawReadSource as _, ReadSource, Segment, SegmentReadView},
+    },
     bytes::{Bytes, BytesMut},
     krabka_ids::Offset,
     krabka_protocol::records::{HEADER_LEN, RecordBatch},
@@ -22,7 +25,7 @@ use {
     tracing::{field, instrument},
 };
 #[krabka_macros::sendfile_cfg]
-use {krabka_protocol::records::FileRegion, std::cell::Cell};
+use {crate::segment::RawDescSource as _, krabka_protocol::records::FileRegion, std::cell::Cell};
 
 /// A `usize` byte length as a quantity.
 ///
@@ -50,7 +53,7 @@ fn batch_header() -> ByteSize { size_from_len(HEADER_LEN) }
 /// first batch of the next segment after the run, and skip every offset
 /// between them. Kafka's `LocalLog.read` never leaves the segment that it
 /// found data in.
-fn emptied(segment: &Segment, next: Offset) -> bool { next > segment.last_offset() }
+fn emptied(segment: &impl ReadSource, next: Offset) -> bool { next > segment.last() }
 
 /// How far behind a cold fetch of up to `max_size` bytes the pages its
 /// reader's previous fetch brought in can start: twice the size, since only
@@ -107,7 +110,7 @@ impl RawReadCursor {
         true
     }
 
-    fn finished(&self, segment: &Segment, limit: Offset) -> bool {
+    fn finished(&self, segment: &impl ReadSource, limit: Offset) -> bool {
         self.remaining == ByteSize::ZERO || self.next >= limit || !emptied(segment, self.next)
     }
 }
@@ -151,17 +154,6 @@ pub struct RawRead {
     pub last_offset: Option<Offset>,
 }
 
-impl RawRead {
-    fn empty(off: Offset) -> Self {
-        Self {
-            start_offset: off,
-            bytes: Bytes::new(),
-            total: 0,
-            last_offset: None,
-        }
-    }
-}
-
 #[krabka_macros::sendfile_cfg]
 /// Descriptor form of [`Log::read_raw`] for the zero-copy `sendfile` fetch
 /// path, Increments D + E.
@@ -181,17 +173,6 @@ pub struct RawReadDesc {
     pub regions: Vec<FileRegion>,
     /// Total byte length across all regions.
     pub total: usize,
-}
-
-#[krabka_macros::sendfile_cfg]
-impl RawReadDesc {
-    fn empty(off: Offset) -> Self {
-        Self {
-            start_offset: off,
-            regions: Vec::new(),
-            total: 0,
-        }
-    }
 }
 
 impl Log {
@@ -223,6 +204,85 @@ impl Log {
             .chain(self.active.as_ref())
     }
 
+    /// Plan a raw read from `fetch_offset`, to run once the lock on this log
+    /// is released.
+    ///
+    /// A fetch of cold bytes walks batch headers, asks the kernel to read
+    /// ahead and copies or describes megabytes, and all of it waits on the
+    /// disk or costs system calls: milliseconds per fetch of a consumer that
+    /// is catching up. Under the log lock those milliseconds hold up every
+    /// append of the partition, which a producer sees as its publish p99
+    /// while a backlog drains. The plan takes what the read needs of the
+    /// log in a few `Arc` clones and index lookups, and the read then runs
+    /// on it without the log: [`RawReadPlan::read_bytes`] and
+    /// [`RawReadPlan::read_regions`] give what [`Log::read_raw`] and
+    /// [`Log::read_raw_desc`] would, as of the moment of the plan.
+    ///
+    /// The plan views each segment the read may walk, from the one that
+    /// holds `fetch_offset` on, as [`RawReadPlan`] walks them: a later
+    /// segment is read from the offset after the one before it, once that one
+    /// is read to its end, so every view's offset is known now. Planning stops
+    /// once the views can fill `max_size`, counting each from its index floor,
+    /// which is at or before where its read starts.
+    ///
+    /// # Errors
+    /// Returns [`LogError::OffsetTooLow`] below the log start and
+    /// [`LogError::OffsetBelowLocalStart`] below the local one, as the reads
+    /// do, and an error for an offset too far past a segment for its index.
+    pub fn plan_raw_read(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        max_size: ByteSize,
+    ) -> Result<RawReadPlan, LogError> {
+        let (read_buffer_cap, read_ahead_max, budget) = {
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            (
+                config.read_buffer_cap,
+                config.read_ahead_max,
+                config.page_cache_budget,
+            )
+        };
+        self.check_locally_readable(fetch_offset)?;
+        let mut plan = RawReadPlan {
+            fetch_offset,
+            limit_offset,
+            max_size,
+            read_buffer_cap,
+            read_ahead_max,
+            views: Vec::new(),
+            may_block: self.read_may_block(fetch_offset),
+        };
+        if fetch_offset >= limit_offset {
+            return Ok(plan);
+        }
+        let mut next = fetch_offset;
+        let mut planned = 0_u64;
+        for segment in self.segments_from(fetch_offset) {
+            if segment.last_offset() < next {
+                continue;
+            }
+            #[cfg(not(target_os = "wasi"))]
+            let cold_before = self.cold_before(segment, budget);
+            #[cfg(target_os = "wasi")]
+            let cold_before = {
+                let _ = budget;
+                None
+            };
+            let view = segment.read_view(next, cold_before)?;
+            planned = planned.saturating_add(view.bytes_from_floor());
+            plan.views.push(view);
+            if planned >= max_size.bytes_u64() {
+                break;
+            }
+            next = segment.last_offset() + 1;
+            if next >= limit_offset {
+                break;
+            }
+        }
+        Ok(plan)
+    }
+
     #[krabka_macros::sendfile_cfg]
     /// Descriptor variant of [`Log::read_raw`] for the zero-copy `sendfile`
     /// fetch path.
@@ -235,6 +295,8 @@ impl Log {
     ///
     /// The selected byte ranges are byte-identical to what `read_raw` would
     /// have returned for the same `(fetch_offset, limit_offset, max_size)`.
+    /// It plans and runs under the caller's lock: see [`Log::plan_raw_read`]
+    /// for the fetch path's split.
     #[instrument(
     level = "debug",
     skip(self),
@@ -249,66 +311,8 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawReadDesc, LogError> {
-        let (read_ahead_max, budget) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
-            (config.read_ahead_max, config.page_cache_budget)
-        };
-        self.check_locally_readable(fetch_offset)?;
-        if fetch_offset >= limit_offset {
-            return Ok(RawReadDesc::empty(fetch_offset));
-        }
-        let lookback = cold_lookback(max_size);
-        // A segment whose run would be walked on bytes that are not in the
-        // page cache is not described (`Segment::read_raw_desc_if_cached`). The walk
-        // stops there, so the fetch sends the runs before it, or, when it
-        // starts in that segment, gets nothing and falls back to the
-        // byte-copy path, which reads the run in one large read. Passing over
-        // it would send a later segment's runs and skip its offsets.
-        let stopped = Cell::new(false);
-
-        let RawChunks {
-            cursor,
-            chunks: regions,
-        } = self.raw_chunks(
-            fetch_offset,
-            limit_offset,
-            max_size,
-            |segment, next, remaining| {
-                if stopped.get() {
-                    return Ok(None);
-                }
-                let Some(read) = segment.read_raw_desc_if_cached(
-                    next,
-                    limit_offset,
-                    remaining,
-                    read_ahead_max,
-                )?
-                else {
-                    stopped.set(true);
-                    return Ok(None);
-                };
-                if let Some(region) = &read.region {
-                    let end = region.offset.saturating_add(region.len as u64);
-                    self.drop_cold(segment, budget, region.offset..end, lookback, false);
-                }
-                Ok(read.region.map(|region| RawChunk {
-                    len: region.len,
-                    data: region,
-                    start: read.start_offset,
-                    last: read.last_offset,
-                }))
-            },
-        )?;
-
-        let total: usize = regions.iter().map(|r| r.len).sum();
-        let span = tracing::Span::current();
-        span.record("regions", regions.len());
-        span.record("total", total);
-        Ok(RawReadDesc {
-            start_offset: cursor.start,
-            regions,
-            total,
-        })
+        self.plan_raw_read(fetch_offset, limit_offset, max_size)?
+            .read_regions()
     }
 
     /// The position in `segment`'s `.log` file before which a fetch is cold:
@@ -337,57 +341,6 @@ impl Log {
             None if segment.is_sealed() => u64::MAX,
             None => self.writeback_handed,
         })
-    }
-
-    /// Drop from the page cache what a fetch of `range` of `segment`'s `.log`
-    /// file leaves there, when the range is cold: see [`Self::cold_before`].
-    /// A `sendfile` fetch sends its bytes after this returns, so it drops the
-    /// pages behind it, where its reader's previous fetch was, back to
-    /// `lookback` bytes before the range. A fetch that already `held` its
-    /// bytes, having copied them, drops its own pages as well. Whole pages
-    /// only, so the page a `sendfile` range starts in stays for the send.
-    ///
-    /// A consumer catching up on a backlog thus leaves at most a fetch or two
-    /// of pages behind, instead of filling the cgroup to its limit and making
-    /// every append reclaim: see [`page_cache`].
-    #[cfg(not(target_os = "wasi"))]
-    fn drop_cold(
-        &self,
-        segment: &Segment,
-        budget: Option<ByteSize>,
-        range: Range<u64>,
-        lookback: u64,
-        held: bool,
-    ) {
-        let Some(cold_before) = self.cold_before(segment, budget) else {
-            return;
-        };
-        if range.end > cold_before {
-            return;
-        }
-        let from = range.start.saturating_sub(lookback) & !(page_cache::PAGE - 1);
-        let to = if held {
-            range.end
-        } else {
-            range.start & !(page_cache::PAGE - 1)
-        };
-        if to > from {
-            segment.drop_cached(from, to - from);
-        }
-    }
-
-    /// WASI has no flush pool, no page-cache ledger and no fetch that is cold.
-    #[cfg(target_os = "wasi")]
-    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    fn drop_cold(
-        &self,
-        segment: &Segment,
-        budget: Option<ByteSize>,
-        range: Range<u64>,
-        lookback: u64,
-        held: bool,
-    ) {
-        let _ = (segment, budget, range, lookback, held);
     }
 
     /// Reject an offset no local segment can answer.
@@ -474,40 +427,15 @@ impl Log {
         })
     }
 
-    fn raw_chunks<T>(
-        &self,
-        fetch_offset: Offset,
-        limit_offset: Offset,
-        budget: ByteSize,
-        mut read: impl FnMut(&Segment, Offset, ByteSize) -> Result<Option<RawChunk<T>>, LogError>,
-    ) -> Result<RawChunks<T>, LogError> {
-        let mut cursor = RawReadCursor::new(fetch_offset, budget);
-        let mut chunks = Vec::new();
-        for segment in self.segments_from(fetch_offset) {
-            if segment.last_offset() < cursor.next {
-                continue;
-            }
-            let Some(chunk) = read(segment, cursor.next, cursor.budget())? else {
-                continue;
-            };
-            if !cursor.accept(chunk.start, chunk.last, chunk.len) {
-                break;
-            }
-            chunks.push(chunk.data);
-            if cursor.finished(segment, limit_offset) {
-                break;
-            }
-        }
-        Ok(RawChunks { cursor, chunks })
-    }
-
     /// Like [`Log::read`], but returns verbatim wire bytes with no decode.
     ///
     /// The read walks sealed segments and then the active segment. It goes on
     /// into a segment only after it reads the segment before it to the end.
     /// It includes only batches with `base_offset < limit_offset`, up to
     /// `max_size`, and always at least one batch. The first batch is included
-    /// whole, even when it is larger than `max_size`.
+    /// whole, even when it is larger than `max_size`. It plans and runs under
+    /// the caller's lock: see [`Log::plan_raw_read`] for the fetch path's
+    /// split.
     #[instrument(
         level = "debug",
         skip(self),
@@ -522,46 +450,65 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawRead, LogError> {
-        let (read_buffer_cap, read_ahead_max, budget) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
-            (
-                config.read_buffer_cap,
-                config.read_ahead_max,
-                config.page_cache_budget,
-            )
-        };
-        self.check_locally_readable(fetch_offset)?;
-        if fetch_offset >= limit_offset {
-            return Ok(RawRead::empty(fetch_offset));
-        }
-        let lookback = cold_lookback(max_size);
+        self.plan_raw_read(fetch_offset, limit_offset, max_size)?
+            .read_bytes()
+    }
+}
 
-        let RawChunks { cursor, mut chunks } = self.raw_chunks(
-            fetch_offset,
-            limit_offset,
-            max_size,
-            |segment, next, remaining| {
-                let read = segment.read_raw_with_policy(
-                    next,
-                    limit_offset,
-                    remaining,
-                    read_buffer_cap,
-                    read_ahead_max,
-                )?;
-                if read.is_empty() {
-                    return Ok(None);
-                }
-                if let Some(file_range) = &read.file_range {
-                    self.drop_cold(segment, budget, file_range.clone(), lookback, true);
-                }
-                Ok(Some(RawChunk {
-                    len: read.bytes.len(),
-                    data: read.bytes,
-                    start: read.start_offset,
-                    last: read.last_offset,
-                }))
-            },
-        )?;
+/// A raw read planned under the log lock, to run without it.
+///
+/// The plan holds a view of each segment the read may walk, taken by
+/// [`Log::plan_raw_read`], and the read's bounds and policy. Running it is
+/// the header walks, the readahead hints, the copies or descriptions and the
+/// drops of cold pages that [`Log::read_raw`] and [`Log::read_raw_desc`] do,
+/// and it needs nothing of the log: the views hold the file handles, and
+/// read up to the sizes they saw.
+#[derive(Debug, Clone)]
+pub struct RawReadPlan {
+    fetch_offset: Offset,
+    limit_offset: Offset,
+    max_size: ByteSize,
+    read_buffer_cap: ByteSize,
+    read_ahead_max: ByteSize,
+    views: Vec<SegmentReadView>,
+    may_block: bool,
+}
+
+impl RawReadPlan {
+    /// Whether running the plan may wait on more than the page cache:
+    /// [`Log::read_may_block`] for the read's offset, as of the plan. A
+    /// caller that must not block a runtime thread runs such a plan away
+    /// from it.
+    #[must_use]
+    pub fn may_block(&self) -> bool { self.may_block }
+
+    /// Run the plan as [`Log::read_raw`] would have read.
+    ///
+    /// # Errors
+    /// Returns an error when log I/O fails or a record or index is corrupt.
+    pub fn read_bytes(&self) -> Result<RawRead, LogError> {
+        let lookback = cold_lookback(self.max_size);
+        let RawChunks { cursor, mut chunks } = self.chunks(|view, next, remaining| {
+            let read = view.read_raw_with_policy(
+                next,
+                self.limit_offset,
+                remaining,
+                self.read_buffer_cap,
+                self.read_ahead_max,
+            )?;
+            if read.is_empty() {
+                return Ok(None);
+            }
+            if let Some(file_range) = &read.file_range {
+                drop_cold(view, file_range.clone(), lookback, true);
+            }
+            Ok(Some(RawChunk {
+                len: read.bytes.len(),
+                data: read.bytes,
+                start: read.start_offset,
+                last: read.last_offset,
+            }))
+        })?;
 
         let bytes = match chunks.len() {
             // No chunk is empty bytes, and one chunk is itself.
@@ -584,6 +531,127 @@ impl Log {
             last_offset: cursor.last,
         })
     }
+
+    /// Run the plan as [`Log::read_raw_desc`] would have read.
+    ///
+    /// # Errors
+    /// Returns an error when log I/O fails or a record or index is corrupt.
+    #[krabka_macros::sendfile_cfg]
+    pub fn read_regions(&self) -> Result<RawReadDesc, LogError> {
+        let lookback = cold_lookback(self.max_size);
+        // A segment whose run would be walked on bytes that are not in the
+        // page cache is not described (`read_raw_desc_if_cached`). The walk
+        // stops there, so the fetch sends the runs before it, or, when it
+        // starts in that segment, gets nothing and falls back to the
+        // byte-copy path, which reads the run in one large read. Passing over
+        // it would send a later segment's runs and skip its offsets.
+        let stopped = Cell::new(false);
+        let RawChunks {
+            cursor,
+            chunks: regions,
+        } = self.chunks(|view, next, remaining| {
+            if stopped.get() {
+                return Ok(None);
+            }
+            let Some(read) = view.read_raw_desc_if_cached(
+                next,
+                self.limit_offset,
+                remaining,
+                self.read_ahead_max,
+            )?
+            else {
+                stopped.set(true);
+                return Ok(None);
+            };
+            if let Some(region) = &read.region {
+                let end = region.offset.saturating_add(region.len as u64);
+                drop_cold(view, region.offset..end, lookback, false);
+            }
+            Ok(read.region.map(|region| RawChunk {
+                len: region.len,
+                data: region,
+                start: read.start_offset,
+                last: read.last_offset,
+            }))
+        })?;
+
+        let total: usize = regions.iter().map(|r| r.len).sum();
+        let span = tracing::Span::current();
+        span.record("regions", regions.len());
+        span.record("total", total);
+        Ok(RawReadDesc {
+            start_offset: cursor.start,
+            regions,
+            total,
+        })
+    }
+
+    /// The walk both reads share: each view in turn, from the offset after
+    /// the one before it, while the budget and the limit allow and the one
+    /// before was read to its end.
+    fn chunks<T>(
+        &self,
+        mut read: impl FnMut(
+            &SegmentReadView,
+            Offset,
+            ByteSize,
+        ) -> Result<Option<RawChunk<T>>, LogError>,
+    ) -> Result<RawChunks<T>, LogError> {
+        let mut cursor = RawReadCursor::new(self.fetch_offset, self.max_size);
+        let mut chunks = Vec::new();
+        for view in &self.views {
+            if view.last() < cursor.next {
+                continue;
+            }
+            let Some(chunk) = read(view, cursor.next, cursor.budget())? else {
+                continue;
+            };
+            if !cursor.accept(chunk.start, chunk.last, chunk.len) {
+                break;
+            }
+            chunks.push(chunk.data);
+            if cursor.finished(view, self.limit_offset) {
+                break;
+            }
+        }
+        Ok(RawChunks { cursor, chunks })
+    }
+}
+
+/// Drop from the page cache what a fetch of `range` of `view`'s `.log` file
+/// leaves there, when the range is cold: see [`Log::cold_before`]. A
+/// `sendfile` fetch sends its bytes after this returns, so it drops the pages
+/// behind it, where its reader's previous fetch was, back to `lookback` bytes
+/// before the range. A fetch that already `held` its bytes, having copied
+/// them, drops its own pages as well. Whole pages only, so the page a
+/// `sendfile` range starts in stays for the send.
+///
+/// A consumer catching up on a backlog thus leaves at most a fetch or two of
+/// pages behind, instead of filling the cgroup to its limit and making every
+/// append reclaim: see [`page_cache`].
+#[cfg(not(target_os = "wasi"))]
+fn drop_cold(view: &SegmentReadView, range: Range<u64>, lookback: u64, held: bool) {
+    let Some(cold_before) = view.cold_before() else {
+        return;
+    };
+    if range.end > cold_before {
+        return;
+    }
+    let from = range.start.saturating_sub(lookback) & !(page_cache::PAGE - 1);
+    let to = if held {
+        range.end
+    } else {
+        range.start & !(page_cache::PAGE - 1)
+    };
+    if to > from {
+        view.drop_cached(from, to - from);
+    }
+}
+
+/// WASI has no flush pool, no page-cache ledger and no fetch that is cold.
+#[cfg(target_os = "wasi")]
+fn drop_cold(view: &SegmentReadView, range: Range<u64>, lookback: u64, held: bool) {
+    let _ = (view, range, lookback, held);
 }
 
 #[cfg(test)]

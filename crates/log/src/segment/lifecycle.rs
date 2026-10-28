@@ -10,7 +10,10 @@ use std::cell::Cell;
 #[cfg(not(target_os = "wasi"))]
 use std::fs::File;
 use {
-    super::{ReserveRequest, Segment, io::seek_to_log_size},
+    super::{
+        ReserveRequest, Segment,
+        io::{SourceIo as _, seek_to_log_size},
+    },
     crate::{error::LogError, io::LogIo},
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,

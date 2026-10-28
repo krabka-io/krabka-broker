@@ -26,14 +26,19 @@ mod read;
 mod read_raw;
 #[krabka_macros::sendfile_cfg]
 mod read_raw_desc;
+mod read_source;
 mod sealed_input;
 #[cfg(test)]
 mod test_support;
 mod timestamp_scan;
 
+#[krabka_macros::sendfile_cfg]
+pub use self::read_raw_desc::RawDescSource;
 pub use self::{
     append::PlacedBatch,
     open::{FrontierScan, TailScan},
+    read_raw::RawReadSource,
+    read_source::{ReadSource, SegmentReadView},
     sealed_input::SealedInput,
 };
 #[krabka_macros::sendfile_cfg]
@@ -124,7 +129,9 @@ pub struct Segment {
     wrote_direct: bool,
     /// Unsupported page-cache probes are remembered per open segment: other
     /// segments can live on filesystems with different NOWAIT capabilities.
-    cache_probe_unsupported: AtomicBool,
+    /// Shared with the segment's read views, so a probe one of them finds
+    /// unsupported is not tried again by the next.
+    cache_probe_unsupported: Arc<AtomicBool>,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].
