@@ -13,6 +13,17 @@ use {
 };
 krabka_macros::single_partition_produce_fixture!(single_partition_produce);
 
+/// Whether a Produce answer says the partition's leadership has not settled
+/// yet, rather than that the request failed: a broker that does not lead the
+/// partition yet, a partition without a leader, or a request that timed out.
+/// These are the codes a Kafka producer retries after a metadata refresh.
+pub fn leadership_unsettled(code: i16) -> bool {
+    matches!(
+        code,
+        codes::LEADER_NOT_AVAILABLE | codes::NOT_LEADER_OR_FOLLOWER | codes::REQUEST_TIMED_OUT
+    )
+}
+
 #[bon::builder]
 pub fn replicated_topic_produce_setup(
     topic: String,

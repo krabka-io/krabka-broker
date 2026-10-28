@@ -135,11 +135,28 @@ crate_tests(
     # load it and serve both groups again.
     #
     # `steady_state_reclaim` needs uncontended cores for 100ms reclamation sampling.
+    #
+    # `dynamic_voters` is `elect_leaders`'s shape once more, and it joins on
+    # two failures of the `coverage` lane on `main` (#1831, runs 40640831453
+    # and 40644035614). Both stuck at the same wait of
+    # `remove_voter_shrinks_quorum`: after the controller leader committed its
+    # own removal and resigned, the remaining voters had 30 s to elect a
+    # successor and commit the two-voter set, and the first of them was still
+    # at metadata offset 41 when the `wait_for_image` bound ran out. That is a
+    # convergence wait across a quorum, not a wrong image, and the test itself
+    # has been made robust in earlier rounds (#592, #607, #621): it follows the
+    # leader, retries the answers an admin client retries, and runs a fetch
+    # timeout that tolerates a 600 ms stall. The same case takes 3 s locally,
+    # and it passes 64 instrumented copies at once beside a compile on 16
+    # cores. The lane it fails in builds and runs its ~140 instrumented suites
+    # at once, so the cores a two-voter election needs are what it lacks, and
+    # `cpu:4` beside the `ci` job's build-first test step is what gives them.
     cpu_heavy = [
         "compaction",
         "controller_failover",
         "diskless_e2e",
         "durability",
+        "dynamic_voters",
         "elect_leaders",
         "group_coordinator_failover",
         "ip_quotas",
