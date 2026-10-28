@@ -122,6 +122,20 @@ image_manifest(
         "//conditions:default": ":base",
     }),
     entrypoint = ["/usr/bin/krabka-broker"],
+    # The broker frees a 10 MiB records buffer for every partition a consumer
+    # behind the tail reads, five or so per fetch response. With glibc's
+    # defaults such a buffer is an `mmap` of its own or the top of a 64 MiB
+    # arena, and its free is a `munmap` or a `madvise(MADV_DONTNEED)` over
+    # everything the arena has free, 0.7 to 3 ms in which every page fault of
+    # the process waits behind the address-space lock: a consumer draining a
+    # backlog at 500 K msg/s raised the producers' publish p99 from 1.3 to
+    # 3.5 ms. Above these thresholds a 10 MiB buffer comes from an arena and
+    # its free returns it there without a syscall; the arenas keep about
+    # 300 MiB more resident at that rate. A deployment that runs the binary
+    # outside this image sets the same variable (docs/operations/deploy.md).
+    env = {
+        "GLIBC_TUNABLES": "glibc.malloc.trim_threshold=134217728:glibc.malloc.mmap_threshold=67108864",
+    },
     layers = [
         ":broker_layer",
         ":tools_layer",
