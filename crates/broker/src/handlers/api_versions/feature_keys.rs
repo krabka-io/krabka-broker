@@ -58,11 +58,11 @@ mod tests {
 
     krabka_macros::finalized_feature_fixture!(finalized);
 
-    /// #783: below v4 only `metadata.version` stays, because every other
-    /// feature's minimum is 0; from v4 each feature carries Kafka's
-    /// `minimumProduction`.
-    #[test]
-    fn supported_features_follow_kafkas_minimums() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers api versions feature keys tests: supported features follow kafkas minimums"
+    )]
+    fn bdd_verify_supported_features_follow_kafkas_minimums() {
         let metadata_version = supported(
             "metadata.version",
             METADATA_VERSION_MIN,
@@ -79,10 +79,21 @@ mod tests {
         }
     }
 
-    /// A fresh image follows Kafka's initial `FeaturesPublisher` state: the
-    /// minimum metadata version is finalized, while `kraft.version` 0 is no row.
-    #[test]
-    fn a_fresh_image_advertises_kafkas_minimum_metadata_version() {
+    /// #783: below v4 only `metadata.version` stays, because every other
+    /// feature's minimum is 0; from v4 each feature carries Kafka's
+    /// `minimumProduction`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/api_versions/feature_keys.feature",
+        name = "tests: supported features follow kafkas minimums"
+    )]
+    fn supported_features_follow_kafkas_minimums() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers api versions feature keys tests: a fresh image advertises kafkas minimum metadata version"
+    )]
+    fn bdd_verify_a_fresh_image_advertises_kafkas_minimum_metadata_version() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         check!(
             finalized_feature_keys(&image)
@@ -92,6 +103,15 @@ mod tests {
                 )]
         );
     }
+
+    /// A fresh image follows Kafka's initial `FeaturesPublisher` state: the
+    /// minimum metadata version is finalized, while `kraft.version` 0 is no row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/api_versions/feature_keys.feature",
+        name = "tests: a fresh image advertises kafkas minimum metadata version"
+    )]
+    fn a_fresh_image_advertises_kafkas_minimum_metadata_version() {}
 
     #[test]
     fn finalized_feature_keys_keep_levels_above_zero() {

@@ -554,212 +554,222 @@ mod tests {
         check!(cordoned_log_dirs_error(&map(&[(CORDONED_LOG_DIRS, value)]), &[]) == expected);
     }
 
-    #[yare::parameterized(
-        default_resource = { "", Ok(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID) },
-        serving_node = { "1", Ok(NodeId(1)) },
-        other_node = {
-            "2",
-            Err((
-                codes::INVALID_REQUEST,
-                "Unexpected broker id, expected 1, but received 2".to_owned(),
-            )),
-        },
-        negative_node = {
-            "-1",
-            Err((
-                codes::INVALID_REQUEST,
-                "Unexpected broker id, expected 1, but received -1".to_owned(),
-            )),
-        },
-        non_integer = {
-            "abc",
-            Err((
-                codes::INVALID_REQUEST,
-                "Node id must be an integer, but it is: abc".to_owned(),
-            )),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys broker dynamic tests: broker resource names follow kafkas node id rule for {example}"
     )]
-    fn broker_resource_names_follow_kafkas_node_id_rule(
-        name: &str,
-        want: Result<NodeId, (i16, String)>,
-    ) {
+    fn bdd_verify_broker_resource_names_follow_kafkas_node_id_rule(example: String) {
+        type Example<'a> = (&'a str, Result<NodeId, (i16, String)>);
+        let (name, want): Example<'_> = match example.as_str() {
+            "default resource" => ("", Ok(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID)),
+            "serving node" => ("1", Ok(NodeId(1))),
+            "other node" => (
+                "2",
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Unexpected broker id, expected 1, but received 2".to_owned(),
+                )),
+            ),
+            "negative node" => (
+                "-1",
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Unexpected broker id, expected 1, but received -1".to_owned(),
+                )),
+            ),
+            "non integer" => (
+                "abc",
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Node id must be an integer, but it is: abc".to_owned(),
+                )),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let serving = NodeId(1);
         check!(broker_resource_node(name, serving) == want, "{name:?}");
     }
 
-    #[yare::parameterized(
-        custom_key_allowed = { map(&[("plugin.custom.key", "x")]), false, Ok(()) },
-        broker_log_dirs_refused = {
-            map(&[("log.dirs", "/tmp")]),
-            false,
-            Err("Cannot update these configs dynamically: [log.dirs]"),
-        },
-        ssl_key_requires_listener_prefix = {
-            map(&[("ssl.keystore.location", "/k")]),
-            true,
-            Err(
-                "These security configs can be dynamically updated only per-listener using \
-                         the listener prefix: [ssl.keystore.location]",
-            ),
-        },
-        listener_ssl_key_requires_named_broker = {
-            map(&[("listener.name.client.ssl.keystore.location", "/k")]),
-            false,
-            Err(
-                "Cannot update these configs at default cluster level, broker id must be \
-                         specified: [listener.name.client.ssl.keystore.location]",
-            ),
-        },
-        listener_ssl_key_allowed_on_named_broker = {
-            map(&[("listener.name.client.ssl.keystore.location", "/k")]),
-            true,
-            Ok(()),
-        },
-        topic_retention_value_allowed = {
-            map(&[("log.retention.ms", " 86400000 ")]),
-            false,
-            Ok(()),
-        },
-        dynamic_integer_value_allowed = { map(&[("num.io.threads", "16")]), false, Ok(()) },
-        throttle_rate_must_be_nonnegative = {
-            map(&[(LEADER_THROTTLED_RATE_KEY, "-1")]),
-            true,
-            Err(
-                "Invalid value -1 for configuration leader.replication.throttled.rate: Value \
-                        must be at least 0",
-            ),
-        },
-        minimum_insync_replicas_must_be_positive = {
-            map(&[("min.insync.replicas", "0")]),
-            true,
-            Err(
-                "Invalid value 0 for configuration min.insync.replicas: Value must be at \
-                         least 1",
-            ),
-        },
-        startup_only_key_refused = {
-            map(&[("auto.leader.rebalance.enable", "false")]),
-            false,
-            Err("Cannot update these configs dynamically: [auto.leader.rebalance.enable]"),
-        },
-        queued_max_requests_refused = {
-            map(&[("queued.max.requests", "10")]),
-            true,
-            Err("Cannot update these configs dynamically: [queued.max.requests]"),
-        },
-        non_dynamic_key_precedes_bad_value = {
-            map(&[("log.cleaner.enable", "false"), ("num.io.threads", "abc")]),
-            false,
-            Err("Cannot update these configs dynamically: [log.cleaner.enable]"),
-        },
-        offsets_replication_factor_refused = {
-            map(&[("offsets.topic.replication.factor", "1")]),
-            false,
-            Err("Cannot update these configs dynamically: [offsets.topic.replication.factor]"),
-        },
-        dynamic_integer_value_must_parse = {
-            map(&[("num.io.threads", "abc")]),
-            false,
-            Err("Invalid value abc for configuration num.io.threads: Not a number of type INT"),
-        },
-        connection_limit_must_be_nonnegative = {
-            map(&[("max.connections", "-5")]),
-            false,
-            Err("Invalid value -5 for configuration max.connections: Value must be at least 0"),
-        },
-        network_threads_must_be_positive = {
-            map(&[("num.network.threads", "0")]),
-            false,
-            Err(
-                "Invalid value 0 for configuration num.network.threads: Value must be at \
-                         least 1",
-            ),
-        },
-        tiered_offset_boolean_is_case_insensitive = {
-            map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]),
-            false,
-            Ok(()),
-        },
-        listener_override_reports_base_key = {
-            map(&[("listener.name.external.num.network.threads", "abc")]),
-            false,
-            Err(
-                "Invalid value abc for configuration num.network.threads: Not a number of \
-                         type INT",
-            ),
-        },
-        per_broker_key_refused_on_cluster_default = {
-            map(&[("sasl.enabled.mechanisms", "PLAIN")]),
-            false,
-            Err(
-                "Cannot update these configs at default cluster level, broker id must be \
-                         specified: [sasl.enabled.mechanisms]",
-            ),
-        },
-        per_broker_key_allowed_on_named_broker = {
-            map(&[("sasl.enabled.mechanisms", "PLAIN")]),
-            true,
-            Ok(()),
-        },
-        consumer_assignment_interval_at_the_maximum = {
-            map(&[("group.consumer.assignment.interval.ms", "15000")]),
-            false,
-            Ok(()),
-        },
-        consumer_assignment_interval_at_the_minimum = {
-            map(&[("group.consumer.assignment.interval.ms", "0")]),
-            true,
-            Ok(()),
-        },
-        consumer_assignment_interval_above_the_maximum = {
-            map(&[("group.consumer.assignment.interval.ms", "15001")]),
-            false,
-            Err(
-                "group.consumer.assignment.interval.ms must be less than or equal to \
-                 group.consumer.max.assignment.interval.ms",
-            ),
-        },
-        share_assignment_interval_above_the_maximum = {
-            map(&[("group.share.assignment.interval.ms", " 60000 ")]),
-            true,
-            Err(
-                "group.share.assignment.interval.ms must be less than or equal to \
-                 group.share.max.assignment.interval.ms",
-            ),
-        },
-        streams_assignment_interval_above_the_maximum = {
-            map(&[("group.streams.assignment.interval.ms", "20000")]),
-            false,
-            Err(
-                "group.streams.assignment.interval.ms must be less than or equal to \
-                 group.streams.max.assignment.interval.ms",
-            ),
-        },
-        consumer_interval_is_checked_before_share = {
-            map(&[
-                ("group.share.assignment.interval.ms", "20000"),
-                ("group.consumer.assignment.interval.ms", "20000"),
-            ]),
-            false,
-            Err(
-                "group.consumer.assignment.interval.ms must be less than or equal to \
-                 group.consumer.max.assignment.interval.ms",
-            ),
-        },
-        negative_assignment_interval_fails_the_type_check_first = {
-            map(&[("group.consumer.assignment.interval.ms", "-1")]),
-            false,
-            Err(
-                "Invalid value -1 for configuration group.consumer.assignment.interval.ms: \
-                 Value must be at least 0",
-            ),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/broker_dynamic.feature",
+        name = "tests: broker resource names follow kafkas node id rule"
     )]
-    fn dynamic_broker_configs_follow_kafkas_validate_configs(
-        props: BTreeMap<String, String>,
-        per_broker: bool,
-        want: Result<(), &str>,
-    ) {
+    fn broker_resource_names_follow_kafkas_node_id_rule(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys broker dynamic tests: dynamic broker configs follow kafkas validate configs for {example}"
+    )]
+    fn bdd_verify_dynamic_broker_configs_follow_kafkas_validate_configs(example: String) {
+        type Example<'a> = (BTreeMap<String, String>, bool, Result<(), &'a str>);
+        let (props, per_broker, want): Example<'_> = match example.as_str() {
+            "custom key allowed" => (map(&[("plugin.custom.key", "x")]), false, Ok(())),
+            "broker log dirs refused" => (
+                map(&[("log.dirs", "/tmp")]),
+                false,
+                Err("Cannot update these configs dynamically: [log.dirs]"),
+            ),
+            "ssl key requires listener prefix" => (
+                map(&[("ssl.keystore.location", "/k")]),
+                true,
+                Err(
+                    "These security configs can be dynamically updated only per-listener using \
+                         the listener prefix: [ssl.keystore.location]",
+                ),
+            ),
+            "listener ssl key requires named broker" => (
+                map(&[("listener.name.client.ssl.keystore.location", "/k")]),
+                false,
+                Err(
+                    "Cannot update these configs at default cluster level, broker id must be \
+                         specified: [listener.name.client.ssl.keystore.location]",
+                ),
+            ),
+            "listener ssl key allowed on named broker" => (
+                map(&[("listener.name.client.ssl.keystore.location", "/k")]),
+                true,
+                Ok(()),
+            ),
+            "topic retention value allowed" => {
+                (map(&[("log.retention.ms", " 86400000 ")]), false, Ok(()))
+            }
+            "dynamic integer value allowed" => (map(&[("num.io.threads", "16")]), false, Ok(())),
+            "throttle rate must be nonnegative" => (
+                map(&[(LEADER_THROTTLED_RATE_KEY, "-1")]),
+                true,
+                Err(
+                    "Invalid value -1 for configuration leader.replication.throttled.rate: Value \
+                        must be at least 0",
+                ),
+            ),
+            "minimum insync replicas must be positive" => (
+                map(&[("min.insync.replicas", "0")]),
+                true,
+                Err(
+                    "Invalid value 0 for configuration min.insync.replicas: Value must be at \
+                         least 1",
+                ),
+            ),
+            "startup only key refused" => (
+                map(&[("auto.leader.rebalance.enable", "false")]),
+                false,
+                Err("Cannot update these configs dynamically: [auto.leader.rebalance.enable]"),
+            ),
+            "queued max requests refused" => (
+                map(&[("queued.max.requests", "10")]),
+                true,
+                Err("Cannot update these configs dynamically: [queued.max.requests]"),
+            ),
+            "non dynamic key precedes bad value" => (
+                map(&[("log.cleaner.enable", "false"), ("num.io.threads", "abc")]),
+                false,
+                Err("Cannot update these configs dynamically: [log.cleaner.enable]"),
+            ),
+            "offsets replication factor refused" => (
+                map(&[("offsets.topic.replication.factor", "1")]),
+                false,
+                Err("Cannot update these configs dynamically: [offsets.topic.replication.factor]"),
+            ),
+            "dynamic integer value must parse" => (
+                map(&[("num.io.threads", "abc")]),
+                false,
+                Err("Invalid value abc for configuration num.io.threads: Not a number of type INT"),
+            ),
+            "connection limit must be nonnegative" => (
+                map(&[("max.connections", "-5")]),
+                false,
+                Err("Invalid value -5 for configuration max.connections: Value must be at least 0"),
+            ),
+            "network threads must be positive" => (
+                map(&[("num.network.threads", "0")]),
+                false,
+                Err(
+                    "Invalid value 0 for configuration num.network.threads: Value must be at \
+                         least 1",
+                ),
+            ),
+            "tiered offset boolean is case insensitive" => (
+                map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]),
+                false,
+                Ok(()),
+            ),
+            "listener override reports base key" => (
+                map(&[("listener.name.external.num.network.threads", "abc")]),
+                false,
+                Err(
+                    "Invalid value abc for configuration num.network.threads: Not a number of \
+                         type INT",
+                ),
+            ),
+            "per broker key refused on cluster default" => (
+                map(&[("sasl.enabled.mechanisms", "PLAIN")]),
+                false,
+                Err(
+                    "Cannot update these configs at default cluster level, broker id must be \
+                         specified: [sasl.enabled.mechanisms]",
+                ),
+            ),
+            "per broker key allowed on named broker" => {
+                (map(&[("sasl.enabled.mechanisms", "PLAIN")]), true, Ok(()))
+            }
+            "consumer assignment interval at the maximum" => (
+                map(&[("group.consumer.assignment.interval.ms", "15000")]),
+                false,
+                Ok(()),
+            ),
+            "consumer assignment interval at the minimum" => (
+                map(&[("group.consumer.assignment.interval.ms", "0")]),
+                true,
+                Ok(()),
+            ),
+            "consumer assignment interval above the maximum" => (
+                map(&[("group.consumer.assignment.interval.ms", "15001")]),
+                false,
+                Err(
+                    "group.consumer.assignment.interval.ms must be less than or equal to \
+                 group.consumer.max.assignment.interval.ms",
+                ),
+            ),
+            "share assignment interval above the maximum" => (
+                map(&[("group.share.assignment.interval.ms", " 60000 ")]),
+                true,
+                Err(
+                    "group.share.assignment.interval.ms must be less than or equal to \
+                 group.share.max.assignment.interval.ms",
+                ),
+            ),
+            "streams assignment interval above the maximum" => (
+                map(&[("group.streams.assignment.interval.ms", "20000")]),
+                false,
+                Err(
+                    "group.streams.assignment.interval.ms must be less than or equal to \
+                 group.streams.max.assignment.interval.ms",
+                ),
+            ),
+            "consumer interval is checked before share" => (
+                map(&[
+                    ("group.share.assignment.interval.ms", "20000"),
+                    ("group.consumer.assignment.interval.ms", "20000"),
+                ]),
+                false,
+                Err(
+                    "group.consumer.assignment.interval.ms must be less than or equal to \
+                 group.consumer.max.assignment.interval.ms",
+                ),
+            ),
+            "negative assignment interval fails the type check first" => (
+                map(&[("group.consumer.assignment.interval.ms", "-1")]),
+                false,
+                Err(
+                    "Invalid value -1 for configuration group.consumer.assignment.interval.ms: \
+                 Value must be at least 0",
+                ),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let want = want.map_err(|message| (codes::INVALID_REQUEST, message.to_owned()));
         check!(
             validate_dynamic_broker_configs(&props, per_broker, UnstableApiVersions::Enabled)
@@ -767,6 +777,13 @@ mod tests {
             "{props:?} per_broker={per_broker}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/broker_dynamic.feature",
+        name = "tests: dynamic broker configs follow kafkas validate configs"
+    )]
+    fn dynamic_broker_configs_follow_kafkas_validate_configs(example: String) { let _ = example; }
 
     /// #907: the broker keys of Kafka trunk's topic keys are `KafkaConfig`
     /// keys only on trunk. Under Kafka 4.3.1 they are unknown broker keys,

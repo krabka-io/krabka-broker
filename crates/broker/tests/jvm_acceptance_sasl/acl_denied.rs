@@ -16,23 +16,9 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: produce by an unauthorized principal must fail.
-///
-/// Admin (PLAIN super-user) provisions alice with Read+Write on topic `foo`.
-/// Read implies Describe, so these are the same effective ACLs as
-/// `jvm_authorized_produce_consume`. Bob has valid PLAIN credentials but
-/// no ACLs at all. Bob's `kafka-console-producer` must be denied.
-///
-/// Assertion strategy: `kafka-console-producer` is a fire-and-forget shell
-/// wrapper around the Java client. In cp-kafka 7.5.0 it logs
-/// `TopicAuthorizationException` on every Metadata-denied response, but
-/// the wrapper itself exits 0. It retries silently and never turns the
-/// broker-side AUTH failure into a non-zero exit code. So the contract this
-/// test asserts is stderr-shaped, not exit-code-shaped: stderr must contain
-/// `TopicAuthorizationException`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_unauthorized_produce_fails() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl acl denied: jvm unauthorized produce fails")]
+async fn bdd_verify_jvm_unauthorized_produce_fails() {
     const TOPIC: &str = "foo";
     const BOB: &str = "bob";
     const BOB_PASS: &str = "bob-secret";
@@ -91,19 +77,34 @@ async fn jvm_unauthorized_produce_fails() {
     broker.shutdown().await;
 }
 
-/// JVM acceptance: consumer denied on the group-resource path.
+/// JVM acceptance: produce by an unauthorized principal must fail.
 ///
-/// Alice has Read on topic `foo`, which implies Describe, but she has no
-/// ACL on group `cg-other`. `kafka-console-consumer --group cg-other` must
-/// fail with `GroupAuthorizationException`. The broker denies her at
-/// `JoinGroup`/`OffsetFetch`, before any Fetch happens.
+/// Admin (PLAIN super-user) provisions alice with Read+Write on topic `foo`.
+/// Read implies Describe, so these are the same effective ACLs as
+/// `jvm_authorized_produce_consume`. Bob has valid PLAIN credentials but
+/// no ACLs at all. Bob's `kafka-console-producer` must be denied.
 ///
-/// Assertion strategy: stderr-shaped. This test asserts on stderr content
-/// for symmetry with `jvm_unauthorized_produce_fails` and to keep the
-/// contract stable across cp-kafka versions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Assertion strategy: `kafka-console-producer` is a fire-and-forget shell
+/// wrapper around the Java client. In cp-kafka 7.5.0 it logs
+/// `TopicAuthorizationException` on every Metadata-denied response, but
+/// the wrapper itself exits 0. It retries silently and never turns the
+/// broker-side AUTH failure into a non-zero exit code. So the contract this
+/// test asserts is stderr-shaped, not exit-code-shaped: stderr must contain
+/// `TopicAuthorizationException`.
 #[ignore = "requires Docker"]
-async fn jvm_unauthorized_consumer_fails_group_check() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_denied.feature",
+    name = "jvm unauthorized produce fails"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_unauthorized_produce_fails() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl acl denied: jvm unauthorized consumer fails group check"
+)]
+async fn bdd_verify_jvm_unauthorized_consumer_fails_group_check() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-other";
 
@@ -128,3 +129,22 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
 
     broker.shutdown().await;
 }
+
+/// JVM acceptance: consumer denied on the group-resource path.
+///
+/// Alice has Read on topic `foo`, which implies Describe, but she has no
+/// ACL on group `cg-other`. `kafka-console-consumer --group cg-other` must
+/// fail with `GroupAuthorizationException`. The broker denies her at
+/// `JoinGroup`/`OffsetFetch`, before any Fetch happens.
+///
+/// Assertion strategy: stderr-shaped. This test asserts on stderr content
+/// for symmetry with `jvm_unauthorized_produce_fails` and to keep the
+/// contract stable across cp-kafka versions.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_denied.feature",
+    name = "jvm unauthorized consumer fails group check"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_unauthorized_consumer_fails_group_check() {}

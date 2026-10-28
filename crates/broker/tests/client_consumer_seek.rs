@@ -39,8 +39,11 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
     drop(producer);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn seek_before_first_poll_resumes_from_sought_offset() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client consumer seek: seek before first poll resumes from sought offset"
+)]
+async fn bdd_verify_seek_before_first_poll_resumes_from_sought_offset() {
     let (_dir, _broker, bootstrap, _admin) = standalone_topic("s").await;
 
     // Offsets 0..=4 on partition 0.
@@ -77,8 +80,17 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
     consumer.close().await.unwrap();
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_consumer_seek.feature",
+    name = "seek before first poll resumes from sought offset"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn seek_rejects_negative_offset() {
+async fn seek_before_first_poll_resumes_from_sought_offset() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client consumer seek: seek rejects negative offset")]
+async fn bdd_verify_seek_rejects_negative_offset() {
     let (_dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
 
@@ -108,3 +120,11 @@ async fn seek_rejects_negative_offset() {
 
     consumer.close().await.unwrap();
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_consumer_seek.feature",
+    name = "seek rejects negative offset"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn seek_rejects_negative_offset() {}

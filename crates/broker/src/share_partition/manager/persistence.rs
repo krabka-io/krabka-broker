@@ -164,10 +164,11 @@ mod tests {
         std::time::Instant,
     };
 
-    /// Kafka's `SharePartition.fetchPersisterError`, and whether
-    /// `SharePartitionManager.fencedSharePartitionHandler` drops the partition.
-    #[test]
-    fn persister_errors_map_as_kafka_maps_them() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share partition manager persistence tests: persister errors map as kafka maps them"
+    )]
+    fn bdd_verify_persister_errors_map_as_kafka_maps_them() {
         let partition_error = |code| BrokerError::SharePartitionState {
             code,
             message: String::new(),
@@ -231,6 +232,15 @@ mod tests {
             .collect();
         assert!(actual == expected);
     }
+
+    /// Kafka's `SharePartition.fetchPersisterError`, and whether
+    /// `SharePartitionManager.fencedSharePartitionHandler` drops the partition.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_partition/manager/persistence.feature",
+        name = "tests: persister errors map as kafka maps them"
+    )]
+    fn persister_errors_map_as_kafka_maps_them() {}
 
     #[tokio::test]
     async fn persist_if_dirty_is_noop_when_clean() {

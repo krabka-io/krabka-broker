@@ -201,10 +201,11 @@ mod tests {
         }
     }
 
-    /// krabka-io/krabka-broker#824: the transitions of Kafka's
-    /// `BrokerHeartbeatManager.calculateNextBrokerState`, one row per branch.
-    #[test]
-    fn the_next_state_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "heartbeat controller state shutdown tests: the next state follows kafka"
+    )]
+    fn bdd_verify_the_next_state_follows_kafka() {
         struct Case {
             what: &'static str,
             current: BrokerControlState,
@@ -359,6 +360,15 @@ mod tests {
             check!(next_broker_state(*current, *facts) == *expected, "{what}");
         }
     }
+
+    /// krabka-io/krabka-broker#824: the transitions of Kafka's
+    /// `BrokerHeartbeatManager.calculateNextBrokerState`, one row per branch.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/heartbeat/controller_state/shutdown.feature",
+        name = "tests: the next state follows kafka"
+    )]
+    fn the_next_state_follows_kafka() {}
 
     /// The lowest active offset reads only alive, unfenced brokers that are not
     /// in controlled shutdown, and a fence takes a broker out of controlled

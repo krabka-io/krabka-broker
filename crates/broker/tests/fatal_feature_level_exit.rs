@@ -93,8 +93,11 @@ struct FatalFaultCase {
     fault: &'static str,
 }
 
-#[test]
-fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fatal feature level exit: the broker exits non zero with kafkas message over a fatal controller fault"
+)]
+fn bdd_verify_the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault() {
     let cases: [FatalFaultCase; 2] = [
         FatalFaultCase {
             what: "an unsupported feature level",
@@ -184,3 +187,10 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault()
         check!(stderr.contains(fault), "{what}: stderr:\n{stderr}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fatal_feature_level_exit.feature",
+    name = "the broker exits non zero with kafkas message over a fatal controller fault"
+)]
+fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault() {}

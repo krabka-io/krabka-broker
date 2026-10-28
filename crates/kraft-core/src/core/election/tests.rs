@@ -424,13 +424,11 @@ fn a_candidate_that_times_out_pre_votes_again_with_a_fresh_timeout() {
     );
 }
 
-/// Every election timer a voter arms runs for Kafka's
-/// `electionTimeoutMs + random.nextInt(electionTimeoutMs)`: at least the
-/// configured timeout and less than twice it. The draw also differs between
-/// voters, so two voters that time out together in one epoch do not keep
-/// timing out together.
-#[test]
-fn every_election_timer_lies_in_kafkas_jittered_window() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "core election tests: every election timer lies in kafkas jittered window"
+)]
+fn bdd_verify_every_election_timer_lies_in_kafkas_jittered_window() {
     let log = FakeLog::new(5, 1);
     let now = SimInstant(10_000);
     let mut deadlines = BTreeSet::new();
@@ -459,6 +457,18 @@ fn every_election_timer_lies_in_kafkas_jittered_window() {
         deadlines.len()
     );
 }
+
+/// Every election timer a voter arms runs for Kafka's
+/// `electionTimeoutMs + random.nextInt(electionTimeoutMs)`: at least the
+/// configured timeout and less than twice it. The draw also differs between
+/// voters, so two voters that time out together in one epoch do not keep
+/// timing out together.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/core/election/tests.feature",
+    name = "every election timer lies in kafkas jittered window"
+)]
+fn every_election_timer_lies_in_kafkas_jittered_window() {}
 
 /// How a pre-vote round began: from following a leader whose fetches stopped,
 /// or with no leader to abandon.

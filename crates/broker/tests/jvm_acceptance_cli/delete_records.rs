@@ -15,11 +15,9 @@ use {
     std::{io::Write as _, process::Stdio},
 };
 
-/// `kafka-delete-records --offset-json-file <(...)`: produce 20
-/// records, trim to offset 10, expect success + `low_watermark`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_delete_records_trims_log() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli delete records: kafka delete records trims log")]
+async fn bdd_verify_kafka_delete_records_trims_log() {
     const TOPIC: &str = "krabka-delete-recs-itest";
 
     let (_broker, _dir) = start_host_broker().await;
@@ -35,18 +33,22 @@ async fn kafka_delete_records_trims_log() {
     );
 }
 
-/// A trim that lands inside the active segment stays in force across a broker
-/// restart, as the JVM tools see it.
-///
-/// The offsets before a `DeleteRecords` are not on disk anywhere once the
-/// segment they live in is still open for append: nothing rolls, nothing is
-/// deleted, and only the recorded log start offset says they are gone. This
-/// case boots the second broker on the first one's log directory and asks
-/// `kafka-get-offsets --time -2` again, which is the request a JVM consumer
-/// makes when it resets to `earliest`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-delete-records --offset-json-file <(...)`: produce 20
+/// records, trim to offset 10, expect success + `low_watermark`.
 #[ignore = "requires Docker"]
-async fn kafka_delete_records_trim_survives_a_broker_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/delete_records.feature",
+    name = "kafka delete records trims log"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_delete_records_trims_log() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli delete records: kafka delete records trim survives a broker restart"
+)]
+async fn bdd_verify_kafka_delete_records_trim_survives_a_broker_restart() {
     const TOPIC: &str = "krabka-delete-recs-restart-itest";
     /// Inside the first (and only) segment, which 20 records do not fill.
     const TRIM_TO: i64 = 7;
@@ -85,6 +87,24 @@ async fn kafka_delete_records_trim_survives_a_broker_restart() {
 
     broker.shutdown().await;
 }
+
+/// A trim that lands inside the active segment stays in force across a broker
+/// restart, as the JVM tools see it.
+///
+/// The offsets before a `DeleteRecords` are not on disk anywhere once the
+/// segment they live in is still open for append: nothing rolls, nothing is
+/// deleted, and only the recorded log start offset says they are gone. This
+/// case boots the second broker on the first one's log directory and asks
+/// `kafka-get-offsets --time -2` again, which is the request a JVM consumer
+/// makes when it resets to `earliest`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/delete_records.feature",
+    name = "kafka delete records trim survives a broker restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_delete_records_trim_survives_a_broker_restart() {}
 
 /// One partition at replication factor one, which is all a single node hosts.
 fn create_topic(topic: &str) { create_console_topic(KAFKA_IMAGE, &[], topic, 1, 1); }

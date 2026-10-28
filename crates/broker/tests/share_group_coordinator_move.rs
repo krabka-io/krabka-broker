@@ -127,12 +127,11 @@ fn position_of(cluster: &Cluster, node_id: u64) -> usize {
     panic!("a cluster member");
 }
 
-/// A join whose records cannot commit, because a follower of the group's
-/// offsets partition is down but still in its ISR, is not answered with an
-/// epoch. It times out as Kafka's coordinator write does, and the client
-/// gets `COORDINATOR_NOT_AVAILABLE`, which it retries.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_join_that_does_not_commit_is_not_answered() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share group coordinator move: a join that does not commit is not answered"
+)]
+async fn bdd_verify_a_join_that_does_not_commit_is_not_answered() {
     let mut cluster = start_three().await;
     let lookup_cli = client(&cluster[0].0).await;
     let coordinator = coordinator_of(&lookup_cli, None).await;
@@ -165,11 +164,23 @@ async fn a_join_that_does_not_commit_is_not_answered() {
     drop(stopped_dir);
 }
 
-/// The start of `ShareConsumerTest.test_broker_failure` at a small scale:
-/// a member joins, its coordinator stops cleanly, and the broker that takes
-/// the group over accepts the member's next heartbeat at the epoch it had.
+/// A join whose records cannot commit, because a follower of the group's
+/// offsets partition is down but still in its ISR, is not answered with an
+/// epoch. It times out as Kafka's coordinator write does, and the client
+/// gets `COORDINATOR_NOT_AVAILABLE`, which it retries.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_group_coordinator_move.feature",
+    name = "a join that does not commit is not answered"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
+async fn a_join_that_does_not_commit_is_not_answered() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share group coordinator move: a member keeps its epoch when its coordinator stops cleanly"
+)]
+async fn bdd_verify_a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
     let mut cluster = start_three().await;
     let lookup = client(&cluster[0].0).await;
     let coordinator = coordinator_of(&lookup, None).await;
@@ -201,3 +212,14 @@ async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
+
+/// The start of `ShareConsumerTest.test_broker_failure` at a small scale:
+/// a member joins, its coordinator stops cleanly, and the broker that takes
+/// the group over accepts the member's next heartbeat at the epoch it had.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_group_coordinator_move.feature",
+    name = "a member keeps its epoch when its coordinator stops cleanly"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {}

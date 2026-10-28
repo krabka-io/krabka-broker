@@ -333,11 +333,9 @@ mod tests {
         );
     }
 
-    /// Kafka's `ControlRecordType.parseTypeId`: the type is bytes 2..4 of the
-    /// key; a short or missing key and a negative version are corrupt, and a
-    /// later version parses as version 0.
-    #[test]
-    fn a_control_key_parses_as_kafka_parses_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("log control tests: a control key parses as kafka parses it")]
+    fn bdd_verify_a_control_key_parses_as_kafka_parses_it() {
         let cases: [ParseCase<i16>; 12] = [
             ParseCase {
                 name: "ABORT",
@@ -431,11 +429,19 @@ mod tests {
         }
     }
 
-    /// Kafka's `EndTransactionMarker.deserializeValue`: the coordinator epoch
-    /// is bytes 2..6 of the value; a short or missing value and a negative
-    /// version are corrupt, and a later version parses as version 0.
-    #[test]
-    fn an_end_marker_value_parses_as_kafka_parses_it() {
+    /// Kafka's `ControlRecordType.parseTypeId`: the type is bytes 2..4 of the
+    /// key; a short or missing key and a negative version are corrupt, and a
+    /// later version parses as version 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/log/control.feature",
+        name = "tests: a control key parses as kafka parses it"
+    )]
+    fn a_control_key_parses_as_kafka_parses_it() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("log control tests: an end marker value parses as kafka parses it")]
+    fn bdd_verify_an_end_marker_value_parses_as_kafka_parses_it() {
         let cases: [ParseCase<i32>; 10] = [
             ParseCase {
                 name: "current",
@@ -519,17 +525,25 @@ mod tests {
         }
     }
 
+    /// Kafka's `EndTransactionMarker.deserializeValue`: the coordinator epoch
+    /// is bytes 2..6 of the value; a short or missing value and a negative
+    /// version are corrupt, and a later version parses as version 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/log/control.feature",
+        name = "tests: an end marker value parses as kafka parses it"
+    )]
+    fn an_end_marker_value_parses_as_kafka_parses_it() {}
+
     fn append_open_barrier_transaction(log: &mut Log) {
         let mut data = transactional_batch(1000, 2, &["a", "b"]);
         data.base_sequence = 0;
         log.append(&mut data).unwrap(); // offsets 0 and 1
     }
 
-    /// An end marker Kafka would refuse stops the append, as Kafka's
-    /// `ProducerAppendInfo` does when `EndTransactionMarker.deserialize`
-    /// throws, and the log is unchanged.
-    #[test]
-    fn an_end_marker_kafka_refuses_is_not_appended() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("log control tests: an end marker kafka refuses is not appended")]
+    fn bdd_verify_an_end_marker_kafka_refuses_is_not_appended() {
         let cases: [AppendCase; 4] = [
             AppendCase {
                 name: "a negative key version",
@@ -591,6 +605,16 @@ mod tests {
             check!(log.log_end_offset() == Offset(1), "case {name}");
         }
     }
+
+    /// An end marker Kafka would refuse stops the append, as Kafka's
+    /// `ProducerAppendInfo` does when `EndTransactionMarker.deserialize`
+    /// throws, and the log is unchanged.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/log/control.feature",
+        name = "tests: an end marker kafka refuses is not appended"
+    )]
+    fn an_end_marker_kafka_refuses_is_not_appended() {}
 
     // ---- barrier-marker tests ----
 

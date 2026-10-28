@@ -134,13 +134,9 @@ async fn client(bootstrap: &str) -> krabka_client_core::Client {
     connect_client(bootstrap, None).await
 }
 
-/// The broker rejects `enable2Pc=true` against a cluster with 2PC disabled,
-/// with `TRANSACTIONAL_ID_AUTHORIZATION_FAILED`. It does so before any
-/// coordinator lookup, so the result does not depend on a bootstrapped
-/// `__transaction_state`, and a client cannot probe the cluster flag with an
-/// `UNSUPPORTED_*` code.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_rejected_when_cluster_disabled() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions 2pc: enable 2pc rejected when cluster disabled")]
+async fn bdd_verify_enable_2pc_rejected_when_cluster_disabled() {
     let Booted {
         broker,
         bootstrap,
@@ -161,11 +157,24 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
     broker.shutdown().await;
 }
 
-/// `keepPreparedTxn=true` with no ongoing transaction succeeds and reports the
-/// no-ongoing sentinels. A recovery client can therefore treat completion as a
-/// no-op without a separate describe round trip.
+/// The broker rejects `enable2Pc=true` against a cluster with 2PC disabled,
+/// with `TRANSACTIONAL_ID_AUTHORIZATION_FAILED`. It does so before any
+/// coordinator lookup, so the result does not depend on a bootstrapped
+/// `__transaction_state`, and a client cannot probe the cluster flag with an
+/// `UNSUPPORTED_*` code.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions_2pc.feature",
+    name = "enable 2pc rejected when cluster disabled"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
+async fn enable_2pc_rejected_when_cluster_disabled() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions 2pc: keep prepared txn without ongoing transaction is a noop"
+)]
+async fn bdd_verify_keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
     let Booted {
         broker,
         bootstrap,
@@ -201,16 +210,20 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
     broker.shutdown().await;
 }
 
-/// With 2PC enabled, an `enable2Pc` `InitProducerId` succeeds, and the broker
-/// persists the transaction with the no-timeout sentinel `i32::MAX`. That is
-/// how the coordinator marks a transaction that the timeout reaper must skip.
-///
-/// The test bootstraps the coordinator with a normal transactional producer,
-/// which creates `__transaction_state` and the tid's entry. It then
-/// re-initializes the same tid with `enable2Pc=true`, and reads the persisted
-/// timeout back through `DescribeTransactions`.
+/// `keepPreparedTxn=true` with no ongoing transaction succeeds and reports the
+/// no-ongoing sentinels. A recovery client can therefore treat completion as a
+/// no-op without a separate describe round trip.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions_2pc.feature",
+    name = "keep prepared txn without ongoing transaction is a noop"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_persists_no_timeout_sentinel() {
+async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions 2pc: enable 2pc persists no timeout sentinel")]
+async fn bdd_verify_enable_2pc_persists_no_timeout_sentinel() {
     let Booted {
         broker,
         bootstrap,
@@ -270,12 +283,27 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
     broker.shutdown().await;
 }
 
-/// krabka-io/krabka-broker#784: KIP-939 runs at the bootstrapped
-/// `transaction.version` 2, and an upgrade to 3 fails as it does on Kafka
-/// 4.3.1, whose `TransactionVersion` stops at `TV_2`: `INVALID_UPDATE_VERSION`
-/// (95) with `QuorumFeatures.reasonNotSupported`'s message and no rows.
+/// With 2PC enabled, an `enable2Pc` `InitProducerId` succeeds, and the broker
+/// persists the transaction with the no-timeout sentinel `i32::MAX`. That is
+/// how the coordinator marks a transaction that the timeout reaper must skip.
+///
+/// The test bootstraps the coordinator with a normal transactional producer,
+/// which creates `__transaction_state` and the tid's entry. It then
+/// re-initializes the same tid with `enable2Pc=true`, and reads the persisted
+/// timeout back through `DescribeTransactions`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions_2pc.feature",
+    name = "enable 2pc persists no timeout sentinel"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
+async fn enable_2pc_persists_no_timeout_sentinel() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions 2pc: two phase commit needs no transaction version 3 and 3 is refused"
+)]
+async fn bdd_verify_two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
     use krabka_protocol::owned::update_features_response::UpdateFeaturesResponse;
 
     let Booted {
@@ -319,3 +347,15 @@ async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
     );
     broker.shutdown().await;
 }
+
+/// krabka-io/krabka-broker#784: KIP-939 runs at the bootstrapped
+/// `transaction.version` 2, and an upgrade to 3 fails as it does on Kafka
+/// 4.3.1, whose `TransactionVersion` stops at `TV_2`: `INVALID_UPDATE_VERSION`
+/// (95) with `QuorumFeatures.reasonNotSupported`'s message and no rows.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions_2pc.feature",
+    name = "two phase commit needs no transaction version 3 and 3 is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {}

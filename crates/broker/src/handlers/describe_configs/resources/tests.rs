@@ -1153,8 +1153,11 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
     check!(names == vec![LEADER_THROTTLED_RATE_KEY]);
 }
 
-#[test]
-fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources tests: a resource name kafka refuses is refused with kafkas error"
+)]
+fn bdd_verify_a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: "orders".into(),
@@ -1247,6 +1250,13 @@ fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
     check!(found.error_code == NONE);
     check!(!found.configs.is_empty());
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/tests.feature",
+    name = "a resource name kafka refuses is refused with kafkas error"
+)]
+fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {}
 
 #[test]
 fn a_client_metrics_subscription_reports_all_three_keys_typed() {
@@ -1353,10 +1363,11 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     }
 }
 
-/// #784: with `unstable.api.versions.enable` off a group resource lists
-/// exactly Kafka 4.3.1's 17 `GroupConfig` keys, none of trunk's.
-#[test]
-fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources tests: a group lists kafka 4 3 1s keys unless unstable api versions are enabled"
+)]
+fn bdd_verify_a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
     let image = MetadataImage::new(Uuid::nil());
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     let group = describe_one(
@@ -1398,6 +1409,15 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
             ]
     );
 }
+
+/// #784: with `unstable.api.versions.enable` off a group resource lists
+/// exactly Kafka 4.3.1's 17 `GroupConfig` keys, none of trunk's.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/tests.feature",
+    name = "a group lists kafka 4 3 1s keys unless unstable api versions are enabled"
+)]
+fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {}
 
 /// #1345: Kafka 4.3.1's `GroupCoordinatorConfig` defines no
 /// `group.streams.assignors`, so a node serving Kafka 4.3.1 states it on
@@ -2018,13 +2038,11 @@ fn a_broker_reports_its_topic_default_keys_typed() {
     }
 }
 
-/// Kafka's `createBrokerConfigEntry` types a stored key by `KafkaConfig`'s own
-/// `ConfigDef`, and withholds a value only for a `PASSWORD` key or a name Kafka
-/// does not define (`KafkaConfig.maybeSensitive`). `readOnly` is
-/// `!ALL_DYNAMIC_CONFIGS.contains(name)`, so a listener override and a name
-/// Kafka does not define both read back read-only.
-#[test]
-fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources tests: a stored kafka config key comes back typed and disclosed"
+)]
+fn bdd_verify_a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
     /// The key, its stored value, and the value, sensitivity, wire type and
     /// read-only flag the entry carries.
     struct StoredKeyCase {
@@ -2131,12 +2149,23 @@ fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
     }
 }
 
-/// Kafka's `ConfigHelperUtils.createResponseConfig` walks
-/// `config.nonInternalValues()` for a named broker, so tools that read
-/// `KafkaConfig` through `DescribeConfigs` find every non-internal key, at its
-/// default unless the process holds a value.
-#[test]
-fn a_named_broker_reports_every_kafka_config_key() {
+/// Kafka's `createBrokerConfigEntry` types a stored key by `KafkaConfig`'s own
+/// `ConfigDef`, and withholds a value only for a `PASSWORD` key or a name Kafka
+/// does not define (`KafkaConfig.maybeSensitive`). `readOnly` is
+/// `!ALL_DYNAMIC_CONFIGS.contains(name)`, so a listener override and a name
+/// Kafka does not define both read back read-only.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/tests.feature",
+    name = "a stored kafka config key comes back typed and disclosed"
+)]
+fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources tests: a named broker reports every kafka config key"
+)]
+fn bdd_verify_a_named_broker_reports_every_kafka_config_key() {
     let image = MetadataImage::new(Uuid::nil());
     let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
 
@@ -2179,6 +2208,17 @@ fn a_named_broker_reports_every_kafka_config_key() {
             .any(|entry| entry.name == "unstable.api.versions.enable")
     );
 }
+
+/// Kafka's `ConfigHelperUtils.createResponseConfig` walks
+/// `config.nonInternalValues()` for a named broker, so tools that read
+/// `KafkaConfig` through `DescribeConfigs` find every non-internal key, at its
+/// default unless the process holds a value.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/tests.feature",
+    name = "a named broker reports every kafka config key"
+)]
+fn a_named_broker_reports_every_kafka_config_key() {}
 
 /// A key this process holds a static value of reports it at
 /// `STATIC_BROKER_CONFIG`, with the built-in default beneath it, as Kafka
@@ -2667,11 +2707,11 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
     check!(chain(&broker, "queued.max.requests") == untouched("queued.max.requests", "500"));
 }
 
-/// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
-/// override above the broker synonym, or a `DEFAULT_CONFIG` entry under the
-/// group key's own name for a key with no broker synonym.
-#[test]
-fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources tests: a group reports every kafka group key with its broker synonym"
+)]
+fn bdd_verify_a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
     let image = group_config_image("streams.session.timeout.ms", "60000");
     let result = describe(&image, RESOURCE_TYPE_GROUP, "g", None, EVERYTHING);
     let names: Vec<&str> = result
@@ -2734,6 +2774,16 @@ fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
         );
     }
 }
+
+/// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
+/// override above the broker synonym, or a `DEFAULT_CONFIG` entry under the
+/// group key's own name for a key with no broker synonym.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/tests.feature",
+    name = "a group reports every kafka group key with its broker synonym"
+)]
+fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {}
 
 /// `transaction.partition.verification.enable` is a dynamic broker config with
 /// a static layer. A named broker reports the static value beneath its

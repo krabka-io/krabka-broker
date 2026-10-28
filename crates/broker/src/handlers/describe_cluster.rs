@@ -307,21 +307,9 @@ mod tests {
         broker_handle.broker.shutdown().await;
     }
 
-    /// KIP-919 endpoint-type table, matching Kafka's
-    /// `AuthHelper.computeDescribeClusterResponse` byte for byte: a
-    /// `CONTROLLER` request against a broker listener gets
-    /// `MISMATCHED_ENDPOINT_TYPE` with Kafka's own message; any other
-    /// non-`BROKER` value gets `UNSUPPORTED_ENDPOINT_TYPE`. Neither error
-    /// response echoes the requested `endpoint_type`; it stays at the schema
-    /// default (`1`). This all happens before the authorizer is consulted, so
-    /// `DenyAll` proves the endpoint-type check is not an authorization path.
-    ///
-    /// `endpoint_type` is a v1+ field (KIP-919 predates v0), so a v0 request
-    /// always decodes it at the schema default of `1` (BROKER) regardless of
-    /// what bytes follow -- there is no wire-reachable way to drive a v0
-    /// request into either error arm, and this table does not try to.
-    #[tokio::test]
-    async fn endpoint_type_errors_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers describe cluster tests: endpoint type errors match kafka")]
+    async fn bdd_verify_endpoint_type_errors_match_kafka() {
         struct Case {
             name: &'static str,
             version: i16,
@@ -383,12 +371,32 @@ mod tests {
         }
     }
 
-    /// `DescribeClusterResponse.ClusterId` reports Kafka's base64 `Uuid` form,
-    /// not `java.util.UUID`'s hyphenated form (#1042). The expected string is
-    /// what `org.apache.kafka.common.Uuid(0x0102030405060708L,
-    /// 0x090a0b0c0d0e0f10L).toString()` produces for the same 16 bytes.
+    /// KIP-919 endpoint-type table, matching Kafka's
+    /// `AuthHelper.computeDescribeClusterResponse` byte for byte: a
+    /// `CONTROLLER` request against a broker listener gets
+    /// `MISMATCHED_ENDPOINT_TYPE` with Kafka's own message; any other
+    /// non-`BROKER` value gets `UNSUPPORTED_ENDPOINT_TYPE`. Neither error
+    /// response echoes the requested `endpoint_type`; it stays at the schema
+    /// default (`1`). This all happens before the authorizer is consulted, so
+    /// `DenyAll` proves the endpoint-type check is not an authorization path.
+    ///
+    /// `endpoint_type` is a v1+ field (KIP-919 predates v0), so a v0 request
+    /// always decodes it at the schema default of `1` (BROKER) regardless of
+    /// what bytes follow -- there is no wire-reachable way to drive a v0
+    /// request into either error arm, and this table does not try to.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_cluster.feature",
+        name = "tests: endpoint type errors match kafka"
+    )]
     #[tokio::test]
-    async fn reports_cluster_id_in_kafka_base64_form() {
+    async fn endpoint_type_errors_match_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe cluster tests: reports cluster id in kafka base64 form"
+    )]
+    async fn bdd_verify_reports_cluster_id_in_kafka_base64_form() {
         let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
@@ -403,6 +411,18 @@ mod tests {
         assert!(resp.cluster_id.as_str() == "AQIDBAUGBwgJCgsMDQ4PEA");
         broker_handle.shutdown().await;
     }
+
+    /// `DescribeClusterResponse.ClusterId` reports Kafka's base64 `Uuid` form,
+    /// not `java.util.UUID`'s hyphenated form (#1042). The expected string is
+    /// what `org.apache.kafka.common.Uuid(0x0102030405060708L,
+    /// 0x090a0b0c0d0e0f10L).toString()` produces for the same 16 bytes.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_cluster.feature",
+        name = "tests: reports cluster id in kafka base64 form"
+    )]
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form() {}
 
     /// KIP-430: the bitfield is filled only when the request opts in. Without
     /// the flag the field keeps the `i32::MIN` "not present" sentinel, which

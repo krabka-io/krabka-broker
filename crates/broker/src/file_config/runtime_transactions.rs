@@ -237,10 +237,11 @@ barrier_max_topics_per_group = 16
         }
     }
 
-    /// Kafka's `ShareCoordinatorConfig` defaults and bounds for the share
-    /// coordinator keys: `Some` is the applied value, `None` a refusal.
-    #[test]
-    fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config runtime transactions tests: share coordinator keys follow kafka defaults and bounds"
+    )]
+    fn bdd_verify_share_coordinator_keys_follow_kafka_defaults_and_bounds() {
         struct Row {
             label: &'static str,
             /// The `[runtime]` body.
@@ -387,4 +388,13 @@ barrier_max_topics_per_group = 16
                 == krabka_units::mebibytes(5)
         );
     }
+
+    /// Kafka's `ShareCoordinatorConfig` defaults and bounds for the share
+    /// coordinator keys: `Some` is the applied value, `None` a refusal.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/runtime_transactions.feature",
+        name = "tests: share coordinator keys follow kafka defaults and bounds"
+    )]
+    fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {}
 }

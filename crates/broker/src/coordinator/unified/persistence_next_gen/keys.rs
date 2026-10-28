@@ -76,10 +76,11 @@ pub fn encode_key(key: &NextGenKey) -> Result<Bytes, BrokerError> { key.encode()
 mod tests {
     use {super::*, assert2::assert};
 
-    /// `ConsumerGroupPartitionMetadataKey`: an `i16` key version of 4, then
-    /// the group id as a non-flexible string.
-    #[test]
-    fn partition_metadata_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen keys tests: partition metadata key bytes match kafka schema"
+    )]
+    fn bdd_verify_partition_metadata_key_bytes_match_kafka_schema() {
         let key = NextGenKey::PartitionMetadata {
             group_id: "grp".into(),
         };
@@ -88,15 +89,25 @@ mod tests {
         assert!(parse_key(KEY_PARTITION_METADATA, &golden[2..]).unwrap() == key);
     }
 
+    /// `ConsumerGroupPartitionMetadataKey`: an `i16` key version of 4, then
+    /// the group id as a non-flexible string.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/keys.feature",
+        name = "tests: partition metadata key bytes match kafka schema"
+    )]
+    fn partition_metadata_key_bytes_match_kafka_schema() {}
+
     #[test]
     fn unknown_key_version_rejected() {
         assert!(parse_key(99, &[]).is_err());
     }
 
-    /// `ConsumerGroupRegularExpressionKey`: an `i16` key version of 16, then
-    /// the group id and the regular expression as non-flexible strings.
-    #[test]
-    fn regular_expression_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen keys tests: regular expression key bytes match kafka schema"
+    )]
+    fn bdd_verify_regular_expression_key_bytes_match_kafka_schema() {
         let key = NextGenKey::RegularExpression {
             group_id: "g".into(),
             regex: "a.*".into(),
@@ -107,6 +118,15 @@ mod tests {
         let v = bytes::Buf::get_i16(&mut r);
         assert!(parse_key(v, r).unwrap() == key);
     }
+
+    /// `ConsumerGroupRegularExpressionKey`: an `i16` key version of 16, then
+    /// the group id and the regular expression as non-flexible strings.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/keys.feature",
+        name = "tests: regular expression key bytes match kafka schema"
+    )]
+    fn regular_expression_key_bytes_match_kafka_schema() {}
 
     #[test]
     fn key_roundtrip_member_metadata() {

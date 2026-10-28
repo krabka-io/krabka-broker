@@ -75,11 +75,11 @@ mod tests {
         assert2::{assert, check},
     };
 
-    /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as
-    /// Kafka 4.3.1's generated writer lays `ShareGroupMetadataValue` out. The
-    /// hash is a plain field, so 0 is on the wire too.
-    #[test]
-    fn group_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence epochs tests: group metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_group_metadata_bytes_match_kafka_schema() {
         struct Row {
             case: &'static str,
             value: ShareGroupMetadataValue,
@@ -113,6 +113,16 @@ mod tests {
         }
     }
 
+    /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as
+    /// Kafka 4.3.1's generated writer lays `ShareGroupMetadataValue` out. The
+    /// hash is a plain field, so 0 is on the wire too.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/epochs.feature",
+        name = "tests: group metadata bytes match kafka schema"
+    )]
+    fn group_metadata_bytes_match_kafka_schema() {}
+
     #[test]
     fn group_metadata_round_trip() {
         let key = ShareGroupKey::GroupMetadata {
@@ -130,11 +140,11 @@ mod tests {
         assert!(ShareGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
-    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
-    /// the default 0.
-    #[test]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence epochs tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_metadata_bytes_match_kafka_schema() {
         let rows = assignment_metadata_golden_cases().call();
         for row in rows {
             let case = row.description;
@@ -150,6 +160,16 @@ mod tests {
             );
         }
     }
+
+    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
+    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
+    /// the default 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/epochs.feature",
+        name = "tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn target_assignment_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_metadata_round_trip() {

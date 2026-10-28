@@ -32,8 +32,9 @@ use {
 // The lifecycle test.
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delegation_token_lifecycle_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("delegation tokens lifecycle: delegation token lifecycle end to end")]
+async fn bdd_verify_delegation_token_lifecycle_end_to_end() {
     let (handle, _dir, addr) = start_broker().await;
 
     let result: Result<(), String> = async {
@@ -214,3 +215,11 @@ async fn delegation_token_lifecycle_end_to_end() {
         panic!("delegation-token lifecycle failed: {msg}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/lifecycle.feature",
+    name = "delegation token lifecycle end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegation_token_lifecycle_end_to_end() {}

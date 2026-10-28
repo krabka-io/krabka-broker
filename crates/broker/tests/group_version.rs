@@ -31,8 +31,9 @@ fn heartbeat(group: &str) -> ConsumerGroupHeartbeatRequest {
     }
 }
 
-#[tokio::test]
-async fn next_gen_accepted_when_group_version_finalized() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("group version: next gen accepted when group version finalized")]
+async fn bdd_verify_next_gen_accepted_when_group_version_finalized() {
     // Fresh broker self-bootstraps group.version=1 → next-gen enabled.
     let p = support::start().await;
     let resp = p
@@ -50,8 +51,17 @@ async fn next_gen_accepted_when_group_version_finalized() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_version.feature",
+    name = "next gen accepted when group version finalized"
+)]
 #[tokio::test]
-async fn next_gen_rejected_when_group_version_disabled() {
+async fn next_gen_accepted_when_group_version_finalized() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("group version: next gen rejected when group version disabled")]
+async fn bdd_verify_next_gen_rejected_when_group_version_disabled() {
     let p = support::start().await;
 
     // Downgrade group.version to 0 (KIP-584 tombstone) → next-gen disabled.
@@ -82,3 +92,11 @@ async fn next_gen_rejected_when_group_version_disabled() {
     );
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_version.feature",
+    name = "next gen rejected when group version disabled"
+)]
+#[tokio::test]
+async fn next_gen_rejected_when_group_version_disabled() {}

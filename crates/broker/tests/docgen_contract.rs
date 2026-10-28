@@ -17,8 +17,9 @@ use {
 
 mod support;
 
-#[test]
-fn file_config_schema_has_the_shape_docgen_renders() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("docgen contract: file config schema has the shape docgen renders")]
+fn bdd_verify_file_config_schema_has_the_shape_docgen_renders() {
     let schema = file_config::config_schema();
     // `render_sectioned_field_table` partitions `properties` of the root and
     // resolves `$ref` pointers into a `$defs` table.
@@ -53,8 +54,16 @@ fn file_config_schema_has_the_shape_docgen_renders() {
     check!(description.contains("KIP-595"));
 }
 
-#[test]
-fn supported_apis_is_non_empty_and_unique_by_key() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/docgen_contract.feature",
+    name = "file config schema has the shape docgen renders"
+)]
+fn file_config_schema_has_the_shape_docgen_renders() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("docgen contract: supported apis is non empty and unique by key")]
+fn bdd_verify_supported_apis_is_non_empty_and_unique_by_key() {
     let apis = supported_client_apis();
     assert!(!apis.is_empty());
     let keys: BTreeSet<i16> = apis.iter().map(|api| api.api_key).collect();
@@ -84,8 +93,16 @@ fn supported_apis_is_non_empty_and_unique_by_key() {
     }
 }
 
-#[test]
-fn topic_config_docs_carry_the_columns_docgen_prints() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/docgen_contract.feature",
+    name = "supported apis is non empty and unique by key"
+)]
+fn supported_apis_is_non_empty_and_unique_by_key() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("docgen contract: topic config docs carry the columns docgen prints")]
+fn bdd_verify_topic_config_docs_carry_the_columns_docgen_prints() {
     let docs = krabka_broker::topic_config_docs();
     assert!(!docs.is_empty());
     let keys: BTreeSet<&str> = docs.iter().map(|doc| doc.key).collect();
@@ -101,11 +118,19 @@ fn topic_config_docs_carry_the_columns_docgen_prints() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/docgen_contract.feature",
+    name = "topic config docs carry the columns docgen prints"
+)]
+fn topic_config_docs_carry_the_columns_docgen_prints() {}
+
 /// The one scenario `krabka-docgen` special-cases by id.
 const SPECIAL_CASED_SCENARIO: &str = "split_brain_prevented";
 
-#[test]
-fn scenarios_record_the_trace_shape_docgen_renders() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("docgen contract: scenarios record the trace shape docgen renders")]
+fn bdd_verify_scenarios_record_the_trace_shape_docgen_renders() {
     let traces = scenarios();
     assert!(!traces.is_empty());
     let ids: Vec<&str> = traces.iter().map(|trace| trace.id.as_str()).collect();
@@ -192,3 +217,10 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
         }
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/docgen_contract.feature",
+    name = "scenarios record the trace shape docgen renders"
+)]
+fn scenarios_record_the_trace_shape_docgen_renders() {}

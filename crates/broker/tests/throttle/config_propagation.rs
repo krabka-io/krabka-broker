@@ -20,11 +20,9 @@ use {
     krabka_broker::throttle::TopicThrottle,
 };
 
-/// Test 1: `IncrementalAlterConfigs` with `resource_type=Broker` sets the
-/// `leader.replication.throttled.rate` key. The value must be visible in
-/// the metadata image through `controller_image_for_test`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_scoped_alter_persists_in_image() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("throttle config propagation: broker scoped alter persists in image")]
+async fn bdd_verify_broker_scoped_alter_persists_in_image() {
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
 
@@ -54,11 +52,20 @@ async fn broker_scoped_alter_persists_in_image() {
     handle.shutdown().await;
 }
 
-/// Test 2: `IncrementalAlterConfigs` with `resource_type=Topic` sets
-/// `leader.replication.throttled.replicas`. `TopicThrottle::for_topic`
-/// returns the partitions the list throttles on each broker.
+/// Test 1: `IncrementalAlterConfigs` with `resource_type=Broker` sets the
+/// `leader.replication.throttled.rate` key. The value must be visible in
+/// the metadata image through `controller_image_for_test`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/config_propagation.feature",
+    name = "broker scoped alter persists in image"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn topic_throttle_config_propagates() {
+async fn broker_scoped_alter_persists_in_image() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("throttle config propagation: topic throttle config propagates")]
+async fn bdd_verify_topic_throttle_config_propagates() {
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
 
@@ -96,3 +103,14 @@ async fn topic_throttle_config_propagates() {
         .await;
     handle.shutdown().await;
 }
+
+/// Test 2: `IncrementalAlterConfigs` with `resource_type=Topic` sets
+/// `leader.replication.throttled.replicas`. `TopicThrottle::for_topic`
+/// returns the partitions the list throttles on each broker.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/config_propagation.feature",
+    name = "topic throttle config propagates"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn topic_throttle_config_propagates() {}

@@ -44,8 +44,9 @@ async fn wait_for_leader(controller: &ControllerHandle) {
         .expect("leader watch channel closed");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_voter_create_topic_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("single node: single voter create topic round trip")]
+async fn bdd_verify_single_voter_create_topic_round_trip() {
     let SingleVoterConfig { dir: _dir, config } = single_voter_config();
     let controller = Controller::start(config).await.expect("controller start");
     // Wait until openraft elects this single voter as leader.
@@ -59,8 +60,17 @@ async fn single_voter_create_topic_round_trip() {
     controller.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/single_node.feature",
+    name = "single voter create topic round trip"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_voter_duplicate_topic_rejected() {
+async fn single_voter_create_topic_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("single node: single voter duplicate topic rejected")]
+async fn bdd_verify_single_voter_duplicate_topic_rejected() {
     let SingleVoterConfig { dir: _dir, config } = single_voter_config();
     let controller = Controller::start(config).await.unwrap();
     wait_for_leader(&controller).await;
@@ -75,3 +85,11 @@ async fn single_voter_duplicate_topic_rejected() {
 
     controller.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/single_node.feature",
+    name = "single voter duplicate topic rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn single_voter_duplicate_topic_rejected() {}

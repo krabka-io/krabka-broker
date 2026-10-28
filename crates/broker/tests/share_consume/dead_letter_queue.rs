@@ -528,11 +528,11 @@ where
     }
 }
 
-/// Kafka's `initiateDLQAndArchive`, end to end: a rejected batch is written to
-/// the group's topic, one record for each offset, with the six headers and the
-/// copied key and value, and only then does the SPSO move past it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_rejected_batch_is_dead_lettered_then_archived() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a rejected batch is dead lettered then archived"
+)]
+async fn bdd_verify_a_rejected_batch_is_dead_lettered_then_archived() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters().customize(|_| {}).call().await;
     let ClusterParts {
@@ -588,14 +588,22 @@ async fn a_rejected_batch_is_dead_lettered_then_archived() {
     cluster.broker.shutdown().await;
 }
 
-/// Runs that are not neighbours are a write each. One record comes out for
-/// each offset, and the meters count each round as a produce, however the
-/// writes were packed into requests: Kafka's `recordDLQProduce` marks each
-/// handler, not each coalesced request. Whether the writes share a request is
-/// the race of the writers, so this does not assert it: the unit tests of
-/// `dlq::coalesce` and `dlq::writer` do.
+/// Kafka's `initiateDLQAndArchive`, end to end: a rejected batch is written to
+/// the group's topic, one record for each offset, with the six headers and the
+/// copied key and value, and only then does the SPSO move past it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a rejected batch is dead lettered then archived"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
+async fn a_rejected_batch_is_dead_lettered_then_archived() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: rejects that are not neighbours are all dead lettered and counted"
+)]
+async fn bdd_verify_rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters()
         .customize(|_| {})
@@ -661,12 +669,25 @@ async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {
     cluster.broker.shutdown().await;
 }
 
-/// A write that the topic refuses counts as a failed write, and the run is
-/// archived regardless. The topic takes no more than 100 bytes for a message,
-/// and a dead-letter record with its six headers is more, so the leader answers
-/// `MESSAGE_TOO_LARGE`, which Kafka's `handleProduceResponse` does not retry.
+/// Runs that are not neighbours are a write each. One record comes out for
+/// each offset, and the meters count each round as a produce, however the
+/// writes were packed into requests: Kafka's `recordDLQProduce` marks each
+/// handler, not each coalesced request. Whether the writes share a request is
+/// the race of the writers, so this does not assert it: the unit tests of
+/// `dlq::coalesce` and `dlq::writer` do.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "rejects that are not neighbours are all dead lettered and counted"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
+async fn rejects_that_are_not_neighbours_are_all_dead_lettered_and_counted() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a write the topic refuses counts as failed and still archives"
+)]
+async fn bdd_verify_a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters()
         .customize(|_| {})
@@ -693,12 +714,23 @@ async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {
     cluster.broker.shutdown().await;
 }
 
-/// A record that uses up `share.delivery.count.limit` goes to the queue too,
-/// with the delivery count as its cause: here its lock runs out on the second
-/// delivery, and the record is written with a delivery count of 2 and Kafka's
-/// message for the cause.
+/// A write that the topic refuses counts as a failed write, and the run is
+/// archived regardless. The topic takes no more than 100 bytes for a message,
+/// and a dead-letter record with its six headers is more, so the leader answers
+/// `MESSAGE_TOO_LARGE`, which Kafka's `handleProduceResponse` does not retry.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a write the topic refuses counts as failed and still archives"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
+async fn a_write_the_topic_refuses_counts_as_failed_and_still_archives() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a record that uses up its deliveries is dead lettered"
+)]
+async fn bdd_verify_a_record_that_uses_up_its_deliveries_is_dead_lettered() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters()
         .customize(|config| {
@@ -752,11 +784,23 @@ async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {
     cluster.broker.shutdown().await;
 }
 
-/// The queue is off below `share.version` 2, so a reject archives at once and
-/// nothing reaches the topic, even with the group and the topic set up: the
-/// gate is the finalized level, not the config.
+/// A record that uses up `share.delivery.count.limit` goes to the queue too,
+/// with the delivery count as its cause: here its lock runs out on the second
+/// delivery, and the record is written with a delivery count of 2 and Kafka's
+/// message for the cause.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a record that uses up its deliveries is dead lettered"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reject_below_share_version_two_writes_nothing() {
+async fn a_record_that_uses_up_its_deliveries_is_dead_lettered() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a reject below share version two writes nothing"
+)]
+async fn bdd_verify_a_reject_below_share_version_two_writes_nothing() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_dead_letters()
         .customize(|_| {})
@@ -780,11 +824,22 @@ async fn a_reject_below_share_version_two_writes_nothing() {
     cluster.broker.shutdown().await;
 }
 
-/// A group whose topic cannot be written still moves on: Kafka archives the
-/// record when the write fails, and logs the failure. Here the topic does not
-/// exist and the cluster does not create it.
+/// The queue is off below `share.version` 2, so a reject archives at once and
+/// nothing reaches the topic, even with the group and the topic set up: the
+/// gate is the finalized level, not the config.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a reject below share version two writes nothing"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_write_still_archives_the_record() {
+async fn a_reject_below_share_version_two_writes_nothing() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a failed write still archives the record"
+)]
+async fn bdd_verify_a_failed_write_still_archives_the_record() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records(
         ShareRecordCount(2),
@@ -822,10 +877,22 @@ async fn a_failed_write_still_archives_the_record() {
     cluster.broker.shutdown().await;
 }
 
-/// With `errors.deadletterqueue.auto.create.topics.enable`, a missing topic is
-/// created with the config that opts it in, and the records are written to it.
+/// A group whose topic cannot be written still moves on: Kafka archives the
+/// record when the write fails, and logs the failure. Here the topic does not
+/// exist and the cluster does not create it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a failed write still archives the record"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
+async fn a_failed_write_still_archives_the_record() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a missing topic is created when the cluster allows it"
+)]
+async fn bdd_verify_a_missing_topic_is_created_when_the_cluster_allows_it() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records(
         ShareRecordCount(1),
@@ -867,16 +934,21 @@ async fn a_missing_topic_is_created_when_the_cluster_allows_it() {
     cluster.broker.shutdown().await;
 }
 
-/// A source record that fits the read budget can be over the topic's
-/// `max.message.bytes` once the six headers and the batch header are added. The
-/// copy is best effort, so the record is written with its headers alone rather
-/// than lost to the broker's `MESSAGE_TOO_LARGE`.
-///
-/// The source value is 1,000 bytes, which is about 1,010 bytes as a record and
-/// fits the topic's 1,100. With the headers, which take about 180 bytes, and
-/// the 61-byte batch header it is about 1,250 bytes as a batch, which does not.
+/// With `errors.deadletterqueue.auto.create.topics.enable`, a missing topic is
+/// created with the config that opts it in, and the records are written to it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a missing topic is created when the cluster allows it"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
+async fn a_missing_topic_is_created_when_the_cluster_allows_it() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: a copied record too big for the topic is written with headers alone"
+)]
+async fn bdd_verify_a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
     let _permit = broker_test_permit().await;
     let cluster = acquired_records_from()
         .records(1)
@@ -930,6 +1002,22 @@ async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
     );
     cluster.broker.shutdown().await;
 }
+
+/// A source record that fits the read budget can be over the topic's
+/// `max.message.bytes` once the six headers and the batch header are added. The
+/// copy is best effort, so the record is written with its headers alone rather
+/// than lost to the broker's `MESSAGE_TOO_LARGE`.
+///
+/// The source value is 1,000 bytes, which is about 1,010 bytes as a record and
+/// fits the topic's 1,100. With the headers, which take about 180 bytes, and
+/// the 61-byte batch header it is about 1,250 bytes as a batch, which does not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "a copied record too big for the topic is written with headers alone"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {}
 
 /// Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP` (KIP-405).
 const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
@@ -1013,8 +1101,11 @@ async fn wait_until_local_log_start(client: &Client, offset: krabka_ids::Offset)
 // The member acquires the records out of the tier, with their values, and
 // rejects them, and the dead-letter records carry the values that the copy
 // read back from the tier.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume dead letter queue: records that only the remote tier holds are acquired and dead lettered"
+)]
+async fn bdd_verify_records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
     let remote_dir = tempfile::TempDir::new().unwrap();
@@ -1059,6 +1150,14 @@ async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered(
     check!(values(&dead_letters) == produced);
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
+    name = "records that only the remote tier holds are acquired and dead lettered"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn records_that_only_the_remote_tier_holds_are_acquired_and_dead_lettered() {}
 
 #[bon::builder]
 async fn acquired_dead_letters(

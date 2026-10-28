@@ -187,14 +187,24 @@ mod tests {
         );
     }
 
-    /// The directory id takes Kafka's base64 form too, which is what
-    /// `kafka-storage format --initial-controllers` takes.
-    #[test]
-    fn parses_initial_controller_spec_with_a_kafka_directory_id() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "format quorum tests: parses initial controller spec with a kafka directory id"
+    )]
+    fn bdd_verify_parses_initial_controller_spec_with_a_kafka_directory_id() {
         let v =
             parse_initial_controller("3@host:9093:AAAAAAAAAAAAAAAAAAAAAw", "CONTROLLER").unwrap();
         assert2::assert!(v.directory_id == Uuid::from_u128(3));
     }
+
+    /// The directory id takes Kafka's base64 form too, which is what
+    /// `kafka-storage format --initial-controllers` takes.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/format/quorum.feature",
+        name = "tests: parses initial controller spec with a kafka directory id"
+    )]
+    fn parses_initial_controller_spec_with_a_kafka_directory_id() {}
 
     #[test]
     fn rejects_initial_controller_without_at() {
@@ -206,14 +216,19 @@ mod tests {
         assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid", "CONTROLLER").is_err());
     }
 
-    /// A `kraft.version` level the feature does not define gets Kafka's
-    /// `Feature.fromFeatureLevel` text.
-    #[yare::parameterized(
-        below_range = { "-1" },
-        unsupported_in_range = { "2" },
-        above_range = { "9" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "format quorum tests: a kraft version level out of range is kafkas no feature error for {example}"
     )]
-    fn a_kraft_version_level_out_of_range_is_kafkas_no_feature_error(level: &str) {
+    fn bdd_verify_a_kraft_version_level_out_of_range_is_kafkas_no_feature_error(example: String) {
+        type Example<'a> = (&'a str,);
+        let (level,): Example<'_> = match example.as_str() {
+            "below range" => ("-1",),
+            "unsupported in range" => ("2",),
+            "above range" => ("9",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         use clap::Parser as _;
 
         let cli = Cli::try_parse_from([
@@ -235,16 +250,31 @@ mod tests {
         );
     }
 
-    /// The voter endpoints carry the controller listener name, as
-    /// `kafka-storage format` takes it from `controller.listener.names`, in
-    /// Kafka's upper-case form. Without the flag the name is `CONTROLLER`.
-    #[yare::parameterized(
-        default_listener_name = { "default" },
-        explicit_uppercase_listener_name = { "uppercase" },
-        normalized_lowercase_listener_name = { "normalized" },
-        explicit_quorum_default_name = { "explicit-default" },
+    /// A `kraft.version` level the feature does not define gets Kafka's
+    /// `Feature.fromFeatureLevel` text.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/format/quorum.feature",
+        name = "tests: a kraft version level out of range is kafkas no feature error"
     )]
-    fn the_voter_endpoints_carry_the_controller_listener_name(scenario: &str) {
+    fn a_kraft_version_level_out_of_range_is_kafkas_no_feature_error(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "format quorum tests: the voter endpoints carry the controller listener name for {example}"
+    )]
+    fn bdd_verify_the_voter_endpoints_carry_the_controller_listener_name(example: String) {
+        type Example<'a> = (&'a str,);
+        let (scenario,): Example<'_> = match example.as_str() {
+            "default listener name" => ("default",),
+            "explicit uppercase listener name" => ("uppercase",),
+            "normalized lowercase listener name" => ("normalized",),
+            "explicit quorum default name" => ("explicit-default",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         /// The quorum flags, the listener name flag, and the endpoint name
         /// written.
         struct Case<'a> {
@@ -306,6 +336,16 @@ mod tests {
             .collect();
         assert2::assert!(named == vec![(*written).to_owned()]);
     }
+
+    #[cfg(test)]
+    /// The voter endpoints carry the controller listener name, as
+    /// `kafka-storage format` takes it from `controller.listener.names`, in
+    /// Kafka's upper-case form. Without the flag the name is `CONTROLLER`.
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/format/quorum.feature",
+        name = "tests: the voter endpoints carry the controller listener name"
+    )]
+    fn the_voter_endpoints_carry_the_controller_listener_name(example: String) { let _ = example; }
 
     #[yare::parameterized(
         invalid_id = { "notanum@host:9093:00000000-0000-0000-0000-000000000003" },

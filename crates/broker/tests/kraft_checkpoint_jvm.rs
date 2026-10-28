@@ -12,9 +12,9 @@ const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 
 krabka_macros::jvm_checkpoint_dump_fixture!(dump_checkpoint);
 
-#[test]
-#[ignore = "requires Docker"]
-fn jvm_dump_log_parses_krabka_bootstrap_checkpoint() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft checkpoint jvm: jvm dump log parses krabka bootstrap checkpoint")]
+fn bdd_verify_jvm_dump_log_parses_krabka_bootstrap_checkpoint() {
     let bytes = build_bootstrap_checkpoint(&[
         ("metadata.version", 25),
         ("group.version", 1),
@@ -48,3 +48,11 @@ fn jvm_dump_log_parses_krabka_bootstrap_checkpoint() {
         );
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_checkpoint_jvm.feature",
+    name = "jvm dump log parses krabka bootstrap checkpoint"
+)]
+fn jvm_dump_log_parses_krabka_bootstrap_checkpoint() {}

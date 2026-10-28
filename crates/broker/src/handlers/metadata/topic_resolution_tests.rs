@@ -344,8 +344,11 @@ async fn envelope(fixture: &Fixture) -> MetadataResponse {
     metadata(&fixture.broker, 12, &request).await
 }
 
-#[tokio::test]
-async fn topic_ids_follow_kafka_version_rules() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers metadata topic resolution tests: topic ids follow kafka version rules"
+)]
+async fn bdd_verify_topic_ids_follow_kafka_version_rules() {
     use Expect::{Failed, Rows};
     let cases = vec![
         // Versions 10 and 11 refuse a non-zero id or a null name.
@@ -477,6 +480,14 @@ async fn topic_ids_follow_kafka_version_rules() {
     fixture.run(&cases, &baseline).await;
     fixture.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/metadata/topic_resolution_tests.feature",
+    name = "topic ids follow kafka version rules"
+)]
+#[tokio::test]
+async fn topic_ids_follow_kafka_version_rules() {}
 
 /// A denied id row carries a null name and the real id. A denied name row
 /// carries the name and the zero id. An unknown id needs no authorization, and

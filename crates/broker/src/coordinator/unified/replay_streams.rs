@@ -462,11 +462,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `GroupMetadataManager.replay` of the streams group records,
-    /// one log per row: the whole group that replay holds afterwards, or the
-    /// exception that fails the load.
-    #[test]
-    fn streams_records_replay_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified replay streams tests: streams records replay as kafka"
+    )]
+    fn bdd_verify_streams_records_replay_as_kafka() {
         let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `StreamsGroup.createGroupTombstoneRecords` for member `m`:
         // the topology tombstone comes after the group's, and is ignored.
@@ -615,4 +615,14 @@ mod tests {
             |coord| coord.cached_streams_seed("g"),
         );
     }
+
+    /// Kafka's `GroupMetadataManager.replay` of the streams group records,
+    /// one log per row: the whole group that replay holds afterwards, or the
+    /// exception that fails the load.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/replay_streams.feature",
+        name = "tests: streams records replay as kafka"
+    )]
+    fn streams_records_replay_as_kafka() {}
 }

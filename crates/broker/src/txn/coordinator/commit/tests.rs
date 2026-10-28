@@ -45,10 +45,11 @@ const P0: PartitionIndex = PartitionIndex(0);
 const EPOCH: i32 = 3;
 const TID: &str = "tid";
 
-/// Kafka's `appendTransactionToLog` turns the error of its append into the
-/// coordinator error the client gets, and passes any other error through.
-#[test]
-fn append_errors_map_as_kafka_append_transaction_to_log() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn coordinator commit tests: append errors map as kafka append transaction to log"
+)]
+fn bdd_verify_append_errors_map_as_kafka_append_transaction_to_log() {
     let cases = [
         (
             codes::UNKNOWN_TOPIC_OR_PARTITION,
@@ -64,6 +65,15 @@ fn append_errors_map_as_kafka_append_transaction_to_log() {
         assert!(coordinator_append_error(append) == expected, "{append}");
     }
 }
+
+/// Kafka's `appendTransactionToLog` turns the error of its append into the
+/// coordinator error the client gets, and passes any other error through.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/coordinator/commit/tests.feature",
+    name = "append errors map as kafka append transaction to log"
+)]
+fn append_errors_map_as_kafka_append_transaction_to_log() {}
 
 /// `__transaction_state` with one partition that `leader` leads at `epoch`
 /// over replicas 1 and 2 with `isr`, and a `min.insync.replicas` of 2, as

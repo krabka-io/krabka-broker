@@ -173,8 +173,11 @@ fn verification_code(code: i16, version: i16) -> i16 {
 mod tests {
     use {super::*, assert2::assert};
 
-    #[test]
-    fn a_coordinator_answer_becomes_the_code_kafka_puts_on_the_response() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn handlers txn offset commit verification tests: a coordinator answer becomes the code kafka puts on the response"
+    )]
+    fn bdd_verify_a_coordinator_answer_becomes_the_code_kafka_puts_on_the_response() {
         // (coordinator answer, TxnOffsetCommit version, code on the response)
         let cases = [
             (codes::NONE, 3, codes::NONE),
@@ -234,4 +237,11 @@ mod tests {
             .collect();
         assert!(actual == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/handlers/txn_offset_commit/verification.feature",
+        name = "tests: a coordinator answer becomes the code kafka puts on the response"
+    )]
+    fn a_coordinator_answer_becomes_the_code_kafka_puts_on_the_response() {}
 }

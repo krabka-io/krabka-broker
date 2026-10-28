@@ -114,8 +114,11 @@ fn loaded_group(
 // every loaded member supports the selected protocol with its stored
 // subscription, a stored rebalance timeout of -1 becomes the session timeout,
 // and an empty protocol type becomes no protocol type.
-#[test]
-fn replay_rebuilds_the_group_as_kafka_loads_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator bootstrap classic state tests: replay rebuilds the group as kafka loads it"
+)]
+fn bdd_verify_replay_rebuilds_the_group_as_kafka_loads_it() {
     let secs = Duration::from_secs;
     let cases = [
         (
@@ -161,6 +164,13 @@ fn replay_rebuilds_the_group_as_kafka_loads_it() {
     }
     assert!(replayed_rows == expected_rows);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/bootstrap/classic_state_tests.feature",
+    name = "replay rebuilds the group as kafka loads it"
+)]
+fn replay_rebuilds_the_group_as_kafka_loads_it() {}
 
 // Queues a `JoinGroup` v5 from `member_id` that proposes `range` with
 // `metadata`, and returns the channel its reply arrives on.

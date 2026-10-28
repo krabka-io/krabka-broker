@@ -343,25 +343,35 @@ mod tests {
         check!(prepare_owned_batch(overflow).is_err());
     }
 
-    /// Kafka reads a `LogAppendTime` record's timestamp as the batch
-    /// `max_timestamp` and leaves the producer's deltas untouched, so a
-    /// producer clock ahead of the broker is legal there and a contradiction
-    /// under `CreateTime`.
-    #[yare::parameterized(
-        log_append_time = { "log append time", TimestampType::LogAppendTime, true },
-        create_time = { "create time", TimestampType::CreateTime, false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "materialize prepare tests: owned rewrite checks timestamps by kafka timestamp type for {example}"
     )]
-    fn owned_rewrite_checks_timestamps_by_kafka_timestamp_type(
-        name: &str,
-        timestamp_type: TimestampType,
-        admitted: bool,
-    ) {
+    fn bdd_verify_owned_rewrite_checks_timestamps_by_kafka_timestamp_type(example: String) {
+        type Example<'a> = (&'a str, TimestampType, bool);
+        let (name, timestamp_type, admitted): Example<'_> = match example.as_str() {
+            "log append time" => ("log append time", TimestampType::LogAppendTime, true),
+            "create time" => ("create time", TimestampType::CreateTime, false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let mut batch = rewrite(vec![record(0, 0), record(3, 50)]);
         batch.attributes = batch.attributes.with_timestamp_type(timestamp_type);
         batch.base_timestamp = 2_000;
         batch.max_timestamp = 1_000;
         check!(prepare_owned_batch(batch).is_ok() == admitted, "{name}");
     }
+
+    /// Kafka reads a `LogAppendTime` record's timestamp as the batch
+    /// `max_timestamp` and leaves the producer's deltas untouched, so a
+    /// producer clock ahead of the broker is legal there and a contradiction
+    /// under `CreateTime`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/materialize/prepare.feature",
+        name = "tests: owned rewrite checks timestamps by kafka timestamp type"
+    )]
+    fn owned_rewrite_checks_timestamps_by_kafka_timestamp_type(example: String) { let _ = example; }
 
     #[test]
     fn owned_rewrite_rejects_control_and_illegal_producer_semantics() {

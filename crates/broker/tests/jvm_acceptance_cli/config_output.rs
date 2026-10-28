@@ -73,8 +73,11 @@ pub fn quota_entities(stdout: &str) -> Vec<String> {
 mod tests {
     use {super::*, assert2::check};
 
-    #[test]
-    fn the_resource_path_yields_its_keys_without_the_provenance() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli config output tests: the resource path yields its keys without the provenance"
+    )]
+    fn bdd_verify_the_resource_path_yields_its_keys_without_the_provenance() {
         let stdout = "Dynamic configs for group 'krabka-grp' are:\n  \
              consumer.session.timeout.ms=50000 sensitive=false \
              synonyms={DYNAMIC_GROUP_CONFIG:consumer.session.timeout.ms=50000}\n";
@@ -84,8 +87,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_quota_path_yields_the_same_shape_as_the_resource_path() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
+        name = "tests: the resource path yields its keys without the provenance"
+    )]
+    fn the_resource_path_yields_its_keys_without_the_provenance() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli config output tests: the quota path yields the same shape as the resource path"
+    )]
+    fn bdd_verify_the_quota_path_yields_the_same_shape_as_the_resource_path() {
         let stdout = "Quota configs for client-id 'krabka-client' are \
              consumer_byte_rate=1024.0, producer_byte_rate=2048.0\n";
         check!(
@@ -97,8 +110,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_tuple_entity_is_reported_with_both_of_its_components() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
+        name = "tests: the quota path yields the same shape as the resource path"
+    )]
+    fn the_quota_path_yields_the_same_shape_as_the_resource_path() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli config output tests: a tuple entity is reported with both of its components"
+    )]
+    fn bdd_verify_a_tuple_entity_is_reported_with_both_of_its_components() {
         let stdout = "Quota configs for user-principal 'u', client-id 'c' are \
              request_percentage=42.0\n";
         check!(quota_entities(stdout) == vec!["user-principal 'u', client-id 'c'".to_owned()]);
@@ -108,8 +131,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_header_line_contributes_nothing() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
+        name = "tests: a tuple entity is reported with both of its components"
+    )]
+    fn a_tuple_entity_is_reported_with_both_of_its_components() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli config output tests: a header line contributes nothing"
+    )]
+    fn bdd_verify_a_header_line_contributes_nothing() {
         for stdout in [
             "Dynamic configs for topic 't' are:\n",
             "All configs for client-metrics 'm' are:\n",
@@ -122,4 +155,11 @@ mod tests {
             check!(quota_entities(stdout).is_empty());
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
+        name = "tests: a header line contributes nothing"
+    )]
+    fn a_header_line_contributes_nothing() {}
 }

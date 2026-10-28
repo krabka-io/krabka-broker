@@ -127,8 +127,11 @@ async fn start_sasl_controller() -> ControllerNode {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sasl_controller_listener_answers_api_versions_before_authentication() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener api versions: sasl controller listener answers api versions before authentication"
+)]
+async fn bdd_verify_sasl_controller_listener_answers_api_versions_before_authentication() {
     let ControllerNode {
         broker,
         controller_addr,
@@ -230,6 +233,14 @@ async fn sasl_controller_listener_answers_api_versions_before_authentication() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
+    name = "sasl controller listener answers api versions before authentication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sasl_controller_listener_answers_api_versions_before_authentication() {}
+
 /// A broker whose controller listener is PLAINTEXT, on `customize`d settings.
 async fn start_plaintext_controller(customize: impl FnOnce(&mut BrokerConfig)) -> ControllerNode {
     let ControllerListenerFixture {
@@ -264,12 +275,11 @@ async fn assert_closed(stream: &mut TcpStream, what: &str) {
     );
 }
 
-/// The controller listener is one of `SocketServer`'s listeners, so it holds
-/// a peer to `socket.request.max.bytes`: a request within the limit is served,
-/// and a size prefix over it closes the connection before the frame is read,
-/// where it used to allocate for whatever the four bytes said.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_controller_listener_refuses_a_request_over_socket_request_max() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener api versions: the controller listener refuses a request over socket request max"
+)]
+async fn bdd_verify_the_controller_listener_refuses_a_request_over_socket_request_max() {
     let ControllerNode {
         broker,
         controller_addr,
@@ -293,11 +303,23 @@ async fn the_controller_listener_refuses_a_request_over_socket_request_max() {
     broker.shutdown().await;
 }
 
-/// `connections.max.idle.ms` covers the controller listener, under the
-/// listener's own name: a connection that sends nothing is closed once the
-/// window passes, and one that keeps sending requests is not.
+/// The controller listener is one of `SocketServer`'s listeners, so it holds
+/// a peer to `socket.request.max.bytes`: a request within the limit is served,
+/// and a size prefix over it closes the connection before the frame is read,
+/// where it used to allocate for whatever the four bytes said.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
+    name = "the controller listener refuses a request over socket request max"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_controller_listener_closes_an_idle_connection() {
+async fn the_controller_listener_refuses_a_request_over_socket_request_max() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener api versions: the controller listener closes an idle connection"
+)]
+async fn bdd_verify_the_controller_listener_closes_an_idle_connection() {
     let window = Duration::from_millis(800);
     let ControllerNode {
         broker,
@@ -323,3 +345,14 @@ async fn the_controller_listener_closes_an_idle_connection() {
 
     broker.shutdown().await;
 }
+
+/// `connections.max.idle.ms` covers the controller listener, under the
+/// listener's own name: a connection that sends nothing is closed once the
+/// window passes, and one that keeps sending requests is not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
+    name = "the controller listener closes an idle connection"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_controller_listener_closes_an_idle_connection() {}

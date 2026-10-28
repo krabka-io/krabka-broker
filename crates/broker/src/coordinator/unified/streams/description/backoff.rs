@@ -143,13 +143,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_draw_is_kafkas_twenty_percent_jitter() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams description backoff tests: a draw is kafkas twenty percent jitter"
+    )]
+    fn bdd_verify_a_draw_is_kafkas_twenty_percent_jitter() {
         for _ in 0..1_000 {
             let Jitter(per_mille) = Jitter::draw();
             assert!((800..1_200).contains(&per_mille));
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",
+        name = "tests: a draw is kafkas twenty percent jitter"
+    )]
+    fn a_draw_is_kafkas_twenty_percent_jitter() {}
 
     /// One group's backoff through a run of heartbeats and pushes. Each step
     /// is an operation at a time in seconds, what `arm_if_not_active`

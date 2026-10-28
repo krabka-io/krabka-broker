@@ -19,9 +19,9 @@ use {
     },
 };
 
-/// The share-session epoch state machine rejects stale and unknown epochs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_epoch_validation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume session epoch: session epoch validation")]
+async fn bdd_verify_session_epoch_validation() {
     let ConsumptionFixture {
         _permit,
         broker: _broker,
@@ -86,11 +86,20 @@ async fn session_epoch_validation() {
     );
 }
 
-/// An incremental request with no topic rows continues to fetch every cached
-/// partition. A forgotten partition is removed from the session and stays
-/// removed on later empty incremental requests.
+/// The share-session epoch state machine rejects stale and unknown epochs.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/session_epoch.feature",
+    name = "session epoch validation"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incremental_session_uses_cached_and_forgotten_partitions() {
+async fn session_epoch_validation() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume session epoch: incremental session uses cached and forgotten partitions"
+)]
+async fn bdd_verify_incremental_session_uses_cached_and_forgotten_partitions() {
     let ConsumptionFixture {
         _permit,
         broker: _broker,
@@ -168,3 +177,14 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     assert!(after_forget.error_code == NONE);
     assert!(after_forget.responses.is_empty());
 }
+
+/// An incremental request with no topic rows continues to fetch every cached
+/// partition. A forgotten partition is removed from the session and stays
+/// removed on later empty incremental requests.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/session_epoch.feature",
+    name = "incremental session uses cached and forgotten partitions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incremental_session_uses_cached_and_forgotten_partitions() {}

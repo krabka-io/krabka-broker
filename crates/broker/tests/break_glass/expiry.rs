@@ -29,18 +29,9 @@ async fn sleep_past(expires_at_ms: i64) {
     time::sleep(Duration::from_millis(wait)).await;
 }
 
-/// A proposal past its lifetime authorizes nothing, on either end.
-///
-/// `proposal_ttl` is the whole safety bound on an approver who was removed from
-/// the set: the design says explicitly that the broker does not re-check the
-/// approver set when it spends an approval, and that waiting out the lifetime
-/// is what kills a pending approval by a person who has since gone. If an
-/// expired proposal could still be approved, or a fully approved one could
-/// still be spent after its expiry, that bound would not exist and a removed
-/// approver's agreement would stay live for as long as the proposal sat in the
-/// image.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_expired_proposal_authorizes_nothing() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("break glass expiry: an expired proposal authorizes nothing")]
+async fn bdd_verify_an_expired_proposal_authorizes_nothing() {
     let ClusterClients {
         cluster,
         clients: [alice, bob, carol],
@@ -80,3 +71,21 @@ async fn an_expired_proposal_authorizes_nothing() {
 
     cluster.broker.shutdown().await;
 }
+
+/// A proposal past its lifetime authorizes nothing, on either end.
+///
+/// `proposal_ttl` is the whole safety bound on an approver who was removed from
+/// the set: the design says explicitly that the broker does not re-check the
+/// approver set when it spends an approval, and that waiting out the lifetime
+/// is what kills a pending approval by a person who has since gone. If an
+/// expired proposal could still be approved, or a fully approved one could
+/// still be spent after its expiry, that bound would not exist and a removed
+/// approver's agreement would stay live for as long as the proposal sat in the
+/// image.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/expiry.feature",
+    name = "an expired proposal authorizes nothing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_proposal_authorizes_nothing() {}

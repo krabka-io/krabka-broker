@@ -65,17 +65,9 @@ async fn initialize_share_partitions(
     );
 }
 
-/// KIP-932 group-coordinator lifecycle. When a share group joins a topic with
-/// `P` partitions, the coordinator initializes the per-partition share state in
-/// the `__share_group_state` persister. Each entry has a present state, not the
-/// missing-key sentinel, and `start_offset`
-/// [`UNINITIALIZED_START_OFFSET`]: the coordinator records that the
-/// partition exists and leaves where it starts to the share partition, which
-/// resolves the group's `share.auto.offset.reset` on its first load, as
-/// Kafka's `SharePartition.maybeInitialize` does. The heartbeat hook runs
-/// after the reconcile.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_initializes_share_state() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group state: lifecycle initializes share state")]
+async fn bdd_verify_lifecycle_initializes_share_state() {
     let (broker, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t5", 3).await;
@@ -96,13 +88,26 @@ async fn lifecycle_initializes_share_state() {
     }
 }
 
-/// After a restart, the broker recovers the group's
-/// `ShareGroupStatePartitionMetadata`, so a rejoin does not initialize the
-/// state again. A stale, non-zero `start_offset` written straight to the
-/// persister survives, because the coordinator skips already-initialized
-/// partitions on the post-restart heartbeat.
+/// KIP-932 group-coordinator lifecycle. When a share group joins a topic with
+/// `P` partitions, the coordinator initializes the per-partition share state in
+/// the `__share_group_state` persister. Each entry has a present state, not the
+/// missing-key sentinel, and `start_offset`
+/// [`UNINITIALIZED_START_OFFSET`]: the coordinator records that the
+/// partition exists and leaves where it starts to the share partition, which
+/// resolves the group's `share.auto.offset.reset` on its first load, as
+/// Kafka's `SharePartition.maybeInitialize` does. The heartbeat hook runs
+/// after the reconcile.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "lifecycle initializes share state"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_metadata_survives_restart() {
+async fn lifecycle_initializes_share_state() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group state: lifecycle metadata survives restart")]
+async fn bdd_verify_lifecycle_metadata_survives_restart() {
     let (tid, dir) = {
         let (broker, bootstrap, dir) = boot().await;
         let client = connect(&bootstrap).await;
@@ -163,14 +168,24 @@ async fn lifecycle_metadata_survives_restart() {
     }
 }
 
-/// `DeleteGroups` on a share group, as Kafka's
-/// `GroupCoordinatorService.deleteGroups` answers it. A group with a member
-/// gets `NON_EMPTY_GROUP` (68) and keeps its share state. After the member
-/// leaves, the delete succeeds, removes the share state of every initialized
-/// partition, and drops the group. A second delete gets `GROUP_ID_NOT_FOUND`
-/// (69).
+/// After a restart, the broker recovers the group's
+/// `ShareGroupStatePartitionMetadata`, so a rejoin does not initialize the
+/// state again. A stale, non-zero `start_offset` written straight to the
+/// persister survives, because the coordinator skips already-initialized
+/// partitions on the post-restart heartbeat.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "lifecycle metadata survives restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
+async fn lifecycle_metadata_survives_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share groups share group state: delete groups deletes an empty share group and its state"
+)]
+async fn bdd_verify_delete_groups_deletes_an_empty_share_group_and_its_state() {
     use krabka_protocol::owned::delete_groups_request::DeleteGroupsRequest;
 
     let (broker, bootstrap, _d) = boot().await;
@@ -240,6 +255,20 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
     }
 }
 
+/// `DeleteGroups` on a share group, as Kafka's
+/// `GroupCoordinatorService.deleteGroups` answers it. A group with a member
+/// gets `NON_EMPTY_GROUP` (68) and keeps its share state. After the member
+/// leaves, the delete succeeds, removes the share state of every initialized
+/// partition, and drops the group. A second delete gets `GROUP_ID_NOT_FOUND`
+/// (69).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "delete groups deletes an empty share group and its state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_groups_deletes_an_empty_share_group_and_its_state() {}
+
 /// A group member, the epoch it last held, and the topics it subscribes to.
 #[derive(Clone, Copy)]
 struct MemberSubscription<'a> {
@@ -299,11 +328,9 @@ async fn heartbeat_until(
     );
 }
 
-/// A topic that is deleted loses its share state, as Kafka's
-/// `GroupMetadataManager.maybeCleanupShareGroupState` deletes it on the
-/// metadata update. The share state of the other subscribed topic stays.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_topic_loses_its_share_state() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group state: a deleted topic loses its share state")]
+async fn bdd_verify_a_deleted_topic_loses_its_share_state() {
     use krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
 
     let (broker, bootstrap, _d) = boot().await;
@@ -351,12 +378,22 @@ async fn a_deleted_topic_loses_its_share_state() {
     }
 }
 
-/// A partition that no member is assigned keeps its share state, as in Kafka:
-/// the heartbeat only initializes. Rows: the only consumer of one of two
-/// topics leaves while a consumer of the other topic stays, and a member
-/// moves its subscription from one topic to the other.
+/// A topic that is deleted loses its share state, as Kafka's
+/// `GroupMetadataManager.maybeCleanupShareGroupState` deletes it on the
+/// metadata update. The share state of the other subscribed topic stays.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "a deleted topic loses its share state"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unassigned_partitions_keep_their_share_state() {
+async fn a_deleted_topic_loses_its_share_state() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share groups share group state: unassigned partitions keep their share state"
+)]
+async fn bdd_verify_unassigned_partitions_keep_their_share_state() {
     // (group, the second member subscribes to `b` from the start, the first
     //  member moves to `b` instead of leaving)
     let rows = [("g-keep-leave", true, false), ("g-keep-move", false, true)];
@@ -440,14 +477,23 @@ async fn unassigned_partitions_keep_their_share_state() {
     }
 }
 
-/// The start offset that the group coordinator initializes a share partition
-/// at, as Kafka 4.3.1's `buildInitializeShareGroupStateRequest` picks it:
-/// `-1` for every partition, a new partition of a topic that the group
-/// already knows included. The share partition resolves
-/// `share.auto.offset.reset` when it first loads (`SharePartition.
-/// startOffsetDuringInitialization`).
+/// A partition that no member is assigned keeps its share state, as in Kafka:
+/// the heartbeat only initializes. Rows: the only consumer of one of two
+/// topics leaves while a consumer of the other topic stays, and a member
+/// moves its subscription from one topic to the other.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "unassigned partitions keep their share state"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_initialized_partition_starts_uninitialized() {
+async fn unassigned_partitions_keep_their_share_state() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share groups share group state: every initialized partition starts uninitialized"
+)]
+async fn bdd_verify_every_initialized_partition_starts_uninitialized() {
     use krabka_protocol::owned::create_partitions_request::{
         CreatePartitionsRequest, CreatePartitionsTopic,
     };
@@ -520,3 +566,17 @@ async fn every_initialized_partition_starts_uninitialized() {
     }
     assert!(start_offsets == vec![UNINITIALIZED_START_OFFSET; 4]);
 }
+
+/// The start offset that the group coordinator initializes a share partition
+/// at, as Kafka 4.3.1's `buildInitializeShareGroupStateRequest` picks it:
+/// `-1` for every partition, a new partition of a topic that the group
+/// already knows included. The share partition resolves
+/// `share.auto.offset.reset` when it first loads (`SharePartition.
+/// startOffsetDuringInitialization`).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "every initialized partition starts uninitialized"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_initialized_partition_starts_uninitialized() {}

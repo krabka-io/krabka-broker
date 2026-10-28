@@ -334,12 +334,11 @@ mod tests {
         out.freeze()
     }
 
-    /// Kafka's `ConsumerGroup.fromClassicGroup` refusals, through
-    /// `convertToConsumerGroup`: (label, the members' subscription and
-    /// assignment) to whether the group converts, or the message of the
-    /// `GROUP_ID_NOT_FOUND` that refuses it.
-    #[test]
-    fn conversion_refuses_what_kafka_cannot_carry_over() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration upgrade tests: conversion refuses what kafka cannot carry over"
+    )]
+    fn bdd_verify_conversion_refuses_what_kafka_cannot_carry_over() {
         let malformed = "Cannot upgrade classic group g to consumer group because the embedded \
                          consumer protocol is malformed.";
         let custom = "Cannot upgrade classic group g to consumer group because an unsupported \
@@ -452,11 +451,22 @@ mod tests {
         }
     }
 
-    /// Kafka's `checkSubscriptionVersion`: a blob too short for a version and
-    /// a negative version do not decode, and a version above the highest the
-    /// schema knows is read as the highest.
-    #[test]
-    fn subscription_versions_decode_as_kafka_reads_them() {
+    /// Kafka's `ConsumerGroup.fromClassicGroup` refusals, through
+    /// `convertToConsumerGroup`: (label, the members' subscription and
+    /// assignment) to whether the group converts, or the message of the
+    /// `GROUP_ID_NOT_FOUND` that refuses it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/upgrade.feature",
+        name = "tests: conversion refuses what kafka cannot carry over"
+    )]
+    fn conversion_refuses_what_kafka_cannot_carry_over() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration upgrade tests: subscription versions decode as kafka reads them"
+    )]
+    fn bdd_verify_subscription_versions_decode_as_kafka_reads_them() {
         let mut above = BytesMut::new();
         above.put_i16(99);
         ConsumerProtocolSubscription {
@@ -500,6 +510,16 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `checkSubscriptionVersion`: a blob too short for a version and
+    /// a negative version do not decode, and a version above the highest the
+    /// schema knows is read as the highest.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/upgrade.feature",
+        name = "tests: subscription versions decode as kafka reads them"
+    )]
+    fn subscription_versions_decode_as_kafka_reads_them() {}
 
     #[test]
     fn convert_preserves_members_subscriptions_and_facade() {
@@ -562,10 +582,11 @@ mod tests {
         );
     }
 
-    /// Kafka's `validateOnlineUpgrade`, row by row: (label, protocol type,
-    /// member count, upgrade enabled, consumer max size, expected result).
-    #[test]
-    fn validate_online_upgrade_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration upgrade tests: validate online upgrade follows kafka"
+    )]
+    fn bdd_verify_validate_online_upgrade_follows_kafka() {
         let disabled = "Cannot upgrade classic group g to consumer group because online upgrade \
                         is disabled.";
         let protocol = "Cannot upgrade classic group g to consumer group because the group does \
@@ -591,4 +612,13 @@ mod tests {
             check!(got == want.map_err(String::from), "{label}");
         }
     }
+
+    /// Kafka's `validateOnlineUpgrade`, row by row: (label, protocol type,
+    /// member count, upgrade enabled, consumer max size, expected result).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/upgrade.feature",
+        name = "tests: validate online upgrade follows kafka"
+    )]
+    fn validate_online_upgrade_follows_kafka() {}
 }

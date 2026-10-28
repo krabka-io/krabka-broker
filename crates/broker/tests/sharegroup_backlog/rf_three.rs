@@ -366,8 +366,11 @@ async fn assert_only_coordinator_exports(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rf_three_remote_leader_uses_committed_high_watermark() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "sharegroup backlog rf three: rf three remote leader uses committed high watermark"
+)]
+async fn bdd_verify_rf_three_remote_leader_uses_committed_high_watermark() {
     let _guard = test_lock().lock().await;
     let mut cluster = start_cluster().await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
@@ -477,3 +480,11 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/sharegroup_backlog/rf_three.feature",
+    name = "rf three remote leader uses committed high watermark"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rf_three_remote_leader_uses_committed_high_watermark() {}

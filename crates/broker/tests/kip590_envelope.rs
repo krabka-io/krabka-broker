@@ -270,13 +270,11 @@ fn check_refused(broker: &BrokerHandle, topic: &str, response: &EnvelopeResponse
     );
 }
 
-/// The whole forwarding round trip: an `Envelope` carrying a `CreateTopics`
-/// reaches the controller, the topic is created, and the bytes that come back
-/// are exactly what the client would have received had it reached the
-/// controller itself — the client's own correlation id, the client's own
-/// response header shape, and the client's own response body.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: a forwarded create topics is served and answered in the clients own bytes"
+)]
+async fn bdd_verify_a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {
     const TOPIC: &str = "envelope-forwarded-topic";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
@@ -319,12 +317,24 @@ async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_byt
     );
 }
 
-/// Envelopes the controller must refuse, and the `error_code` Kafka's
-/// `kafka.server.EnvelopeUtils` assigns to each. A refusal still comes back as
-/// a well-formed `EnvelopeResponse` with a null `response_data`, because the
-/// forwarding hop has to translate the code for its own client.
+/// The whole forwarding round trip: an `Envelope` carrying a `CreateTopics`
+/// reaches the controller, the topic is created, and the bytes that come back
+/// are exactly what the client would have received had it reached the
+/// controller itself — the client's own correlation id, the client's own
+/// response header shape, and the client's own response body.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "a forwarded create topics is served and answered in the clients own bytes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
+async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an envelope the controller refuses reports kafkas own error code"
+)]
+async fn bdd_verify_an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
     let addr = broker.controller_addr();
 
@@ -366,6 +376,18 @@ async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
     }
 }
 
+/// Envelopes the controller must refuse, and the `error_code` Kafka's
+/// `kafka.server.EnvelopeUtils` assigns to each. A refusal still comes back as
+/// a well-formed `EnvelopeResponse` with a null `response_data`, because the
+/// forwarding hop has to translate the code for its own client.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an envelope the controller refuses reports kafkas own error code"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {}
+
 /// Read the `ApiVersions` v0 table a listener advertises.
 ///
 /// v0 is deliberate: its request header is v1 and its response header is v0,
@@ -385,15 +407,11 @@ async fn advertised_api_versions(addr: SocketAddr) -> ApiVersionsResponse {
     ApiVersionsResponse::decode(&mut cur, 0).expect("decode ApiVersionsResponse")
 }
 
-/// `Envelope` is advertised on the controller listener and on no other.
-///
-/// `ApiKeys.ENVELOPE.messageType.listeners()` in the pinned image is exactly
-/// `[CONTROLLER]`, and both `ApiKeys.clientApis()` and `ApiKeys.brokerApis()`
-/// exclude it. Advertising it to clients would invite them to forward on their
-/// own behalf; not advertising it on the controller listener would leave a
-/// JVM broker with no forwarding path at all.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: envelope is advertised on the controller listener and nowhere else"
+)]
+async fn bdd_verify_envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
     let controller = advertised_api_versions(broker.controller_addr()).await;
@@ -410,6 +428,21 @@ async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
     check!(envelope(&controller) == Some((0, 0)), "controller listener");
     check!(envelope(&client).is_none(), "client listener");
 }
+
+/// `Envelope` is advertised on the controller listener and on no other.
+///
+/// `ApiKeys.ENVELOPE.messageType.listeners()` in the pinned image is exactly
+/// `[CONTROLLER]`, and both `ApiKeys.clientApis()` and `ApiKeys.brokerApis()`
+/// exclude it. Advertising it to clients would invite them to forward on their
+/// own behalf; not advertising it on the controller listener would leave a
+/// JVM broker with no forwarding path at all.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "envelope is advertised on the controller listener and nowhere else"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {}
 
 /// Decode the embedded `CreateTopicsResponse` out of a served `Envelope`.
 ///
@@ -431,23 +464,11 @@ struct TopicOutcome {
     error_code: i16,
 }
 
-/// A host ACL on a forwarded request must be evaluated against the client's
-/// own address, not the forwarding broker's.
-///
-/// Both envelopes below reach the controller listener over loopback, so the
-/// connection's peer is `127.0.0.1` for both, while `client_host_address`
-/// names `10.1.2.3`. The two seeded ACLs are the two ways the connection's
-/// address is the wrong answer:
-///
-/// - `User:alice` may create only from `10.1.2.3`, the address the envelope
-///   names. Reading the connection instead denies a client that the host ACL
-///   allows.
-/// - `User:bob` may create only from `127.0.0.1`, which is the address the
-///   *forwarding hop* happens to connect from. Reading the connection instead
-///   authorizes a client that the host ACL denies — the broker's own address
-///   launders the request.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: a forwarded request authorizes against the embedded client host"
+)]
+async fn bdd_verify_a_forwarded_request_authorizes_against_the_embedded_client_host() {
     let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
 
     for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
@@ -520,14 +541,34 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
     );
 }
 
-/// An `EnvelopeRequest.client_host_address` `InetAddress.getByAddress` would
-/// refuse is an invalid request, and the embedded handler never runs.
+/// A host ACL on a forwarded request must be evaluated against the client's
+/// own address, not the forwarding broker's.
 ///
-/// `EnvelopeUtils.parseForwardedClientAddress` catches `UnknownHostException`
-/// and rethrows it as `InvalidRequestException` (42), and it does so before
-/// the embedded request header is parsed at all.
+/// Both envelopes below reach the controller listener over loopback, so the
+/// connection's peer is `127.0.0.1` for both, while `client_host_address`
+/// names `10.1.2.3`. The two seeded ACLs are the two ways the connection's
+/// address is the wrong answer:
+///
+/// - `User:alice` may create only from `10.1.2.3`, the address the envelope
+///   names. Reading the connection instead denies a client that the host ACL
+///   allows.
+/// - `User:bob` may create only from `127.0.0.1`, which is the address the
+///   *forwarding hop* happens to connect from. Reading the connection instead
+///   authorizes a client that the host ACL denies — the broker's own address
+///   launders the request.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "a forwarded request authorizes against the embedded client host"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unparseable_client_host_address_is_an_invalid_request() {
+async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an unparseable client host address is an invalid request"
+)]
+async fn bdd_verify_an_unparseable_client_host_address_is_an_invalid_request() {
     const TOPIC: &str = "envelope-bad-client-host";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
@@ -543,19 +584,26 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
     check_refused(&broker, TOPIC, &response, 42);
 }
 
-/// A forwarded `AllocateProducerIds` (67) is authorized against the principal
-/// that the envelope names, and a principal with `ClusterAction` gets a block.
+/// An `EnvelopeRequest.client_host_address` `InetAddress.getByAddress` would
+/// refuse is an invalid request, and the embedded handler never runs.
 ///
-/// 67 is in `ApiKeys.forwardable`, and a JVM broker forwards it to the
-/// controller to obtain the producer-ID block every producer on it needs
-/// before it can initialise. `ControllerApis.handleAllocateProducerIdsRequest`
-/// checks `ClusterAction` for the request principal before the controller
-/// runs (#681). The outer gate holds for the plaintext `ANONYMOUS` peer, so
-/// only the embedded principal decides. `User:bob` goes first: its refusal
-/// must allocate nothing, so `User:alice` still gets the block that starts at
-/// 0.
+/// `EnvelopeUtils.parseForwardedClientAddress` catches `UnknownHostException`
+/// and rethrows it as `InvalidRequestException` (42), and it does so before
+/// the embedded request header is parsed at all.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an unparseable client host address is an invalid request"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
+async fn an_unparseable_client_host_address_is_an_invalid_request() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: a forwarded allocate producer ids needs cluster action for the embedded principal"
+)]
+async fn bdd_verify_a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal()
+ {
     let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
     broker.wait_until_brokers_registered(1).await;
     broker
@@ -626,21 +674,30 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
     }
 }
 
-/// Only a peer that holds `ClusterAction` may speak for another identity.
+/// A forwarded `AllocateProducerIds` (67) is authorized against the principal
+/// that the envelope names, and a principal with `ClusterAction` gets a block.
 ///
-/// `ApiKeys.ENVELOPE.clusterAction` is true, so `EnvelopeUtils` runs that gate
-/// on the *forwarding connection's* principal before it looks at the payload
-/// at all. Without it, anything that can reach the controller listener can
-/// mint an envelope naming any principal it likes and have the controller run
-/// the request as that identity -- the forwarding wrapper becomes an
-/// impersonation primitive.
-///
-/// The broker here runs a real ACL authorizer with no super-users, so the
-/// plaintext connection's `ANONYMOUS` holds nothing. The refusal has to arrive
-/// as an `EnvelopeResponse` carrying the code and a null `response_data`, and
-/// the embedded `CreateTopics` must never have run.
+/// 67 is in `ApiKeys.forwardable`, and a JVM broker forwards it to the
+/// controller to obtain the producer-ID block every producer on it needs
+/// before it can initialise. `ControllerApis.handleAllocateProducerIdsRequest`
+/// checks `ClusterAction` for the request principal before the controller
+/// runs (#681). The outer gate holds for the plaintext `ANONYMOUS` peer, so
+/// only the embedded principal decides. `User:bob` goes first: its refusal
+/// must allocate nothing, so `User:alice` still gets the block that starts at
+/// 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "a forwarded allocate producer ids needs cluster action for the embedded principal"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
+async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an envelope from a peer without cluster action is refused"
+)]
+async fn bdd_verify_an_envelope_from_a_peer_without_cluster_action_is_refused() {
     const TOPIC: &str = "envelope-no-cluster-action";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
@@ -658,16 +715,32 @@ async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
     check_refused(&broker, TOPIC, &response, 31);
 }
 
-/// An embedded request at a version this broker does not serve is an
-/// `UNSUPPORTED_VERSION`, and the handler never sees it.
+/// Only a peer that holds `ClusterAction` may speak for another identity.
 ///
-/// The embedded header carries its own `api_version`, and nothing on the
-/// controller connection has negotiated it: the forwarding hop negotiated
-/// `Envelope`, and the *client* negotiated the inner api against the hop.
-/// So the version has to be re-checked against this broker's own registry
-/// before dispatch, or a handler is handed a version it never advertised.
+/// `ApiKeys.ENVELOPE.clusterAction` is true, so `EnvelopeUtils` runs that gate
+/// on the *forwarding connection's* principal before it looks at the payload
+/// at all. Without it, anything that can reach the controller listener can
+/// mint an envelope naming any principal it likes and have the controller run
+/// the request as that identity -- the forwarding wrapper becomes an
+/// impersonation primitive.
+///
+/// The broker here runs a real ACL authorizer with no super-users, so the
+/// plaintext connection's `ANONYMOUS` holds nothing. The refusal has to arrive
+/// as an `EnvelopeResponse` carrying the code and a null `response_data`, and
+/// the embedded `CreateTopics` must never have run.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an envelope from a peer without cluster action is refused"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
+async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an embedded version the broker does not serve is refused"
+)]
+async fn bdd_verify_an_embedded_version_the_broker_does_not_serve_is_refused() {
     const TOPIC: &str = "envelope-unsupported-version";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
@@ -695,16 +768,27 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
     check_refused(&broker, TOPIC, &response, 35);
 }
 
-/// `EnvelopeUtils` answers an embedded request it cannot parse in the
-/// envelope, and the controller keeps the connection for the next one:
-/// `RequestHeader.parse` refuses an api key the release does not have (93 and
-/// up on 4.3.1) or that has no valid version (the removed keys 4 to 7), and
-/// `RequestContext.parseRequest` refuses a body that does not decode. Both are
-/// `UNSUPPORTED_VERSION`. A known key that Kafka does not forward is
-/// `INVALID_REQUEST`. A forwarder that saw the connection drop instead could
-/// not tell any of these from a network fault.
+/// An embedded request at a version this broker does not serve is an
+/// `UNSUPPORTED_VERSION`, and the handler never sees it.
+///
+/// The embedded header carries its own `api_version`, and nothing on the
+/// controller connection has negotiated it: the forwarding hop negotiated
+/// `Envelope`, and the *client* negotiated the inner api against the hop.
+/// So the version has to be re-checked against this broker's own registry
+/// before dispatch, or a handler is handed a version it never advertised.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an embedded version the broker does not serve is refused"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {
+async fn an_embedded_version_the_broker_does_not_serve_is_refused() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an embedded request the controller cannot parse is answered in the envelope"
+)]
+async fn bdd_verify_an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {
     const TOPIC: &str = "envelope-after-refusals";
 
     let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
@@ -776,14 +860,28 @@ async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_enve
     broker.shutdown().await;
 }
 
-/// #784: `UnregisterController` (94) is Kafka trunk's, so a 4.3.1 controller
-/// cannot parse an embedded header naming it, and `EnvelopeUtils` reports
-/// that as `UNSUPPORTED_VERSION`. krabka answers the same while
-/// `unstable.api.versions.enable` is off, and serves the embedded request --
-/// here refused by the handler's own `metadata.version` gate, a response the
-/// envelope carries back -- when it is on.
+/// `EnvelopeUtils` answers an embedded request it cannot parse in the
+/// envelope, and the controller keeps the connection for the next one:
+/// `RequestHeader.parse` refuses an api key the release does not have (93 and
+/// up on 4.3.1) or that has no valid version (the removed keys 4 to 7), and
+/// `RequestContext.parseRequest` refuses a body that does not decode. Both are
+/// `UNSUPPORTED_VERSION`. A known key that Kafka does not forward is
+/// `INVALID_REQUEST`. A forwarder that saw the connection drop instead could
+/// not tell any of these from a network fault.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an embedded request the controller cannot parse is answered in the envelope"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled() {
+async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: an embedded trunk api key is refused unless unstable api versions are enabled"
+)]
+async fn bdd_verify_an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled()
+{
     use krabka_protocol::owned::unregister_controller_request::{
         self, UnregisterControllerRequest,
     };
@@ -822,6 +920,20 @@ async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_e
         broker.shutdown().await;
     }
 }
+
+/// #784: `UnregisterController` (94) is Kafka trunk's, so a 4.3.1 controller
+/// cannot parse an embedded header naming it, and `EnvelopeUtils` reports
+/// that as `UNSUPPORTED_VERSION`. krabka answers the same while
+/// `unstable.api.versions.enable` is off, and serves the embedded request --
+/// here refused by the handler's own `metadata.version` gate, a response the
+/// envelope carries back -- when it is on.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "an embedded trunk api key is refused unless unstable api versions are enabled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled() {}
 
 /// Canonical Kafka error code that mirrors `krabka_broker::codes::
 /// DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. The broker's `codes` module is
@@ -959,31 +1071,11 @@ async fn sasl_plain(stream: &mut TcpStream, user: &str, password: &str) {
     check!((decoded.error_code, decoded.error_message) == (0, None));
 }
 
-/// A forwarded request runs under the *client's* delegation-token flag, not
-/// the forwarding hop's.
-///
-/// KIP-48 forbids a caller who authenticated with a delegation token from
-/// minting another one, and `CreateDelegationToken` is in
-/// `ApiKeys.forwardable`, so the rule has to survive the hop. Both envelopes
-/// below go down one SASL/PLAIN controller connection authenticated as
-/// `User:forwarder`, whose own `authenticated_via_token` is false, and they
-/// differ in a single byte: the `token_authenticated` flag inside
-/// `request_principal`. Reading the connection's flag rather than the
-/// envelope's mints a token for a token-authenticated client, which is the
-/// escalation KIP-48 closes; reading it the other way round refuses every
-/// forwarded mint a cluster makes.
-///
-/// The listener has to speak SASL for this to be observable at all: KIP-48
-/// admits no anonymous caller to any of the four token APIs, so on a plaintext
-/// controller listener both halves are refused and the flag never decides
-/// anything.
-///
-/// This is also the one test that drives a forwarded request into the
-/// `DispatchKind::Auth` arm of the shared dispatch. The delegation-token APIs
-/// are the forwardable keys registered that way, and that arm rebuilds a
-/// `ConnectionAuth` out of the envelope rather than a `RequestContext`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip590 envelope: a forwarded request carries the clients own delegation token flag"
+)]
+async fn bdd_verify_a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
     struct Credential {
         user: &'static str,
         password: &'static str,
@@ -1064,3 +1156,34 @@ async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
     );
     check!(!minted.hmac.is_empty(), "a minted token carries its HMAC");
 }
+
+/// A forwarded request runs under the *client's* delegation-token flag, not
+/// the forwarding hop's.
+///
+/// KIP-48 forbids a caller who authenticated with a delegation token from
+/// minting another one, and `CreateDelegationToken` is in
+/// `ApiKeys.forwardable`, so the rule has to survive the hop. Both envelopes
+/// below go down one SASL/PLAIN controller connection authenticated as
+/// `User:forwarder`, whose own `authenticated_via_token` is false, and they
+/// differ in a single byte: the `token_authenticated` flag inside
+/// `request_principal`. Reading the connection's flag rather than the
+/// envelope's mints a token for a token-authenticated client, which is the
+/// escalation KIP-48 closes; reading it the other way round refuses every
+/// forwarded mint a cluster makes.
+///
+/// The listener has to speak SASL for this to be observable at all: KIP-48
+/// admits no anonymous caller to any of the four token APIs, so on a plaintext
+/// controller listener both halves are refused and the flag never decides
+/// anything.
+///
+/// This is also the one test that drives a forwarded request into the
+/// `DispatchKind::Auth` arm of the shared dispatch. The delegation-token APIs
+/// are the forwardable keys registered that way, and that arm rebuilds a
+/// `ConnectionAuth` out of the envelope rather than a `RequestContext`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "a forwarded request carries the clients own delegation token flag"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {}

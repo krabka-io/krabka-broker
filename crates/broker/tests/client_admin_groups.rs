@@ -10,8 +10,9 @@ use {
     tokio::time,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lists_groups_and_committed_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client admin groups: lists groups and committed offsets")]
+async fn bdd_verify_lists_groups_and_committed_offsets() {
     // `ListGroups` goes to every broker of the metadata, as Kafka's
     // `KafkaAdminClient.listGroups` does, so it depends on the broker
     // advertising a real, dialable port for itself.
@@ -76,3 +77,11 @@ async fn lists_groups_and_committed_offsets() {
     let committed = offsets.get(&("t1".to_owned(), 0)).copied();
     assert2::assert!(committed == Some(1));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_admin_groups.feature",
+    name = "lists groups and committed offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lists_groups_and_committed_offsets() {}

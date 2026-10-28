@@ -183,6 +183,16 @@ async fn background_recovery_case(case: &BackgroundCase) {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass background recovery: background unclean recovery follows its configured rule"
+)]
+async fn bdd_verify_background_unclean_recovery_follows_its_configured_rule() {
+    for case in &BACKGROUND {
+        background_recovery_case(case).await;
+    }
+}
+
 /// The background unclean-recovery path under each of the three settings it
 /// takes.
 ///
@@ -200,9 +210,10 @@ async fn background_recovery_case(case: &BackgroundCase) {
 /// The rows run one cluster at a time rather than three at once: each needs
 /// three brokers and a broker death, and the sequence keeps the peak cost of
 /// the case to one cluster.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/background_recovery.feature",
+    name = "background unclean recovery follows its configured rule"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn background_unclean_recovery_follows_its_configured_rule() {
-    for case in &BACKGROUND {
-        background_recovery_case(case).await;
-    }
-}
+async fn background_unclean_recovery_follows_its_configured_rule() {}

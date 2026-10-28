@@ -149,8 +149,11 @@ mod tests {
         list.iter().map(|name| (*name).to_owned()).collect()
     }
 
-    #[test]
-    fn subscription_type_matches_kafka_consumer_group_rule() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified assignor mod tests: subscription type matches kafka consumer group rule"
+    )]
+    fn bdd_verify_subscription_type_matches_kafka_consumer_group_rule() {
         let ab = names(&["a", "b"]);
         let a = names(&["a"]);
         let missing = names(&["a", "b", "missing"]);
@@ -236,4 +239,11 @@ mod tests {
             assert!(subscription_type(&members) == expected, "{name}");
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/assignor/mod.feature",
+        name = "tests: subscription type matches kafka consumer group rule"
+    )]
+    fn subscription_type_matches_kafka_consumer_group_rule() {}
 }

@@ -271,8 +271,11 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
     producer
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_transactional_produce_needs_a_verified_transaction() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver produce verification: a transactional produce needs a verified transaction"
+)]
+async fn bdd_verify_a_transactional_produce_needs_a_verified_transaction() {
     let cases = [
         Case {
             name: "v10-partition-not-added",
@@ -427,3 +430,11 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
 
     assert!(actual == expected);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "a transactional produce needs a verified transaction"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transactional_produce_needs_a_verified_transaction() {}

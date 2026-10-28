@@ -159,8 +159,11 @@ mod tests {
         unstable_features: krabka_raft::UnstableFeatureVersions::Disabled,
     };
 
-    #[test]
-    fn range_reasons_use_kafka_version_range_text() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers update features preconditions tests: range reasons use kafka version range text"
+    )]
+    fn bdd_verify_range_reasons_use_kafka_version_range_text() {
         let cases = [
             (1, SupportedRange { min: 0, max: 1 }, None),
             (
@@ -183,6 +186,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/update_features/preconditions.feature",
+        name = "tests: range reasons use kafka version range text"
+    )]
+    fn range_reasons_use_kafka_version_range_text() {}
 
     /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`, so a controller
     /// supports it only with `unstable.feature.versions.enable`, and answers
@@ -256,8 +266,11 @@ mod tests {
         })
     }
 
-    #[test]
-    fn nodes_answer_in_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers update features preconditions tests: nodes answer in kafka order"
+    )]
+    fn bdd_verify_nodes_answer_in_kafka_order() {
         let all = krabka_metadata::supported_feature_ranges();
         let mut no_group = all.clone();
         no_group.remove("group.version");
@@ -338,6 +351,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/update_features/preconditions.feature",
+        name = "tests: nodes answer in kafka order"
+    )]
+    fn nodes_answer_in_kafka_order() {}
 
     #[yare::parameterized(
         absent = {

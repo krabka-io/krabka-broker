@@ -18,28 +18,11 @@ use {
     krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
 };
 
-/// `kafka-configs` reads the freeze and cannot write it.
-///
-/// KFC-9 synthesises a read-only `write.freeze` topic config so that an
-/// operator holding only the JVM tools can see a freeze at all: they cannot
-/// call `DescribeTopicFreezes`, and the value is the one place the scope that
-/// froze the topic is legible to them. The other half of the rule is that the
-/// key is never writable, because a key that could be set through
-/// `AlterConfigs` would put the freeze registry behind an ordinary topic-config
-/// ACL and let a snapshot restore resurrect a stale freeze.
-///
-/// The three alter rows differ only in the operation the same tool sends: set
-/// a freeze, clear one, and delete the key. All three are refused with one
-/// wording, and the `--delete-config` row reaches the broker at all only
-/// because the frozen topic reports the key as a dynamic config, which is what
-/// `kafka-configs` checks before it sends a delete.
-///
-/// The describe after the loop is the proof that the refusals refused. Three
-/// rejected alters that had quietly changed the registry would pass every
-/// assertion above.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn kafka_configs_reads_the_freeze_and_cannot_write_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance freeze freeze config key: kafka configs reads the freeze and cannot write it"
+)]
+async fn bdd_verify_kafka_configs_reads_the_freeze_and_cannot_write_it() {
     let (broker, client) = plain_topic_fixture(&[CONFIGS_TOPIC]).await;
     freeze(&client, CONFIGS_TOPIC, PATTERN_TYPE_LITERAL, CONFIGS_REASON).await;
 
@@ -100,3 +83,31 @@ async fn kafka_configs_reads_the_freeze_and_cannot_write_it() {
         "the refusals must have left the freeze exactly as it was, got {after:?}"
     );
 }
+
+/// `kafka-configs` reads the freeze and cannot write it.
+///
+/// KFC-9 synthesises a read-only `write.freeze` topic config so that an
+/// operator holding only the JVM tools can see a freeze at all: they cannot
+/// call `DescribeTopicFreezes`, and the value is the one place the scope that
+/// froze the topic is legible to them. The other half of the rule is that the
+/// key is never writable, because a key that could be set through
+/// `AlterConfigs` would put the freeze registry behind an ordinary topic-config
+/// ACL and let a snapshot restore resurrect a stale freeze.
+///
+/// The three alter rows differ only in the operation the same tool sends: set
+/// a freeze, clear one, and delete the key. All three are refused with one
+/// wording, and the `--delete-config` row reaches the broker at all only
+/// because the frozen topic reports the key as a dynamic config, which is what
+/// `kafka-configs` checks before it sends a delete.
+///
+/// The describe after the loop is the proof that the refusals refused. Three
+/// rejected alters that had quietly changed the registry would pass every
+/// assertion above.
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_freeze/freeze_config_key.feature",
+    name = "kafka configs reads the freeze and cannot write it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_configs_reads_the_freeze_and_cannot_write_it() {}

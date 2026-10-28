@@ -17,8 +17,11 @@ use {
     std::collections::HashSet,
 };
 
-#[tokio::test]
-async fn empty_partition_returns_no_active_producers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers idempotent: empty partition returns no active producers"
+)]
+async fn bdd_verify_empty_partition_returns_no_active_producers() {
     let p = support::start().await;
     create_topic(&p.client, "fresh").await;
 
@@ -46,8 +49,19 @@ async fn empty_partition_returns_no_active_producers() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
+    name = "empty partition returns no active producers"
+)]
 #[tokio::test]
-async fn after_idempotent_produce_describe_returns_the_producer() {
+async fn empty_partition_returns_no_active_producers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers idempotent: after idempotent produce describe returns the producer"
+)]
+async fn bdd_verify_after_idempotent_produce_describe_returns_the_producer() {
     let p = support::start().await;
     create_topic(&p.client, "t").await;
     let topic_id = topic_id_for(&p.client, "t").await;
@@ -101,8 +115,19 @@ async fn after_idempotent_produce_describe_returns_the_producer() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
+    name = "after idempotent produce describe returns the producer"
+)]
 #[tokio::test]
-async fn multiple_producers_on_same_partition_all_surfaced() {
+async fn after_idempotent_produce_describe_returns_the_producer() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers idempotent: multiple producers on same partition all surfaced"
+)]
+async fn bdd_verify_multiple_producers_on_same_partition_all_surfaced() {
     let p = support::start().await;
     create_topic(&p.client, "shared").await;
     let topic_id = topic_id_for(&p.client, "shared").await;
@@ -148,6 +173,14 @@ async fn multiple_producers_on_same_partition_all_surfaced() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
+    name = "multiple producers on same partition all surfaced"
+)]
+#[tokio::test]
+async fn multiple_producers_on_same_partition_all_surfaced() {}
 
 /// The common successful idempotent append; the snapshot assertions stay in each scenario.
 async fn produce_values(

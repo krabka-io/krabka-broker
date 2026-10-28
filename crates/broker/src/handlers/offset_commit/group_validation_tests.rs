@@ -188,8 +188,11 @@ async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> Driven {
     }
 }
 
-#[tokio::test]
-async fn commit_is_fenced_by_kafka_group_rule() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers offset commit group validation tests: commit is fenced by kafka group rule"
+)]
+async fn bdd_verify_commit_is_fenced_by_kafka_group_rule() {
     let cases = [
         // A group that does not exist is created as a simple group for a
         // negative generation.
@@ -300,6 +303,14 @@ async fn commit_is_fenced_by_kafka_group_rule() {
     assert!(actual == expected);
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/offset_commit/group_validation_tests.feature",
+    name = "commit is fenced by kafka group rule"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule() {}
 
 /// Allows everything but `Read` on the topic `DENIED_TOPIC`.
 #[derive(Debug)]

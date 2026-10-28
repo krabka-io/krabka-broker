@@ -27,10 +27,11 @@ const INVALID_REQUEST: i16 = 42;
 /// The Kafka error code `GROUP_ID_NOT_FOUND`.
 const GROUP_ID_NOT_FOUND: i16 = 69;
 
-/// Every static membership case of KIP-1071 is refused with the same answer,
-/// and leaves the group and its member as they were.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_static_member_request_is_refused_and_changes_nothing() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams groups streams static membership: every static member request is refused and changes nothing"
+)]
+async fn bdd_verify_every_static_member_request_is_refused_and_changes_nothing() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "static-input", 2).await;
@@ -134,3 +135,13 @@ async fn every_static_member_request_is_refused_and_changes_nothing() {
             == vec![GROUP_ID_NOT_FOUND]
     );
 }
+
+/// Every static membership case of KIP-1071 is refused with the same answer,
+/// and leaves the group and its member as they were.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_static_membership.feature",
+    name = "every static member request is refused and changes nothing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_static_member_request_is_refused_and_changes_nothing() {}

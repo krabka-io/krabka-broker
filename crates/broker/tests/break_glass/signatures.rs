@@ -19,18 +19,11 @@ use {
     krabka_broker::codes,
 };
 
-/// An action in `break_glass.signed_actions` takes a detached operator
-/// signature on every approval.
-///
-/// The name on an approval is the broker's word for it, and the whole point of
-/// the signature is that the record stays provable without trusting the broker
-/// that minted it. Three outcomes have to stay apart, and this case pins all
-/// three: no signature is `OPERATOR_SIGNATURE_REQUIRED` (1010), a signature
-/// that does not verify is `OPERATOR_SIGNATURE_INVALID` (1009), and a good one
-/// is accepted and stored. The bytes are built in this file from the layout
-/// KFC-9 documents, so the pass also proves the broker rebuilds the same bytes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signed_action_takes_a_signature_on_every_approval() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass signatures: a signed action takes a signature on every approval"
+)]
+async fn bdd_verify_a_signed_action_takes_a_signature_on_every_approval() {
     let ClusterClients {
         cluster,
         clients: [alice, bob, carol],
@@ -87,3 +80,21 @@ async fn a_signed_action_takes_a_signature_on_every_approval() {
 
     cluster.broker.shutdown().await;
 }
+
+/// An action in `break_glass.signed_actions` takes a detached operator
+/// signature on every approval.
+///
+/// The name on an approval is the broker's word for it, and the whole point of
+/// the signature is that the record stays provable without trusting the broker
+/// that minted it. Three outcomes have to stay apart, and this case pins all
+/// three: no signature is `OPERATOR_SIGNATURE_REQUIRED` (1010), a signature
+/// that does not verify is `OPERATOR_SIGNATURE_INVALID` (1009), and a good one
+/// is accepted and stored. The bytes are built in this file from the layout
+/// KFC-9 documents, so the pass also proves the broker rebuilds the same bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/signatures.feature",
+    name = "a signed action takes a signature on every approval"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signed_action_takes_a_signature_on_every_approval() {}

@@ -21,26 +21,11 @@ use {
     tokio::time,
 };
 
-/// KIP-320 leader side. A Fetch from an assigned follower that
-/// advertises a stale `last_fetched_epoch` whose epoch ends *before* the
-/// requested `fetch_offset` must get a `diverging_epoch` that points at the
-/// epoch boundary, and NO records.
-///
-/// The test builds the leader's epoch history deterministically:
-///   * produce `k = 2` records at epoch 0, which gives checkpoint `0 -> 0`,
-///   * commit leader epoch 1 in metadata, then produce 2 more, which gives
-///     checkpoint `1 -> 2`.
-///
-/// The cache is then `e0 -> [0, 2)` and `e1 -> [2, 4)`, and the log end is 4.
-///
-/// A follower fetch at `fetch_offset = 4` with `last_fetched_epoch = 0` says
-/// "my last record was in epoch 0, give me offset 4". That is divergent,
-/// because epoch 0 on this leader ends at offset 2, not 4. The leader's
-/// `epoch_and_offset_for(0, 4)` returns `(0, 2)`. The recorded end, 2, is below
-/// the fetch offset, 4, so the handler answers with
-/// `diverging_epoch { epoch: 0, end_offset: 2 }` and serves nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "leader epoch epoch diverge leader: diverging epoch returned on stale last fetched epoch"
+)]
+async fn bdd_verify_diverging_epoch_returned_on_stale_last_fetched_epoch() {
     let (broker, bootstrap, dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "diverge").await;
 
@@ -159,3 +144,29 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
 
     broker.shutdown().await;
 }
+
+/// KIP-320 leader side. A Fetch from an assigned follower that
+/// advertises a stale `last_fetched_epoch` whose epoch ends *before* the
+/// requested `fetch_offset` must get a `diverging_epoch` that points at the
+/// epoch boundary, and NO records.
+///
+/// The test builds the leader's epoch history deterministically:
+///   * produce `k = 2` records at epoch 0, which gives checkpoint `0 -> 0`,
+///   * commit leader epoch 1 in metadata, then produce 2 more, which gives
+///     checkpoint `1 -> 2`.
+///
+/// The cache is then `e0 -> [0, 2)` and `e1 -> [2, 4)`, and the log end is 4.
+///
+/// A follower fetch at `fetch_offset = 4` with `last_fetched_epoch = 0` says
+/// "my last record was in epoch 0, give me offset 4". That is divergent,
+/// because epoch 0 on this leader ends at offset 2, not 4. The leader's
+/// `epoch_and_offset_for(0, 4)` returns `(0, 2)`. The recorded end, 2, is below
+/// the fetch offset, 4, so the handler answers with
+/// `diverging_epoch { epoch: 0, end_offset: 2 }` and serves nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_epoch/epoch_diverge_leader.feature",
+    name = "diverging epoch returned on stale last fetched epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {}

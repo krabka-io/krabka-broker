@@ -12,8 +12,9 @@ use krabka_protocol::owned::{
     unregister_broker_response::UnregisterBrokerResponse,
 };
 
-#[tokio::test]
-async fn unregister_known_broker_drops_it_from_metadata() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("unregister broker: unregister known broker drops it from metadata")]
+async fn bdd_verify_unregister_known_broker_drops_it_from_metadata() {
     let p = support::start().await;
 
     // Single-broker support cluster: this broker registers itself as
@@ -47,10 +48,19 @@ async fn unregister_known_broker_drops_it_from_metadata() {
     p.broker.shutdown().await;
 }
 
-/// Kafka's `ReplicationControlManager.unregisterBroker` answers an id with no
-/// registration, a negative one included, with `BROKER_ID_NOT_REGISTERED`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unregister_broker.feature",
+    name = "unregister known broker drops it from metadata"
+)]
 #[tokio::test]
-async fn unregister_unknown_broker_returns_broker_id_not_registered() {
+async fn unregister_known_broker_drops_it_from_metadata() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unregister broker: unregister unknown broker returns broker id not registered"
+)]
+async fn bdd_verify_unregister_unknown_broker_returns_broker_id_not_registered() {
     let p = support::start().await;
 
     for broker_id in [999, -1] {
@@ -74,8 +84,19 @@ async fn unregister_unknown_broker_returns_broker_id_not_registered() {
     p.broker.shutdown().await;
 }
 
+/// Kafka's `ReplicationControlManager.unregisterBroker` answers an id with no
+/// registration, a negative one included, with `BROKER_ID_NOT_REGISTERED`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unregister_broker.feature",
+    name = "unregister unknown broker returns broker id not registered"
+)]
 #[tokio::test]
-async fn unregister_is_idempotent_on_repeat_call() {
+async fn unregister_unknown_broker_returns_broker_id_not_registered() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unregister broker: unregister is idempotent on repeat call")]
+async fn bdd_verify_unregister_is_idempotent_on_repeat_call() {
     let p = support::start().await;
 
     // First call: success.
@@ -112,3 +133,11 @@ async fn unregister_is_idempotent_on_repeat_call() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unregister_broker.feature",
+    name = "unregister is idempotent on repeat call"
+)]
+#[tokio::test]
+async fn unregister_is_idempotent_on_repeat_call() {}

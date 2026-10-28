@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use std::vec;
 
 const RENEW_EXPECTED: TokenMutationFacts = TokenMutationFacts {
     kind: TokenMutationKind::Renew,
@@ -110,33 +112,53 @@ fn token_mutations_are_generation_bound_live_and_idempotent(
     check!(token_mutation_decision(facts) == expected, "{facts:?}");
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation token tests token mutations are generation bound live and idempotent: expire matches kafka delete expiry and saturation for {example}"
+)]
+fn bdd_verify_expire_matches_kafka_delete_expiry_and_saturation(example: String) {
+    type Example = (i64, i64, i64, i64, TokenExpireDecision);
+    let (now, period, current, max, expected): Example = match example.as_str() {
+        "zero period at zero" => (0, 0, 150, 200, TokenExpireDecision::Update(0)),
+        "zero period" => (100, 0, 150, 200, TokenExpireDecision::Update(100)),
+        "positive period" => (100, 25, 150, 200, TokenExpireDecision::Update(125)),
+        "period capped at max" => (100, 500, 150, 200, TokenExpireDecision::Update(200)),
+        "near overflow is capped" => (
+            100,
+            i64::MAX - 100,
+            150,
+            200,
+            TokenExpireDecision::Update(200),
+        ),
+        "saturating overflow" => (
+            100,
+            i64::MAX,
+            150,
+            i64::MAX,
+            TokenExpireDecision::Update(i64::MAX),
+        ),
+        "zero period at expiry" => (100, 0, 100, 200, TokenExpireDecision::Update(100)),
+        "zero period at max" => (100, 0, 100, 100, TokenExpireDecision::Update(100)),
+        "negative period deletes live" => (100, -1, 150, 200, TokenExpireDecision::Delete),
+        "negative period deletes expired" => (100, -1, 50, 60, TokenExpireDecision::Delete),
+        "minimum period deletes" => (100, i64::MIN, 150, 200, TokenExpireDecision::Delete),
+        "current expiry is past" => (100, 0, 99, 200, TokenExpireDecision::Expired),
+        "max timestamp is past" => (100, 0, 150, 99, TokenExpireDecision::Expired),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    check!(expire_token_deadline(now, period, current, max) == expected);
+}
+
 /// `DelegationTokenControlManager.expireDelegationToken`: a negative period
 /// deletes before the expiry check, and a live token gets
 /// `min(max, now + period)` with a saturating sum.
-#[yare::parameterized(
-    zero_period_at_zero = { 0, 0, 150, 200, TokenExpireDecision::Update(0) },
-    zero_period = { 100, 0, 150, 200, TokenExpireDecision::Update(100) },
-    positive_period = { 100, 25, 150, 200, TokenExpireDecision::Update(125) },
-    period_capped_at_max = { 100, 500, 150, 200, TokenExpireDecision::Update(200) },
-    near_overflow_is_capped = { 100, i64::MAX - 100, 150, 200, TokenExpireDecision::Update(200) },
-    saturating_overflow = { 100, i64::MAX, 150, i64::MAX, TokenExpireDecision::Update(i64::MAX) },
-    zero_period_at_expiry = { 100, 0, 100, 200, TokenExpireDecision::Update(100) },
-    zero_period_at_max = { 100, 0, 100, 100, TokenExpireDecision::Update(100) },
-    negative_period_deletes_live = { 100, -1, 150, 200, TokenExpireDecision::Delete },
-    negative_period_deletes_expired = { 100, -1, 50, 60, TokenExpireDecision::Delete },
-    minimum_period_deletes = { 100, i64::MIN, 150, 200, TokenExpireDecision::Delete },
-    current_expiry_is_past = { 100, 0, 99, 200, TokenExpireDecision::Expired },
-    max_timestamp_is_past = { 100, 0, 150, 99, TokenExpireDecision::Expired },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/delegation_token/tests/token_mutations_are_generation_bound_live_and_idempotent.feature",
+    name = "expire matches kafka delete expiry and saturation"
 )]
-fn expire_matches_kafka_delete_expiry_and_saturation(
-    now: i64,
-    period: i64,
-    current: i64,
-    max: i64,
-    expected: TokenExpireDecision,
-) {
-    check!(expire_token_deadline(now, period, current, max) == expected);
-}
+fn expire_matches_kafka_delete_expiry_and_saturation(example: String) { let _ = example; }
 
 #[test]
 fn expiry_and_renewal_stay_within_the_token_maximum() {

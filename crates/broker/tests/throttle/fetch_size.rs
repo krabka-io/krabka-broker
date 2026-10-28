@@ -124,17 +124,9 @@ async fn replica_fetch_bytes(
     }
 }
 
-/// Test 3: After setting a very low leader throttle rate (512 bytes/sec) and
-/// marking partition 0 as throttled on this broker, a Fetch issued with
-/// `replica_id=2`, a follower outside the ISR, must return a response well
-/// under 8 KB.
-///
-/// An 8 KB response must be capped to at most 512 bytes of record data. The
-/// list names the leader, as Kafka reads it:
-/// `leader.replication.throttled.replicas` is `partition:replica` for the
-/// replicas that leader holds (#1210).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn throttle_rate_caps_fetch_response_size() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("throttle fetch size: throttle rate caps fetch response size")]
+async fn bdd_verify_throttle_rate_caps_fetch_response_size() {
     let ReplicaFetchBytes {
         first: first_bytes,
         followup: followup_bytes,
@@ -154,10 +146,26 @@ async fn throttle_rate_caps_fetch_response_size() {
     );
 }
 
-/// Test 4: Without any throttle config, a Fetch with `replica_id >= 0` delivers
-/// all 8 KB of data unimpeded.
+/// Test 3: After setting a very low leader throttle rate (512 bytes/sec) and
+/// marking partition 0 as throttled on this broker, a Fetch issued with
+/// `replica_id=2`, a follower outside the ISR, must return a response well
+/// under 8 KB.
+///
+/// An 8 KB response must be capped to at most 512 bytes of record data. The
+/// list names the leader, as Kafka reads it:
+/// `leader.replication.throttled.replicas` is `partition:replica` for the
+/// replicas that leader holds (#1210).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/fetch_size.feature",
+    name = "throttle rate caps fetch response size"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unthrottled_partition_unaffected() {
+async fn throttle_rate_caps_fetch_response_size() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("throttle fetch size: unthrottled partition unaffected")]
+async fn bdd_verify_unthrottled_partition_unaffected() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
     // Create topic rf=1.
@@ -188,13 +196,21 @@ async fn unthrottled_partition_unaffected() {
     handle.shutdown().await;
 }
 
-/// Test 5: The leader reads its own id from the list, so a list that names
-/// only the fetching follower, the reading the old code made, throttles
-/// nothing on the leader: `kafka-reassign-partitions --throttle` lists the
-/// source replicas on the leader side, and never the destination that fetches
-/// (#1210).
+/// Test 4: Without any throttle config, a Fetch with `replica_id >= 0` delivers
+/// all 8 KB of data unimpeded.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/fetch_size.feature",
+    name = "unthrottled partition unaffected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {
+async fn unthrottled_partition_unaffected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "throttle fetch size: a list naming only the follower throttles nothing on the leader"
+)]
+async fn bdd_verify_a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {
     let ReplicaFetchBytes {
         first: resp_bytes, ..
     } = replica_fetch_bytes(|_| "0:2".to_owned(), false, false).await;
@@ -205,11 +221,22 @@ async fn a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {
     );
 }
 
-/// Test 6: A follower in the ISR is never throttled, whatever the list and the
-/// rate say, so a throttle left configured after a reassignment cannot starve
-/// the replicas that keep the partition available (#1211).
+/// Test 5: The leader reads its own id from the list, so a list that names
+/// only the fetching follower, the reading the old code made, throttles
+/// nothing on the leader: `kafka-reassign-partitions --throttle` lists the
+/// source replicas on the leader side, and never the destination that fetches
+/// (#1210).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/fetch_size.feature",
+    name = "a list naming only the follower throttles nothing on the leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_in_the_isr_is_not_throttled() {
+async fn a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("throttle fetch size: a follower in the isr is not throttled")]
+async fn bdd_verify_a_follower_in_the_isr_is_not_throttled() {
     let ReplicaFetchBytes {
         first: resp_bytes, ..
     } = replica_fetch_bytes(|_| "*".to_owned(), true, false).await;
@@ -219,3 +246,14 @@ async fn a_follower_in_the_isr_is_not_throttled() {
         "expected an in-sync follower's fetch response >= 4096 bytes, got {resp_bytes} bytes"
     );
 }
+
+/// Test 6: A follower in the ISR is never throttled, whatever the list and the
+/// rate say, so a throttle left configured after a reassignment cannot starve
+/// the replicas that keep the partition available (#1211).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/throttle/fetch_size.feature",
+    name = "a follower in the isr is not throttled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_in_the_isr_is_not_throttled() {}

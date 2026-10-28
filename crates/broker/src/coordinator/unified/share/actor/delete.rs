@@ -284,12 +284,11 @@ mod tests {
         .collect()
     }
 
-    /// `DeleteGroups` on a share group, per row: whether the group exists,
-    /// its members and initialized or initializing partitions, and whether a share persister
-    /// is wired. The persister runs over a metadata image with no brokers, so
-    /// it cannot reach a share coordinator and every state delete fails.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn delete_share_group_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share actor delete tests: delete share group answers as kafka"
+    )]
+    async fn bdd_verify_delete_share_group_answers_as_kafka() {
         let tombstones: Appended = tombstone_batch("sg", 0)
             .unwrap()
             .records
@@ -415,6 +414,18 @@ mod tests {
             check!(written == appended, "row {index}");
         }
     }
+
+    /// `DeleteGroups` on a share group, per row: whether the group exists,
+    /// its members and initialized or initializing partitions, and whether a share persister
+    /// is wired. The persister runs over a metadata image with no brokers, so
+    /// it cannot reach a share coordinator and every state delete fails.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "tests: delete share group answers as kafka"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_answers_as_kafka() {}
 
     /// A share actor that stopped after a log-write failure leaves a closed
     /// handle and a cached seed. `DeleteGroups` respawns the actor from the

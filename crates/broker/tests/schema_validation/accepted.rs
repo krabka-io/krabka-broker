@@ -10,8 +10,11 @@ use {
     assert2::check,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_record_framed_with_a_bound_schema_id_is_accepted() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation accepted: a record framed with a bound schema id is accepted"
+)]
+async fn bdd_verify_a_record_framed_with_a_bound_schema_id_is_accepted() {
     let (_registry, broker, client, _dir, id) = mock_topic_fixture("validated", VALIDATED).await;
 
     let payload = Some(framed(KNOWN_ID, b"anything"));
@@ -20,15 +23,19 @@ async fn a_record_framed_with_a_bound_schema_id_is_accepted() {
     broker.shutdown().await;
 }
 
-/// The cache counters must move on a real produce.
-///
-/// Both were declared, registered and documented, and nothing incremented
-/// them: a live broker scraped zero for the life of the process. The unit test
-/// that called `record_schema_cache_hit` directly proved the counter counts,
-/// not that anything counts with it, so the assertion belongs here — behind an
-/// actual produce through the validator.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/accepted.feature",
+    name = "a record framed with a bound schema id is accepted"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_cache_counters_move_on_a_validated_produce() {
+async fn a_record_framed_with_a_bound_schema_id_is_accepted() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation accepted: the cache counters move on a validated produce"
+)]
+async fn bdd_verify_the_cache_counters_move_on_a_validated_produce() {
     let (_registry, broker, client, _dir, id) = mock_topic_fixture("validated", VALIDATED).await;
 
     // The first produce loads the schema; the next is served within its TTL.
@@ -51,8 +58,26 @@ async fn the_cache_counters_move_on_a_validated_produce() {
     broker.shutdown().await;
 }
 
+/// The cache counters must move on a real produce.
+///
+/// Both were declared, registered and documented, and nothing incremented
+/// them: a live broker scraped zero for the life of the process. The unit test
+/// that called `record_schema_cache_hit` directly proved the counter counts,
+/// not that anything counts with it, so the assertion belongs here — behind an
+/// actual produce through the validator.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/accepted.feature",
+    name = "the cache counters move on a validated produce"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tombstone_is_accepted_on_a_validated_topic() {
+async fn the_cache_counters_move_on_a_validated_produce() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation accepted: a tombstone is accepted on a validated topic"
+)]
+async fn bdd_verify_a_tombstone_is_accepted_on_a_validated_topic() {
     let (_registry, broker, client, _dir, id) = mock_topic_fixture("validated", VALIDATED).await;
 
     // A null value is a tombstone. Rejecting it would make schema validation
@@ -61,3 +86,11 @@ async fn a_tombstone_is_accepted_on_a_validated_topic() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/accepted.feature",
+    name = "a tombstone is accepted on a validated topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tombstone_is_accepted_on_a_validated_topic() {}

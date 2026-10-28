@@ -21,9 +21,9 @@ use {
 
 const CONTAINER: &str = "krabka-kip595-slice5-spike";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + a published controller port (throwaway spike)"]
-async fn static_mixed_jvm_krabka_quorum() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm static quorum spike mixed quorum: static mixed jvm krabka quorum")]
+async fn bdd_verify_static_mixed_jvm_krabka_quorum() {
     support::init_tracing();
     docker_rm(CONTAINER);
 
@@ -145,3 +145,12 @@ async fn static_mixed_jvm_krabka_quorum() {
          metadata.version not loaded); see JVM logs"
     );
 }
+
+#[ignore = "requires Docker + a published controller port (throwaway spike)"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_static_quorum_spike/mixed_quorum.feature",
+    name = "static mixed jvm krabka quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn static_mixed_jvm_krabka_quorum() {}

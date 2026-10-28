@@ -67,18 +67,11 @@ fn is_consume_of(record: &MetadataRecord, id: WireUuid) -> bool {
     }
 }
 
-/// The consumed approval and the transition it authorizes commit together, in
-/// one raft append.
-///
-/// This is the reason a proposal lives in the metadata log at all rather than
-/// in an internal topic or a separate service. Two appends would let a crash
-/// between them either spend one approval twice or lose it. Nothing in the type
-/// system enforces the rule — each gated handler prepends the consumed record
-/// to its own — so a handler that called `submit_change` twice would keep every
-/// other assertion in this file green and quietly break the guarantee. The case
-/// reads the committed log back and asserts on the batch itself.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_consume_and_the_transition_land_in_one_raft_append() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass atomicity: the consume and the transition land in one raft append"
+)]
+async fn bdd_verify_the_consume_and_the_transition_land_in_one_raft_append() {
     let cluster = boot().await;
     let alice = cluster.client(ALICE).await;
     let id = approved_proposal(&cluster, ACTION_UNREGISTER_BROKER, &BROKER_ID.to_string()).await;
@@ -162,3 +155,21 @@ async fn the_consume_and_the_transition_land_in_one_raft_append() {
 
     cluster.broker.shutdown().await;
 }
+
+/// The consumed approval and the transition it authorizes commit together, in
+/// one raft append.
+///
+/// This is the reason a proposal lives in the metadata log at all rather than
+/// in an internal topic or a separate service. Two appends would let a crash
+/// between them either spend one approval twice or lose it. Nothing in the type
+/// system enforces the rule — each gated handler prepends the consumed record
+/// to its own — so a handler that called `submit_change` twice would keep every
+/// other assertion in this file green and quietly break the guarantee. The case
+/// reads the committed log back and asserts on the batch itself.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/atomicity.feature",
+    name = "the consume and the transition land in one raft append"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_consume_and_the_transition_land_in_one_raft_append() {}

@@ -814,10 +814,11 @@ mod tests {
         check!(shares(0, 2) == vec![0, 0]);
     }
 
-    /// Kafka's `Errors.forException` for what `ReplicaManager.readFromLog`
-    /// catches.
-    #[test]
-    fn a_failed_log_read_maps_to_the_partition_error_kafka_gives() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers share fetch acquire tests: a failed log read maps to the partition error kafka gives"
+    )]
+    fn bdd_verify_a_failed_log_read_maps_to_the_partition_error_kafka_gives() {
         let io = || Error::other("disk");
         let cases = [
             (
@@ -840,6 +841,15 @@ mod tests {
             .unzip::<_, _, Vec<_>, Vec<_>>();
         assert!(got == want);
     }
+
+    /// Kafka's `Errors.forException` for what `ReplicaManager.readFromLog`
+    /// catches.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/share_fetch/acquire.feature",
+        name = "tests: a failed log read maps to the partition error kafka gives"
+    )]
+    fn a_failed_log_read_maps_to_the_partition_error_kafka_gives() {}
 
     #[test]
     fn remaining_record_budget_is_request_wide_and_saturating() {

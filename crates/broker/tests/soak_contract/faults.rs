@@ -364,32 +364,51 @@ mod tests {
         std::fs,
     };
 
-    #[yare::parameterized(
-        fills_to_the_watermark = { 100 << 20, 10 << 30, Ok(412 << 20) },
-        already_past_it = { 600 << 20, 10 << 30, Ok(0) },
-        exactly_the_reserve_left = { 0, (4 << 30) + (512 << 20), Ok(512 << 20) },
-        refused_below_the_reserve = { 0, (4 << 30) + (511 << 20), Err(()) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract faults tests: a disk fill reaches its watermark or is refused for {example}"
     )]
-    fn a_disk_fill_reaches_its_watermark_or_is_refused(
-        used: u64,
-        host_free: u64,
-        expected: Result<u64, ()>,
-    ) {
+    fn bdd_verify_a_disk_fill_reaches_its_watermark_or_is_refused(example: String) {
+        type Example = (u64, u64, Result<u64, ()>);
+        let (used, host_free, expected): Example = match example.as_str() {
+            "fills to the watermark" => (100 << 20, 10 << 30, Ok(412 << 20)),
+            "already past it" => (600 << 20, 10 << 30, Ok(0)),
+            "exactly the reserve left" => (0, (4 << 30) + (512 << 20), Ok(512 << 20)),
+            "refused below the reserve" => (0, (4 << 30) + (511 << 20), Err(())),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let fill = ballast_bytes(percent(25), gibibytes(2), used, host_free, gibibytes(4));
         let outcome = fill.clone().map_err(|_| ());
         check!(outcome == expected, "{fill:?}");
     }
 
-    #[test]
-    fn a_refusal_says_why() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/faults.feature",
+        name = "tests: a disk fill reaches its watermark or is refused"
+    )]
+    fn a_disk_fill_reaches_its_watermark_or_is_refused(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract faults tests: a refusal says why")]
+    fn bdd_verify_a_refusal_says_why() {
         let refusal =
             ballast_bytes(percent(80), gibibytes(500), 0, 100 << 30, gibibytes(50)).unwrap_err();
         assert!(refusal.starts_with("disk fill refused:"));
         check!(refusal.contains("reserve"));
     }
 
-    #[test]
-    fn a_dropped_guard_undoes_its_fault() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/faults.feature",
+        name = "tests: a refusal says why"
+    )]
+    fn a_refusal_says_why() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract faults tests: a dropped guard undoes its fault")]
+    fn bdd_verify_a_dropped_guard_undoes_its_fault() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("ballast");
         fs::write(&path, b"x").unwrap();
@@ -399,8 +418,16 @@ mod tests {
         check!(!path.exists());
     }
 
-    #[test]
-    fn a_cleared_guard_reports_its_cleanup() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/faults.feature",
+        name = "tests: a dropped guard undoes its fault"
+    )]
+    fn a_dropped_guard_undoes_its_fault() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract faults tests: a cleared guard reports its cleanup")]
+    fn bdd_verify_a_cleared_guard_reports_its_cleanup() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("ballast");
         fs::write(&path, b"x").unwrap();
@@ -414,4 +441,11 @@ mod tests {
                 .is_ok_and(|how| how.ends_with("was never written"))
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/faults.feature",
+        name = "tests: a cleared guard reports its cleanup"
+    )]
+    fn a_cleared_guard_reports_its_cleanup() {}
 }

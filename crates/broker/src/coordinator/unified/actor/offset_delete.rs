@@ -235,10 +235,11 @@ mod tests {
         g
     }
 
-    /// `ClassicGroup.validateOffsetDelete` and `isSubscribedToTopic`, row by
-    /// row.
-    #[test]
-    fn classic_guard_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor offset delete tests: classic guard follows kafka"
+    )]
+    fn bdd_verify_classic_guard_follows_kafka() {
         let rows = [
             (
                 "empty consumer group subscribes to nothing",
@@ -300,6 +301,15 @@ mod tests {
             check!(classic_guard(&group) == want, "{name}");
         }
     }
+
+    /// `ClassicGroup.validateOffsetDelete` and `isSubscribedToTopic`, row by
+    /// row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/offset_delete.feature",
+        name = "tests: classic guard follows kafka"
+    )]
+    fn classic_guard_follows_kafka() {}
 
     /// `ModernGroup.isSubscribedToTopic`: the names, and the topics that the
     /// group resolved each regex to. A regex the group has not resolved makes

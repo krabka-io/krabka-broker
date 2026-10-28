@@ -69,19 +69,11 @@ async fn alter_configs(client: &Client, topic: &str, value: Option<&str>) -> Con
     }
 }
 
-/// Neither config path can set a freeze, and neither can clear one.
-///
-/// The freeze deliberately looks like a topic config through `DescribeConfigs`,
-/// which is the whole reason the JVM tools can see it. That resemblance is also
-/// the risk: whoever holds `Alter` on a topic is the producing team, and a
-/// freeze has to hold against exactly that team. So this case comes at the key
-/// from all four directions an operator could try — set and delete, on both
-/// alter APIs — and asserts the freeze is still in force afterwards. The last
-/// two assertions are the point: an ordinary topic config still alters, so the
-/// four refusals are the key being refused by name and not the alter path being
-/// broken.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn neither_alter_path_can_set_or_clear_a_freeze() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze config surface: neither alter path can set or clear a freeze"
+)]
+async fn bdd_verify_neither_alter_path_can_set_or_clear_a_freeze() {
     let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
 
@@ -148,6 +140,25 @@ async fn neither_alter_path_can_set_or_clear_a_freeze() {
     p.broker.shutdown().await;
 }
 
+/// Neither config path can set a freeze, and neither can clear one.
+///
+/// The freeze deliberately looks like a topic config through `DescribeConfigs`,
+/// which is the whole reason the JVM tools can see it. That resemblance is also
+/// the risk: whoever holds `Alter` on a topic is the producing team, and a
+/// freeze has to hold against exactly that team. So this case comes at the key
+/// from all four directions an operator could try — set and delete, on both
+/// alter APIs — and asserts the freeze is still in force afterwards. The last
+/// two assertions are the point: an ordinary topic config still alters, so the
+/// four refusals are the key being refused by name and not the alter path being
+/// broken.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/config_surface.feature",
+    name = "neither alter path can set or clear a freeze"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn neither_alter_path_can_set_or_clear_a_freeze() {}
+
 /// Alter an ordinary topic config, as the control for the four refusals.
 async fn client_alter_retention(client: &Client, topic: &str) -> ConfigMutationOutcome {
     let response = client
@@ -180,16 +191,11 @@ async fn write_freeze_config(client: &Client, topic: &str) -> DescribeConfigsRes
     topic_config(client, topic, WRITE_FREEZE).await
 }
 
-/// `kafka-configs --describe` shows the freeze, read-only, naming the scope.
-///
-/// An operator who holds only the JVM tools cannot call `DescribeTopicFreezes`,
-/// so this key is the whole of what they can see. The value has to name the
-/// scope rather than say `true`, because the thaw is a different command
-/// depending on whether one topic or a thousand-topic namespace is frozen. The
-/// unfrozen control reports `false` rather than nothing, because an absent key
-/// cannot be told apart from a broker that does not have the feature.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_configs_reports_the_freeze_read_only_and_names_the_scope() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze config surface: describe configs reports the freeze read only and names the scope"
+)]
+async fn bdd_verify_describe_configs_reports_the_freeze_read_only_and_names_the_scope() {
     let p = support::start().await;
     create_topic(&p.broker, &p.client, "tenant-a.orders").await;
     create_topic(&p.broker, &p.client, "orders").await;
@@ -220,3 +226,19 @@ async fn describe_configs_reports_the_freeze_read_only_and_names_the_scope() {
 
     p.broker.shutdown().await;
 }
+
+/// `kafka-configs --describe` shows the freeze, read-only, naming the scope.
+///
+/// An operator who holds only the JVM tools cannot call `DescribeTopicFreezes`,
+/// so this key is the whole of what they can see. The value has to name the
+/// scope rather than say `true`, because the thaw is a different command
+/// depending on whether one topic or a thousand-topic namespace is frozen. The
+/// unfrozen control reports `false` rather than nothing, because an absent key
+/// cannot be told apart from a broker that does not have the feature.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/config_surface.feature",
+    name = "describe configs reports the freeze read only and names the scope"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_configs_reports_the_freeze_read_only_and_names_the_scope() {}

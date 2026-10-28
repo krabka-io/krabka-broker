@@ -44,17 +44,9 @@ use {
 
 mod support;
 
-/// A native `Producer` against a 3-broker rf=1 cluster must store every
-/// partition's record on the partition's leader. This includes partitions whose
-/// leader, and sole replica, is NOT the broker it bootstrapped at.
-///
-/// With rf=1 the bootstrap broker holds no replica for partitions led by other
-/// nodes. A bootstrap-only producer would get `UNKNOWN_TOPIC_OR_PARTITION` for
-/// those partitions and would never store them. The producer MUST route each
-/// Produce to the actual partition leader. The test verifies durability and
-/// consumes every record back, because the consumer already routes per-leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn producer_routes_to_non_bootstrap_leaders() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("producer leader routing: producer routes to non bootstrap leaders")]
+async fn bdd_verify_producer_routes_to_non_bootstrap_leaders() {
     let _g = cluster_lock().lock().await;
     let topic = "producer-routing-rf1";
     let (cluster, bootstrap, _topic_id, n_partitions) = start_leader_routing_cluster(topic).await;
@@ -177,3 +169,20 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     }.unwrap();
     shutdown_cluster(cluster).await;
 }
+
+/// A native `Producer` against a 3-broker rf=1 cluster must store every
+/// partition's record on the partition's leader. This includes partitions whose
+/// leader, and sole replica, is NOT the broker it bootstrapped at.
+///
+/// With rf=1 the bootstrap broker holds no replica for partitions led by other
+/// nodes. A bootstrap-only producer would get `UNKNOWN_TOPIC_OR_PARTITION` for
+/// those partitions and would never store them. The producer MUST route each
+/// Produce to the actual partition leader. The test verifies durability and
+/// consumes every record back, because the consumer already routes per-leader.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/producer_leader_routing.feature",
+    name = "producer routes to non bootstrap leaders"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn producer_routes_to_non_bootstrap_leaders() {}

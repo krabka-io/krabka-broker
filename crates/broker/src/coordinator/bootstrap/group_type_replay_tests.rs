@@ -107,8 +107,11 @@ fn replay(records: Vec<LogRecord>) -> Held {
     }
 }
 
-#[test]
-fn one_group_per_id_as_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator bootstrap group type replay tests: one group per id as kafka"
+)]
+fn bdd_verify_one_group_per_id_as_kafka() {
     let rows = [
         (
             "an offset commit creates a simple classic group",
@@ -155,3 +158,10 @@ fn one_group_per_id_as_kafka() {
         check!(replay(records) == expected, "{case}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/bootstrap/group_type_replay_tests.feature",
+    name = "one group per id as kafka"
+)]
+fn one_group_per_id_as_kafka() {}

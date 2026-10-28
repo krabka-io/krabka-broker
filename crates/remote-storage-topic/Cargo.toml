@@ -40,6 +40,10 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 mutants = { workspace = true }
 krabka-security = { version = "0.7.0" }
 serde_json = { workspace = true }

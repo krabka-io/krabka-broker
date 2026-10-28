@@ -16,11 +16,11 @@ use {
     tokio::time,
 };
 
-/// Recreates a shorter Krabka-led suffix, then verifies the JVM follower
-/// truncates it and resumes consumption from the leader's rewritten log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + a published controller/data port; Linux-bound"]
-async fn kip320_jvm_follower_truncates_from_krabka_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence jvm follower truncation: kip320 jvm follower truncates from krabka leader"
+)]
+async fn bdd_verify_kip320_jvm_follower_truncates_from_krabka_leader() {
     const TOPIC: &str = "krabka-kip320-jvm-follower";
     let (container, cluster, bootstrap_all, prefix_leo) =
         prepare_divergence(TOPIC, DivergenceDirection::JvmFollower).await;
@@ -209,3 +209,14 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
 
     cluster.shutdown().await;
 }
+
+/// Recreates a shorter Krabka-led suffix, then verifies the JVM follower
+/// truncates it and resumes consumption from the leader's rewritten log.
+#[ignore = "requires Docker + a published controller/data port; Linux-bound"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/jvm_follower_truncation.feature",
+    name = "kip320 jvm follower truncates from krabka leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kip320_jvm_follower_truncates_from_krabka_leader() {}

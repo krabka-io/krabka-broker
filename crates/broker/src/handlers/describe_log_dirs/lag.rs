@@ -143,11 +143,9 @@ mod tests {
             .expect("append records");
     }
 
-    /// `ReplicaManager.getLogEndOffsetLag` for a current log: `-1` with no
-    /// local partition, and `max(HW − LEO, 0)`, so 0, for a leader whose five
-    /// records are not replicated yet (a fresh HW is 0).
-    #[tokio::test]
-    async fn offset_lag_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers describe log dirs lag tests: offset lag matches kafka")]
+    async fn bdd_verify_offset_lag_matches_kafka() {
         let dir = tempfile::tempdir().unwrap();
         let reg = PartitionRegistry::new();
         let part = partition_with_leo()
@@ -161,6 +159,17 @@ mod tests {
             assert2::check!(offset_lag_for(&reg, topic, 0).await == expected, "{topic}");
         }
     }
+
+    /// `ReplicaManager.getLogEndOffsetLag` for a current log: `-1` with no
+    /// local partition, and `max(HW − LEO, 0)`, so 0, for a leader whose five
+    /// records are not replicated yet (a fresh HW is 0).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_log_dirs/lag.feature",
+        name = "tests: offset lag matches kafka"
+    )]
+    #[tokio::test]
+    async fn offset_lag_matches_kafka() {}
 
     /// Builds a `FutureLogState` whose future log has LEO `future_count`.
     fn future_state_with_leo(dir: &Path, future_count: RecordCount) -> Arc<FutureLogState> {
@@ -180,16 +189,19 @@ mod tests {
         })
     }
 
-    /// `ReplicaManager.getLogEndOffsetLag` for a future log:
-    /// `current LEO − future LEO` with no clamp, and `-1` with no local
-    /// current log.
-    #[yare::parameterized(
-        no_local_log = { "ghost", 2, INVALID_OFFSET_LAG },
-        three_records_behind = { "t", 2, 3 },
-        future_ahead = { "t", 7, -2 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe log dirs lag tests: future offset lag matches kafka for {example}"
     )]
-    #[test_macro(tokio::test)]
-    async fn future_offset_lag_matches_kafka(topic: &str, future_leo: i32, expected: i64) {
+    async fn bdd_verify_future_offset_lag_matches_kafka(example: String) {
+        type Example<'a> = (&'a str, i32, i64);
+        let (topic, future_leo, expected): Example<'_> = match example.as_str() {
+            "no local log" => ("ghost", 2, INVALID_OFFSET_LAG),
+            "three records behind" => ("t", 2, 3),
+            "future ahead" => ("t", 7, -2),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let cur_dir = tempfile::tempdir().unwrap();
         let reg = PartitionRegistry::new();
         let part = partition_with_leo()
@@ -210,4 +222,15 @@ mod tests {
         let lag = future_offset_lag(&reg, &future_logs, topic, krabka_ids::PartitionIndex(3));
         assert2::check!(lag == expected);
     }
+
+    /// `ReplicaManager.getLogEndOffsetLag` for a future log:
+    /// `current LEO − future LEO` with no clamp, and `-1` with no local
+    /// current log.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_log_dirs/lag.feature",
+        name = "tests: future offset lag matches kafka"
+    )]
+    #[tokio::test]
+    async fn future_offset_lag_matches_kafka(example: String) { let _ = example; }
 }

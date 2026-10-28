@@ -45,14 +45,11 @@ fn without_replica_progress(mut resp: DescribeQuorumResponse) -> DescribeQuorumR
     resp
 }
 
-/// `DescribeQuorum` against the cluster-metadata topic on a 1-broker
-/// cluster returns one partition row carrying the broker's voter id with
-/// `leader_id` == 1. This test verifies the dispatch glue, the ACL allow
-/// path, and the response encoding. The pure `build_topic_responses` helper
-/// has its own unit tests in
-/// `crates/broker/src/handlers/describe_quorum.rs`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_quorum_reports_cluster_metadata_voter_set() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin describe quorum: describe quorum reports cluster metadata voter set"
+)]
+async fn bdd_verify_describe_quorum_reports_cluster_metadata_voter_set() {
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
 
     let req = describe_quorum_request();
@@ -93,17 +90,25 @@ async fn describe_quorum_reports_cluster_metadata_voter_set() {
     );
 }
 
-/// A combined node that is not the active controller forwards `DescribeQuorum`
-/// to the active controller instead of answering from its own (follower) raft
-/// view (#1034). Before the fix, the follower answered locally and reported
-/// every voter's `log_end_offset` as `-1` (openraft only fills the
-/// replication map on the leader); after the fix it gets the leader's exact
-/// answer, so the two decoded responses name the same leader, epoch, and
-/// voter set (apart from each replica's log position, high watermark, and
-/// wall-clock timestamps, which the live leader may have advanced between
-/// the two requests).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
+/// `DescribeQuorum` against the cluster-metadata topic on a 1-broker
+/// cluster returns one partition row carrying the broker's voter id with
+/// `leader_id` == 1. This test verifies the dispatch glue, the ACL allow
+/// path, and the response encoding. The pure `build_topic_responses` helper
+/// has its own unit tests in
+/// `crates/broker/src/handlers/describe_quorum.rs`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "describe quorum reports cluster metadata voter set"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_quorum_reports_cluster_metadata_voter_set() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin describe quorum: combined follower forwards describe quorum to the active controller"
+)]
+async fn bdd_verify_combined_follower_forwards_describe_quorum_to_the_active_controller() {
     let cluster = start_n_node_with_retry(2).await;
 
     // Ask node 0 first: whichever role it holds, the fix means it now answers
@@ -149,15 +154,28 @@ async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
     shutdown_cluster(cluster).await;
 }
 
-/// A request for a topic other than `__cluster_metadata`, or a partition
-/// other than 0, gets Kafka's `UNKNOWN_TOPIC_OR_PARTITION` (3) with its
-/// message -- not the `INVALID_TOPIC_EXCEPTION` (17) the broker listener used
-/// to answer with locally before it forwarded (#1034). The check runs
-/// against a node forwarding to the active controller (node 0 of a 2-node
-/// cluster is a follower about half the time; either way `forward_raw`
-/// routes the request to whichever node answers it).
+/// A combined node that is not the active controller forwards `DescribeQuorum`
+/// to the active controller instead of answering from its own (follower) raft
+/// view (#1034). Before the fix, the follower answered locally and reported
+/// every voter's `log_end_offset` as `-1` (openraft only fills the
+/// replication map on the leader); after the fix it gets the leader's exact
+/// answer, so the two decoded responses name the same leader, epoch, and
+/// voter set (apart from each replica's log position, high watermark, and
+/// wall-clock timestamps, which the live leader may have advanced between
+/// the two requests).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "combined follower forwards describe quorum to the active controller"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
+async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin describe quorum: describe quorum for another topic is unknown topic or partition"
+)]
+async fn bdd_verify_describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
     let cluster = start_n_node_with_retry(2).await;
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
@@ -177,3 +195,18 @@ async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// A request for a topic other than `__cluster_metadata`, or a partition
+/// other than 0, gets Kafka's `UNKNOWN_TOPIC_OR_PARTITION` (3) with its
+/// message -- not the `INVALID_TOPIC_EXCEPTION` (17) the broker listener used
+/// to answer with locally before it forwarded (#1034). The check runs
+/// against a node forwarding to the active controller (node 0 of a 2-node
+/// cluster is a follower about half the time; either way `forward_raw`
+/// routes the request to whichever node answers it).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature",
+    name = "describe quorum for another topic is unknown topic or partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {}

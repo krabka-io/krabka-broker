@@ -261,9 +261,11 @@ fn ordinary_batch() -> RecordBatch {
     }
 }
 
-#[test]
-#[ignore = "requires Docker, a JDK, and Maven Central"]
-fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm tiered storage: kafka reads krabka local tiered segment and producer snapshot"
+)]
+fn bdd_verify_kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let local = tempfile::tempdir().expect("local log tempdir");
     let mut log = Log::open(local.path(), LogConfig {
         segment_size: bytes(1),
@@ -362,3 +364,11 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
             .is_file()
     );
 }
+
+#[ignore = "requires Docker, a JDK, and Maven Central"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_tiered_storage.feature",
+    name = "kafka reads krabka local tiered segment and producer snapshot"
+)]
+fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {}

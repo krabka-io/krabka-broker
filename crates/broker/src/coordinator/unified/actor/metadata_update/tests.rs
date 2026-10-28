@@ -312,12 +312,11 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
     );
 }
 
-/// The `MetadataHash` that a consumer group writes is Kafka's: hash4j 0.22.0
-/// gives `computeGroupHash` of topic `orders`, id `0101..01-0101..01`, two
-/// partitions and no racks, as the golden value below, and a group that
-/// subscribes to no existing topic writes 0.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_written_metadata_hash_is_kafkas() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified actor metadata update tests: the written metadata hash is kafkas"
+)]
+async fn bdd_verify_the_written_metadata_hash_is_kafkas() {
     // (case, the metadata, the hash of the group's epoch record)
     let rows = [
         (
@@ -339,6 +338,18 @@ async fn the_written_metadata_hash_is_kafkas() {
     }
     check!(written == expected);
 }
+
+/// The `MetadataHash` that a consumer group writes is Kafka's: hash4j 0.22.0
+/// gives `computeGroupHash` of topic `orders`, id `0101..01-0101..01`, two
+/// partitions and no racks, as the golden value below, and a group that
+/// subscribes to no existing topic writes 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/metadata_update/tests.feature",
+    name = "the written metadata hash is kafkas"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_written_metadata_hash_is_kafkas() {}
 
 /// KIP-1263: a consumer group replays the `AssignmentTimestamp` of its target
 /// assignment metadata record, and Kafka's `canComputeNextTargetAssignment`

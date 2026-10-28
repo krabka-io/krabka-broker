@@ -30,14 +30,11 @@ const CONFIG_TYPE_INT: i8 = 3;
 
 const CAP: usize = 2048;
 
-/// `CreateTopics` accepts the key, and `DescribeConfigs` echoes it.
-///
-/// The whole entry is compared rather than its value alone. `kafka-configs
-/// --describe` renders the source and the read-only flag beside the value, and
-/// a key reported as read-only would tell an operator that the alter in the
-/// next case cannot work.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "max message bytes config surface: create topics accepts the key and describe configs echoes it"
+)]
+async fn bdd_verify_create_topics_accepts_the_key_and_describe_configs_echoes_it() {
     let p = support::start().await;
     create_topic(&p.broker, &p.client, "orders", &[(
         MAX_MESSAGE_BYTES,
@@ -63,16 +60,25 @@ async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
     p.broker.shutdown().await;
 }
 
-/// `kafka-configs --alter --add-config max.message.bytes=...` raises the cap
-/// on a live topic, and the produce path picks the new value up.
+/// `CreateTopics` accepts the key, and `DescribeConfigs` echoes it.
 ///
-/// The refusal before the alter and the acceptance after it are the same
-/// batch. That is what separates "the alter was stored" from "the alter took
-/// effect": a broker that recorded the override and kept gating on the old
-/// value would answer `NONE` to the alter and `MESSAGE_TOO_LARGE` to the
-/// produce, which is the failure an operator would be least able to explain.
+/// The whole entry is compared rather than its value alone. `kafka-configs
+/// --describe` renders the source and the read-only flag beside the value, and
+/// a key reported as read-only would tell an operator that the alter in the
+/// next case cannot work.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "create topics accepts the key and describe configs echoes it"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
+async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "max message bytes config surface: an incremental alter raises the cap for the next produce"
+)]
+async fn bdd_verify_an_incremental_alter_raises_the_cap_for_the_next_produce() {
     let (p, topic) = orders_fixture(&[(MAX_MESSAGE_BYTES, &CAP.to_string())]).await;
 
     check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == too_large());
@@ -91,18 +97,27 @@ async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
     p.broker.shutdown().await;
 }
 
-/// The value check matches Kafka's: `INT` with `atLeast(0)`.
+/// `kafka-configs --alter --add-config max.message.bytes=...` raises the cap
+/// on a live topic, and the produce path picks the new value up.
 ///
-/// `apache/kafka:4.3.1` answers "Value must be at least 0" to `-1` and "Not a
-/// number of type INT" to `2147483648` and to `abc`, and accepts `0`. A broker
-/// that took `-1` would store a cap no batch can satisfy.
-///
-/// The refusal's error code is asserted, not merely its non-zero-ness, because
-/// `INVALID_CONFIG` (40) is the code this whole feature exists to stop the
-/// broker sending for a *valid* value. A refusal that arrived as some other
-/// code would leave `kafka-configs` printing an unfamiliar failure.
+/// The refusal before the alter and the acceptance after it are the same
+/// batch. That is what separates "the alter was stored" from "the alter took
+/// effect": a broker that recorded the override and kept gating on the old
+/// value would answer `NONE` to the alter and `MESSAGE_TOO_LARGE` to the
+/// produce, which is the failure an operator would be least able to explain.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "an incremental alter raises the cap for the next produce"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_alter_path_rejects_the_values_kafka_rejects() {
+async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "max message bytes config surface: the alter path rejects the values kafka rejects"
+)]
+async fn bdd_verify_the_alter_path_rejects_the_values_kafka_rejects() {
     let p = support::start().await;
     create_topic(&p.broker, &p.client, "orders", &[]).await;
 
@@ -129,6 +144,24 @@ async fn the_alter_path_rejects_the_values_kafka_rejects() {
 
     p.broker.shutdown().await;
 }
+
+/// The value check matches Kafka's: `INT` with `atLeast(0)`.
+///
+/// `apache/kafka:4.3.1` answers "Value must be at least 0" to `-1` and "Not a
+/// number of type INT" to `2147483648` and to `abc`, and accepts `0`. A broker
+/// that took `-1` would store a cap no batch can satisfy.
+///
+/// The refusal's error code is asserted, not merely its non-zero-ness, because
+/// `INVALID_CONFIG` (40) is the code this whole feature exists to stop the
+/// broker sending for a *valid* value. A refusal that arrived as some other
+/// code would leave `kafka-configs` printing an unfamiliar failure.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/config_surface.feature",
+    name = "the alter path rejects the values kafka rejects"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_alter_path_rejects_the_values_kafka_rejects() {}
 
 /// Read the topic's `max.message.bytes` entry back through `DescribeConfigs`.
 async fn describe_max_message_bytes(client: &Client, topic: &str) -> DescribeConfigsResourceResult {

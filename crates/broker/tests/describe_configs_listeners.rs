@@ -293,8 +293,11 @@ enum Roles {
     Combined,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn each_role_reports_the_listener_keys_through_the_listener_a_client_uses() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe configs listeners: each role reports the listener keys through the listener a client uses"
+)]
+async fn bdd_verify_each_role_reports_the_listener_keys_through_the_listener_a_client_uses() {
     for roles in [Roles::ControllerOnly, Roles::BrokerOnly, Roles::Combined] {
         // The nodes of the cluster, the node described, the listeners a client
         // reaches it on, and what it reports.
@@ -356,3 +359,11 @@ async fn each_role_reports_the_listener_keys_through_the_listener_a_client_uses(
         }
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_configs_listeners.feature",
+    name = "each role reports the listener keys through the listener a client uses"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_role_reports_the_listener_keys_through_the_listener_a_client_uses() {}

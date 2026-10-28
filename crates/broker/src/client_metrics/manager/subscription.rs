@@ -419,11 +419,11 @@ mod tests {
         check!(m.metrics == vec!["*".to_owned()]);
     }
 
-    /// Kafka's `createClientInstance` caps the interval at 300000, lets every
-    /// matched subscription lower it, and full-matches the last pattern of
-    /// each selector (#712).
-    #[test]
-    fn subscription_matches_kafkas_client_metrics_manager() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "client metrics manager subscription tests: subscription matches kafkas client metrics manager"
+    )]
+    fn bdd_verify_subscription_matches_kafkas_client_metrics_manager() {
         struct Subscription {
             name: &'static str,
             configs: Vec<ConfigEntry<'static>>,
@@ -559,6 +559,16 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `createClientInstance` caps the interval at 300000, lets every
+    /// matched subscription lower it, and full-matches the last pattern of
+    /// each selector (#712).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/client_metrics/manager/subscription.feature",
+        name = "tests: subscription matches kafkas client metrics manager"
+    )]
+    fn subscription_matches_kafkas_client_metrics_manager() {}
 
     /// The id is pinned: brokers of two versions in one cluster must hand a
     /// client the same id for the same subscription, so the CRC-32C

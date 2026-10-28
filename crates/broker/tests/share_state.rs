@@ -251,14 +251,9 @@ async fn read_state(
     resp.results[0].partitions[0].clone()
 }
 
-/// `FindCoordinator(SHARE)` bootstraps `__share_group_state` and routes the
-/// `(group, topic, partition)` key to a real broker (this single node).
-///
-/// The first lookup finds no topic. It asks for the topic and answers
-/// `COORDINATOR_NOT_AVAILABLE` with no node, as Kafka's
-/// `KafkaApis.getCoordinator` does. A retried lookup names this broker.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_share_creates_topic_and_returns_broker() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share state: find coordinator share creates topic and returns broker")]
+async fn bdd_verify_find_coordinator_share_creates_topic_and_returns_broker() {
     let (broker, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
 
@@ -294,9 +289,23 @@ async fn find_coordinator_share_creates_topic_and_returns_broker() {
     );
 }
 
-/// Initialize -> Write -> Read -> `ReadSummary` -> Delete round-trips over the wire.
+/// `FindCoordinator(SHARE)` bootstraps `__share_group_state` and routes the
+/// `(group, topic, partition)` key to a real broker (this single node).
+///
+/// The first lookup finds no topic. It asks for the topic and answers
+/// `COORDINATOR_NOT_AVAILABLE` with no node, as Kafka's
+/// `KafkaApis.getCoordinator` does. A retried lookup names this broker.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "find coordinator share creates topic and returns broker"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persister_round_trip() {
+async fn find_coordinator_share_creates_topic_and_returns_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share state: persister round trip")]
+async fn bdd_verify_persister_round_trip() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     let tid = create_topic(&client, "round-trip").await;
@@ -397,10 +406,18 @@ async fn persister_round_trip() {
     );
 }
 
-/// The broker fences a write that carries a `state_epoch` below the durable
-/// one (124).
+/// Initialize -> Write -> Read -> `ReadSummary` -> Delete round-trips over the wire.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "persister round trip"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn write_fences_stale_state_epoch() {
+async fn persister_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share state: write fences stale state epoch")]
+async fn bdd_verify_write_fences_stale_state_epoch() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     let tid = create_topic(&client, "stale-state-epoch").await;
@@ -432,10 +449,19 @@ async fn write_fences_stale_state_epoch() {
     );
 }
 
-/// Persisted share state survives a broker restart. Recovery replays
-/// `__share_group_state`.
+/// The broker fences a write that carries a `state_epoch` below the durable
+/// one (124).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "write fences stale state epoch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn state_survives_restart() {
+async fn write_fences_stale_state_epoch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share state: state survives restart")]
+async fn bdd_verify_state_survives_restart() {
     let restart_dir = tempfile::tempdir().expect("restart tempdir");
     let log_dir = restart_dir.path().to_path_buf();
 
@@ -486,6 +512,16 @@ async fn state_survives_restart() {
         );
     }
 }
+
+/// Persisted share state survives a broker restart. Recovery replays
+/// `__share_group_state`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "state survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn state_survives_restart() {}
 
 /// The state epoch and start offset a share partition is initialized with.
 #[derive(Clone, Copy)]

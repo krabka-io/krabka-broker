@@ -17,21 +17,11 @@ use {
     std::time::Duration,
 };
 
-/// A leader whose replicas can no longer reach it must stop acknowledging
-/// `acks=all` writes, and must not hand leadership to the witness on the way.
-///
-/// This is the safety half of a partitioned leader site. Nothing here is
-/// stopped: the leader is still running, still holds its log, and still
-/// believes it leads. What it has lost is the ability to have a write copied
-/// anywhere else. Its replicas stop fetching, so it drops them from the in-sync
-/// set, and the in-sync set of one no longer satisfies
-/// `min.insync.replicas=2` — `NOT_ENOUGH_REPLICAS`, before the record is even
-/// appended.
-///
-/// Healing puts it back: the replicas catch up, the ISR returns to three, and
-/// `acks=all` commits again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "stretch cluster unreachable site: an unreachable leader stops acknowledging acks all and recovers on heal"
+)]
+async fn bdd_verify_an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal() {
     let _guard = cluster_lock().lock().await;
     let (cluster, topic_id) = linked_cluster_with_topic().await;
 
@@ -91,3 +81,24 @@ async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal
 
     cluster.shutdown().await;
 }
+
+/// A leader whose replicas can no longer reach it must stop acknowledging
+/// `acks=all` writes, and must not hand leadership to the witness on the way.
+///
+/// This is the safety half of a partitioned leader site. Nothing here is
+/// stopped: the leader is still running, still holds its log, and still
+/// believes it leads. What it has lost is the ability to have a write copied
+/// anywhere else. Its replicas stop fetching, so it drops them from the in-sync
+/// set, and the in-sync set of one no longer satisfies
+/// `min.insync.replicas=2` — `NOT_ENOUGH_REPLICAS`, before the record is even
+/// appended.
+///
+/// Healing puts it back: the replicas catch up, the ISR returns to three, and
+/// `acks=all` commits again.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/stretch_cluster/unreachable_site.feature",
+    name = "an unreachable leader stops acknowledging acks all and recovers on heal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal() {}

@@ -98,25 +98,28 @@ krabka_macros::directory_tree_fixture!(
     (|_dir: &Path, path: &Path| (path.to_path_buf(), fs::read(path).expect("read")))
 );
 
-/// The id form: whatever `--cluster-id` names, the directory, the manifest,
-/// and stdout carry Kafka's 22-character form. The reserved ids parse, as
-/// they do in `kafka-storage format -t AAAAAAAAAAAAAAAAAAAAAA`. clap refuses a
-/// bad id with its usage error, exit 2, before anything is written.
-#[yare::parameterized(
-    kafka_form = { "Kafka form" },
-    hyphenated = { "hyphenated form" },
-    uppercase_hyphenated = { "upper-case hyphenated form" },
-    padded = { "Kafka form with canonical padding" },
-    unused_bits = { "unused low bits set in the last character" },
-    reserved_zero = { "the reserved zero id" },
-    reserved_one = { "the reserved one id" },
-    too_short = { "too short" },
-    too_long = { "too long" },
-    invalid_alphabet = { "outside the url-safe alphabet" },
-    invalid_hyphenated = { "hyphenated but not hex" },
-    unhyphenated_hex = { "unhyphenated hex" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: the cluster id is written and printed in kafka form for {example}"
 )]
-fn the_cluster_id_is_written_and_printed_in_kafka_form(scenario: &str) {
+fn bdd_verify_the_cluster_id_is_written_and_printed_in_kafka_form(example: String) {
+    type Example<'a> = (&'a str,);
+    let (scenario,): Example<'_> = match example.as_str() {
+        "kafka form" => ("Kafka form",),
+        "hyphenated" => ("hyphenated form",),
+        "uppercase hyphenated" => ("upper-case hyphenated form",),
+        "padded" => ("Kafka form with canonical padding",),
+        "unused bits" => ("unused low bits set in the last character",),
+        "reserved zero" => ("the reserved zero id",),
+        "reserved one" => ("the reserved one id",),
+        "too short" => ("too short",),
+        "too long" => ("too long",),
+        "invalid alphabet" => ("outside the url-safe alphabet",),
+        "invalid hyphenated" => ("hyphenated but not hex",),
+        "unhyphenated hex" => ("unhyphenated hex",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     /// What it is, `--cluster-id`, and the id written, or `None` for a refused
     /// one.
     struct Case<'a> {
@@ -222,19 +225,37 @@ fn the_cluster_id_is_written_and_printed_in_kafka_form(scenario: &str) {
     }
 }
 
-/// `--directory-id` and the directory id of an `--initial-controllers` entry
-/// take either form and are written in Kafka's.
-#[yare::parameterized(
-    directory_id_kafka_form = { &["--directory-id", "AAAAAAAAAAAAAAAAAAAAZA"] },
-    directory_id_hyphenated = { &["--directory-id", "00000000-0000-0000-0000-000000000064"] },
-    controller_id_kafka_form = {
-        &["--initial-controllers", "1@controller-1:9093:AAAAAAAAAAAAAAAAAAAAZA"],
-    },
-    controller_id_hyphenated = {
-        &["--initial-controllers", "1@controller-1:9093:00000000-0000-0000-0000-000000000064"],
-    },
+/// The id form: whatever `--cluster-id` names, the directory, the manifest,
+/// and stdout carry Kafka's 22-character form. The reserved ids parse, as
+/// they do in `kafka-storage format -t AAAAAAAAAAAAAAAAAAAAAA`. clap refuses a
+/// bad id with its usage error, exit 2, before anything is written.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "the cluster id is written and printed in kafka form"
 )]
-fn directory_ids_are_written_in_kafka_form(extra: &[&str]) {
+fn the_cluster_id_is_written_and_printed_in_kafka_form(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: directory ids are written in kafka form for {example}"
+)]
+fn bdd_verify_directory_ids_are_written_in_kafka_form(example: String) {
+    type Example<'a> = (&'a [&'a str],);
+    let (extra,): Example<'_> = match example.as_str() {
+        "directory id kafka form" => (&["--directory-id", "AAAAAAAAAAAAAAAAAAAAZA"],),
+        "directory id hyphenated" => (&["--directory-id", "00000000-0000-0000-0000-000000000064"],),
+        "controller id kafka form" => (&[
+            "--initial-controllers",
+            "1@controller-1:9093:AAAAAAAAAAAAAAAAAAAAZA",
+        ],),
+        "controller id hyphenated" => (&[
+            "--initial-controllers",
+            "1@controller-1:9093:00000000-0000-0000-0000-000000000064",
+        ],),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
     let current = thread::current();
     let what = current.name().expect("case name");
@@ -262,6 +283,15 @@ fn directory_ids_are_written_in_kafka_form(extra: &[&str]) {
     );
     assert2::assert!(written_directory_id(&dir) == DIRECTORY_ID, "{what}");
 }
+
+/// `--directory-id` and the directory id of an `--initial-controllers` entry
+/// take either form and are written in Kafka's.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "directory ids are written in kafka form"
+)]
+fn directory_ids_are_written_in_kafka_form(example: String) { let _ = example; }
 
 /// What one directory of a multi-directory format holds.
 #[derive(Debug, PartialEq, Eq)]
@@ -335,17 +365,18 @@ fn files_under(dir: &Path) -> Vec<String> {
 /// Spells the `--log-dir` flags for two directories.
 type Spelling = fn(&str, &str) -> Vec<String>;
 
-/// Repeated and comma-separated `--log-dir` format every directory in one
-/// run, as `kafka-storage format` formats every entry of `log.dirs`. The set
-/// shares one cluster id, and each directory has its own id. Only the first
-/// directory gets the bootstrap files and the `__cluster_metadata-0`
-/// checkpoint. It is the metadata log directory, as `metadata.log.dir`
-/// defaults to the first entry of `log.dirs`.
-#[yare::parameterized(
-    repeated_flags = { "repeated", repeated_log_dirs as Spelling },
-    comma_separated = { "comma-separated", comma_separated_log_dirs as Spelling },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: every log dir is formatted in one run for {example}"
 )]
-fn every_log_dir_is_formatted_in_one_run(what: &str, spell: Spelling) {
+fn bdd_verify_every_log_dir_is_formatted_in_one_run(example: String) {
+    type Example<'a> = (&'a str, Spelling);
+    let (what, spell): Example<'_> = match example.as_str() {
+        "repeated flags" => ("repeated", repeated_log_dirs as Spelling),
+        "comma separated" => ("comma-separated", comma_separated_log_dirs as Spelling),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let tmp = tempfile::tempdir().expect("tempdir");
     let seed_records = standalone_seed_records(tmp.path());
     let run = tmp.path().join(what);
@@ -383,6 +414,19 @@ fn every_log_dir_is_formatted_in_one_run(what: &str, spell: Spelling) {
     );
 }
 
+#[cfg(test)]
+/// Repeated and comma-separated `--log-dir` format every directory in one
+/// run, as `kafka-storage format` formats every entry of `log.dirs`. The set
+/// shares one cluster id, and each directory has its own id. Only the first
+/// directory gets the bootstrap files and the `__cluster_metadata-0`
+/// checkpoint. It is the metadata log directory, as `metadata.log.dir`
+/// defaults to the first entry of `log.dirs`.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "every log dir is formatted in one run"
+)]
+fn every_log_dir_is_formatted_in_one_run(example: String) { let _ = example; }
+
 fn repeated_log_dirs(a: &str, b: &str) -> Vec<String> {
     vec!["--log-dir".into(), a.into(), "--log-dir".into(), b.into()]
 }
@@ -391,18 +435,18 @@ fn comma_separated_log_dirs(a: &str, b: &str) -> Vec<String> {
     vec!["--log-dir".into(), format!("{a},{b}")]
 }
 
-/// `--metadata-log-dir` is `metadata.log.dir`: `kafka-storage format` adds it
-/// to the `log.dirs` set, so one run formats it and every `--log-dir`. It is
-/// the one metadata directory, and it is formatted once when it is also a
-/// `--log-dir`. Only it gets the bootstrap files and the
-/// `__cluster_metadata-0` checkpoint. Each other directory is a data
-/// directory with `meta.properties` alone. The set shares one cluster id,
-/// each directory has its own id, and the metadata directory is written first.
-#[yare::parameterized(
-    separate_metadata_directory = { "a separate metadata log directory" },
-    metadata_is_log_dir = { "a metadata log directory that is also a log directory" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: a metadata log dir is formatted with the log dirs for {example}"
 )]
-fn a_metadata_log_dir_is_formatted_with_the_log_dirs(scenario: &str) {
+fn bdd_verify_a_metadata_log_dir_is_formatted_with_the_log_dirs(example: String) {
+    type Example<'a> = (&'a str,);
+    let (scenario,): Example<'_> = match example.as_str() {
+        "separate metadata directory" => ("a separate metadata log directory",),
+        "metadata is log dir" => ("a metadata log directory that is also a log directory",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     const VOTER: &str = "dynamic metadata voter directory";
     const DATA: &str = "data directory";
     /// A directory and its Kafka description.
@@ -538,12 +582,25 @@ fn a_metadata_log_dir_is_formatted_with_the_log_dirs(scenario: &str) {
     );
 }
 
-/// Without `--ignore-formatted`, one formatted directory refuses the whole
-/// run with Kafka's message, and the others are left alone. With it, the
-/// formatted directories are skipped, the rest are formatted under the same
-/// cluster id, and a second run changes nothing.
-#[test]
-fn ignore_formatted_skips_the_formatted_and_formats_the_rest() {
+#[cfg(test)]
+/// `--metadata-log-dir` is `metadata.log.dir`: `kafka-storage format` adds it
+/// to the `log.dirs` set, so one run formats it and every `--log-dir`. It is
+/// the one metadata directory, and it is formatted once when it is also a
+/// `--log-dir`. Only it gets the bootstrap files and the
+/// `__cluster_metadata-0` checkpoint. Each other directory is a data
+/// directory with `meta.properties` alone. The set shares one cluster id,
+/// each directory has its own id, and the metadata directory is written first.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "a metadata log dir is formatted with the log dirs"
+)]
+fn a_metadata_log_dir_is_formatted_with_the_log_dirs(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: ignore formatted skips the formatted and formats the rest"
+)]
+fn bdd_verify_ignore_formatted_skips_the_formatted_and_formats_the_rest() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
     let both = format!("{},{}", a.display(), b.display());
@@ -655,18 +712,32 @@ fn ignore_formatted_skips_the_formatted_and_formats_the_rest() {
     assert2::assert!((snapshot(&a), snapshot(&b)) == before);
 }
 
-/// A run that stops after any file it writes leaves a directory the next run
-/// formats without an `rm -rf`, because `meta.properties` is the last file
-/// and is published by a rename. Once the marker has landed, the directory is
-/// formatted, and only `--ignore-formatted` passes it.
-#[yare::parameterized(
-    checkpoint_interrupted = { "00000000000000000000-0000000000.checkpoint", 0 },
-    bootstrap_records_interrupted = { "bootstrap.records.bin", 0 },
-    manifest_interrupted = { "bootstrap.json", 0 },
-    temporary_marker_interrupted = { "meta.properties.tmp", 0 },
-    published_marker_interrupted = { META_PROPERTIES, 3 },
+#[cfg(test)]
+/// Without `--ignore-formatted`, one formatted directory refuses the whole
+/// run with Kafka's message, and the others are left alone. With it, the
+/// formatted directories are skipped, the rest are formatted under the same
+/// cluster id, and a second run changes nothing.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "ignore formatted skips the formatted and formats the rest"
 )]
-fn an_interrupted_run_can_be_run_again(fault: &str, rerun_exit: i32) {
+fn ignore_formatted_skips_the_formatted_and_formats_the_rest() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kafka storage parity: an interrupted run can be run again for {example}"
+)]
+fn bdd_verify_an_interrupted_run_can_be_run_again(example: String) {
+    type Example<'a> = (&'a str, i32);
+    let (fault, rerun_exit): Example<'_> = match example.as_str() {
+        "checkpoint interrupted" => ("00000000000000000000-0000000000.checkpoint", 0),
+        "bootstrap records interrupted" => ("bootstrap.records.bin", 0),
+        "manifest interrupted" => ("bootstrap.json", 0),
+        "temporary marker interrupted" => ("meta.properties.tmp", 0),
+        "published marker interrupted" => (META_PROPERTIES, 3),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
     let dirs = format!("{},{}", meta_dir.display(), data_dir.display());
     let mut args = vec!["--log-dir", &dirs, "--cluster-id", CLUSTER_ID];
@@ -732,6 +803,17 @@ fn an_interrupted_run_can_be_run_again(fault: &str, rerun_exit: i32) {
     );
 }
 
+#[cfg(test)]
+/// A run that stops after any file it writes leaves a directory the next run
+/// formats without an `rm -rf`, because `meta.properties` is the last file
+/// and is published by a rename. Once the marker has landed, the directory is
+/// formatted, and only `--ignore-formatted` passes it.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "an interrupted run can be run again"
+)]
+fn an_interrupted_run_can_be_run_again(example: String) { let _ = example; }
+
 /// Whether `line` is the date comment of `Properties.store` on a UTC host:
 /// `#` and `java.util.Date.toString`, `EEE MMM dd HH:mm:ss zzz yyyy`.
 fn is_utc_date_comment(line: &str) -> bool {
@@ -759,13 +841,9 @@ fn is_utc_date_comment(line: &str) -> bool {
         && digits(year, 4)
 }
 
-/// Every `meta.properties` a format writes is the file Kafka's
-/// `PropertiesUtils.writePropertiesFile` writes for the same ids, byte for
-/// byte, except for the time on the date comment: an empty comment line, the
-/// date, and `cluster.id`, `directory.id`, `node.id`, and `version=1` in key
-/// order, as `Properties.store` writes them on Java 18 and later.
-#[test]
-fn meta_properties_is_the_file_kafka_writes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kafka storage parity: meta properties is the file kafka writes")]
+fn bdd_verify_meta_properties_is_the_file_kafka_writes() {
     const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
     let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
     let out = krabka_format(
@@ -810,6 +888,18 @@ fn meta_properties_is_the_file_kafka_writes() {
         );
     }
 }
+
+/// Every `meta.properties` a format writes is the file Kafka's
+/// `PropertiesUtils.writePropertiesFile` writes for the same ids, byte for
+/// byte, except for the time on the date comment: an empty comment line, the
+/// date, and `cluster.id`, `directory.id`, `node.id`, and `version=1` in key
+/// order, as `Properties.store` writes them on Java 18 and later.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
+    name = "meta properties is the file kafka writes"
+)]
+fn meta_properties_is_the_file_kafka_writes() {}
 
 fn format_successfully(args: &[&str], what: &str) -> Output {
     let out = krabka_format(args, None);

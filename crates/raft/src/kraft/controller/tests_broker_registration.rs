@@ -262,18 +262,11 @@ fn kafka_records_from(engine: &Engine, start: Offset) -> Vec<KafkaRecord> {
         .collect()
 }
 
-/// krabka-io/krabka-broker#1009: the controller writes a broker's
-/// registration and its fence, unfence, controlled shutdown and
-/// unregistration in Kafka's record shapes, as
-/// `ClusterControlManager.registerBroker` (`RegisterBrokerRecord`, `Fenced`
-/// true), `ReplicationControlManager.handleBrokerUnfenced`,
-/// `handleBrokerInControlledShutdown` and `handleBrokerFenced`
-/// (`BrokerRegistrationChangeRecord` v0, v1 and v0) and `unregisterBroker`
-/// (`UnregisterBrokerRecord` with the registration's epoch) write them. A
-/// replica that replays each record arrives at the registration the leader
-/// holds.
-#[test]
-fn registration_transitions_are_written_as_kafkas_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests broker registration: registration transitions are written as kafkas records"
+)]
+fn bdd_verify_registration_transitions_are_written_as_kafkas_records() {
     use {
         krabka_metadata::{
             BrokerRegistrationChangeRecord, FencingChange, MetadataRecord, UnregisterBrokerRecord,
@@ -382,6 +375,23 @@ fn registration_transitions_are_written_as_kafkas_records() {
         check!(registration == want_registration, "{what}");
     }
 }
+
+/// krabka-io/krabka-broker#1009: the controller writes a broker's
+/// registration and its fence, unfence, controlled shutdown and
+/// unregistration in Kafka's record shapes, as
+/// `ClusterControlManager.registerBroker` (`RegisterBrokerRecord`, `Fenced`
+/// true), `ReplicationControlManager.handleBrokerUnfenced`,
+/// `handleBrokerInControlledShutdown` and `handleBrokerFenced`
+/// (`BrokerRegistrationChangeRecord` v0, v1 and v0) and `unregisterBroker`
+/// (`UnregisterBrokerRecord` with the registration's epoch) write them. A
+/// replica that replays each record arrives at the registration the leader
+/// holds.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_broker_registration.feature",
+    name = "registration transitions are written as kafkas records"
+)]
+fn registration_transitions_are_written_as_kafkas_records() {}
 
 /// krabka-io/krabka-broker#1009: a `BrokerRegistrationChangeRecord` built
 /// before the broker registered again names an epoch the broker is no longer

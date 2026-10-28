@@ -12,12 +12,11 @@ use {
     std::fs,
 };
 
-/// KIP-113: `kafka-log-dirs --describe` against a two-directory
-/// JBOD broker. The test asserts that the JVM tool sees both configured log
-/// directories and that the new topic spreads its partitions across them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas log dirs: jvm kafka log dirs describe reports jbod spread"
+)]
+async fn bdd_verify_jvm_kafka_log_dirs_describe_reports_jbod_spread() {
     let (broker, primary, extra) = start_host_broker_jbod().await;
     nc_check_connectivity();
 
@@ -75,3 +74,15 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
 
     broker.shutdown().await;
 }
+
+/// KIP-113: `kafka-log-dirs --describe` against a two-directory
+/// JBOD broker. The test asserts that the JVM tool sees both configured log
+/// directories and that the new topic spreads its partitions across them.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/log_dirs.feature",
+    name = "jvm kafka log dirs describe reports jbod spread"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {}

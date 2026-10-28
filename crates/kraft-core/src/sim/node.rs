@@ -83,13 +83,20 @@ pub(super) use crate::simulation_support::voter_set as make_voter_set;
 mod tests {
     use {super::*, assert2::check};
 
-    #[yare::parameterized(
-        first = { NodeId(1), 1050 },
-        second = { NodeId(2), 1100 },
-        third = { NodeId(3), 1150 },
-        seventh = { NodeId(7), 1350 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "sim node tests: election timeouts land on whole staggered milliseconds for {example}"
     )]
-    fn election_timeouts_land_on_whole_staggered_milliseconds(id: NodeId, expected_millis: u64) {
+    fn bdd_verify_election_timeouts_land_on_whole_staggered_milliseconds(example: String) {
+        type Example = (NodeId, u64);
+        let (id, expected_millis): Example = match example.as_str() {
+            "first" => (NodeId(1), 1050),
+            "second" => (NodeId(2), 1100),
+            "third" => (NodeId(3), 1150),
+            "seventh" => (NodeId(7), 1350),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // The scheduler's clock is an integer millisecond timeline, and which
         // voter wins a race is decided by these exact values. Pin them so a
         // rounding shift in the extent arithmetic cannot silently rewrite the
@@ -100,4 +107,11 @@ mod tests {
         );
         check!(deadline_millis(HEARTBEAT) == 300);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/node.feature",
+        name = "tests: election timeouts land on whole staggered milliseconds"
+    )]
+    fn election_timeouts_land_on_whole_staggered_milliseconds(example: String) { let _ = example; }
 }

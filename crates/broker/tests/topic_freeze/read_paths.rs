@@ -74,16 +74,11 @@ async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) ->
     record_count(partition.records.as_ref())
 }
 
-/// A frozen topic stays readable, stays visible, and stays observable.
-///
-/// "The cluster is up, every read works, and the broker must not accept a new
-/// write" is the state this feature exists to give. A freeze that also broke
-/// reads would be a deny ACL with extra steps, so the read paths are asserted
-/// rather than assumed. The metrics half closes the gap KFC-7's suite found
-/// late: both counters were declared, registered and documented, and a live
-/// broker scraped zero for them, because nothing on a real request moved them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze read paths: fetch metadata and the metrics endpoint still answer for a frozen topic"
+)]
+async fn bdd_verify_fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic() {
     let support::InProcess {
         broker,
         client,
@@ -121,15 +116,27 @@ async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic
     finish_with_control_record(broker, &client, control).await;
 }
 
-/// A consumer of a frozen topic can still record where it got to.
+/// A frozen topic stays readable, stays visible, and stays observable.
 ///
-/// `OffsetCommit` appends to `__consumer_offsets` and not to the frozen topic,
-/// and a cutover is exactly when the reader positions matter most: the whole
-/// point of freezing rather than deleting is that consumers drain the frozen
-/// prefix and commit as they go. A freeze that stopped the commits would strand
-/// every group at its last pre-freeze position.
+/// "The cluster is up, every read works, and the broker must not accept a new
+/// write" is the state this feature exists to give. A freeze that also broke
+/// reads would be a deny ACL with extra steps, so the read paths are asserted
+/// rather than assumed. The metrics half closes the gap KFC-7's suite found
+/// late: both counters were declared, registered and documented, and a live
+/// broker scraped zero for them, because nothing on a real request moved them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/read_paths.feature",
+    name = "fetch metadata and the metrics endpoint still answer for a frozen topic"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn offset_commit_still_works_against_a_frozen_topic() {
+async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze read paths: offset commit still works against a frozen topic"
+)]
+async fn bdd_verify_offset_commit_still_works_against_a_frozen_topic() {
     let p = support::start().await;
     // The raw OffsetCommit makes no coordinator lookup. Create
     // `__consumer_offsets` and load it first, as a client lookup does.
@@ -172,3 +179,18 @@ async fn offset_commit_still_works_against_a_frozen_topic() {
 
     p.broker.shutdown().await;
 }
+
+/// A consumer of a frozen topic can still record where it got to.
+///
+/// `OffsetCommit` appends to `__consumer_offsets` and not to the frozen topic,
+/// and a cutover is exactly when the reader positions matter most: the whole
+/// point of freezing rather than deleting is that consumers drain the frozen
+/// prefix and commit as they go. A freeze that stopped the commits would strand
+/// every group at its last pre-freeze position.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/read_paths.feature",
+    name = "offset commit still works against a frozen topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offset_commit_still_works_against_a_frozen_topic() {}

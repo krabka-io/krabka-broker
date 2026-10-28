@@ -11,8 +11,9 @@ use {
     krabka_client_producer::{Header, ProducerRecord},
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_record_carries_headers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client consumer headers: consumer record carries headers")]
+async fn bdd_verify_consumer_record_carries_headers() {
     let (_dir, _broker, bootstrap, _admin) = standalone_topic("h").await;
 
     let producer = default_producer(&bootstrap).await;
@@ -53,3 +54,11 @@ async fn consumer_record_carries_headers() {
             }]
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_consumer_headers.feature",
+    name = "consumer record carries headers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_record_carries_headers() {}

@@ -124,8 +124,11 @@ max_time_skew = "17s"
         check!(g.max_time_skew == secs(17));
     }
 
-    #[test]
-    fn apply_to_gssapi_defaults_service_name_to_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config gssapi tests: apply to gssapi defaults service name to kafka"
+    )]
+    fn bdd_verify_apply_to_gssapi_defaults_service_name_to_kafka() {
         let src = r#"
 [gssapi]
 keytab_path = "/k/keytab"
@@ -136,6 +139,13 @@ principal_to_local_rules = ["DEFAULT"]
         assert!(gssapi.service_name == "kafka");
         assert!(gssapi.max_time_skew == DEFAULT_GSSAPI_MAX_TIME_SKEW);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/gssapi.feature",
+        name = "tests: apply to gssapi defaults service name to kafka"
+    )]
+    fn apply_to_gssapi_defaults_service_name_to_kafka() {}
 
     /// Kafka's `sasl.kerberos.principal.to.local.rules` defaults to
     /// `["DEFAULT"]`, so a `[gssapi]` section with no rules maps a principal in
@@ -234,8 +244,11 @@ type = "carrier-pigeon"
         assert!(toml::from_str::<FileConfig>(src).is_err());
     }
 
-    #[test]
-    fn apply_to_inter_broker_credentials_defaults_service_name_to_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config gssapi tests: apply to inter broker credentials defaults service name to kafka"
+    )]
+    fn bdd_verify_apply_to_inter_broker_credentials_defaults_service_name_to_kafka() {
         let src = r#"
 [inter_broker_credentials]
 type = "gssapi"
@@ -251,6 +264,13 @@ kdc_url = "tcp://kdc:88"
             other => panic!("expected Gssapi, got {other:?}"),
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/gssapi.feature",
+        name = "tests: apply to inter broker credentials defaults service name to kafka"
+    )]
+    fn apply_to_inter_broker_credentials_defaults_service_name_to_kafka() {}
 
     #[test]
     fn apply_to_inter_broker_credentials_oauthbearer_reads_redacted_token_file() {

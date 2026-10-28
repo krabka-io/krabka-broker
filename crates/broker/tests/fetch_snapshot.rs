@@ -85,8 +85,9 @@ fn checkpoint_ids(dir: &Path) -> Vec<CheckpointId> {
     ids
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_snapshot_serves_the_named_metadata_snapshot() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch snapshot: fetch snapshot serves the named metadata snapshot")]
+async fn bdd_verify_fetch_snapshot_serves_the_named_metadata_snapshot() {
     // The test owns the data directory, since the snapshot file it reads back
     // lives under it.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -193,8 +194,17 @@ async fn fetch_snapshot_serves_the_named_metadata_snapshot() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_snapshot.feature",
+    name = "fetch snapshot serves the named metadata snapshot"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_snapshot_rejects_non_metadata_topic() {
+async fn fetch_snapshot_serves_the_named_metadata_snapshot() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch snapshot: fetch snapshot rejects non metadata topic")]
+async fn bdd_verify_fetch_snapshot_rejects_non_metadata_topic() {
     let env = support::start().await;
 
     let mut req = fetch(
@@ -214,3 +224,11 @@ async fn fetch_snapshot_rejects_non_metadata_topic() {
 
     env.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_snapshot.feature",
+    name = "fetch snapshot rejects non metadata topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_snapshot_rejects_non_metadata_topic() {}

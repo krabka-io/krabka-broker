@@ -87,10 +87,9 @@ async fn fetch_offset(p: &support::InProcess, group: &str, topic: &str, partitio
     resp.groups[0].topics[0].partitions[0].committed_offset
 }
 
-/// T1, the happy path. Commit an offset for an Empty group and delete it.
-/// `OffsetFetch` then returns `-1`, which means no committed offset.
-#[tokio::test]
-async fn delete_offsets_from_empty_group_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("offset delete: delete offsets from empty group round trip")]
+async fn bdd_verify_delete_offsets_from_empty_group_round_trip() {
     let p = start().await;
     create_topic(&p, "t1", 2).await;
 
@@ -127,10 +126,19 @@ async fn delete_offsets_from_empty_group_round_trip() {
     p.broker.shutdown().await;
 }
 
-/// T2, unknown group. `OffsetDelete` against a group that was never
-/// joined or committed returns `GROUP_ID_NOT_FOUND` at the top level.
+/// T1, the happy path. Commit an offset for an Empty group and delete it.
+/// `OffsetFetch` then returns `-1`, which means no committed offset.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "delete offsets from empty group round trip"
+)]
 #[tokio::test]
-async fn delete_offsets_unknown_group_returns_group_id_not_found() {
+async fn delete_offsets_from_empty_group_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("offset delete: delete offsets unknown group returns group id not found")]
+async fn bdd_verify_delete_offsets_unknown_group_returns_group_id_not_found() {
     let p = start().await;
     create_topic(&p, "t2", 1).await;
 
@@ -154,11 +162,21 @@ async fn delete_offsets_unknown_group_returns_group_id_not_found() {
     p.broker.shutdown().await;
 }
 
-/// T3, missing topic. The response carries per-partition
-/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a topic that does not exist, even when
-/// the group does exist.
+/// T2, unknown group. `OffsetDelete` against a group that was never
+/// joined or committed returns `GROUP_ID_NOT_FOUND` at the top level.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "delete offsets unknown group returns group id not found"
+)]
 #[tokio::test]
-async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
+async fn delete_offsets_unknown_group_returns_group_id_not_found() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "offset delete: delete offsets missing topic returns unknown topic or partition"
+)]
+async fn bdd_verify_delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
     let p = start().await;
     create_topic(&p, "t3", 1).await;
     commit_offset(&p, "g3", "t3", 0, 7).await;
@@ -180,11 +198,22 @@ async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
     p.broker.shutdown().await;
 }
 
-/// T4, out-of-range partition. The response carries per-partition
-/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a partition index beyond the
-/// topic's partition count.
+/// T3, missing topic. The response carries per-partition
+/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a topic that does not exist, even when
+/// the group does exist.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "delete offsets missing topic returns unknown topic or partition"
+)]
 #[tokio::test]
-async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition() {
+async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "offset delete: delete offsets partition out of range returns unknown topic or partition"
+)]
+async fn bdd_verify_delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition() {
     let p = start().await;
     create_topic(&p, "t4", 1).await;
     commit_offset(&p, "g4", "t4", 0, 5).await;
@@ -224,11 +253,22 @@ async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partitio
     p.broker.shutdown().await;
 }
 
-/// T5, the subscription guard. A non-empty consumer-protocol group that is
-/// still subscribed to the topic returns per-partition
-/// `GROUP_SUBSCRIBED_TO_TOPIC` (86). The offset survives the request.
+/// T4, out-of-range partition. The response carries per-partition
+/// `UNKNOWN_TOPIC_OR_PARTITION` (3) for a partition index beyond the
+/// topic's partition count.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "delete offsets partition out of range returns unknown topic or partition"
+)]
 #[tokio::test]
-async fn delete_offsets_for_subscribed_topic_returns_group_subscribed() {
+async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "offset delete: delete offsets for subscribed topic returns group subscribed"
+)]
+async fn bdd_verify_delete_offsets_for_subscribed_topic_returns_group_subscribed() {
     let p = start().await;
     create_topic(&p, "t5", 1).await;
     commit_offset(&p, "g5", "t5", 0, 9).await;
@@ -302,3 +342,14 @@ async fn delete_offsets_for_subscribed_topic_returns_group_subscribed() {
 
     p.broker.shutdown().await;
 }
+
+/// T5, the subscription guard. A non-empty consumer-protocol group that is
+/// still subscribed to the topic returns per-partition
+/// `GROUP_SUBSCRIBED_TO_TOPIC` (86). The offset survives the request.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offset_delete.feature",
+    name = "delete offsets for subscribed topic returns group subscribed"
+)]
+#[tokio::test]
+async fn delete_offsets_for_subscribed_topic_returns_group_subscribed() {}

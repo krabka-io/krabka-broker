@@ -17,8 +17,9 @@ use {
     std::collections::HashSet,
 };
 
-#[test]
-fn config_type_wire_bytes_match_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("config keys registry tests: config type wire bytes match kafka")]
+fn bdd_verify_config_type_wire_bytes_match_kafka() {
     // `DescribeConfigsResponse.ConfigType`, verified against
     // `apache/kafka:4.3.1` over the wire.
     #[derive(Debug, PartialEq, Eq)]
@@ -55,36 +56,50 @@ fn config_type_wire_bytes_match_kafka() {
     );
 }
 
-#[yare::parameterized(
-    retention_ms = { RETENTION_MS, ConfigType::Long },
-    retention_bytes = { RETENTION_BYTES, ConfigType::Long },
-    segment_bytes = { SEGMENT_BYTES, ConfigType::Int },
-    cleanup_policy = { CLEANUP_POLICY, ConfigType::List },
-    compression_type = { COMPRESSION_TYPE, ConfigType::String },
-    min_insync_replicas = { MIN_INSYNC_REPLICAS, ConfigType::Int },
-    unclean_leader_election_enable = { UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean },
-    remote_storage_enable = { REMOTE_STORAGE_ENABLE, ConfigType::Boolean },
-    local_retention_ms = { LOCAL_RETENTION_MS, ConfigType::Long },
-    local_retention_bytes = { LOCAL_RETENTION_BYTES, ConfigType::Long },
-    delete_retention_ms = { DELETE_RETENTION_MS, ConfigType::Long },
-    leader_throttled_replicas = { LEADER_THROTTLED_REPLICAS_KEY, ConfigType::List },
-    follower_throttled_replicas = { FOLLOWER_THROTTLED_REPLICAS_KEY, ConfigType::List },
-    segment_ms = { SEGMENT_MS, ConfigType::Long },
-    segment_index_bytes = { SEGMENT_INDEX_BYTES, ConfigType::Int },
-    segment_jitter_ms = { SEGMENT_JITTER_MS, ConfigType::Long },
-    min_compaction_lag_ms = { MIN_COMPACTION_LAG_MS, ConfigType::Long },
-    max_compaction_lag_ms = { MAX_COMPACTION_LAG_MS, ConfigType::Long },
-    min_cleanable_dirty_ratio = { MIN_CLEANABLE_DIRTY_RATIO, ConfigType::Double },
-    file_delete_delay_ms = { FILE_DELETE_DELAY_MS, ConfigType::Long },
-    flush_messages = { FLUSH_MESSAGES, ConfigType::Long },
-    flush_ms = { FLUSH_MS, ConfigType::Long },
-    index_interval_bytes = { INDEX_INTERVAL_BYTES, ConfigType::Int },
-    preallocate = { PREALLOCATE, ConfigType::Boolean },
-    message_timestamp_type = { MESSAGE_TIMESTAMP_TYPE, ConfigType::String },
-    message_timestamp_after_max_ms = { MESSAGE_TIMESTAMP_AFTER_MAX_MS, ConfigType::Long },
-    message_timestamp_before_max_ms = { MESSAGE_TIMESTAMP_BEFORE_MAX_MS, ConfigType::Long },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/registry/tests.feature",
+    name = "config type wire bytes match kafka"
 )]
-fn topic_key_types_match_apache_kafka(name: &str, expected: ConfigType) {
+fn config_type_wire_bytes_match_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys registry tests: topic key types match apache kafka for {example}"
+)]
+fn bdd_verify_topic_key_types_match_apache_kafka(example: String) {
+    type Example<'a> = (&'a str, ConfigType);
+    let (name, expected): Example<'_> = match example.as_str() {
+        "retention ms" => (RETENTION_MS, ConfigType::Long),
+        "retention bytes" => (RETENTION_BYTES, ConfigType::Long),
+        "segment bytes" => (SEGMENT_BYTES, ConfigType::Int),
+        "cleanup policy" => (CLEANUP_POLICY, ConfigType::List),
+        "compression type" => (COMPRESSION_TYPE, ConfigType::String),
+        "min insync replicas" => (MIN_INSYNC_REPLICAS, ConfigType::Int),
+        "unclean leader election enable" => (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
+        "remote storage enable" => (REMOTE_STORAGE_ENABLE, ConfigType::Boolean),
+        "local retention ms" => (LOCAL_RETENTION_MS, ConfigType::Long),
+        "local retention bytes" => (LOCAL_RETENTION_BYTES, ConfigType::Long),
+        "delete retention ms" => (DELETE_RETENTION_MS, ConfigType::Long),
+        "leader throttled replicas" => (LEADER_THROTTLED_REPLICAS_KEY, ConfigType::List),
+        "follower throttled replicas" => (FOLLOWER_THROTTLED_REPLICAS_KEY, ConfigType::List),
+        "segment ms" => (SEGMENT_MS, ConfigType::Long),
+        "segment index bytes" => (SEGMENT_INDEX_BYTES, ConfigType::Int),
+        "segment jitter ms" => (SEGMENT_JITTER_MS, ConfigType::Long),
+        "min compaction lag ms" => (MIN_COMPACTION_LAG_MS, ConfigType::Long),
+        "max compaction lag ms" => (MAX_COMPACTION_LAG_MS, ConfigType::Long),
+        "min cleanable dirty ratio" => (MIN_CLEANABLE_DIRTY_RATIO, ConfigType::Double),
+        "file delete delay ms" => (FILE_DELETE_DELAY_MS, ConfigType::Long),
+        "flush messages" => (FLUSH_MESSAGES, ConfigType::Long),
+        "flush ms" => (FLUSH_MS, ConfigType::Long),
+        "index interval bytes" => (INDEX_INTERVAL_BYTES, ConfigType::Int),
+        "preallocate" => (PREALLOCATE, ConfigType::Boolean),
+        "message timestamp type" => (MESSAGE_TIMESTAMP_TYPE, ConfigType::String),
+        "message timestamp after max ms" => (MESSAGE_TIMESTAMP_AFTER_MAX_MS, ConfigType::Long),
+        "message timestamp before max ms" => (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, ConfigType::Long),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     // Read off `apache/kafka:4.3.1` with a DescribeConfigs v3 probe that asked
     // for synonyms and documentation. Every row here is a key Kafka also has,
     // so the byte the JVM AdminClient reads must be the same one.
@@ -92,65 +107,103 @@ fn topic_key_types_match_apache_kafka(name: &str, expected: ConfigType) {
     check!(row.config_type == expected, "{name}");
 }
 
-#[yare::parameterized(
-    leader_throttled_rate = { LEADER_THROTTLED_RATE_KEY, ConfigType::Long },
-    follower_throttled_rate = { FOLLOWER_THROTTLED_RATE_KEY, ConfigType::Long },
-    alter_log_dirs_throttled_rate = { ALTER_LOG_DIRS_THROTTLED_RATE_KEY, ConfigType::Long },
-    unclean_leader_election_enable = { UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean },
-    remote_list_offsets_request_timeout_ms = {
-        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        ConfigType::Long,
-    },
-    offsets_retention_minutes = { OFFSETS_RETENTION_MINUTES, ConfigType::Int },
-    offsets_retention_check_interval_ms = { OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long },
-    connections_max_idle_ms = { CONNECTIONS_MAX_IDLE_MS, ConfigType::Long },
-    connections_max_reauth_ms = { CONNECTIONS_MAX_REAUTH_MS, ConfigType::Long },
-    node_id = { NODE_ID, ConfigType::Int },
-    transactional_id_expiration_ms = { TRANSACTIONAL_ID_EXPIRATION_MS, ConfigType::Int },
-    transaction_remove_expired_cleanup_interval_ms = {
-        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        ConfigType::Int,
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/registry/tests.feature",
+    name = "topic key types match apache kafka"
 )]
-fn broker_key_types_match_apache_kafka(name: &str, expected: ConfigType) {
+fn topic_key_types_match_apache_kafka(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys registry tests: broker key types match apache kafka for {example}"
+)]
+fn bdd_verify_broker_key_types_match_apache_kafka(example: String) {
+    type Example<'a> = (&'a str, ConfigType);
+    let (name, expected): Example<'_> = match example.as_str() {
+        "leader throttled rate" => (LEADER_THROTTLED_RATE_KEY, ConfigType::Long),
+        "follower throttled rate" => (FOLLOWER_THROTTLED_RATE_KEY, ConfigType::Long),
+        "alter log dirs throttled rate" => (ALTER_LOG_DIRS_THROTTLED_RATE_KEY, ConfigType::Long),
+        "unclean leader election enable" => (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
+        "remote list offsets request timeout ms" => {
+            (REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long)
+        }
+        "offsets retention minutes" => (OFFSETS_RETENTION_MINUTES, ConfigType::Int),
+        "offsets retention check interval ms" => {
+            (OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long)
+        }
+        "connections max idle ms" => (CONNECTIONS_MAX_IDLE_MS, ConfigType::Long),
+        "connections max reauth ms" => (CONNECTIONS_MAX_REAUTH_MS, ConfigType::Long),
+        "node id" => (NODE_ID, ConfigType::Int),
+        "transactional id expiration ms" => (TRANSACTIONAL_ID_EXPIRATION_MS, ConfigType::Int),
+        "transaction remove expired cleanup interval ms" => (
+            TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+            ConfigType::Int,
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let row = lookup(ConfigScope::Broker, name).expect(name);
     check!(row.config_type == expected, "{name}");
 }
 
-#[yare::parameterized(
-    retention_ms = { RETENTION_MS, "604800000" },
-    retention_bytes = { RETENTION_BYTES, "-1" },
-    segment_bytes = { SEGMENT_BYTES, "1073741824" },
-    cleanup_policy = { CLEANUP_POLICY, "delete" },
-    compression_type = { COMPRESSION_TYPE, "producer" },
-    min_insync_replicas = { MIN_INSYNC_REPLICAS, "1" },
-    unclean_leader_election_enable = { UNCLEAN_LEADER_ELECTION_ENABLE, "false" },
-    remote_storage_enable = { REMOTE_STORAGE_ENABLE, "false" },
-    local_retention_ms = { LOCAL_RETENTION_MS, "-2" },
-    local_retention_bytes = { LOCAL_RETENTION_BYTES, "-2" },
-    delete_retention_ms = { DELETE_RETENTION_MS, "86400000" },
-    leader_throttled_replicas = { LEADER_THROTTLED_REPLICAS_KEY, "" },
-    follower_throttled_replicas = { FOLLOWER_THROTTLED_REPLICAS_KEY, "" },
-    segment_ms = { SEGMENT_MS, "604800000" },
-    segment_index_bytes = { SEGMENT_INDEX_BYTES, "10485760" },
-    segment_jitter_ms = { SEGMENT_JITTER_MS, "0" },
-    min_compaction_lag_ms = { MIN_COMPACTION_LAG_MS, "0" },
-    max_compaction_lag_ms = { MAX_COMPACTION_LAG_MS, "9223372036854775807" },
-    min_cleanable_dirty_ratio = { MIN_CLEANABLE_DIRTY_RATIO, "0.5" },
-    file_delete_delay_ms = { FILE_DELETE_DELAY_MS, "60000" },
-    flush_messages = { FLUSH_MESSAGES, "9223372036854775807" },
-    flush_ms = { FLUSH_MS, "9223372036854775807" },
-    index_interval_bytes = { INDEX_INTERVAL_BYTES, "4096" },
-    preallocate = { PREALLOCATE, "false" },
-    message_timestamp_type = { MESSAGE_TIMESTAMP_TYPE, "CreateTime" },
-    message_timestamp_after_max_ms = { MESSAGE_TIMESTAMP_AFTER_MAX_MS, "3600000" },
-    message_timestamp_before_max_ms = { MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807" },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/registry/tests.feature",
+    name = "broker key types match apache kafka"
 )]
-fn topic_key_defaults_match_apache_kafka(name: &str, expected: &str) {
+fn broker_key_types_match_apache_kafka(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys registry tests: topic key defaults match apache kafka for {example}"
+)]
+fn bdd_verify_topic_key_defaults_match_apache_kafka(example: String) {
+    type Example<'a> = (&'a str, &'a str);
+    let (name, expected): Example<'_> = match example.as_str() {
+        "retention ms" => (RETENTION_MS, "604800000"),
+        "retention bytes" => (RETENTION_BYTES, "-1"),
+        "segment bytes" => (SEGMENT_BYTES, "1073741824"),
+        "cleanup policy" => (CLEANUP_POLICY, "delete"),
+        "compression type" => (COMPRESSION_TYPE, "producer"),
+        "min insync replicas" => (MIN_INSYNC_REPLICAS, "1"),
+        "unclean leader election enable" => (UNCLEAN_LEADER_ELECTION_ENABLE, "false"),
+        "remote storage enable" => (REMOTE_STORAGE_ENABLE, "false"),
+        "local retention ms" => (LOCAL_RETENTION_MS, "-2"),
+        "local retention bytes" => (LOCAL_RETENTION_BYTES, "-2"),
+        "delete retention ms" => (DELETE_RETENTION_MS, "86400000"),
+        "leader throttled replicas" => (LEADER_THROTTLED_REPLICAS_KEY, ""),
+        "follower throttled replicas" => (FOLLOWER_THROTTLED_REPLICAS_KEY, ""),
+        "segment ms" => (SEGMENT_MS, "604800000"),
+        "segment index bytes" => (SEGMENT_INDEX_BYTES, "10485760"),
+        "segment jitter ms" => (SEGMENT_JITTER_MS, "0"),
+        "min compaction lag ms" => (MIN_COMPACTION_LAG_MS, "0"),
+        "max compaction lag ms" => (MAX_COMPACTION_LAG_MS, "9223372036854775807"),
+        "min cleanable dirty ratio" => (MIN_CLEANABLE_DIRTY_RATIO, "0.5"),
+        "file delete delay ms" => (FILE_DELETE_DELAY_MS, "60000"),
+        "flush messages" => (FLUSH_MESSAGES, "9223372036854775807"),
+        "flush ms" => (FLUSH_MS, "9223372036854775807"),
+        "index interval bytes" => (INDEX_INTERVAL_BYTES, "4096"),
+        "preallocate" => (PREALLOCATE, "false"),
+        "message timestamp type" => (MESSAGE_TIMESTAMP_TYPE, "CreateTime"),
+        "message timestamp after max ms" => (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "3600000"),
+        "message timestamp before max ms" => {
+            (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807")
+        }
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     // The same probe's `DEFAULT_CONFIG` values on a topic with no overrides.
     let row = lookup(ConfigScope::Topic, name).expect(name);
     check!(row.default == Some(expected), "{name}");
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/registry/tests.feature",
+    name = "topic key defaults match apache kafka"
+)]
+fn topic_key_defaults_match_apache_kafka(example: String) { let _ = example; }
 
 #[test]
 fn topic_defaults_agree_with_the_log_config_a_partition_runs_on() {
@@ -260,22 +313,35 @@ fn the_synthesised_keys_are_the_only_unstored_rows() {
     );
 }
 
-/// The two KIP-98 keys report Kafka's own defaults, so a broker that never
-/// touched either one answers `--describe --all` the way a Kafka broker does.
-#[yare::parameterized(
-    transactional_id_expiration = { TRANSACTIONAL_ID_EXPIRATION_MS, "604800000" },
-    transaction_remove_expired_cleanup_interval = {
-        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        "3600000",
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys registry tests: transactional id expiry defaults match apache kafka for {example}"
 )]
-fn transactional_id_expiry_defaults_match_apache_kafka(name: &str, expected: &str) {
+fn bdd_verify_transactional_id_expiry_defaults_match_apache_kafka(example: String) {
+    type Example<'a> = (&'a str, &'a str);
+    let (name, expected): Example<'_> = match example.as_str() {
+        "transactional id expiration" => (TRANSACTIONAL_ID_EXPIRATION_MS, "604800000"),
+        "transaction remove expired cleanup interval" => {
+            (TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, "3600000")
+        }
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let row = lookup(ConfigScope::Broker, name).expect(name);
     check!(row.default == Some(expected), "{name}");
     // `kafka-configs --alter` answers `Cannot update these configs
     // dynamically`, so `DescribeConfigs` must report them read-only.
     check!(row.read_only, "{name}");
 }
+
+/// The two KIP-98 keys report Kafka's own defaults, so a broker that never
+/// touched either one answers `--describe --all` the way a Kafka broker does.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/registry/tests.feature",
+    name = "transactional id expiry defaults match apache kafka"
+)]
+fn transactional_id_expiry_defaults_match_apache_kafka(example: String) { let _ = example; }
 
 /// The defaults the registry reports are the values the broker actually runs
 /// with. A broker sweeping on a cadence `DescribeConfigs` does not report is

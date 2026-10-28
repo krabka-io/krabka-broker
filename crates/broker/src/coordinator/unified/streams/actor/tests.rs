@@ -215,15 +215,11 @@ async fn a_known_member_that_rejoins_a_full_group_is_refused_by_4_3_1_only() {
     }
 }
 
-/// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
-/// Member `m1` is at epoch 4 with previous epoch 3: it joins at epoch 2, the
-/// first bump past the initial group epoch 1, `m2` joins (group epoch 3), `m1`
-/// heartbeats at 2, `m3` joins (group epoch 4), and `m1` heartbeats at 3.
-/// With no metadata source every assignment is
-/// empty. Each row sends one heartbeat on a fresh group. An accepted row must
-/// answer exactly what a heartbeat at the member epoch answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn member_epoch_rule_matches_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: member epoch rule matches kafka"
+)]
+async fn bdd_verify_member_epoch_rule_matches_kafka() {
     use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds;
 
     // A request that reports owned tasks reports all three lists, as the
@@ -319,6 +315,21 @@ async fn member_epoch_rule_matches_kafka() {
         check!(resp == expected, "row {index}");
     }
 }
+
+/// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
+/// Member `m1` is at epoch 4 with previous epoch 3: it joins at epoch 2, the
+/// first bump past the initial group epoch 1, `m2` joins (group epoch 3), `m1`
+/// heartbeats at 2, `m3` joins (group epoch 4), and `m1` heartbeats at 3.
+/// With no metadata source every assignment is
+/// empty. Each row sends one heartbeat on a fresh group. An accepted row must
+/// answer exactly what a heartbeat at the member epoch answers.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "member epoch rule matches kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn member_epoch_rule_matches_kafka() {}
 
 /// Kafka's `streamsGroupLeave` answers `UNKNOWN_MEMBER_ID` to a member that
 /// the group does not have, and writes no record.
@@ -1018,13 +1029,11 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
     }
 }
 
-/// Kafka sizes the internal topics with `InternalTopicManager`: a repartition
-/// topic takes the partition count of its writer, and a copartition group
-/// coerces it to the partition count of the external topics. Each row joins
-/// one member with a two-subtopology topology and compares the internal topics
-/// that the heartbeat asks `CreateTopics` for, and the whole response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_join_sizes_the_internal_topics_as_kafka_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: a join sizes the internal topics as kafka does"
+)]
+async fn bdd_verify_a_join_sizes_the_internal_topics_as_kafka_does() {
     use {
         crate::coordinator::unified::streams::topology::{InternalTopicSpec, status},
         krabka_protocol::owned::{
@@ -1157,15 +1166,24 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
     }
 }
 
-/// Kafka builds the `StreamsGroupHeartbeat` status list on every heartbeat:
-/// `STALE_TOPOLOGY` for a member behind the group topology, the topology
-/// configuration status, and `SHUTDOWN_APPLICATION` while a shutdown request
-/// stands. The list is empty, not null, when nothing holds, and the shutdown
-/// request ends when the group becomes empty. Each row runs its heartbeats on
-/// a fresh group with a one-partition source topic and compares the whole
-/// response of the last one.
+/// Kafka sizes the internal topics with `InternalTopicManager`: a repartition
+/// topic takes the partition count of its writer, and a copartition group
+/// coerces it to the partition count of the external topics. Each row joins
+/// one member with a two-subtopology topology and compares the internal topics
+/// that the heartbeat asks `CreateTopics` for, and the whole response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "a join sizes the internal topics as kafka does"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_heartbeat_status_list_follows_kafka() {
+async fn a_join_sizes_the_internal_topics_as_kafka_does() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: the heartbeat status list follows kafka"
+)]
+async fn bdd_verify_the_heartbeat_status_list_follows_kafka() {
     use {
         crate::coordinator::unified::streams::topology::status,
         krabka_protocol::owned::{
@@ -1346,14 +1364,26 @@ async fn the_heartbeat_status_list_follows_kafka() {
     }
 }
 
-/// The parts of Kafka's `StreamsGroupHeartbeat` response beyond the member
-/// epoch and the status: the task lists only on a join or a change, the
-/// endpoint information for Interactive Queries, the leave response and the
-/// error response. Each row runs its heartbeats on a fresh group with a
-/// source topic of the given partition count and compares the whole response
-/// of the last one.
+/// Kafka builds the `StreamsGroupHeartbeat` status list on every heartbeat:
+/// `STALE_TOPOLOGY` for a member behind the group topology, the topology
+/// configuration status, and `SHUTDOWN_APPLICATION` while a shutdown request
+/// stands. The list is empty, not null, when nothing holds, and the shutdown
+/// request ends when the group becomes empty. Each row runs its heartbeats on
+/// a fresh group with a one-partition source topic and compares the whole
+/// response of the last one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "the heartbeat status list follows kafka"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_heartbeat_response_carries_what_kafka_sends() {
+async fn the_heartbeat_status_list_follows_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: the heartbeat response carries what kafka sends"
+)]
+async fn bdd_verify_the_heartbeat_response_carries_what_kafka_sends() {
     use {
         krabka_protocol::owned::{
             common::{
@@ -1517,6 +1547,20 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         check!(last == Some(expected), "{name}");
     }
 }
+
+/// The parts of Kafka's `StreamsGroupHeartbeat` response beyond the member
+/// epoch and the status: the task lists only on a join or a change, the
+/// endpoint information for Interactive Queries, the leave response and the
+/// error response. Each row runs its heartbeats on a fresh group with a
+/// source topic of the given partition count and compares the whole response
+/// of the last one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "the heartbeat response carries what kafka sends"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_response_carries_what_kafka_sends() {}
 
 /// KIP-1071 reconciliation through the actor, as Kafka's
 /// `CurrentAssignmentBuilder` and `scheduleStreamsGroupRebalanceTimeout` run
@@ -1710,15 +1754,11 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
     }
 }
 
-/// KIP-1071 static membership, as Kafka's
-/// `getOrMaybeCreateStaticStreamsGroupMember` and
-/// `streamsGroupStaticMemberGroupLeave` run it. Member `m1` holds instance id
-/// `i1` in a group with a one-partition topic. Each row sends its heartbeats
-/// and compares the whole last response and the members afterwards, as
-/// `(member id, member epoch, active tasks)`. Static membership is Kafka
-/// trunk's: 4.3.1 refuses an instance id before the group sees the request.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_static_member_follows_kafka_static_membership() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: a static member follows kafka static membership"
+)]
+async fn bdd_verify_a_static_member_follows_kafka_static_membership() {
     let config = StreamsGroupConfig {
         max_size: 2,
         unstable_api_versions: UnstableApiVersions::Enabled,
@@ -1898,10 +1938,26 @@ async fn a_static_member_follows_kafka_static_membership() {
     }
 }
 
-/// Kafka's `StreamsGroup.validateOffsetCommit`. Each row is a group (with
-/// member `m1` at epoch 5, or empty), a commit and the expected answer.
-#[test]
-fn validate_offset_commit_follows_kafka_streams_group() {
+/// KIP-1071 static membership, as Kafka's
+/// `getOrMaybeCreateStaticStreamsGroupMember` and
+/// `streamsGroupStaticMemberGroupLeave` run it. Member `m1` holds instance id
+/// `i1` in a group with a one-partition topic. Each row sends its heartbeats
+/// and compares the whole last response and the members afterwards, as
+/// `(member id, member epoch, active tasks)`. Static membership is Kafka
+/// trunk's: 4.3.1 refuses an instance id before the group sees the request.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "a static member follows kafka static membership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_static_member_follows_kafka_static_membership() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: validate offset commit follows kafka streams group"
+)]
+fn bdd_verify_validate_offset_commit_follows_kafka_streams_group() {
     let offset = |api_version| CommitFence::Offset { api_version };
     let txn = CommitFence::Transactional;
     let mut group = StreamsGroupState::new("g");
@@ -2027,6 +2083,15 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     }
 }
 
+/// Kafka's `StreamsGroup.validateOffsetCommit`. Each row is a group (with
+/// member `m1` at epoch 5, or empty), a commit and the expected answer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "validate offset commit follows kafka streams group"
+)]
+fn validate_offset_commit_follows_kafka_streams_group() {}
+
 /// A stored subtopology `id` that reads the source topic `source` and the
 /// repartition topics `repartition`.
 fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSubtopology {
@@ -2049,12 +2114,11 @@ fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSub
     }
 }
 
-/// Kafka's `StreamsGroup.isSubscribedToTopic`, which `OffsetDelete` asks:
-/// an empty group and a group with no topology subscribe to nothing;
-/// otherwise the group subscribes to the source and repartition source
-/// topics of its topology, and not to its other topics.
-#[test]
-fn subscribed_topics_follow_kafka_streams_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: subscribed topics follow kafka streams group"
+)]
+fn bdd_verify_subscribed_topics_follow_kafka_streams_group() {
     let topology = StreamsGroupTopologyValue {
         epoch: 1,
         subtopologies: vec![
@@ -2089,11 +2153,22 @@ fn subscribed_topics_follow_kafka_streams_group() {
     }
 }
 
-/// Kafka's `StreamsGroup.validateOffsetFetch`. Each row is the v9+ member
-/// fields of an `OffsetFetch` against a group whose member `m1` is at epoch 5,
-/// and the expected answer.
-#[test]
-fn validate_offset_fetch_follows_kafka_streams_group() {
+/// Kafka's `StreamsGroup.isSubscribedToTopic`, which `OffsetDelete` asks:
+/// an empty group and a group with no topology subscribe to nothing;
+/// otherwise the group subscribes to the source and repartition source
+/// topics of its topology, and not to its other topics.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "subscribed topics follow kafka streams group"
+)]
+fn subscribed_topics_follow_kafka_streams_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams actor tests: validate offset fetch follows kafka streams group"
+)]
+fn bdd_verify_validate_offset_fetch_follows_kafka_streams_group() {
     let mut group = StreamsGroupState::new("g");
     group.members.insert("m1".into(), epoch_five_member());
 
@@ -2133,6 +2208,16 @@ fn validate_offset_fetch_follows_kafka_streams_group() {
         );
     }
 }
+
+/// Kafka's `StreamsGroup.validateOffsetFetch`. Each row is the v9+ member
+/// fields of an `OffsetFetch` against a group whose member `m1` is at epoch 5,
+/// and the expected answer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
+    name = "validate offset fetch follows kafka streams group"
+)]
+fn validate_offset_fetch_follows_kafka_streams_group() {}
 
 /// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
 /// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology

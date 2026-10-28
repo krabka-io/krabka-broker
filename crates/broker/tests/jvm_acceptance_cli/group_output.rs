@@ -203,8 +203,11 @@ mod tests {
         krabka-grp                     krabka-topic                   0          7              \n\
         krabka-grp                     krabka-topic                   1          0              \n";
 
-    #[test]
-    fn the_reset_table_keeps_only_numeric_rows_and_sorts_them() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: the reset table keeps only numeric rows and sorts them"
+    )]
+    fn bdd_verify_the_reset_table_keeps_only_numeric_rows_and_sorts_them() {
         check!(
             parse_reset_table(RESET_TABLE)
                 == vec![
@@ -224,8 +227,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_table_printed_in_another_order_parses_to_the_same_rows() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: the reset table keeps only numeric rows and sorts them"
+    )]
+    fn the_reset_table_keeps_only_numeric_rows_and_sorts_them() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: a table printed in another order parses to the same rows"
+    )]
+    fn bdd_verify_a_table_printed_in_another_order_parses_to_the_same_rows() {
         let reversed: String = {
             let mut lines: Vec<&str> = RESET_TABLE.lines().collect();
             lines.reverse();
@@ -234,8 +247,18 @@ mod tests {
         check!(parse_reset_table(&reversed) == parse_reset_table(RESET_TABLE));
     }
 
-    #[test]
-    fn lines_that_are_not_rows_are_not_rows() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: a table printed in another order parses to the same rows"
+    )]
+    fn a_table_printed_in_another_order_parses_to_the_same_rows() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: lines that are not rows are not rows"
+    )]
+    fn bdd_verify_lines_that_are_not_rows_are_not_rows() {
         for text in [
             "GROUP TOPIC PARTITION NEW-OFFSET",
             "Error: Assignments can only be reset if the group is inactive",
@@ -249,8 +272,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_export_csv_parses_in_both_of_the_shapes_the_tool_writes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: lines that are not rows are not rows"
+    )]
+    fn lines_that_are_not_rows_are_not_rows() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: the export csv parses in both of the shapes the tool writes"
+    )]
+    fn bdd_verify_the_export_csv_parses_in_both_of_the_shapes_the_tool_writes() {
         let three = ExportRow {
             group: None,
             topic: "t".to_owned(),
@@ -266,19 +299,38 @@ mod tests {
         check!(parse_export_csv("\n\n") == Vec::new());
     }
 
-    /// apache/kafka:4.3.1 writes this file through a Jackson `CsvMapper` that
-    /// quotes the string columns and leaves the numeric ones bare, so the same
-    /// row arrives quoted from one side and plain from the other and the two
-    /// must still compare equal.
-    #[test]
-    fn a_quoted_export_row_reads_the_same_as_a_plain_one() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: the export csv parses in both of the shapes the tool writes"
+    )]
+    fn the_export_csv_parses_in_both_of_the_shapes_the_tool_writes() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: a quoted export row reads the same as a plain one"
+    )]
+    fn bdd_verify_a_quoted_export_row_reads_the_same_as_a_plain_one() {
         check!(parse_export_csv("\"t\",0,12\n") == parse_export_csv("t,0,12\n"));
         check!(parse_export_csv("\"g\",\"t\",0,12\n") == parse_export_csv("g,t,0,12\n"));
     }
 
-    /// A quote inside a quoted field is written doubled, and reads back as one.
-    #[test]
-    fn a_doubled_quote_inside_a_field_reads_back_as_one() {
+    /// apache/kafka:4.3.1 writes this file through a Jackson `CsvMapper` that
+    /// quotes the string columns and leaves the numeric ones bare, so the same
+    /// row arrives quoted from one side and plain from the other and the two
+    /// must still compare equal.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: a quoted export row reads the same as a plain one"
+    )]
+    fn a_quoted_export_row_reads_the_same_as_a_plain_one() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: a doubled quote inside a field reads back as one"
+    )]
+    fn bdd_verify_a_doubled_quote_inside_a_field_reads_back_as_one() {
         check!(
             parse_export_csv("\"a\"\"b\",0,12\n")
                 == vec![ExportRow {
@@ -290,8 +342,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_kafka_exception_in_a_tool_dump_is_found_once() {
+    /// A quote inside a quoted field is written doubled, and reads back as one.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: a doubled quote inside a field reads back as one"
+    )]
+    fn a_doubled_quote_inside_a_field_reads_back_as_one() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: every kafka exception in a tool dump is found once"
+    )]
+    fn bdd_verify_every_kafka_exception_in_a_tool_dump_is_found_once() {
         let text = "Error: org.apache.kafka.common.errors.GroupNotEmptyException: no\n\
                     caused by org.apache.kafka.common.errors.GroupNotEmptyException\n\
                     and org.apache.kafka.common.errors.GroupIdNotFoundException: gone";
@@ -305,8 +368,18 @@ mod tests {
         check!(kafka_exceptions("nothing here").is_empty());
     }
 
-    #[test]
-    fn delete_reports_reduce_to_one_outcome_per_group() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: every kafka exception in a tool dump is found once"
+    )]
+    fn every_kafka_exception_in_a_tool_dump_is_found_once() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance cli group output tests: delete reports reduce to one outcome per group"
+    )]
+    fn bdd_verify_delete_reports_reduce_to_one_outcome_per_group() {
         let failed = "Error: Deletion of some consumer groups failed:\n\
              * Group 'ghost' could not be deleted due to: \
              org.apache.kafka.common.errors.GroupIdNotFoundException: The group id does not exist.\n\
@@ -337,4 +410,11 @@ mod tests {
                 }]
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_cli/group_output.feature",
+        name = "tests: delete reports reduce to one outcome per group"
+    )]
+    fn delete_reports_reduce_to_one_outcome_per_group() {}
 }

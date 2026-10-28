@@ -414,12 +414,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka's `KafkaApis.isMemberIdValid` and
-    /// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`:
-    /// each malformed heartbeat answers `INVALID_REQUEST`, with the
-    /// coordinator's message where Kafka sets one, and creates no group.
-    #[tokio::test]
-    async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers share group heartbeat tests: handle refuses malformed heartbeats as kafka does"
+    )]
+    async fn bdd_verify_handle_refuses_malformed_heartbeats_as_kafka_does() {
         let version = VERSION;
         allow_all_broker_setup!(
             (broker_handle, _dir, broker, ctx),
@@ -522,6 +521,18 @@ mod tests {
 
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `KafkaApis.isMemberIdValid` and
+    /// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`:
+    /// each malformed heartbeat answers `INVALID_REQUEST`, with the
+    /// coordinator's message where Kafka sets one, and creates no group.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/share_group_heartbeat.feature",
+        name = "tests: handle refuses malformed heartbeats as kafka does"
+    )]
+    #[tokio::test]
+    async fn handle_refuses_malformed_heartbeats_as_kafka_does() {}
 
     #[test]
     fn subscribed_names_describe_denied_table() { denied_table_fixture(); }
@@ -671,12 +682,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka's `getOrMaybeCreateShareGroup` and `shareGroupLeave`: only a join
-    /// creates a share group, and a group of another type is refused. Each row
-    /// sends one heartbeat for its own group id and compares the whole
-    /// response; `None` expects an accepted join.
-    #[tokio::test]
-    async fn handle_creates_share_group_only_on_join_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers share group heartbeat tests: handle creates share group only on join as kafka does"
+    )]
+    async fn bdd_verify_handle_creates_share_group_only_on_join_as_kafka_does() {
         use crate::coordinator::unified::actor::GroupKindTag;
 
         let version = VERSION;
@@ -749,4 +759,16 @@ mod tests {
         assert!(coordinator.share_group_ids() == vec!["joined".to_owned()]);
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `getOrMaybeCreateShareGroup` and `shareGroupLeave`: only a join
+    /// creates a share group, and a group of another type is refused. Each row
+    /// sends one heartbeat for its own group id and compares the whole
+    /// response; `None` expects an accepted join.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/share_group_heartbeat.feature",
+        name = "tests: handle creates share group only on join as kafka does"
+    )]
+    #[tokio::test]
+    async fn handle_creates_share_group_only_on_join_as_kafka_does() {}
 }

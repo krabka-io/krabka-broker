@@ -14,8 +14,11 @@ use {
     tokio::time,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit placement: every combined node leads one audit partition with a minimum isr of one"
+)]
+async fn bdd_verify_every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one() {
     let cluster = support::start_n_node_customized_with_retry(
         3,
         |_, config| {
@@ -86,3 +89,11 @@ async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one
 
     support::shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/placement.feature",
+    name = "every combined node leads one audit partition with a minimum isr of one"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one() {}

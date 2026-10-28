@@ -441,8 +441,11 @@ mod tests {
         expected: AppliedRecordGauges,
     }
 
-    #[test]
-    fn applied_record_gauges_follow_kafka_units_and_initial_values() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "broker gauges tests: applied record gauges follow kafka units and initial values"
+    )]
+    fn bdd_verify_applied_record_gauges_follow_kafka_units_and_initial_values() {
         const APPENDED_MS: i64 = 1_700_000_000_000;
         let cases = [
             AppliedRecordCase {
@@ -518,6 +521,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/broker/gauges.feature",
+        name = "tests: applied record gauges follow kafka units and initial values"
+    )]
+    fn applied_record_gauges_follow_kafka_units_and_initial_values() {}
 
     /// Reads the KIP-835 applied-record gauges back from the registry.
     fn published_applied_record_gauges(metrics: &BrokerMetrics) -> AppliedRecordGauges {

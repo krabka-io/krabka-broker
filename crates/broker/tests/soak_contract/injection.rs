@@ -142,13 +142,20 @@ mod tests {
         std::iter,
     };
 
-    #[yare::parameterized(
-        acknowledged_once = { 3, true },
-        never_acknowledged = { 12, false },
-        failed_then_acknowledged = { 5, false },
-        resent = { 6, false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract injection tests: only a record sent once and acknowledged is deleted for {example}"
     )]
-    fn only_a_record_sent_once_and_acknowledged_is_deleted(seq: u64, expected: bool) {
+    fn bdd_verify_only_a_record_sent_once_and_acknowledged_is_deleted(example: String) {
+        type Example = (u64, bool);
+        let (seq, expected): Example = match example.as_str() {
+            "acknowledged once" => (3, true),
+            "never acknowledged" => (12, false),
+            "failed then acknowledged" => (5, false),
+            "resent" => (6, false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let ledger = ProducerLedger {
             path: "p".into(),
             producer: "p-0".into(),
@@ -161,4 +168,11 @@ mod tests {
         };
         check!(deletable(&ledger, seq) == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/injection.feature",
+        name = "tests: only a record sent once and acknowledged is deleted"
+    )]
+    fn only_a_record_sent_once_and_acknowledged_is_deleted(example: String) { let _ = example; }
 }

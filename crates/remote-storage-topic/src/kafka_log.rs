@@ -677,8 +677,11 @@ mod tests {
         assert2::{assert, check},
     };
 
-    #[test]
-    fn metadata_requests_name_only_the_metadata_topic_without_auto_creation() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: metadata requests name only the metadata topic without auto creation"
+    )]
+    fn bdd_verify_metadata_requests_name_only_the_metadata_topic_without_auto_creation() {
         use {
             krabka_client_core::MetadataTopics,
             krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -700,8 +703,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn open_read_only_rejects_invalid_policy_before_connecting() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: metadata requests name only the metadata topic without auto creation"
+    )]
+    fn metadata_requests_name_only_the_metadata_topic_without_auto_creation() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: open read only rejects invalid policy before connecting"
+    )]
+    async fn bdd_verify_open_read_only_rejects_invalid_policy_before_connecting() {
         let cfg = KafkaMetadataLogConfig {
             topic_create_timeout: Time::ZERO,
             ..KafkaMetadataLogConfig::new("not a socket address")
@@ -714,16 +727,27 @@ mod tests {
         assert!(error.to_string().contains("topic_create_timeout"));
     }
 
-    #[yare::parameterized(
-        empty = { "", "bootstrap \"\" resolved to no address" },
-        separators_only = { " , ", "bootstrap \" , \" resolved to no address" },
-        missing_port = { "no-port", "DNS lookup of no-port failed" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: open read only rejects invalid policy before connecting"
     )]
-    #[test_macro(tokio::test)]
-    async fn bootstrap_resolution_names_the_address_it_could_not_use(
-        bootstrap: &str,
-        expected: &str,
-    ) {
+    #[tokio::test]
+    async fn open_read_only_rejects_invalid_policy_before_connecting() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: bootstrap resolution names the address it could not use for {example}"
+    )]
+    async fn bdd_verify_bootstrap_resolution_names_the_address_it_could_not_use(example: String) {
+        type Example<'a> = (&'a str, &'a str);
+        let (bootstrap, expected): Example<'_> = match example.as_str() {
+            "empty" => ("", "bootstrap \"\" resolved to no address"),
+            "separators only" => (" , ", "bootstrap \" , \" resolved to no address"),
+            "missing port" => ("no-port", "DNS lookup of no-port failed"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let options = ConnectionOptions::default();
         let error = resolve_bootstrap(bootstrap, &options).await.unwrap_err();
         check!(
@@ -732,8 +756,21 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: bootstrap resolution names the address it could not use"
+    )]
     #[tokio::test]
-    async fn bootstrap_resolution_keeps_valid_addresses_in_order() {
+    async fn bootstrap_resolution_names_the_address_it_could_not_use(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: bootstrap resolution keeps valid addresses in order"
+    )]
+    async fn bdd_verify_bootstrap_resolution_keeps_valid_addresses_in_order() {
         let options = ConnectionOptions::default();
         let resolved = resolve_bootstrap(" 127.0.0.1:9092, ,localhost:9093", &options)
             .await
@@ -749,8 +786,17 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: bootstrap resolution keeps valid addresses in order"
+    )]
     #[tokio::test]
-    async fn start_rejects_invalid_policy_before_connecting() {
+    async fn bootstrap_resolution_keeps_valid_addresses_in_order() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log tests: start rejects invalid policy before connecting")]
+    async fn bdd_verify_start_rejects_invalid_policy_before_connecting() {
         let cfg = KafkaMetadataLogConfig {
             topic_create_timeout: Time::ZERO,
             ..KafkaMetadataLogConfig::new("not a socket address")
@@ -762,8 +808,19 @@ mod tests {
         assert!(error.to_string().contains("topic_create_timeout"));
     }
 
-    #[test]
-    fn keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: start rejects invalid policy before connecting"
+    )]
+    #[tokio::test]
+    async fn start_rejects_invalid_policy_before_connecting() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: keyed tombstone record is partitioned and preserves the null value"
+    )]
+    fn bdd_verify_keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {
         let record = producer_record(
             "__diskless_wal_index",
             3,
@@ -779,11 +836,25 @@ mod tests {
         assert!(record.value.is_none());
     }
 
-    #[yare::parameterized(
-        negative = { -1 },
-        upper_bound = { 3 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: keyed tombstone record is partitioned and preserves the null value"
     )]
-    fn keyed_record_rejects_out_of_range_partitions(partition: i32) {
+    fn keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log tests: keyed record rejects out of range partitions for {example}"
+    )]
+    fn bdd_verify_keyed_record_rejects_out_of_range_partitions(example: String) {
+        type Example = (i32,);
+        let (partition,): Example = match example.as_str() {
+            "negative" => (-1,),
+            "upper bound" => (3,),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let error = producer_record("index", 3, partition, None, None).unwrap_err();
         assert2::assert!(matches!(
             error,
@@ -793,4 +864,11 @@ mod tests {
             } if got == partition
         ));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log.feature",
+        name = "tests: keyed record rejects out of range partitions"
+    )]
+    fn keyed_record_rejects_out_of_range_partitions(example: String) { let _ = example; }
 }

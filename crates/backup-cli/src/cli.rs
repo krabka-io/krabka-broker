@@ -247,8 +247,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cluster_commands_accept_kafka_command_config() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("cli tests: cluster commands accept kafka command config")]
+    fn bdd_verify_cluster_commands_accept_kafka_command_config() {
         let capture = Cli::try_parse_from([
             "krabka-backup",
             "capture",
@@ -275,6 +276,13 @@ mod tests {
         .expect("restore command config");
         assert!(let Command::RestoreOffsets { .. } = &restore.command);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/cli.feature",
+        name = "tests: cluster commands accept kafka command config"
+    )]
+    fn cluster_commands_accept_kafka_command_config() {}
 
     #[test]
     fn diskless_capture_signing_key_is_an_explicit_pair() {

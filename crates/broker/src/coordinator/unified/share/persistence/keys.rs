@@ -76,8 +76,11 @@ mod tests {
         assert!(parse_share_key(99, &[]).is_err());
     }
 
-    #[test]
-    fn key_versions_match_kafka_api_keys() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence keys tests: key versions match kafka api keys"
+    )]
+    fn bdd_verify_key_versions_match_kafka_api_keys() {
         // apiKey of each schema at Apache Kafka tag 4.3.1.
         assert!(KEY_SHARE_MEMBER_METADATA == 10);
         assert!(KEY_SHARE_GROUP_METADATA == 11);
@@ -87,8 +90,18 @@ mod tests {
         assert!(KEY_SHARE_GROUP_STATE_PARTITION_METADATA == 15);
     }
 
-    #[test]
-    fn group_metadata_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/keys.feature",
+        name = "tests: key versions match kafka api keys"
+    )]
+    fn key_versions_match_kafka_api_keys() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence keys tests: group metadata key bytes match kafka schema"
+    )]
+    fn bdd_verify_group_metadata_key_bytes_match_kafka_schema() {
         // i16 apiKey 11, then a non-flexible i16-length group id.
         let bytes = encode_share_key(&ShareGroupKey::GroupMetadata {
             group_id: "g1".into(),
@@ -97,8 +110,18 @@ mod tests {
         assert!(&bytes[..] == b"\x00\x0b\x00\x02g1");
     }
 
-    #[test]
-    fn member_metadata_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/keys.feature",
+        name = "tests: group metadata key bytes match kafka schema"
+    )]
+    fn group_metadata_key_bytes_match_kafka_schema() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence keys tests: member metadata key bytes match kafka schema"
+    )]
+    fn bdd_verify_member_metadata_key_bytes_match_kafka_schema() {
         let bytes = encode_share_key(&ShareGroupKey::MemberMetadata {
             group_id: "g1".into(),
             member_id: "m1".into(),
@@ -106,4 +129,11 @@ mod tests {
         .unwrap();
         assert!(&bytes[..] == b"\x00\x0a\x00\x02g1\x00\x02m1");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/keys.feature",
+        name = "tests: member metadata key bytes match kafka schema"
+    )]
+    fn member_metadata_key_bytes_match_kafka_schema() {}
 }

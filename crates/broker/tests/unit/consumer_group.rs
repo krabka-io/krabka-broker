@@ -38,8 +38,11 @@ fn join_setup() -> ClassicJoinSetup {
     }
 }
 
-#[tokio::test]
-async fn join_group_with_empty_member_returns_member_id_required() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit consumer group: join group with empty member returns member id required"
+)]
+async fn bdd_verify_join_group_with_empty_member_returns_member_id_required() {
     let p = start().await;
     let req = classic_join_request()
         .group_id(join_setup().group_id)
@@ -57,8 +60,17 @@ async fn join_group_with_empty_member_returns_member_id_required() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/consumer_group.feature",
+    name = "join group with empty member returns member id required"
+)]
 #[tokio::test]
-async fn join_group_single_member_completes_after_deadline() {
+async fn join_group_with_empty_member_returns_member_id_required() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit consumer group: join group single member completes after deadline")]
+async fn bdd_verify_join_group_single_member_completes_after_deadline() {
     let p = start().await;
     // First call to obtain a server-assigned member_id.
     let r1 = p
@@ -88,8 +100,19 @@ async fn join_group_single_member_completes_after_deadline() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/consumer_group.feature",
+    name = "join group single member completes after deadline"
+)]
 #[tokio::test]
-async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
+async fn join_group_single_member_completes_after_deadline() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit consumer group: full group flow join sync heartbeat commit fetch leave"
+)]
+async fn bdd_verify_full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     let p = start().await;
 
     // KIP-516: OffsetCommit/OffsetFetch negotiate to v10/v8+, which key by
@@ -200,3 +223,11 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/consumer_group.feature",
+    name = "full group flow join sync heartbeat commit fetch leave"
+)]
+#[tokio::test]
+async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {}

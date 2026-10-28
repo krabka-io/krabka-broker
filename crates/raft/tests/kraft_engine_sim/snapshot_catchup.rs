@@ -145,24 +145,11 @@ fn checkpoint_names(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// 5. KIP-630 snapshot catch-up, the snapshot catch-up acceptance case. A lagging controller
-///    follower whose own log is empty and far behind the leader's pruned
-///    `log_start` catches up purely through `FetchSnapshot`, and not through log
-///    replication.
-///
-///    Topology: all three voters are configured up front, so an election can
-///    reach a majority, but the lagging node's engine starts LATE, on a fresh
-///    empty tempdir. The two timely voters, the leader and one follower, commit
-///    a burst of distinct metadata records larger than
-///    `snapshot_interval_records`. That forces the leader to write a checkpoint
-///    and prune its log, so its `log_start_offset` advances past 0. When the
-///    lagging node finally joins, its `LEO == 0 < leader.log_start`, so a
-///    `snapshot_id` answers its first Fetch. The engine then runs the
-///    `FetchSnapshot` loop, installs the snapshot, and resumes a normal Fetch
-///    from the snapshot boundary. The follower's published `MetadataImage` must
-///    converge to the leader's.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn lagging_follower_catches_up_via_snapshot() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim snapshot catchup: lagging follower catches up via snapshot"
+)]
+async fn bdd_verify_lagging_follower_catches_up_via_snapshot() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(500);
     // Snapshot after every 5 committed records past the last checkpoint.
@@ -237,16 +224,35 @@ async fn lagging_follower_catches_up_via_snapshot() {
     drop(dirs);
 }
 
-/// Every voter snapshots and prunes on its own (#364): a follower that never
-/// held leadership still checkpoints once the committed offset advances past
-/// `snapshot_interval_records`. `Fetch` and `FetchSnapshot` are both
-/// leader-only, as Kafka's `validateLeaderOnlyRequest` makes them, so the
-/// follower refuses a lagging peer's `Fetch` below its own log start, and a
-/// transfer of its own checkpoint, with `NOT_LEADER_OR_FOLLOWER` and names
-/// the leader. The leader stays up and reachable throughout, so this isolates
-/// the follower's own serve path from election/discovery timing.
+/// 5. KIP-630 snapshot catch-up, the snapshot catch-up acceptance case. A lagging controller
+///    follower whose own log is empty and far behind the leader's pruned
+///    `log_start` catches up purely through `FetchSnapshot`, and not through log
+///    replication.
+///
+///    Topology: all three voters are configured up front, so an election can
+///    reach a majority, but the lagging node's engine starts LATE, on a fresh
+///    empty tempdir. The two timely voters, the leader and one follower, commit
+///    a burst of distinct metadata records larger than
+///    `snapshot_interval_records`. That forces the leader to write a checkpoint
+///    and prune its log, so its `log_start_offset` advances past 0. When the
+///    lagging node finally joins, its `LEO == 0 < leader.log_start`, so a
+///    `snapshot_id` answers its first Fetch. The engine then runs the
+///    `FetchSnapshot` loop, installs the snapshot, and resumes a normal Fetch
+///    from the snapshot boundary. The follower's published `MetadataImage` must
+///    converge to the leader's.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
+    name = "lagging follower catches up via snapshot"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
+async fn lagging_follower_catches_up_via_snapshot() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim snapshot catchup: follower that pruned independently redirects a lagging fetch to the leader"
+)]
+async fn bdd_verify_follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
     let cid = uuid::Uuid::from_u128(501);
     let interval = 5u64;
     let (net, _ids, pair) = elected_pair_on_new_network(cid, interval).await;
@@ -365,23 +371,27 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     }
 }
 
-/// A `FetchSnapshot` that is mid-transfer when the serving node rolls to a
-/// newer checkpoint finishes on the id it started on (#365).
-///
-/// Before retention kept the previous checkpoint, the roll deleted the id
-/// under the reader: `load_checkpoint_by_id` missed, the leader answered
-/// `SNAPSHOT_NOT_FOUND` (98), and the reader dropped its reassembly and began
-/// again from position 0 against the newer id. A reader slower than one
-/// `metadata_snapshot_interval_records` never escapes that, which is exactly
-/// the reader snapshots exist for. Kafka has no reference count either — the
-/// previous snapshot simply stays until retention expires it.
-///
-/// The lagging peer here drives the wire directly, chunk by chunk, which is
-/// the same `FetchSnapshot` loop `Engine::on_fetch_snapshot_response` runs;
-/// stepping it by hand is what makes "the leader rolled between two chunks"
-/// exact rather than a race.
+/// Every voter snapshots and prunes on its own (#364): a follower that never
+/// held leadership still checkpoints once the committed offset advances past
+/// `snapshot_interval_records`. `Fetch` and `FetchSnapshot` are both
+/// leader-only, as Kafka's `validateLeaderOnlyRequest` makes them, so the
+/// follower refuses a lagging peer's `Fetch` below its own log start, and a
+/// transfer of its own checkpoint, with `NOT_LEADER_OR_FOLLOWER` and names
+/// the leader. The leader stays up and reachable throughout, so this isolates
+/// the follower's own serve path from election/discovery timing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
+    name = "follower that pruned independently redirects a lagging fetch to the leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
+async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim snapshot catchup: a snapshot fetch in flight survives the leader rolling to a new checkpoint"
+)]
+async fn bdd_verify_a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
     let (net, _ids, pair) = elected_pair_on_new_network(cid, interval).await;
@@ -532,3 +542,26 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
         }
     }
 }
+
+/// A `FetchSnapshot` that is mid-transfer when the serving node rolls to a
+/// newer checkpoint finishes on the id it started on (#365).
+///
+/// Before retention kept the previous checkpoint, the roll deleted the id
+/// under the reader: `load_checkpoint_by_id` missed, the leader answered
+/// `SNAPSHOT_NOT_FOUND` (98), and the reader dropped its reassembly and began
+/// again from position 0 against the newer id. A reader slower than one
+/// `metadata_snapshot_interval_records` never escapes that, which is exactly
+/// the reader snapshots exist for. Kafka has no reference count either — the
+/// previous snapshot simply stays until retention expires it.
+///
+/// The lagging peer here drives the wire directly, chunk by chunk, which is
+/// the same `FetchSnapshot` loop `Engine::on_fetch_snapshot_response` runs;
+/// stepping it by hand is what makes "the leader rolled between two chunks"
+/// exact rather than a race.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
+    name = "a snapshot fetch in flight survives the leader rolling to a new checkpoint"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {}

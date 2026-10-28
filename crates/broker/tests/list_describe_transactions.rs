@@ -219,8 +219,9 @@ async fn boot_with_ongoing_txn(tid: &str, topic: &str) -> OngoingTxn {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_returns_ongoing_txn() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("list describe transactions: list transactions returns ongoing txn")]
+async fn bdd_verify_list_transactions_returns_ongoing_txn() {
     let OngoingTxn {
         broker,
         bootstrap,
@@ -249,8 +250,19 @@ async fn list_transactions_returns_ongoing_txn() {
     teardown_test_txn(transaction, producer, broker).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "list transactions returns ongoing txn"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_state_filter_excludes_non_matching() {
+async fn list_transactions_returns_ongoing_txn() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list describe transactions: list transactions state filter excludes non matching"
+)]
+async fn bdd_verify_list_transactions_state_filter_excludes_non_matching() {
     let OngoingTxn {
         broker,
         bootstrap,
@@ -275,8 +287,19 @@ async fn list_transactions_state_filter_excludes_non_matching() {
     teardown_test_txn(transaction, producer, broker).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "list transactions state filter excludes non matching"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_transactions_reports_unknown_state_filters() {
+async fn list_transactions_state_filter_excludes_non_matching() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list describe transactions: list transactions reports unknown state filters"
+)]
+async fn bdd_verify_list_transactions_reports_unknown_state_filters() {
     let (broker, bootstrap, _dir) = boot_single().await;
 
     let client = admin_client(&bootstrap).await;
@@ -295,8 +318,19 @@ async fn list_transactions_reports_unknown_state_filters() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "list transactions reports unknown state filters"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_transactions_returns_full_state_for_known_tid() {
+async fn list_transactions_reports_unknown_state_filters() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list describe transactions: describe transactions returns full state for known tid"
+)]
+async fn bdd_verify_describe_transactions_returns_full_state_for_known_tid() {
     let OngoingTxn {
         broker,
         bootstrap,
@@ -337,8 +371,19 @@ async fn describe_transactions_returns_full_state_for_known_tid() {
     teardown_test_txn(transaction, producer, broker).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "describe transactions returns full state for known tid"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_transactions_returns_not_found_for_unknown_tid() {
+async fn describe_transactions_returns_full_state_for_known_tid() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list describe transactions: describe transactions returns not found for unknown tid"
+)]
+async fn bdd_verify_describe_transactions_returns_not_found_for_unknown_tid() {
     let (broker, bootstrap, _dir) = boot_single().await;
 
     let client = admin_client(&bootstrap).await;
@@ -353,6 +398,14 @@ async fn describe_transactions_returns_not_found_for_unknown_tid() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_describe_transactions.feature",
+    name = "describe transactions returns not found for unknown tid"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_transactions_returns_not_found_for_unknown_tid() {}
 
 /// Abort before closing, proving the guard released its owning producer reference.
 async fn abort_and_close(transaction: OwnedTransaction, producer: Arc<Producer>) {

@@ -209,8 +209,9 @@ mod tests {
         cfg
     }
 
-    #[test]
-    fn config_defaults_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: config defaults match kafka")]
+    fn bdd_verify_config_defaults_match_kafka() {
         let cfg = KafkaMetadataLogConfig::new("127.0.0.1:9092");
         check!(cfg.topic == METADATA_TOPIC);
         check!(cfg.num_partitions == 50);
@@ -228,8 +229,16 @@ mod tests {
         cfg.validate().unwrap();
     }
 
-    #[test]
-    fn config_accepts_custom_transport_policy() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: config defaults match kafka"
+    )]
+    fn config_defaults_match_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: config accepts custom transport policy")]
+    fn bdd_verify_config_accepts_custom_transport_policy() {
         let cfg = KafkaMetadataLogConfig {
             topic_create_timeout: secs(45),
             fetch_max_wait: millis(750),
@@ -247,74 +256,107 @@ mod tests {
         check!(cfg.event_queue_capacity.capacity() == 2048);
     }
 
-    #[yare::parameterized(
-        create_timeout_zero = {
-            "topic_create_timeout",
-            configured(|cfg| cfg.topic_create_timeout = Time::ZERO),
-        },
-        create_timeout_submillisecond = {
-            "topic_create_timeout",
-            configured(|cfg| cfg.topic_create_timeout = Time::from_micros(500)),
-        },
-        create_timeout_infinite = {
-            "topic_create_timeout",
-            configured(|cfg| cfg.topic_create_timeout = Time::from_secs_f64(f64::INFINITY)),
-        },
-        create_timeout_too_large = {
-            "topic_create_timeout",
-            configured(|cfg| cfg.topic_create_timeout = Time::from_millis(i64::from(i32::MAX) + 1)),
-        },
-        fetch_wait_zero = { "fetch_max_wait", configured(|cfg| cfg.fetch_max_wait = Time::ZERO) },
-        fetch_wait_submillisecond = {
-            "fetch_max_wait",
-            configured(|cfg| cfg.fetch_max_wait = Time::from_micros(500)),
-        },
-        fetch_wait_infinite = {
-            "fetch_max_wait",
-            configured(|cfg| cfg.fetch_max_wait = Time::from_secs_f64(f64::INFINITY)),
-        },
-        fetch_wait_too_large = {
-            "fetch_max_wait",
-            configured(|cfg| cfg.fetch_max_wait = Time::from_millis(i64::from(i32::MAX) + 1)),
-        },
-        fetch_bytes_zero = {
-            "fetch_max_bytes",
-            configured(|cfg| cfg.fetch_max_bytes = ByteSize::ZERO),
-        },
-        fetch_bytes_fractional = {
-            "fetch_max_bytes",
-            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(0.5)),
-        },
-        fetch_bytes_infinite = {
-            "fetch_max_bytes",
-            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(f64::INFINITY)),
-        },
-        fetch_bytes_too_large = {
-            "fetch_max_bytes",
-            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1)),
-        },
-        retry_backoff_zero = {
-            "fetch_retry_backoff",
-            configured(|cfg| cfg.fetch_retry_backoff = Time::ZERO),
-        },
-        retry_backoff_infinite = {
-            "fetch_retry_backoff",
-            configured(|cfg| cfg.fetch_retry_backoff = Time::from_secs_f64(f64::INFINITY)),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: config accepts custom transport policy"
     )]
-    fn config_rejects_invalid_transport_policy(field: &str, cfg: KafkaMetadataLogConfig) {
+    fn config_accepts_custom_transport_policy() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log config tests: config rejects invalid transport policy for {example}"
+    )]
+    fn bdd_verify_config_rejects_invalid_transport_policy(example: String) {
+        type Example<'a> = (&'a str, KafkaMetadataLogConfig);
+        let (field, cfg): Example<'_> = match example.as_str() {
+            "create timeout zero" => (
+                "topic_create_timeout",
+                configured(|cfg| cfg.topic_create_timeout = Time::ZERO),
+            ),
+            "create timeout submillisecond" => (
+                "topic_create_timeout",
+                configured(|cfg| cfg.topic_create_timeout = Time::from_micros(500)),
+            ),
+            "create timeout infinite" => (
+                "topic_create_timeout",
+                configured(|cfg| cfg.topic_create_timeout = Time::from_secs_f64(f64::INFINITY)),
+            ),
+            "create timeout too large" => (
+                "topic_create_timeout",
+                configured(|cfg| {
+                    cfg.topic_create_timeout = Time::from_millis(i64::from(i32::MAX) + 1);
+                }),
+            ),
+            "fetch wait zero" => (
+                "fetch_max_wait",
+                configured(|cfg| cfg.fetch_max_wait = Time::ZERO),
+            ),
+            "fetch wait submillisecond" => (
+                "fetch_max_wait",
+                configured(|cfg| cfg.fetch_max_wait = Time::from_micros(500)),
+            ),
+            "fetch wait infinite" => (
+                "fetch_max_wait",
+                configured(|cfg| cfg.fetch_max_wait = Time::from_secs_f64(f64::INFINITY)),
+            ),
+            "fetch wait too large" => (
+                "fetch_max_wait",
+                configured(|cfg| cfg.fetch_max_wait = Time::from_millis(i64::from(i32::MAX) + 1)),
+            ),
+            "fetch bytes zero" => (
+                "fetch_max_bytes",
+                configured(|cfg| cfg.fetch_max_bytes = ByteSize::ZERO),
+            ),
+            "fetch bytes fractional" => (
+                "fetch_max_bytes",
+                configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(0.5)),
+            ),
+            "fetch bytes infinite" => (
+                "fetch_max_bytes",
+                configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(f64::INFINITY)),
+            ),
+            "fetch bytes too large" => (
+                "fetch_max_bytes",
+                configured(|cfg| {
+                    cfg.fetch_max_bytes = ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1);
+                }),
+            ),
+            "retry backoff zero" => (
+                "fetch_retry_backoff",
+                configured(|cfg| cfg.fetch_retry_backoff = Time::ZERO),
+            ),
+            "retry backoff infinite" => (
+                "fetch_retry_backoff",
+                configured(|cfg| cfg.fetch_retry_backoff = Time::from_secs_f64(f64::INFINITY)),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let error = cfg.validate().expect_err("invalid policy must fail");
         assert2::assert!(error.contains(field), "field={field}, error={error}");
     }
 
-    #[yare::parameterized(
-        one = { Some(1), true },
-        two = { Some(2), true },
-        zero = { Some(0), false },
-        negative = { Some(-1), false },
-        unset_uses_cluster_default = { None, true },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: config rejects invalid transport policy"
     )]
-    fn min_isr_must_be_at_least_one(min_isr: Option<i32>, valid: bool) {
+    fn config_rejects_invalid_transport_policy(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: min isr must be at least one for {example}")]
+    fn bdd_verify_min_isr_must_be_at_least_one(example: String) {
+        type Example = (Option<i32>, bool);
+        let (min_isr, valid): Example = match example.as_str() {
+            "one" => (Some(1), true),
+            "two" => (Some(2), true),
+            "zero" => (Some(0), false),
+            "negative" => (Some(-1), false),
+            "unset uses cluster default" => (None, true),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let cfg = KafkaMetadataLogConfig {
             min_isr,
             ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
@@ -326,19 +368,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn metadata_event_queue_capacity_rejects_zero() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: min isr must be at least one"
+    )]
+    fn min_isr_must_be_at_least_one(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: metadata event queue capacity rejects zero")]
+    fn bdd_verify_metadata_event_queue_capacity_rejects_zero() {
         assert!(MetadataEventQueueCapacity::new(0).is_err());
         check!(MetadataEventQueueCapacity::new(1).unwrap().capacity() == 1);
     }
 
-    /// The metadata client's tunables are quantities, but they reach Kafka as
-    /// raw `int32` milliseconds and bytes. This test pins the wire images. A
-    /// wrong scale here is invisible in the types. It would show up only as a
-    /// metadata consumer that spins, when `max_wait` is too short, or that
-    /// truncates batches.
-    #[test]
-    fn client_tunables_convert_to_their_kafka_wire_images() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: metadata event queue capacity rejects zero"
+    )]
+    fn metadata_event_queue_capacity_rejects_zero() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log config tests: client tunables convert to their kafka wire images"
+    )]
+    fn bdd_verify_client_tunables_convert_to_their_kafka_wire_images() {
         let cfg = KafkaMetadataLogConfig::new("127.0.0.1:9092");
         check!(cfg.topic_create_timeout.millis_i32() == 30_000);
         check!(cfg.fetch_max_wait.millis_i32() == 500);
@@ -346,8 +401,21 @@ mod tests {
         check!(cfg.fetch_retry_backoff.to_std() == Duration::from_millis(200));
     }
 
-    #[test]
-    fn config_carries_client_resource_policy() {
+    /// The metadata client's tunables are quantities, but they reach Kafka as
+    /// raw `int32` milliseconds and bytes. This test pins the wire images. A
+    /// wrong scale here is invisible in the types. It would show up only as a
+    /// metadata consumer that spins, when `max_wait` is too short, or that
+    /// truncates batches.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: client tunables convert to their kafka wire images"
+    )]
+    fn client_tunables_convert_to_their_kafka_wire_images() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: config carries client resource policy")]
+    fn bdd_verify_config_carries_client_resource_policy() {
         let cfg = KafkaMetadataLogConfig {
             dispatch_queue_capacity: ConnectionDispatchQueueCapacity::new(7).unwrap(),
             frame_max: ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
@@ -357,8 +425,16 @@ mod tests {
         check!(cfg.frame_max.size() == krabka_units::kibibytes(32));
     }
 
-    #[test]
-    fn config_carries_security() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: config carries client resource policy"
+    )]
+    fn config_carries_client_resource_policy() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log config tests: config carries security")]
+    fn bdd_verify_config_carries_security() {
         use {
             krabka_client_core::security::{ClientSecurity, SaslCredentials},
             krabka_security::ListenerProtocol,
@@ -382,4 +458,11 @@ mod tests {
         };
         assert!(cfg.security.is_some());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/config.feature",
+        name = "tests: config carries security"
+    )]
+    fn config_carries_security() {}
 }

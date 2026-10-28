@@ -158,16 +158,11 @@ fn partition_lines(describe: &str) -> Vec<String> {
         .collect()
 }
 
-/// `kafka-topics --describe` must render the same partition line against
-/// krabka as it does against Apache Kafka, ELR columns included.
-///
-/// A healthy partition has no eligible-leader replicas, so both brokers send
-/// empty lists and the tool prints `Elr:` and `LastKnownElr:` with nothing
-/// after them. A null on either field would print `N/A` on the krabka side
-/// only, and this comparison would fail.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli elr columns: kafka topics describe renders the same elr columns as apache kafka"
+)]
+async fn bdd_verify_kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
     let container = format!("krabka-elr-columns-{}", process::id());
     let _ = Command::new("docker")
         .args(["rm", "-f", &container])
@@ -218,3 +213,19 @@ async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
 
     broker.shutdown().await;
 }
+
+/// `kafka-topics --describe` must render the same partition line against
+/// krabka as it does against Apache Kafka, ELR columns included.
+///
+/// A healthy partition has no eligible-leader replicas, so both brokers send
+/// empty lists and the tool prints `Elr:` and `LastKnownElr:` with nothing
+/// after them. A null on either field would print `N/A` on the krabka side
+/// only, and this comparison would fail.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/elr_columns.feature",
+    name = "kafka topics describe renders the same elr columns as apache kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {}

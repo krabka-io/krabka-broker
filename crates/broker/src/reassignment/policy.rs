@@ -262,11 +262,11 @@ mod tests {
         assert!(new == vec![da, uuid::Uuid::nil()]);
     }
 
-    /// One row per branch of Kafka's `maybeCompleteReassignment`. The
-    /// replicas are the union a reassignment in flight carries: the target
-    /// followed by the removing replicas.
-    #[test]
-    fn maybe_complete_reassignment_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "reassignment policy tests: maybe complete reassignment follows kafka"
+    )]
+    fn bdd_verify_maybe_complete_reassignment_follows_kafka() {
         struct Case {
             name: &'static str,
             replicas: &'static [u64],
@@ -380,6 +380,16 @@ mod tests {
             assert!(got == expected, "{name}");
         }
     }
+
+    /// One row per branch of Kafka's `maybeCompleteReassignment`. The
+    /// replicas are the union a reassignment in flight carries: the target
+    /// followed by the removing replicas.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/reassignment/policy.feature",
+        name = "tests: maybe complete reassignment follows kafka"
+    )]
+    fn maybe_complete_reassignment_follows_kafka() {}
 
     /// A replication factor decrease completes only once every target replica
     /// is in the ISR, as in Kafka, where the change that completes it is the

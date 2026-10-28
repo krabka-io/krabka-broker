@@ -647,13 +647,11 @@ fn identity_group() -> GroupState {
     state
 }
 
-/// Kafka's KIP-848 identity rules for `ConsumerGroupHeartbeat`
-/// (`GroupMetadataManager.consumerGroupHeartbeat`, `consumerGroupLeave`,
-/// `throwIfConsumerGroupMemberEpochIsInvalid`, the instance checks and
-/// `getOrMaybeSubscribeStaticConsumerGroupMember`). Each row starts from
-/// [`identity_group`] and compares the whole response and the members after.
-#[test]
-fn heartbeat_identity_rules_follow_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified actor heartbeat tests: heartbeat identity rules follow kafka"
+)]
+fn bdd_verify_heartbeat_identity_rules_follow_kafka() {
     let config = NextGenConfig::assigning_at_once();
     let metadata = StaticMetadata {
         input: ReconcileInput {
@@ -719,6 +717,18 @@ fn heartbeat_identity_rules_follow_kafka() {
         );
     }
 }
+
+/// Kafka's KIP-848 identity rules for `ConsumerGroupHeartbeat`
+/// (`GroupMetadataManager.consumerGroupHeartbeat`, `consumerGroupLeave`,
+/// `throwIfConsumerGroupMemberEpochIsInvalid`, the instance checks and
+/// `getOrMaybeSubscribeStaticConsumerGroupMember`). Each row starts from
+/// [`identity_group`] and compares the whole response and the members after.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "heartbeat identity rules follow kafka"
+)]
+fn heartbeat_identity_rules_follow_kafka() {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MemberRecordKind {
@@ -1079,15 +1089,11 @@ fn step_heartbeat_first_join_targets_all_partitions() {
     );
 }
 
-/// Kafka's `getOrMaybeCreateConsumerGroup` for a heartbeat that meets a
-/// classic group: (label, policy, classic group members, protocol type,
-/// heartbeat epoch) to (error code, error message, classic k2 tombstone
-/// written). An empty classic group, such as one that only holds committed
-/// offsets, is replaced whatever the policy and protocol type; a non-empty
-/// one goes through `validateOnlineUpgrade`; only a joining heartbeat may
-/// create a consumer group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified actor heartbeat tests: a heartbeat replaces or upgrades a classic group as kafka does"
+)]
+async fn bdd_verify_a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
     use crate::coordinator::unified::{
         classic_state::ClassicGroup as ClassicState,
         config::ConsumerGroupMigrationPolicy as Policy,
@@ -1177,6 +1183,21 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
         check!(got == want, "{label}");
     }
 }
+
+/// Kafka's `getOrMaybeCreateConsumerGroup` for a heartbeat that meets a
+/// classic group: (label, policy, classic group members, protocol type,
+/// heartbeat epoch) to (error code, error message, classic k2 tombstone
+/// written). An empty classic group, such as one that only holds committed
+/// offsets, is replaced whatever the policy and protocol type; a non-empty
+/// one goes through `validateOnlineUpgrade`; only a joining heartbeat may
+/// create a consumer group.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/actor/heartbeat/tests.feature",
+    name = "a heartbeat replaces or upgrades a classic group as kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {}
 
 /// Independent success expectation for both partitions of the fixture topic.
 fn identity_ok_two_partitions() -> ConsumerGroupHeartbeatResponse {

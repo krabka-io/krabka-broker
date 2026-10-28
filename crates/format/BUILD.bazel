@@ -18,7 +18,7 @@ crate_binary(
 )
 
 crate_tests(
-    compile_data = ["tests/fixtures/bootstrap.records.bin"],
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]) + ["tests/fixtures/bootstrap.records.bin"],
     # `format_smoke` runs the binary and reads back what it wrote.
     data = [":krabka-format"],
     env = {"CARGO_BIN_EXE_krabka-format": "$(rootpath :krabka-format)"},

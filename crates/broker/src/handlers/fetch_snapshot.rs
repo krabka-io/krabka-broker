@@ -260,10 +260,11 @@ mod tests {
         handle.shutdown().await;
     }
 
-    /// The broker listener answers as Kafka's `handleFetchSnapshotRequest`
-    /// does: exactly the named snapshot, and the refusals of its order.
-    #[tokio::test]
-    async fn the_broker_listener_answers_as_kafkas_raft_client_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers fetch snapshot tests: the broker listener answers as kafkas raft client does"
+    )]
+    async fn bdd_verify_the_broker_listener_answers_as_kafkas_raft_client_does() {
         let version = fetch_snapshot_response::MAX_VERSION;
         let HandlerStartedBroker {
             broker: handle,
@@ -437,6 +438,16 @@ mod tests {
         }
         handle.shutdown().await;
     }
+
+    /// The broker listener answers as Kafka's `handleFetchSnapshotRequest`
+    /// does: exactly the named snapshot, and the refusals of its order.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/fetch_snapshot.feature",
+        name = "tests: the broker listener answers as kafkas raft client does"
+    )]
+    #[tokio::test]
+    async fn the_broker_listener_answers_as_kafkas_raft_client_does() {}
 
     /// A broker-only observer keeps no metadata log, so it answers without
     /// asking an engine.

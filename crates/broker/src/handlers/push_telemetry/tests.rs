@@ -204,18 +204,29 @@ impl Client<'_> {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers push telemetry tests: push after get follows kafkas payload checks"
+)]
+async fn bdd_verify_push_after_get_follows_kafkas_payload_checks() {
+    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
+        push_after_get_checks(unstable).await;
+    }
+}
+
 /// One push after a `GetTelemetrySubscriptions`, with `telemetry.max.bytes`
 /// at 1024. Kafka's `CompressionType.forId` takes 0 to 4 only. A payload that
 /// decompresses past `telemetry.max.bytes` is `INVALID_RECORD` on 4.3.1, which
 /// stops the Java client's telemetry, and the retriable `TELEMETRY_TOO_LARGE`
 /// on trunk (KAFKA-21076), which `unstable.api.versions.enable` selects
 /// (#693, #1246).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/push_telemetry/tests.feature",
+    name = "push after get follows kafkas payload checks"
+)]
 #[tokio::test]
-async fn push_after_get_follows_kafkas_payload_checks() {
-    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
-        push_after_get_checks(unstable).await;
-    }
-}
+async fn push_after_get_follows_kafkas_payload_checks() {}
 
 async fn push_after_get_checks(unstable: UnstableApiVersions) {
     let HandlerStartedBroker {

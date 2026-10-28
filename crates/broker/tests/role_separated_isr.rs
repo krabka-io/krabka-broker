@@ -108,8 +108,11 @@ fn sorted_isr(cluster: &RoleSeparated, topic: &str) -> Vec<u64> {
     isr
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_only() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separated isr: a restarted follower rejoins the isr when the controller is controller only"
+)]
+async fn bdd_verify_a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_only() {
     support::init_tracing();
     let topic = "rolesep-isr";
     let mut cluster = start_role_separated().await;
@@ -152,3 +155,11 @@ async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_
 
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separated_isr.feature",
+    name = "a restarted follower rejoins the isr when the controller is controller only"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restarted_follower_rejoins_the_isr_when_the_controller_is_controller_only() {}

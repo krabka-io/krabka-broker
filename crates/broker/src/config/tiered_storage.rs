@@ -197,8 +197,11 @@ mod tests {
         assert!(matches!(c.remote_log_metadata, RlmmKind::InMemory));
     }
 
-    #[test]
-    fn kafka_rlmm_config_default_has_sane_topic_settings() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tiered storage tests: kafka rlmm config default has sane topic settings"
+    )]
+    fn bdd_verify_kafka_rlmm_config_default_has_sane_topic_settings() {
         let c = KafkaRlmmConfig::default();
         check!(c.num_partitions == 50);
         check!(c.replication == 3);
@@ -215,8 +218,18 @@ mod tests {
         c.validate().unwrap();
     }
 
-    #[test]
-    fn kafka_rlmm_config_validates_transport_and_snapshot_policy() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/tiered_storage.feature",
+        name = "tests: kafka rlmm config default has sane topic settings"
+    )]
+    fn kafka_rlmm_config_default_has_sane_topic_settings() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tiered storage tests: kafka rlmm config validates transport and snapshot policy"
+    )]
+    fn bdd_verify_kafka_rlmm_config_validates_transport_and_snapshot_policy() {
         let valid = KafkaRlmmConfig {
             topic_create_timeout: secs(45),
             fetch_max_wait: millis(750),
@@ -255,6 +268,13 @@ mod tests {
         }
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/tiered_storage.feature",
+        name = "tests: kafka rlmm config validates transport and snapshot policy"
+    )]
+    fn kafka_rlmm_config_validates_transport_and_snapshot_policy() {}
+
     #[test]
     fn broker_validation_rejects_invalid_topic_metadata_policy() {
         let config = BrokerConfig {
@@ -271,8 +291,11 @@ mod tests {
         assert!(error.to_string().contains("fetch_max_bytes"), "{error}");
     }
 
-    #[test]
-    fn kafka_rlmm_config_carries_snapshot_settings() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tiered storage tests: kafka rlmm config carries snapshot settings"
+    )]
+    fn bdd_verify_kafka_rlmm_config_carries_snapshot_settings() {
         let c = KafkaRlmmConfig {
             bootstrap: "127.0.0.1:9092".into(),
             snapshot_interval: minutes(1),
@@ -283,8 +306,18 @@ mod tests {
         assert!(c.snapshot_dir == PathBuf::from("/data/remote-log-metadata"));
     }
 
-    #[test]
-    fn kafka_rlmm_config_carries_optional_security() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/tiered_storage.feature",
+        name = "tests: kafka rlmm config carries snapshot settings"
+    )]
+    fn kafka_rlmm_config_carries_snapshot_settings() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tiered storage tests: kafka rlmm config carries optional security"
+    )]
+    fn bdd_verify_kafka_rlmm_config_carries_optional_security() {
         let c = KafkaRlmmConfig {
             bootstrap: "127.0.0.1:9092".into(),
             num_partitions: 1,
@@ -294,6 +327,13 @@ mod tests {
         };
         assert!(c.security.is_none());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/tiered_storage.feature",
+        name = "tests: kafka rlmm config carries optional security"
+    )]
+    fn kafka_rlmm_config_carries_optional_security() {}
 
     #[test]
     fn worm_without_an_object_store_backend_is_rejected_by_validate() {

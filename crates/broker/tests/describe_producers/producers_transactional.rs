@@ -24,8 +24,11 @@ use {
     },
 };
 
-#[tokio::test]
-async fn transactional_fields_follow_open_and_completed_transactions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers transactional: transactional fields follow open and completed transactions"
+)]
+async fn bdd_verify_transactional_fields_follow_open_and_completed_transactions() {
     let p = support::start().await;
     create_topic(&p.client, "transactions").await;
     let topic_id = topic_id_for(&p.client, "transactions").await;
@@ -107,6 +110,14 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_transactional.feature",
+    name = "transactional fields follow open and completed transactions"
+)]
+#[tokio::test]
+async fn transactional_fields_follow_open_and_completed_transactions() {}
 
 /// The transaction fields one active producer reports.
 struct TransactionState {

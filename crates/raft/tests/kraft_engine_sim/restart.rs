@@ -9,11 +9,9 @@ use {
     tokio::time,
 };
 
-/// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
-///    dir, then assert that the image is rebuilt from the checkpoint and the
-///    log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn restart_recovers_image() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft engine sim restart: restart recovers image")]
+async fn bdd_verify_restart_recovers_image() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(400);
 
@@ -62,3 +60,14 @@ async fn restart_recovers_image() {
 
     shutdown_nodes(&net, &ids).await;
 }
+
+/// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
+///    dir, then assert that the image is rebuilt from the checkpoint and the
+///    log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/restart.feature",
+    name = "restart recovers image"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_recovers_image() {}

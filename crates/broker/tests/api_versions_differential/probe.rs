@@ -98,18 +98,35 @@ mod tests {
             .expect("spawn sh")
     }
 
-    #[yare::parameterized(
-        success = { "exit 0", true },
-        failure = { "exit 3", false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: a child that exits in time reports its status for {example}"
     )]
-    fn a_child_that_exits_in_time_reports_its_status(script: &str, expected_success: bool) {
+    fn bdd_verify_a_child_that_exits_in_time_reports_its_status(example: String) {
+        type Example<'a> = (&'a str, bool);
+        let (script, expected_success): Example<'_> = match example.as_str() {
+            "success" => ("exit 0", true),
+            "failure" => ("exit 3", false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let mut child = spawn(script);
         let status = wait_bounded(&mut child, Duration::from_secs(30));
         assert2::assert!(status.map(|status| status.success()) == Some(expected_success));
     }
 
-    #[test]
-    fn a_child_that_outruns_its_budget_is_killed_and_reaped() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: a child that exits in time reports its status"
+    )]
+    fn a_child_that_exits_in_time_reports_its_status(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: a child that outruns its budget is killed and reaped"
+    )]
+    fn bdd_verify_a_child_that_outruns_its_budget_is_killed_and_reaped() {
         let mut child = spawn("sleep 300");
         let started = Instant::now();
         let status = wait_bounded(&mut child, Duration::from_millis(200));
@@ -122,8 +139,18 @@ mod tests {
         assert!(child.try_wait().expect("wait on child process").is_some());
     }
 
-    #[test]
-    fn a_zero_budget_still_reports_a_child_that_has_already_exited() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: a child that outruns its budget is killed and reaped"
+    )]
+    fn a_child_that_outruns_its_budget_is_killed_and_reaped() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: a zero budget still reports a child that has already exited"
+    )]
+    fn bdd_verify_a_zero_budget_still_reports_a_child_that_has_already_exited() {
         let mut child = spawn("exit 0");
         child.wait().expect("wait on child process");
 
@@ -132,8 +159,18 @@ mod tests {
         assert!(status.map(|status| status.success()) == Some(true));
     }
 
-    #[test]
-    fn readiness_stops_at_the_first_ready_probe() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: a zero budget still reports a child that has already exited"
+    )]
+    fn a_zero_budget_still_reports_a_child_that_has_already_exited() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: readiness stops at the first ready probe"
+    )]
+    fn bdd_verify_readiness_stops_at_the_first_ready_probe() {
         let mut seen = 0;
         let attempts = retry_until(Duration::from_secs(30), Duration::ZERO, |_| {
             seen += 1;
@@ -144,8 +181,18 @@ mod tests {
         assert!(seen == 3);
     }
 
-    #[test]
-    fn a_probe_that_blocks_cannot_outlive_the_deadline() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: readiness stops at the first ready probe"
+    )]
+    fn readiness_stops_at_the_first_ready_probe() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: a probe that blocks cannot outlive the deadline"
+    )]
+    fn bdd_verify_a_probe_that_blocks_cannot_outlive_the_deadline() {
         let budget = Duration::from_millis(300);
         let started = Instant::now();
         // The probe spends every bit of budget it is handed and never reports
@@ -162,8 +209,18 @@ mod tests {
         assert!(elapsed < budget * 10);
     }
 
-    #[test]
-    fn a_probe_that_never_reports_ready_gives_up_at_the_deadline() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: a probe that blocks cannot outlive the deadline"
+    )]
+    fn a_probe_that_blocks_cannot_outlive_the_deadline() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential probe tests: a probe that never reports ready gives up at the deadline"
+    )]
+    fn bdd_verify_a_probe_that_never_reports_ready_gives_up_at_the_deadline() {
         let started = Instant::now();
         let attempts = retry_until(
             Duration::from_millis(200),
@@ -176,4 +233,11 @@ mod tests {
         assert!(elapsed >= Duration::from_millis(200));
         assert!(elapsed < Duration::from_secs(30));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/probe.feature",
+        name = "tests: a probe that never reports ready gives up at the deadline"
+    )]
+    fn a_probe_that_never_reports_ready_gives_up_at_the_deadline() {}
 }

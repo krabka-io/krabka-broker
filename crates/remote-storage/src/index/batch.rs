@@ -265,61 +265,66 @@ mod tests {
     /// value behind its two-byte length, and no headers.
     const LARGE: usize = 1_007;
 
-    /// Kafka's `RemoteLogManager.lookupTimestamp` decompresses a batch only when
-    /// its max timestamp and its last offset reach the lookup's, and holds each
-    /// record it reads to the limit. A batch the producer did not compress is
-    /// never held to it.
-    #[yare::parameterized(
-        found_before_oversized_batch = {
-            krabka_compression::CompressionType::Gzip,
-            10,
-            1_000,
-            Some(100),
-            Ok(Some((10, 1_000))),
-        },
-        oversized_record_is_match = {
-            krabka_compression::CompressionType::Gzip,
-            10,
-            1_100,
-            Some(100),
-            Err(LARGE),
-        },
-        oversized_record_before_match = {
-            krabka_compression::CompressionType::Gzip,
-            10,
-            1_200,
-            Some(100),
-            Err(LARGE),
-        },
-        batch_below_offset_floor = {
-            krabka_compression::CompressionType::Gzip,
-            13,
-            1_100,
-            Some(100),
-            Ok(None),
-        },
-        no_limit = {
-            krabka_compression::CompressionType::Gzip,
-            10,
-            1_100,
-            None,
-            Ok(Some((11, 1_100))),
-        },
-        uncompressed_batch = {
-            krabka_compression::CompressionType::None,
-            10,
-            1_100,
-            Some(100),
-            Ok(Some((11, 1_100))),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "index batch tests: first record at or after timestamp refuses only the records kafka reads for {example}"
     )]
-    fn first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(
-        codec: krabka_compression::CompressionType,
-        floor_offset: i64,
-        target: i64,
-        limit: Option<usize>,
-        want: Result<Option<(i64, i64)>, usize>,
+    fn bdd_verify_first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(
+        example: String,
     ) {
+        type Example = (
+            krabka_compression::CompressionType,
+            i64,
+            i64,
+            Option<usize>,
+            Result<Option<(i64, i64)>, usize>,
+        );
+        let (codec, floor_offset, target, limit, want): Example = match example.as_str() {
+            "found before oversized batch" => (
+                krabka_compression::CompressionType::Gzip,
+                10,
+                1_000,
+                Some(100),
+                Ok(Some((10, 1_000))),
+            ),
+            "oversized record is match" => (
+                krabka_compression::CompressionType::Gzip,
+                10,
+                1_100,
+                Some(100),
+                Err(LARGE),
+            ),
+            "oversized record before match" => (
+                krabka_compression::CompressionType::Gzip,
+                10,
+                1_200,
+                Some(100),
+                Err(LARGE),
+            ),
+            "batch below offset floor" => (
+                krabka_compression::CompressionType::Gzip,
+                13,
+                1_100,
+                Some(100),
+                Ok(None),
+            ),
+            "no limit" => (
+                krabka_compression::CompressionType::Gzip,
+                10,
+                1_100,
+                None,
+                Ok(Some((11, 1_100))),
+            ),
+            "uncompressed batch" => (
+                krabka_compression::CompressionType::None,
+                10,
+                1_100,
+                Some(100),
+                Ok(Some((11, 1_100))),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let layout = |codec| {
             encoded(&[
                 sized_batch_at(10, &[sized(1_000, 10)], codec),
@@ -336,5 +341,18 @@ mod tests {
                 Err(other) => panic!("unexpected error: {other}"),
             };
         assert2::assert!(got == want);
+    }
+
+    /// Kafka's `RemoteLogManager.lookupTimestamp` decompresses a batch only when
+    /// its max timestamp and its last offset reach the lookup's, and holds each
+    /// record it reads to the limit. A batch the producer did not compress is
+    /// never held to it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/index/batch.feature",
+        name = "tests: first record at or after timestamp refuses only the records kafka reads"
+    )]
+    fn first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(example: String) {
+        let _ = example;
     }
 }

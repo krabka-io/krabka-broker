@@ -30,11 +30,11 @@ fn preferred_partition_view(isr: BTreeSet<u64>) -> PartitionView {
     }
 }
 
-/// Placement pins the partition to the preferred site: `replicas[0]` is the
-/// `site-a` broker and it is the leader, with the other data site and the
-/// witness in the ISR behind it. `acks=all` commits with all three sites up.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preferred_site_holds_replicas_zero_and_the_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "stretch cluster site loss: preferred site holds replicas zero and the leader"
+)]
+async fn bdd_verify_preferred_site_holds_replicas_zero_and_the_leader() {
     let _guard = cluster_lock().lock().await;
     let (cluster, topic_id) = cluster_with_topic().await;
 
@@ -56,15 +56,22 @@ async fn preferred_site_holds_replicas_zero_and_the_leader() {
     cluster.shutdown().await;
 }
 
-/// **The headline claim.** Losing a whole *data* site leaves one data replica
-/// and the witness. The witness is a full ISR member, so the in-sync set is
-/// still two — `min.insync.replicas` — and `acks=all` keeps committing.
-///
-/// This is the property the witness role exists for. Without a data-bearing
-/// witness the ISR would drop to one member here and every `acks=all` write
-/// would be refused for as long as the site was down.
+/// Placement pins the partition to the preferred site: `replicas[0]` is the
+/// `site-a` broker and it is the leader, with the other data site and the
+/// witness in the ISR behind it. `acks=all` commits with all three sites up.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/stretch_cluster/site_loss.feature",
+    name = "preferred site holds replicas zero and the leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_survives_the_loss_of_the_non_preferred_data_site() {
+async fn preferred_site_holds_replicas_zero_and_the_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "stretch cluster site loss: acks all survives the loss of the non preferred data site"
+)]
+async fn bdd_verify_acks_all_survives_the_loss_of_the_non_preferred_data_site() {
     let _guard = cluster_lock().lock().await;
     let (mut cluster, topic_id) = cluster_with_topic().await;
 
@@ -100,6 +107,21 @@ async fn acks_all_survives_the_loss_of_the_non_preferred_data_site() {
     cluster.shutdown().await;
 }
 
+/// **The headline claim.** Losing a whole *data* site leaves one data replica
+/// and the witness. The witness is a full ISR member, so the in-sync set is
+/// still two — `min.insync.replicas` — and `acks=all` keeps committing.
+///
+/// This is the property the witness role exists for. Without a data-bearing
+/// witness the ISR would drop to one member here and every `acks=all` write
+/// would be refused for as long as the site was down.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/stretch_cluster/site_loss.feature",
+    name = "acks all survives the loss of the non preferred data site"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_survives_the_loss_of_the_non_preferred_data_site() {}
+
 /// One case of the site-loss table: which site is lost, and what the survivors
 /// must do afterwards.
 struct SiteLossCase {
@@ -115,15 +137,11 @@ struct SiteLossCase {
     write_to: usize,
 }
 
-/// The remaining single-site losses, which differ only by which site goes down.
-///
-/// * The witness site is lost: the two data replicas are still in sync, so the
-///   ISR is two and writes continue.
-/// * The preferred data site is lost: leadership moves to the **other data
-///   site**, never to the witness, and writes continue there against an ISR of
-///   the surviving data replica plus the witness.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_single_site_loss_keeps_acks_all_committing() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "stretch cluster site loss: a single site loss keeps acks all committing"
+)]
+async fn bdd_verify_a_single_site_loss_keeps_acks_all_committing() {
     let _guard = cluster_lock().lock().await;
 
     for case in [
@@ -170,15 +188,26 @@ async fn a_single_site_loss_keeps_acks_all_committing() {
     }
 }
 
-/// Losing **both** data sites is beyond what the topology promises. The
-/// witness holds every committed record, but it serves no client and it never
-/// leads: the partition has no leader a client can write to, and the witness
-/// refuses the write outright rather than electing itself.
+/// The remaining single-site losses, which differ only by which site goes down.
 ///
-/// Refusing is the safe answer. A witness that took leadership here would be
-/// serving clients from a node the deployment sized for neither.
+/// * The witness site is lost: the two data replicas are still in sync, so the
+///   ISR is two and writes continue.
+/// * The preferred data site is lost: leadership moves to the **other data
+///   site**, never to the witness, and writes continue there against an ISR of
+///   the surviving data replica plus the witness.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/stretch_cluster/site_loss.feature",
+    name = "a single site loss keeps acks all committing"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes() {
+async fn a_single_site_loss_keeps_acks_all_committing() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "stretch cluster site loss: both data sites down leaves no leader and the witness refuses writes"
+)]
+async fn bdd_verify_both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes() {
     let _guard = cluster_lock().lock().await;
     let (mut cluster, topic_id) = cluster_with_topic().await;
 
@@ -205,3 +234,18 @@ async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes() 
 
     cluster.shutdown().await;
 }
+
+/// Losing **both** data sites is beyond what the topology promises. The
+/// witness holds every committed record, but it serves no client and it never
+/// leads: the partition has no leader a client can write to, and the witness
+/// refuses the write outright rather than electing itself.
+///
+/// Refusing is the safe answer. A witness that took leadership here would be
+/// serving clients from a node the deployment sized for neither.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/stretch_cluster/site_loss.feature",
+    name = "both data sites down leaves no leader and the witness refuses writes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes() {}

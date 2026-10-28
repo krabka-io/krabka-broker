@@ -514,14 +514,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka creates a streams group only on a join, and answers
-    /// `GROUP_ID_NOT_FOUND` to a heartbeat or a leave for a group that does not
-    /// exist and to any heartbeat for a group of another type
-    /// (`getOrCreateStreamsGroup`, `getStreamsGroupOrThrow`, `streamsGroup`).
-    /// Each row sends one request for its own group id, compares the whole
-    /// response, and checks whether a streams group exists afterwards.
-    #[tokio::test]
-    async fn handle_finds_or_creates_the_streams_group_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers streams group heartbeat tests: handle finds or creates the streams group as kafka does"
+    )]
+    async fn bdd_verify_handle_finds_or_creates_the_streams_group_as_kafka_does() {
         use crate::coordinator::unified::{
             actor::GroupKindTag, streams::actor::response::error_resp,
         };
@@ -585,6 +582,20 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// Kafka creates a streams group only on a join, and answers
+    /// `GROUP_ID_NOT_FOUND` to a heartbeat or a leave for a group that does not
+    /// exist and to any heartbeat for a group of another type
+    /// (`getOrCreateStreamsGroup`, `getStreamsGroupOrThrow`, `streamsGroup`).
+    /// Each row sends one request for its own group id, compares the whole
+    /// response, and checks whether a streams group exists afterwards.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/streams_group_heartbeat.feature",
+        name = "tests: handle finds or creates the streams group as kafka does"
+    )]
+    #[tokio::test]
+    async fn handle_finds_or_creates_the_streams_group_as_kafka_does() {}
 
     /// Kafka's `GroupCoordinatorService` refuses an invalid request before the
     /// coordinator runs it, so the response carries only the error and the

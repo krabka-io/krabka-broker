@@ -249,9 +249,9 @@ fn alter_feature(verb: &str, spec: &str) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_features_describe_and_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm features: kafka features describe and round trip")]
+async fn bdd_verify_kafka_features_describe_and_round_trip() {
     let StartedBroker { handle, dir: _dir } = start_host_broker().await;
 
     // 1. describe — Krabka advertises + finalizes the feature surface.
@@ -411,21 +411,18 @@ async fn kafka_features_describe_and_round_trip() {
     handle.shutdown().await;
 }
 
-/// KIP-966: `eligible.leader.replicas.version` is a row the stock tool can
-/// describe, disable and enable.
-///
-/// `kafka-features describe` lists every feature the broker advertises in
-/// `ApiVersions.supported_features`. A fresh cluster bootstraps at
-/// `4.3-IV0`, and `ELRV_1` bootstraps at 4.1-IV0, so the row starts finalized
-/// at 1, as it does on a freshly formatted Kafka 4.3 cluster. An operator then
-/// turns it off with `downgrade` and on again with `upgrade`, which is what a
-/// runbook or a Terraform apply that pins the flag does. The broker-side
-/// effect of each level (the controller publishing or clearing ELR) is pinned
-/// by the in-process tests; this case pins that the JVM tool can drive it at
-/// all, which is the bug the row's absence caused.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn kafka_features_describes_and_round_trips_elr() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_features.feature",
+    name = "kafka features describe and round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_features_describe_and_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm features: kafka features describes and round trips elr")]
+async fn bdd_verify_kafka_features_describes_and_round_trips_elr() {
     const ELR: &str = "eligible.leader.replicas.version";
 
     let StartedBroker { handle, dir: _dir } = start_host_broker().await;
@@ -458,3 +455,24 @@ async fn kafka_features_describes_and_round_trips_elr() {
 
     handle.shutdown().await;
 }
+
+/// KIP-966: `eligible.leader.replicas.version` is a row the stock tool can
+/// describe, disable and enable.
+///
+/// `kafka-features describe` lists every feature the broker advertises in
+/// `ApiVersions.supported_features`. A fresh cluster bootstraps at
+/// `4.3-IV0`, and `ELRV_1` bootstraps at 4.1-IV0, so the row starts finalized
+/// at 1, as it does on a freshly formatted Kafka 4.3 cluster. An operator then
+/// turns it off with `downgrade` and on again with `upgrade`, which is what a
+/// runbook or a Terraform apply that pins the flag does. The broker-side
+/// effect of each level (the controller publishing or clearing ELR) is pinned
+/// by the in-process tests; this case pins that the JVM tool can drive it at
+/// all, which is the bug the row's absence caused.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_features.feature",
+    name = "kafka features describes and round trips elr"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_features_describes_and_round_trips_elr() {}

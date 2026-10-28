@@ -167,13 +167,11 @@ async fn wait_for_the_topic_config(broker: &BrokerHandle) {
         .await;
 }
 
-/// An idempotent producer writes keys `a` and `b`, and a client with no
-/// idempotence then writes both keys again, so compaction removes every
-/// record of the producer. Each replica compacts its own log. Every replica
-/// keeps the last batch of the producer as an empty batch, which holds the
-/// sequence of the producer for a later leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication compaction replicas: every replica keeps the last batch of an active producer"
+)]
+async fn bdd_verify_every_replica_keeps_the_last_batch_of_an_active_producer() {
     let _g = cluster_lock().lock().await;
     let cluster = registered_cluster(3).await;
 
@@ -261,3 +259,16 @@ async fn every_replica_keeps_the_last_batch_of_an_active_producer() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// An idempotent producer writes keys `a` and `b`, and a client with no
+/// idempotence then writes both keys again, so compaction removes every
+/// record of the producer. Each replica compacts its own log. Every replica
+/// keeps the last batch of the producer as an empty batch, which holds the
+/// sequence of the producer for a later leader.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication/compaction_replicas.feature",
+    name = "every replica keeps the last batch of an active producer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_replica_keeps_the_last_batch_of_an_active_producer() {}

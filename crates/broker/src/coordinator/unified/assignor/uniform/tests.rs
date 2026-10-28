@@ -169,15 +169,25 @@ fn sizes(actual: &Assignment) -> Vec<usize> {
     sizes
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: homogeneous builder matches kafka scenarios"
+)]
+fn bdd_verify_homogeneous_builder_matches_kafka_scenarios() {
+    run(homogeneous_rows_early());
+    run(homogeneous_rows_late());
+}
+
 /// `UniformHomogeneousAssignmentBuilderTest`, with exact expected
 /// assignments. Kafka's homogeneous builder walks topics in `HashSet` order.
 /// Here topics go in ascending ID order, so each row numbers its topics to
 /// reproduce the order Kafka's expectation was computed in.
-#[test]
-fn homogeneous_builder_matches_kafka_scenarios() {
-    run(homogeneous_rows_early());
-    run(homogeneous_rows_late());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "homogeneous builder matches kafka scenarios"
+)]
+fn homogeneous_builder_matches_kafka_scenarios() {}
 
 #[bon::builder]
 fn empty_homogeneous_assignment(
@@ -310,14 +320,24 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
     ]
 }
 
-/// `UniformHeterogeneousAssignmentBuilderTest`, with exact expected
-/// assignments. Topic IDs rank topic1 < topic2 < topic3 < topic4, as Kafka's
-/// test IDs do.
-#[test]
-fn heterogeneous_builder_matches_kafka_scenarios() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: heterogeneous builder matches kafka scenarios"
+)]
+fn bdd_verify_heterogeneous_builder_matches_kafka_scenarios() {
     run(heterogeneous_rows_early());
     run(heterogeneous_rows_late());
 }
+
+/// `UniformHeterogeneousAssignmentBuilderTest`, with exact expected
+/// assignments. Topic IDs rank topic1 < topic2 < topic3 < topic4, as Kafka's
+/// test IDs do.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "heterogeneous builder matches kafka scenarios"
+)]
+fn heterogeneous_builder_matches_kafka_scenarios() {}
 
 fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
     let (t1, t2, t3) = (tid(1), tid(2), tid(3));
@@ -476,11 +496,11 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
     ]
 }
 
-/// The review scenario: member A sits in rack r1, member B in r2, and every
-/// replica of the topic's four partitions is in r1. Kafka's uniform
-/// assignor does not read racks, so each member gets two partitions.
-#[test]
-fn replica_racks_do_not_outrank_balance() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: replica racks do not outrank balance"
+)]
+fn bdd_verify_replica_racks_do_not_outrank_balance() {
     let topic = tid(1);
     let members = vec![
         MemberSubscription {
@@ -522,11 +542,21 @@ fn replica_racks_do_not_outrank_balance() {
     }
 }
 
-/// A group whose type says homogeneous but whose resolved subscriptions
-/// differ runs the heterogeneous builder, so no member receives a topic it
-/// does not subscribe to.
-#[test]
-fn diverging_resolved_subscriptions_use_the_heterogeneous_builder() {
+/// The review scenario: member A sits in rack r1, member B in r2, and every
+/// replica of the topic's four partitions is in r1. Kafka's uniform
+/// assignor does not read racks, so each member gets two partitions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "replica racks do not outrank balance"
+)]
+fn replica_racks_do_not_outrank_balance() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: diverging resolved subscriptions use the heterogeneous builder"
+)]
+fn bdd_verify_diverging_resolved_subscriptions_use_the_heterogeneous_builder() {
     let (t1, t2) = (tid(1), tid(2));
     let members = vec![member("A", &[t1, t2], &[]), member("B", &[t1], &[])];
     let topics = metadata(&[sized(t1, 2), sized(t2, 2)]);
@@ -548,10 +578,21 @@ fn diverging_resolved_subscriptions_use_the_heterogeneous_builder() {
     );
 }
 
-/// Kafka's `testValidityAndBalanceForLargeSampleSet`: 100 topics of three
-/// partitions over 49 members.
-#[test]
-fn homogeneous_large_sample_is_valid_and_balanced() {
+/// A group whose type says homogeneous but whose resolved subscriptions
+/// differ runs the heterogeneous builder, so no member receives a topic it
+/// does not subscribe to.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "diverging resolved subscriptions use the heterogeneous builder"
+)]
+fn diverging_resolved_subscriptions_use_the_heterogeneous_builder() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: homogeneous large sample is valid and balanced"
+)]
+fn bdd_verify_homogeneous_large_sample_is_valid_and_balanced() {
     let topic_ids: Vec<Uuid> = (1..=100).map(tid).collect();
     let members: Vec<MemberSubscription> = (1..50)
         .map(|i| member(&format!("member{i}"), &topic_ids, &[]))
@@ -566,6 +607,15 @@ fn homogeneous_large_sample_is_valid_and_balanced() {
     let sizes = sizes(&actual);
     assert!(sizes[sizes.len() - 1] - sizes[0] <= 1);
 }
+
+/// Kafka's `testValidityAndBalanceForLargeSampleSet`: 100 topics of three
+/// partitions over 49 members.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "homogeneous large sample is valid and balanced"
+)]
+fn homogeneous_large_sample_is_valid_and_balanced() {}
 
 /// The three-topic group of Kafka's `CommonAssignorTests`.
 fn common_group(subscription_type: SubscriptionType) -> Case {
@@ -599,11 +649,11 @@ fn with_current(spec: &GroupSpec, current: &Assignment, order: &[&str]) -> Group
     group(spec.subscription_type, members)
 }
 
-/// Kafka's `testAssignmentReuse` and `testReassignmentStickiness`: feeding an
-/// assignment back in returns it unchanged, whatever order the members come
-/// in.
-#[test]
-fn assignment_is_a_fixed_point_in_every_member_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified assignor uniform tests: assignment is a fixed point in every member order"
+)]
+fn bdd_verify_assignment_is_a_fixed_point_in_every_member_order() {
     let orders: [[&str; 3]; 6] = [
         ["A", "B", "C"],
         ["A", "C", "B"],
@@ -622,6 +672,16 @@ fn assignment_is_a_fixed_point_in_every_member_order() {
         }
     }
 }
+
+/// Kafka's `testAssignmentReuse` and `testReassignmentStickiness`: feeding an
+/// assignment back in returns it unchanged, whatever order the members come
+/// in.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature",
+    name = "assignment is a fixed point in every member order"
+)]
+fn assignment_is_a_fixed_point_in_every_member_order() {}
 
 /// How many partitions of `previous` each member still holds in `next`.
 fn retained(previous: &Assignment, next: &Assignment, member: &str) -> usize {

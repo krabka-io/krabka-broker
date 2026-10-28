@@ -66,15 +66,11 @@ async fn hold_live_classic_member(
     broker.wait_until_classic_group_member_count(group, 1).await;
 }
 
-/// A classic group with a **live** member, dynamic or static, rejects the
-/// `StreamsGroupHeartbeat` and remains Classic-typed.
-///
-/// Kafka 4.3.1's `getOrCreateStreamsGroup` converts only an empty classic
-/// group. Any other is refused by `castToStreamsGroup` with
-/// `GROUP_ID_NOT_FOUND` and the message "Group {id} is not a streams group.",
-/// and a static member holds its group like a dynamic one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classic_group_with_live_member_rejects_streams_heartbeat() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic upgrade upgrade live member: classic group with live member rejects streams heartbeat"
+)]
+async fn bdd_verify_classic_group_with_live_member_rejects_streams_heartbeat() {
     let (broker, bootstrap, _dir) = boot().await;
     let streams_client = connect(&bootstrap).await;
     finalize_streams_version(&streams_client).await;
@@ -114,3 +110,18 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
         broker.wait_until_classic_group_member_count(group, 1).await;
     }
 }
+
+/// A classic group with a **live** member, dynamic or static, rejects the
+/// `StreamsGroupHeartbeat` and remains Classic-typed.
+///
+/// Kafka 4.3.1's `getOrCreateStreamsGroup` converts only an empty classic
+/// group. Any other is refused by `castToStreamsGroup` with
+/// `GROUP_ID_NOT_FOUND` and the message "Group {id} is not a streams group.",
+/// and a static member holds its group like a dynamic one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_upgrade/upgrade_live_member.feature",
+    name = "classic group with live member rejects streams heartbeat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classic_group_with_live_member_rejects_streams_heartbeat() {}

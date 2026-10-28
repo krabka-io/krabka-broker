@@ -420,13 +420,11 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
     broker_handle.shutdown().await;
 }
 
-/// The partition records of an unregistration are built from the image of the
-/// node that runs it, and only the active controller's image is current. Any
-/// other node answers `NOT_CONTROLLER` with Kafka's wrong-controller message
-/// and appends nothing, so a follower or an observer whose image trails cannot
-/// roll back the leader, epoch and ISR that the controller committed since.
-#[test]
-fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers unregister broker tests: a node that is not the active controller refuses with kafkas message"
+)]
+fn bdd_verify_a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
     let node = NodeId(1);
     let not_controller = |message: &str| {
         Some(UnregisterBrokerResponse {
@@ -454,6 +452,18 @@ fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
         );
     }
 }
+
+/// The partition records of an unregistration are built from the image of the
+/// node that runs it, and only the active controller's image is current. Any
+/// other node answers `NOT_CONTROLLER` with Kafka's wrong-controller message
+/// and appends nothing, so a follower or an observer whose image trails cannot
+/// roll back the leader, epoch and ISR that the controller committed since.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/unregister_broker/tests.feature",
+    name = "a node that is not the active controller refuses with kafkas message"
+)]
+fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {}
 
 /// A request that arrives on the controller listener, or inside an `Envelope`,
 /// is already at the active controller and is never forwarded again.

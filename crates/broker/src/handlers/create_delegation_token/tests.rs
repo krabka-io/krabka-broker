@@ -108,14 +108,11 @@ fn refusal(
     }
 }
 
-/// `KafkaApis.handleCreateTokenRequest` first builds the owner principal,
-/// which fails for a name with a null type (-1, `ANONYMOUS` on both sides).
-/// It then checks `allowTokenRequests` (64),
-/// then the `CreateTokens` authorization (65), then the renewer types (67),
-/// all before the controller's `DELEGATION_TOKEN_AUTH_DISABLED` (61). No
-/// refusal mints a token, and each names the owner and the requester.
-#[tokio::test]
-async fn refusals_follow_kafka_order_and_name_both_principals() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create delegation token tests: refusals follow kafka order and name both principals"
+)]
+async fn bdd_verify_refusals_follow_kafka_order_and_name_both_principals() {
     let TokenFixture {
         directory: _dir,
         controller,
@@ -261,12 +258,25 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
     controller.cancel().await;
 }
 
-/// Owner resolution and Kafka's lifetime rules: a null or empty owner
-/// name means the requester, naming the requester needs no authorization, any
-/// owner type is kept, a `max_lifetime_ms` of 0 or less takes the configured
-/// ceiling, and the first expiry is `issue + min(renew period, lifetime)`.
+/// `KafkaApis.handleCreateTokenRequest` first builds the owner principal,
+/// which fails for a name with a null type (-1, `ANONYMOUS` on both sides).
+/// It then checks `allowTokenRequests` (64),
+/// then the `CreateTokens` authorization (65), then the renewer types (67),
+/// all before the controller's `DELEGATION_TOKEN_AUTH_DISABLED` (61). No
+/// refusal mints a token, and each names the owner and the requester.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_delegation_token/tests.feature",
+    name = "refusals follow kafka order and name both principals"
+)]
 #[tokio::test]
-async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
+async fn refusals_follow_kafka_order_and_name_both_principals() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create delegation token tests: mints for the resolved owner with kafka deadlines"
+)]
+async fn bdd_verify_mints_for_the_resolved_owner_with_kafka_deadlines() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"master-key".to_vec());
@@ -458,6 +468,18 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
     }
     controller.cancel().await;
 }
+
+/// Owner resolution and Kafka's lifetime rules: a null or empty owner
+/// name means the requester, naming the requester needs no authorization, any
+/// owner type is kept, a `max_lifetime_ms` of 0 or less takes the configured
+/// ceiling, and the first expiry is `issue + min(renew period, lifetime)`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_delegation_token/tests.feature",
+    name = "mints for the resolved owner with kafka deadlines"
+)]
+#[tokio::test]
+async fn mints_for_the_resolved_owner_with_kafka_deadlines() {}
 
 /// KIP-373: `CreateTokens` on `User:<owner>` lets a requester mint a token for
 /// that owner, and for no other (Kafka's `handleCreateTokenRequest`).

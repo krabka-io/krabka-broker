@@ -266,8 +266,11 @@ mod tests {
         });
     }
 
-    #[test]
-    fn supported_operations_topic_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers authorized operations tests: supported operations topic matches kafka"
+    )]
+    fn bdd_verify_supported_operations_topic_matches_kafka() {
         let ops = supported_operations(ResourceType::Topic);
         // Order doesn't matter for callers but the set must match.
         let got: HashSet<_> = ops.iter().copied().collect();
@@ -286,8 +289,18 @@ mod tests {
         assert!(got == want);
     }
 
-    #[test]
-    fn supported_operations_group_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
+        name = "tests: supported operations topic matches kafka"
+    )]
+    fn supported_operations_topic_matches_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers authorized operations tests: supported operations group matches kafka"
+    )]
+    fn bdd_verify_supported_operations_group_matches_kafka() {
         let got: HashSet<_> = supported_operations(ResourceType::Group)
             .iter()
             .copied()
@@ -304,8 +317,18 @@ mod tests {
         assert!(got == want);
     }
 
-    #[test]
-    fn supported_operations_cluster_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
+        name = "tests: supported operations group matches kafka"
+    )]
+    fn supported_operations_group_matches_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers authorized operations tests: supported operations cluster matches kafka"
+    )]
+    fn bdd_verify_supported_operations_cluster_matches_kafka() {
         let got: HashSet<_> = supported_operations(ResourceType::Cluster)
             .iter()
             .copied()
@@ -323,6 +346,13 @@ mod tests {
         .collect();
         assert!(got == want);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
+        name = "tests: supported operations cluster matches kafka"
+    )]
+    fn supported_operations_cluster_matches_kafka() {}
 
     #[test]
     fn allow_all_authorizer_sets_every_supported_bit_for_each_resource() {
@@ -512,23 +542,37 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        read = { AclOperation::Read, 1 << 3 },
-        write = { AclOperation::Write, 1 << 4 },
-        create = { AclOperation::Create, 1 << 5 },
-        delete = { AclOperation::Delete, 1 << 6 },
-        alter = { AclOperation::Alter, 1 << 7 },
-        describe = { AclOperation::Describe, 1 << 8 },
-        cluster_action = { AclOperation::ClusterAction, 1 << 9 },
-        describe_configs = { AclOperation::DescribeConfigs, 1 << 10 },
-        alter_configs = { AclOperation::AlterConfigs, 1 << 11 },
-        idempotent_write = { AclOperation::IdempotentWrite, 1 << 12 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers authorized operations tests: bit values match kafka int8 codes for {example}"
     )]
-    fn bit_values_match_kafka_int8_codes(op: AclOperation, want: i32) {
+    fn bdd_verify_bit_values_match_kafka_int8_codes(example: String) {
+        type Example = (AclOperation, i32);
+        let (op, want): Example = match example.as_str() {
+            "read" => (AclOperation::Read, 1 << 3),
+            "write" => (AclOperation::Write, 1 << 4),
+            "create" => (AclOperation::Create, 1 << 5),
+            "delete" => (AclOperation::Delete, 1 << 6),
+            "alter" => (AclOperation::Alter, 1 << 7),
+            "describe" => (AclOperation::Describe, 1 << 8),
+            "cluster action" => (AclOperation::ClusterAction, 1 << 9),
+            "describe configs" => (AclOperation::DescribeConfigs, 1 << 10),
+            "alter configs" => (AclOperation::AlterConfigs, 1 << 11),
+            "idempotent write" => (AclOperation::IdempotentWrite, 1 << 12),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // Sanity: spot-check that the bit positions equal Kafka's wire
         // discriminants. If `operation_to_wire` ever drifts from
         // Kafka's `AclOperation.code()`, the wire field would become
         // unintelligible to JVM clients.
         assert2::assert!(bit(op) == want, "{op:?}");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
+        name = "tests: bit values match kafka int8 codes"
+    )]
+    fn bit_values_match_kafka_int8_codes(example: String) { let _ = example; }
 }

@@ -150,10 +150,11 @@ pub const fn kafka_4_3_1_max(api_key: i16) -> Option<i16> {
 mod tests {
     use {super::*, assert2::check};
 
-    /// Strictly ascending, so a key is listed once, and every row names
-    /// versions `krabka-protocol` decodes: 4.3.1 is never ahead of trunk.
-    #[test]
-    fn the_table_is_ascending_and_inside_the_vendored_ranges() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka release tests: the table is ascending and inside the vendored ranges"
+    )]
+    fn bdd_verify_the_table_is_ascending_and_inside_the_vendored_ranges() {
         check!(
             KAFKA_4_3_1_APIS
                 .windows(2)
@@ -165,23 +166,52 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        offset_fetch = { 18, Some(4) },
-        sasl_handshake = { 22, Some(5) },
-        txn_offset_commit = { 28, Some(5) },
-        api_key_88 = { 88, Some(0) },
-        api_key_89 = { 89, Some(0) },
-        api_key_92 = { 92, Some(0) },
-        first_unknown = { 93, None },
-        later_unknown = { 94, None },
-        private_key_unknown = { 1020, None },
+    #[cfg(test)]
+    /// Strictly ascending, so a key is listed once, and every row names
+    /// versions `krabka-protocol` decodes: 4.3.1 is never ahead of trunk.
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_release.feature",
+        name = "tests: the table is ascending and inside the vendored ranges"
     )]
-    fn lookups_follow_the_table(api_key: i16, want: Option<i16>) {
+    fn the_table_is_ascending_and_inside_the_vendored_ranges() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config kafka release tests: lookups follow the table for {example}")]
+    fn bdd_verify_lookups_follow_the_table(example: String) {
+        type Example = (i16, Option<i16>);
+        let (api_key, want): Example = match example.as_str() {
+            "offset fetch" => (18, Some(4)),
+            "sasl handshake" => (22, Some(5)),
+            "txn offset commit" => (28, Some(5)),
+            "api key 88" => (88, Some(0)),
+            "api key 89" => (89, Some(0)),
+            "api key 92" => (92, Some(0)),
+            "first unknown" => (93, None),
+            "later unknown" => (94, None),
+            "private key unknown" => (1020, None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(kafka_4_3_1_max(api_key) == want, "api_key {api_key}");
     }
 
-    #[test]
-    fn api_table_includes_produce() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_release.feature",
+        name = "tests: lookups follow the table"
+    )]
+    fn lookups_follow_the_table(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config kafka release tests: api table includes produce")]
+    fn bdd_verify_api_table_includes_produce() {
         check!(kafka_4_3_1_api(1) == Some(api(1, 4, 18)));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_release.feature",
+        name = "tests: api table includes produce"
+    )]
+    fn api_table_includes_produce() {}
 }

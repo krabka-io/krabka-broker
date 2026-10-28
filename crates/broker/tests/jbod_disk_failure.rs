@@ -94,8 +94,11 @@ async fn produce_and_get_error(addr: SocketAddr, topic: &str, partition: i32) ->
     resp.responses[0].partition_responses[0].error_code
 }
 
-#[tokio::test]
-async fn produce_to_partition_on_offline_dir_returns_storage_error() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jbod disk failure: produce to partition on offline dir returns storage error"
+)]
+async fn bdd_verify_produce_to_partition_on_offline_dir_returns_storage_error() {
     const TOPIC: &str = "kip112-offline";
     // 6 partitions: jbod.rs shows this is enough to guarantee spread across
     // both dirs under the least-loaded placement algorithm.
@@ -157,15 +160,17 @@ async fn produce_to_partition_on_offline_dir_returns_storage_error() {
     handle.shutdown().await;
 }
 
-/// KIP-112: when ALL configured log dirs go offline, the broker must shut
-/// itself down and latch `should_shutdown` to `true`. This test uses a
-/// single-dir broker, so flipping that one dir offline immediately satisfies
-/// the all-dirs condition.
-///
-/// The `for_tests` heartbeat interval is 200 ms, so the check fires well
-/// inside the 15-second timeout below.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "produce to partition on offline dir returns storage error"
+)]
 #[tokio::test]
-async fn all_log_dirs_offline_triggers_self_shutdown() {
+async fn produce_to_partition_on_offline_dir_returns_storage_error() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jbod disk failure: all log dirs offline triggers self shutdown")]
+async fn bdd_verify_all_log_dirs_offline_triggers_self_shutdown() {
     let primary = tempfile::tempdir().unwrap();
     // Single-dir broker: no extra_log_dirs.
     let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
@@ -208,6 +213,21 @@ async fn all_log_dirs_offline_triggers_self_shutdown() {
     handle.shutdown().await;
 }
 
+/// KIP-112: when ALL configured log dirs go offline, the broker must shut
+/// itself down and latch `should_shutdown` to `true`. This test uses a
+/// single-dir broker, so flipping that one dir offline immediately satisfies
+/// the all-dirs condition.
+///
+/// The `for_tests` heartbeat interval is 200 ms, so the check fires well
+/// inside the 15-second timeout below.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "all log dirs offline triggers self shutdown"
+)]
+#[tokio::test]
+async fn all_log_dirs_offline_triggers_self_shutdown() {}
+
 /// A running broker, the directory that backs it, and its listen address.
 struct SingleDirectoryBroker {
     primary: tempfile::TempDir,
@@ -233,8 +253,9 @@ async fn single_directory_broker() -> SingleDirectoryBroker {
     }
 }
 
-#[tokio::test]
-async fn assign_replicas_to_dirs_reports_and_echoes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jbod disk failure: assign replicas to dirs reports and echoes")]
+async fn bdd_verify_assign_replicas_to_dirs_reports_and_echoes() {
     const VERSION: i16 = 0; // AssignReplicasToDirs only has version 0
 
     const TOPIC: &str = "kip112-assign";
@@ -313,16 +334,17 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     handle.shutdown().await;
 }
 
-/// KIP-112: the controller accepts a `BrokerHeartbeat` (`api_key=63`) that
-/// sets `offline_log_dirs`. In a single-broker cluster with no ISR peers, the
-/// failover scan finds no live ISR alternative, so `plan.changes` is empty,
-/// the handler skips `submit_change`, and the response carries
-/// `error_code=0`.
-///
-/// This exercises the heartbeat handler's offline-dir failover block end to
-/// end, on the no-change path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "assign replicas to dirs reports and echoes"
+)]
 #[tokio::test]
-async fn heartbeat_with_offline_log_dirs_is_accepted() {
+async fn assign_replicas_to_dirs_reports_and_echoes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jbod disk failure: heartbeat with offline log dirs is accepted")]
+async fn bdd_verify_heartbeat_with_offline_log_dirs_is_accepted() {
     use krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
     let SingleDirectoryBroker {
         primary: _primary,
@@ -379,3 +401,19 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
 
     handle.shutdown().await;
 }
+
+/// KIP-112: the controller accepts a `BrokerHeartbeat` (`api_key=63`) that
+/// sets `offline_log_dirs`. In a single-broker cluster with no ISR peers, the
+/// failover scan finds no live ISR alternative, so `plan.changes` is empty,
+/// the handler skips `submit_change`, and the response carries
+/// `error_code=0`.
+///
+/// This exercises the heartbeat handler's offline-dir failover block end to
+/// end, on the no-change path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_disk_failure.feature",
+    name = "heartbeat with offline log dirs is accepted"
+)]
+#[tokio::test]
+async fn heartbeat_with_offline_log_dirs_is_accepted() {}

@@ -43,13 +43,11 @@ fn unknown_row(member_id: &str, group_instance_id: Option<&str>) -> MemberRespon
     }
 }
 
-/// (label, version, request, whole expected response) against a broker that
-/// holds no group. Kafka's `GroupCoordinatorService.leaveGroup` answers an
-/// empty group id `INVALID_GROUP_ID`, and a missing group with one
-/// `UNKNOWN_MEMBER_ID` row per identity under a top-level `NONE`, which
-/// `LeaveGroupResponse` folds into the top-level code at v0-v2.
-#[tokio::test]
-async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers leave group tests: leave group answers kafka shapes for missing and invalid groups"
+)]
+async fn bdd_verify_leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
     let HandlerStartedBroker {
         broker: broker_handle,
         dir: _dir,
@@ -118,6 +116,19 @@ async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
     assert!(broker.group_coordinator.find("ghost").is_none());
     broker_handle.shutdown().await;
 }
+
+/// (label, version, request, whole expected response) against a broker that
+/// holds no group. Kafka's `GroupCoordinatorService.leaveGroup` answers an
+/// empty group id `INVALID_GROUP_ID`, and a missing group with one
+/// `UNKNOWN_MEMBER_ID` row per identity under a top-level `NONE`, which
+/// `LeaveGroupResponse` folds into the top-level code at v0-v2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/leave_group/tests.feature",
+    name = "leave group answers kafka shapes for missing and invalid groups"
+)]
+#[tokio::test]
+async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {}
 
 /// The `Read` check on the group runs first, so a denied principal gets
 /// `GROUP_AUTHORIZATION_FAILED` even for an empty group id.

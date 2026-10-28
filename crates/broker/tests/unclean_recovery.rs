@@ -121,21 +121,45 @@ fn topic_config(topic: &str) -> MetadataRecord {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[rstest_bdd_macros::then("unclean recovery: unclean recovery elects longest log replica")]
+async fn bdd_verify_unclean_recovery_elects_longest_log_replica() {
+    run_unclean_recovery(None, None, 2).await;
+}
+
 /// The offset-aware unclean-recovery path elects the survivor with the
 /// **highest LEO** when nothing better is known about any of them. That result
 /// is different from a simple "first alive replica" pick.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery elects longest log replica"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_elects_longest_log_replica() {
-    run_unclean_recovery(None, None, 2).await;
+async fn unclean_recovery_elects_longest_log_replica() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unclean recovery: unclean recovery prefers an eligible leader replica")]
+async fn bdd_verify_unclean_recovery_prefers_an_eligible_leader_replica() {
+    run_unclean_recovery(Some("3"), None, 3).await;
 }
 
 /// KIP-966: a surviving eligible leader replica outranks a longer log that is
 /// not one. Broker 3 is in the published ELR and holds fewer records than
 /// broker 2, and broker 3 must still win: it is known to hold every committed
 /// record, and broker 2's longer log is only the longest one that answered.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery prefers an eligible leader replica"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_prefers_an_eligible_leader_replica() {
-    run_unclean_recovery(Some("3"), None, 3).await;
+async fn unclean_recovery_prefers_an_eligible_leader_replica() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unclean recovery: unclean recovery never elects a witness from the elr")]
+async fn bdd_verify_unclean_recovery_never_elects_a_witness_from_the_elr() {
+    run_unclean_recovery(Some("3"), Some(3), 2).await;
 }
 
 /// A witness replicates the partition and can be published as an eligible
@@ -145,10 +169,13 @@ async fn unclean_recovery_prefers_an_eligible_leader_replica() {
 /// role, so recovery has to fall back to broker 2's longest surviving log --
 /// the answer that is reported as data-losing rather than the one that is
 /// reported as free.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unclean_recovery.feature",
+    name = "unclean recovery never elects a witness from the elr"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_recovery_never_elects_a_witness_from_the_elr() {
-    run_unclean_recovery(Some("3"), Some(3), 2).await;
-}
+async fn unclean_recovery_never_elects_a_witness_from_the_elr() {}
 
 /// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
 /// surviving replicas holding logs of three different lengths.

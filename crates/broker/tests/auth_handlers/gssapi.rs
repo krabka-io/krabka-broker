@@ -33,16 +33,9 @@ use {
     std::env,
 };
 
-/// A broker with GSSAPI enabled advertises GSSAPI in its `SaslHandshake`
-/// response and accepts the handshake with `error_code = 0`.
-///
-/// The connection then stays in GSSAPI negotiation. The GSS context exchange
-/// itself needs a live KDC, and the E2E parity tests in Task 10 cover it.
-/// This case proves two things only. The mechanism is wired through the
-/// handshake advertisement, and the broker does not touch the keytab before
-/// the first `SaslAuthenticate` round.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gssapi_handshake_advertised_when_enabled() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers gssapi: gssapi handshake advertised when enabled")]
+async fn bdd_verify_gssapi_handshake_advertised_when_enabled() {
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
@@ -110,6 +103,46 @@ async fn gssapi_handshake_advertised_when_enabled() {
     );
 }
 
+/// A broker with GSSAPI enabled advertises GSSAPI in its `SaslHandshake`
+/// response and accepts the handshake with `error_code = 0`.
+///
+/// The connection then stays in GSSAPI negotiation. The GSS context exchange
+/// itself needs a live KDC, and the E2E parity tests in Task 10 cover it.
+/// This case proves two things only. The mechanism is wired through the
+/// handshake advertisement, and the broker does not touch the keytab before
+/// the first `SaslAuthenticate` round.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/gssapi.feature",
+    name = "gssapi handshake advertised when enabled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gssapi_handshake_advertised_when_enabled() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers gssapi: gssapi inter broker client authenticates from keytab"
+)]
+async fn bdd_verify_gssapi_inter_broker_client_authenticates_from_keytab() {
+    let fixtures = manifest_dir().join("tests/fixtures/security/kdc");
+    let kdc_url = env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_owned());
+
+    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
+    cfg.gssapi = Some(broker_config(
+        fixtures.join("kafka.keytab"),
+        kdc_url.clone(),
+    ));
+
+    let result = run_inter_broker_auth_test(cfg, InterBrokerCredentials::Gssapi {
+        keytab_path: fixtures.join("alice.keytab"),
+        client_principal: "alice@CRABKA.TEST".to_owned(),
+        service_name: "kafka".to_owned(),
+        kdc_url,
+    })
+    .await;
+    result.expect("InterBrokerClient GSSAPI auth + ApiVersions round-trip must succeed");
+}
+
 /// End-to-end inter-broker GSSAPI initiate against a live KDC.
 ///
 /// A Krabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
@@ -129,24 +162,11 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
 ///   cargo test -p krabka-broker gssapi_inter_broker -- --ignored
 /// ```
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the MIT KDC fixture (docker compose up) + exported KRB5_CONFIG/SSPI_KDC_URL"]
-async fn gssapi_inter_broker_client_authenticates_from_keytab() {
-    let fixtures = manifest_dir().join("tests/fixtures/security/kdc");
-    let kdc_url = env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_owned());
-
-    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
-    cfg.gssapi = Some(broker_config(
-        fixtures.join("kafka.keytab"),
-        kdc_url.clone(),
-    ));
-
-    let result = run_inter_broker_auth_test(cfg, InterBrokerCredentials::Gssapi {
-        keytab_path: fixtures.join("alice.keytab"),
-        client_principal: "alice@CRABKA.TEST".to_owned(),
-        service_name: "kafka".to_owned(),
-        kdc_url,
-    })
-    .await;
-    result.expect("InterBrokerClient GSSAPI auth + ApiVersions round-trip must succeed");
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/gssapi.feature",
+    name = "gssapi inter broker client authenticates from keytab"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gssapi_inter_broker_client_authenticates_from_keytab() {}

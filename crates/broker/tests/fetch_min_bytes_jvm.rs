@@ -187,11 +187,11 @@ impl Oracle {
     }
 }
 
-/// Both brokers hold the same under-`min_bytes` Fetch for the same wait, and
-/// then answer it with the same records.
-#[tokio::test]
-#[ignore = "requires Docker"]
-async fn krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fetch min bytes jvm: krabka and kafka both hold a fetch below its min bytes"
+)]
+async fn bdd_verify_krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes() {
     let oracle = Oracle::start();
     oracle.wait_until_ready().await;
     let (kafka_held, kafka_facts) = min_bytes_exchange(&oracle.bootstrap, "fetch-min-bytes").await;
@@ -204,3 +204,14 @@ async fn krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes() {
     assert!(krabka_held >= HELD_AT_LEAST);
     assert!(krabka_facts == kafka_facts);
 }
+
+/// Both brokers hold the same under-`min_bytes` Fetch for the same wait, and
+/// then answer it with the same records.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_min_bytes_jvm.feature",
+    name = "krabka and kafka both hold a fetch below its min bytes"
+)]
+#[tokio::test]
+async fn krabka_and_kafka_both_hold_a_fetch_below_its_min_bytes() {}

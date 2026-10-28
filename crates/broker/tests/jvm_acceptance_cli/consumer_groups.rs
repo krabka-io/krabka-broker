@@ -20,11 +20,11 @@ use {
     },
 };
 
-/// `kafka-consumer-groups --list` and `--describe` round-trip after a
-/// real consumer has joined a group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_consumer_groups_list_describe() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli consumer groups: kafka consumer groups list describe"
+)]
+async fn bdd_verify_kafka_consumer_groups_list_describe() {
     const TOPIC: &str = "krabka-cg-list-itest";
     const GROUP: &str = "krabka-cg-list-grp";
 
@@ -47,15 +47,22 @@ async fn kafka_consumer_groups_list_describe() {
     );
 }
 
-/// `kafka-consumer-groups --delete-offsets` exercises `OffsetDelete`
-/// (`api_key` 47, KIP-496) end-to-end against `cp-kafka:6.1.1`. The JVM
-/// `AdminClient` flow under this CLI runs `FindCoordinator` →
-/// `DescribeGroups` → `OffsetDelete`. After the consumer exits, the group
-/// is `Empty`, so the KIP-496 subscription guard skips and the tombstone
-/// path runs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-consumer-groups --list` and `--describe` round-trip after a
+/// real consumer has joined a group.
 #[ignore = "requires Docker"]
-async fn kafka_consumer_groups_delete_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "kafka consumer groups list describe"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_consumer_groups_list_describe() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli consumer groups: kafka consumer groups delete offsets"
+)]
+async fn bdd_verify_kafka_consumer_groups_delete_offsets() {
     const TOPIC: &str = "krabka-cg-delete-offsets-itest";
     const GROUP: &str = "krabka-cg-delete-offsets-grp";
 
@@ -127,6 +134,21 @@ async fn kafka_consumer_groups_delete_offsets() {
         "post-delete --describe still shows {TOPIC} for {GROUP}: {post_s}"
     );
 }
+
+/// `kafka-consumer-groups --delete-offsets` exercises `OffsetDelete`
+/// (`api_key` 47, KIP-496) end-to-end against `cp-kafka:6.1.1`. The JVM
+/// `AdminClient` flow under this CLI runs `FindCoordinator` →
+/// `DescribeGroups` → `OffsetDelete`. After the consumer exits, the group
+/// is `Empty`, so the KIP-496 subscription guard skips and the tombstone
+/// path runs.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "kafka consumer groups delete offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_consumer_groups_delete_offsets() {}
 
 // ── `--reset-offsets` and `--delete`, against the stock broker ──────────────
 //
@@ -368,17 +390,11 @@ fn expected_rows(group: &str, new_offset: i64) -> Vec<ResetRow> {
     }]
 }
 
-/// Every `--reset-offsets` mode, `--dry-run` against `--execute`, and the
-/// `--export` / `--from-file` round trip, compared with Apache Kafka.
-///
-/// `--dry-run` is what lets the whole table share one group: it prints the
-/// offset it would commit and commits nothing, so eleven modes cost eleven
-/// invocations rather than eleven groups. The two cases that must change
-/// something -- the `--execute` control and the file round trip -- take their
-/// own groups afterwards.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn reset_offsets_modes_match_apache_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli consumer groups: reset offsets modes match apache kafka"
+)]
+async fn bdd_verify_reset_offsets_modes_match_apache_kafka() {
     const DRY_GROUP: &str = "krabka-reset-dry-grp";
     const EXECUTE_GROUP: &str = "krabka-reset-execute-grp";
     const FILE_GROUP: &str = "krabka-reset-file-grp";
@@ -533,15 +549,28 @@ async fn reset_offsets_modes_match_apache_kafka() {
     comparison.broker.shutdown().await;
 }
 
-/// A live group refuses a reset and refuses a delete, an absent group refuses
-/// a delete, and an empty one accepts it -- all four as Apache Kafka does.
+/// Every `--reset-offsets` mode, `--dry-run` against `--execute`, and the
+/// `--export` / `--from-file` round trip, compared with Apache Kafka.
 ///
-/// The three outcomes are one case because they share the expensive half: a
-/// consumer that is actually joined. A group is only ever not `Empty` while
-/// somebody is in it, and the two refusals are about exactly that state.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// `--dry-run` is what lets the whole table share one group: it prints the
+/// offset it would commit and commits nothing, so eleven modes cost eleven
+/// invocations rather than eleven groups. The two cases that must change
+/// something -- the `--execute` control and the file round trip -- take their
+/// own groups afterwards.
 #[ignore = "requires Docker"]
-async fn group_delete_and_reset_refusals_match_apache_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "reset offsets modes match apache kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reset_offsets_modes_match_apache_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli consumer groups: group delete and reset refusals match apache kafka"
+)]
+async fn bdd_verify_group_delete_and_reset_refusals_match_apache_kafka() {
     const LIVE_GROUP: &str = "krabka-group-live-grp";
     const EMPTY_GROUP: &str = "krabka-group-empty-grp";
     const ABSENT_GROUP: &str = "krabka-group-absent-grp";
@@ -647,6 +676,21 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
 
     comparison.broker.shutdown().await;
 }
+
+/// A live group refuses a reset and refuses a delete, an absent group refuses
+/// a delete, and an empty one accepts it -- all four as Apache Kafka does.
+///
+/// The three outcomes are one case because they share the expensive half: a
+/// consumer that is actually joined. A group is only ever not `Empty` while
+/// somebody is in it, and the two refusals are about exactly that state.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/consumer_groups.feature",
+    name = "group delete and reset refusals match apache kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn group_delete_and_reset_refusals_match_apache_kafka() {}
 
 /// Poll `--describe --state` until `group` reports `Stable`.
 ///

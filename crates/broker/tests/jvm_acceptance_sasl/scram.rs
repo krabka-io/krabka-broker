@@ -16,6 +16,12 @@ use {
     assert2::assert,
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl scram: jvm sasl scram sha512 produce consume")]
+async fn bdd_verify_jvm_sasl_scram_sha512_produce_consume() {
+    scram_round_trip("krabka-sasl-scram-itest", "SCRAM-SHA-512").await;
+}
+
 /// End-to-end `SASL_PLAINTEXT` + SCRAM-SHA-512 drive of the JVM tools
 /// against a Rust broker. Exercises two distinct authentication paths in a
 /// single run:
@@ -33,36 +39,39 @@ use {
 ///    `kafka-topics`, `kafka-console-producer`, and `kafka-console-consumer`
 ///    with `sasl.mechanism=SCRAM-SHA-512`. This exercises the RFC 5802 state
 ///    machine end-to-end through the official Kafka client.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_sasl_scram_sha512_produce_consume() {
-    scram_round_trip("krabka-sasl-scram-itest", "SCRAM-SHA-512").await;
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/scram.feature",
+    name = "jvm sasl scram sha512 produce consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_scram_sha512_produce_consume() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl scram: jvm sasl scram sha256 produce consume")]
+async fn bdd_verify_jvm_sasl_scram_sha256_produce_consume() {
+    scram_round_trip("krabka-sasl-scram256-itest", "SCRAM-SHA-256").await;
 }
 
 /// SHA-256 analog of `jvm_sasl_scram_sha512_produce_consume`.
 /// The test provisions alice's credential with `kafka-configs --add-config
 /// 'SCRAM-SHA-256=[password=...]'` (KIP-554 wire byte 1), then drives
 /// produce + consume with `sasl.mechanism=SCRAM-SHA-256`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_sasl_scram_sha256_produce_consume() {
-    scram_round_trip("krabka-sasl-scram256-itest", "SCRAM-SHA-256").await;
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/scram.feature",
+    name = "jvm sasl scram sha256 produce consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_scram_sha256_produce_consume() {}
 
-/// KIP-368 in-band re-authentication under a two-second
-/// `connections.max.reauth.ms`, driven by the JVM client's own re-auth code.
-///
-/// `kafka-verifiable-producer --throughput 1 --max-messages 10` keeps one
-/// connection open for about ten seconds, which spans five re-auth windows.
-/// The JVM `SaslClientAuthenticator` re-authenticates in band whenever it is
-/// past the window the broker reported in `session_lifetime_ms`, so a run
-/// that produces all ten records with no error is the client and the broker
-/// agreeing on the window and on the SCRAM re-auth exchange. Without the
-/// re-auth path, the broker would close the connection at the two-second
-/// mark and the tool would report send errors.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl scram: jvm sasl scram sha512 in band reauth under max reauth window"
+)]
+async fn bdd_verify_jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
     const TOPIC: &str = "krabka-sasl-scram-reauth-itest";
 
     let (broker, _dir) =
@@ -124,6 +133,26 @@ async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
 
     broker.shutdown().await;
 }
+
+/// KIP-368 in-band re-authentication under a two-second
+/// `connections.max.reauth.ms`, driven by the JVM client's own re-auth code.
+///
+/// `kafka-verifiable-producer --throughput 1 --max-messages 10` keeps one
+/// connection open for about ten seconds, which spans five re-auth windows.
+/// The JVM `SaslClientAuthenticator` re-authenticates in band whenever it is
+/// past the window the broker reported in `session_lifetime_ms`, so a run
+/// that produces all ten records with no error is the client and the broker
+/// agreeing on the window and on the SCRAM re-auth exchange. Without the
+/// re-auth path, the broker would close the connection at the two-second
+/// mark and the tool would report send errors.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/scram.feature",
+    name = "jvm sasl scram sha512 in band reauth under max reauth window"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {}
 
 async fn scram_round_trip(topic: &str, mechanism: &str) {
     let (broker, _dir) = start_dual_mech_broker(ADMIN, ADMIN_PASS).await;

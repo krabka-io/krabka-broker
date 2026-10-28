@@ -567,11 +567,11 @@ mod tests {
         ])
     }
 
-    /// The whole assignment for inputs from Kafka's `SimpleAssignorTest` and
-    /// from the issue: balance over the group, sharing when members outnumber
-    /// partitions, and stickiness.
-    #[test]
-    fn assignments_match_kafka_simple_assignor() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share assignor tests: assignments match kafka simple assignor"
+    )]
+    fn bdd_verify_assignments_match_kafka_simple_assignor() {
         use SubscriptionType::{Heterogeneous, Homogeneous};
         struct Row {
             name: &'static str,
@@ -732,6 +732,16 @@ mod tests {
             check!(got == want, "{name}");
         }
     }
+
+    /// The whole assignment for inputs from Kafka's `SimpleAssignorTest` and
+    /// from the issue: balance over the group, sharing when members outnumber
+    /// partitions, and stickiness.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/assignor.feature",
+        name = "tests: assignments match kafka simple assignor"
+    )]
+    fn assignments_match_kafka_simple_assignor() {}
 
     /// Kafka's `testIncrementalAssignment*MembersHomogeneous`: members join one
     /// at a time and then leave one at a time, every partition stays assigned,

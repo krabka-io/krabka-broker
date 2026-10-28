@@ -617,17 +617,34 @@ mod tests {
 
     const STEP: i64 = 5_000;
 
-    #[yare::parameterized(
-        loopback = { "http://127.0.0.1:40123/metrics", Ok(40123) },
-        no_path = { "http://host.docker.internal:9404", Ok(9404) },
-        no_port = { "http://127.0.0.1/metrics", Err(()) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: a target port comes from the metrics url for {example}"
     )]
-    fn a_target_port_comes_from_the_metrics_url(url: &str, port: Result<u16, ()>) {
+    fn bdd_verify_a_target_port_comes_from_the_metrics_url(example: String) {
+        type Example<'a> = (&'a str, Result<u16, ()>);
+        let (url, port): Example<'_> = match example.as_str() {
+            "loopback" => ("http://127.0.0.1:40123/metrics", Ok(40123)),
+            "no path" => ("http://host.docker.internal:9404", Ok(9404)),
+            "no port" => ("http://127.0.0.1/metrics", Err(())),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(url_port(url).map_err(|_| ()) == port);
     }
 
-    #[test]
-    fn the_config_scrapes_every_node_as_the_job_the_rules_name() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: a target port comes from the metrics url"
+    )]
+    fn a_target_port_comes_from_the_metrics_url(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: the config scrapes every node as the job the rules name"
+    )]
+    fn bdd_verify_the_config_scrapes_every_node_as_the_job_the_rules_name() {
         check!(
             prometheus_config(&[(1, 40001), (2, 40002)])
                 == "global:
@@ -649,55 +666,129 @@ scrape_configs:
         );
     }
 
-    #[yare::parameterized(
-        ipv4 = { "127.0.0.1:32768\n", Ok(32768) },
-        both_families = { "0.0.0.0:32769\n[::]:32769\n", Ok(32769) },
-        empty = { "", Err(()) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: the config scrapes every node as the job the rules name"
     )]
-    fn the_api_port_is_the_published_one(output: &str, port: Result<u16, ()>) {
+    fn the_config_scrapes_every_node_as_the_job_the_rules_name() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: the api port is the published one for {example}"
+    )]
+    fn bdd_verify_the_api_port_is_the_published_one(example: String) {
+        type Example<'a> = (&'a str, Result<u16, ()>);
+        let (output, port): Example<'_> = match example.as_str() {
+            "ipv4" => ("127.0.0.1:32768\n", Ok(32768)),
+            "both families" => ("0.0.0.0:32769\n[::]:32769\n", Ok(32769)),
+            "empty" => ("", Err(())),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(published_port(output).map_err(|_| ()) == port);
     }
 
-    #[yare::parameterized(
-        ready = { "HTTP/1.0 200 OK\r\n\r\nPrometheus Server is Ready.\n", true },
-        starting = { "HTTP/1.0 503 Service Unavailable\r\n\r\n", false },
-        closed_by_proxy = { "", false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: the api port is the published one"
     )]
-    fn ready_is_a_200(response: &str, ready: bool) {
+    fn the_api_port_is_the_published_one(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract alerts tests: ready is a 200 for {example}")]
+    fn bdd_verify_ready_is_a_200(example: String) {
+        type Example<'a> = (&'a str, bool);
+        let (response, ready): Example<'_> = match example.as_str() {
+            "ready" => ("HTTP/1.0 200 OK\r\n\r\nPrometheus Server is Ready.\n", true),
+            "starting" => ("HTTP/1.0 503 Service Unavailable\r\n\r\n", false),
+            "closed by proxy" => ("", false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(is_ok_response(response) == ready);
     }
 
-    #[yare::parameterized(
-        whole = { 1_700_000_000_000, "1700000000.000" },
-        millis = { 1_700_000_000_042, "1700000000.042" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: ready is a 200"
     )]
-    fn milliseconds_go_out_as_seconds(ms: i64, seconds: &str) {
+    fn ready_is_a_200(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: milliseconds go out as seconds for {example}"
+    )]
+    fn bdd_verify_milliseconds_go_out_as_seconds(example: String) {
+        type Example<'a> = (i64, &'a str);
+        let (ms, seconds): Example<'_> = match example.as_str() {
+            "whole" => (1_700_000_000_000, "1700000000.000"),
+            "millis" => (1_700_000_000_042, "1700000000.042"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(api_seconds(ms) == seconds);
         check!(api_millis(seconds) == Some(ms));
     }
 
-    #[yare::parameterized(
-        integer = { "1700000000", Some(1_700_000_000_000) },
-        one_digit = { "1700000000.5", Some(1_700_000_000_500) },
-        past_millis = { "1700000000.12345", Some(1_700_000_000_123) },
-        exponent = { "1.7e9", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: milliseconds go out as seconds"
     )]
-    fn seconds_come_back_as_milliseconds(seconds: &str, ms: Option<i64>) {
+    fn milliseconds_go_out_as_seconds(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: seconds come back as milliseconds for {example}"
+    )]
+    fn bdd_verify_seconds_come_back_as_milliseconds(example: String) {
+        type Example<'a> = (&'a str, Option<i64>);
+        let (seconds, ms): Example<'_> = match example.as_str() {
+            "integer" => ("1700000000", Some(1_700_000_000_000)),
+            "one digit" => ("1700000000.5", Some(1_700_000_000_500)),
+            "past millis" => ("1700000000.12345", Some(1_700_000_000_123)),
+            "exponent" => ("1.7e9", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(api_millis(seconds) == ms);
     }
 
-    #[yare::parameterized(
-        one_range = { 0, 10 * STEP, vec![(0, 10 * STEP)] },
-        a_single_point = { 0, 0, vec![(0, 0)] },
-        split_at_the_point_limit = { 0, 15_000 * STEP, vec![(0, 9_999 * STEP), (10_000 * STEP, 15_000 * STEP)] },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: seconds come back as milliseconds"
     )]
-    fn a_long_run_is_queried_in_ranges_prometheus_accepts(
-        start: i64,
-        end: i64,
-        ranges: Vec<(i64, i64)>,
-    ) {
+    fn seconds_come_back_as_milliseconds(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: a long run is queried in ranges prometheus accepts for {example}"
+    )]
+    fn bdd_verify_a_long_run_is_queried_in_ranges_prometheus_accepts(example: String) {
+        type Example = (i64, i64, Vec<(i64, i64)>);
+        let (start, end, ranges): Example = match example.as_str() {
+            "one range" => (0, 10 * STEP, vec![(0, 10 * STEP)]),
+            "a single point" => (0, 0, vec![(0, 0)]),
+            "split at the point limit" => (0, 15_000 * STEP, vec![
+                (0, 9_999 * STEP),
+                (10_000 * STEP, 15_000 * STEP),
+            ]),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(query_ranges(start, end, STEP) == ranges);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: a long run is queried in ranges prometheus accepts"
+    )]
+    fn a_long_run_is_queried_in_ranges_prometheus_accepts(example: String) { let _ = example; }
 
     fn matrix(series: &[(&str, &str, &[i64])]) -> serde_json::Value {
         let result: Vec<serde_json::Value> = series
@@ -747,34 +838,40 @@ scrape_configs:
         fold(samples, 0, end_s * 1000, STEP)
     }
 
-    #[yare::parameterized(
-        pending_then_firing_then_resolved = {
-            &[("KrabkaBrokerDown", "pending", &[100, 105, 110]), ("KrabkaBrokerDown", "firing", &[115, 120])],
-            200,
-            vec![
-                interval(AlertState::Pending, 100, Some(115)),
-                interval(AlertState::Firing, 115, Some(125)),
-            ]
-        },
-        still_firing_at_the_last_step = {
-            &[("KrabkaBrokerDown", "firing", &[190, 195, 200])],
-            202,
-            vec![interval(AlertState::Firing, 190, None)]
-        },
-        a_gap_is_two_intervals = {
-            &[("KrabkaBrokerDown", "pending", &[10, 15, 40])],
-            200,
-            vec![
-                interval(AlertState::Pending, 10, Some(20)),
-                interval(AlertState::Pending, 40, Some(45)),
-            ]
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: alerts fold into intervals per state for {example}"
     )]
-    fn alerts_fold_into_intervals_per_state(
-        series: &[(&str, &str, &[i64])],
-        end_s: i64,
-        intervals: Vec<Interval>,
-    ) {
+    fn bdd_verify_alerts_fold_into_intervals_per_state(example: String) {
+        type Example<'a> = (&'a [(&'a str, &'a str, &'a [i64])], i64, Vec<Interval>);
+        let (series, end_s, intervals): Example<'_> = match example.as_str() {
+            "pending then firing then resolved" => (
+                &[
+                    ("KrabkaBrokerDown", "pending", &[100, 105, 110]),
+                    ("KrabkaBrokerDown", "firing", &[115, 120]),
+                ],
+                200,
+                vec![
+                    interval(AlertState::Pending, 100, Some(115)),
+                    interval(AlertState::Firing, 115, Some(125)),
+                ],
+            ),
+            "still firing at the last step" => (
+                &[("KrabkaBrokerDown", "firing", &[190, 195, 200])],
+                202,
+                vec![interval(AlertState::Firing, 190, None)],
+            ),
+            "a gap is two intervals" => (
+                &[("KrabkaBrokerDown", "pending", &[10, 15, 40])],
+                200,
+                vec![
+                    interval(AlertState::Pending, 10, Some(20)),
+                    interval(AlertState::Pending, 40, Some(45)),
+                ],
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(
             folded(series, end_s)
                 == vec![AlertSeries {
@@ -786,8 +883,18 @@ scrape_configs:
         );
     }
 
-    #[test]
-    fn ranges_of_one_series_join_into_one_interval() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: alerts fold into intervals per state"
+    )]
+    fn alerts_fold_into_intervals_per_state(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: ranges of one series join into one interval"
+    )]
+    fn bdd_verify_ranges_of_one_series_join_into_one_interval() {
         let mut samples = Samples::new();
         assert!(
             let Ok(()) = add_matrix(&mut samples, matrix(&[("KrabkaBrokerDown", "firing", &[100, 105])]))
@@ -800,17 +907,43 @@ scrape_configs:
         check!(alerts[0].intervals == vec![interval(AlertState::Firing, 100, Some(115))]);
     }
 
-    #[yare::parameterized(
-        an_error = { json!({"status": "error", "errorType": "bad_data", "error": "exceeded maximum resolution"}) },
-        a_vector = { json!({"status": "success", "data": {"resultType": "vector", "result": []}}) },
-        not_an_answer = { json!({"nothing": true}) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: ranges of one series join into one interval"
     )]
-    fn a_bad_answer_is_an_error(body: serde_json::Value) {
+    fn ranges_of_one_series_join_into_one_interval() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract alerts tests: a bad answer is an error for {example}")]
+    fn bdd_verify_a_bad_answer_is_an_error(example: String) {
+        type Example = (serde_json::Value,);
+        let (body,): Example = match example.as_str() {
+            "an error" => (
+                json ! ({ "status" : "error" , "errorType" : "bad_data" , "error" : "exceeded maximum resolution" }),
+            ),
+            "a vector" => (
+                json ! ({ "status" : "success" , "data" : { "resultType" : "vector" , "result" : [] } }),
+            ),
+            "not an answer" => (json ! ({ "nothing" : true }),),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(add_matrix(&mut Samples::new(), body).is_err());
     }
 
-    #[test]
-    fn only_alerting_rules_are_recorded_with_their_health() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: a bad answer is an error"
+    )]
+    fn a_bad_answer_is_an_error(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: only alerting rules are recorded with their health"
+    )]
+    fn bdd_verify_only_alerting_rules_are_recorded_with_their_health() {
         let body = json!({"status": "success", "data": {"groups": [{
             "name": "krabka-broker-cluster",
             "file": "/etc/prometheus/soak/alert-rules.yaml",
@@ -839,8 +972,18 @@ scrape_configs:
         );
     }
 
-    #[test]
-    fn the_lines_name_unhealthy_rules_and_alerts_that_fired() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: only alerting rules are recorded with their health"
+    )]
+    fn only_alerting_rules_are_recorded_with_their_health() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: the lines name unhealthy rules and alerts that fired"
+    )]
+    fn bdd_verify_the_lines_name_unhealthy_rules_and_alerts_that_fired() {
         let history = AlertHistory {
             start_ms: 0,
             end_ms: 7_200_000,
@@ -891,12 +1034,33 @@ scrape_configs:
         );
     }
 
-    #[yare::parameterized(
-        seconds = { 42_000, "42s" },
-        minutes = { 125_000, "2m05s" },
-        hours = { 72 * 3_600_000 + 61_000, "72h01m01s" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: the lines name unhealthy rules and alerts that fired"
     )]
-    fn a_span_reads_in_hours_minutes_and_seconds(ms: i64, text: &str) {
+    fn the_lines_name_unhealthy_rules_and_alerts_that_fired() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract alerts tests: a span reads in hours minutes and seconds for {example}"
+    )]
+    fn bdd_verify_a_span_reads_in_hours_minutes_and_seconds(example: String) {
+        type Example<'a> = (i64, &'a str);
+        let (ms, text): Example<'_> = match example.as_str() {
+            "seconds" => (42_000, "42s"),
+            "minutes" => (125_000, "2m05s"),
+            "hours" => (72 * 3_600_000 + 61_000, "72h01m01s"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(span(ms) == text);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
+        name = "tests: a span reads in hours minutes and seconds"
+    )]
+    fn a_span_reads_in_hours_minutes_and_seconds(example: String) { let _ = example; }
 }

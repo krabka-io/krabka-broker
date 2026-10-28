@@ -37,21 +37,9 @@ mod compaction_rpc;
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-compaction-test";
 
-/// End-to-end compaction test:
-///
-/// 1. Boot a single broker with cleaner interval = 1s.
-/// 2. Create topic `compacted` with `cleanup.policy=compact` and `internal.segment.bytes=256`.
-/// 3. Produce 30 records, 10 for each of the 3 keys, values v0-k1..v9-k3.
-/// 4. Wait for a compaction pass so the cleaner compacts the sealed segments.
-/// 5. Force-roll the active segment. Produce v10-k1, v10-k2, and v10-k3.
-/// 6. Wait for another compaction pass so the cleaner compacts the newly-sealed
-///    segments.
-/// 7. Fetch all records from offset 0.
-/// 8. Assert that exactly 3 distinct keys survive.
-/// 9. Assert that no stale value from v0-* to v9-* remains.
-/// 10. Assert that each key has its latest value, v10-kN.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn compaction_dedupes_via_native_client() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("compaction: compaction dedupes via native client")]
+async fn bdd_verify_compaction_dedupes_via_native_client() {
     let (handle, _dir, addr) = start_broker_with_fast_cleaner().await;
 
     // Create the compacted topic.
@@ -199,3 +187,24 @@ async fn compaction_dedupes_via_native_client() {
 
     handle.shutdown().await;
 }
+
+/// End-to-end compaction test:
+///
+/// 1. Boot a single broker with cleaner interval = 1s.
+/// 2. Create topic `compacted` with `cleanup.policy=compact` and `internal.segment.bytes=256`.
+/// 3. Produce 30 records, 10 for each of the 3 keys, values v0-k1..v9-k3.
+/// 4. Wait for a compaction pass so the cleaner compacts the sealed segments.
+/// 5. Force-roll the active segment. Produce v10-k1, v10-k2, and v10-k3.
+/// 6. Wait for another compaction pass so the cleaner compacts the newly-sealed
+///    segments.
+/// 7. Fetch all records from offset 0.
+/// 8. Assert that exactly 3 distinct keys survive.
+/// 9. Assert that no stale value from v0-* to v9-* remains.
+/// 10. Assert that each key has its latest value, v10-kN.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/compaction.feature",
+    name = "compaction dedupes via native client"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compaction_dedupes_via_native_client() {}

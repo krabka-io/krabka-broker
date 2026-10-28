@@ -37,11 +37,9 @@ use {
 /// `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
 const EARLIEST_TIMESTAMP: i64 = -2;
 
-/// `DeleteRecords`: the test produces 100 records and then trims from offset
-/// 50. The response carries a valid `low_watermark`, and the broker's
-/// `log_start_offset` moves forward.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_records_trims_log_start() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("admin handlers admin delete records: delete records trims log start")]
+async fn bdd_verify_delete_records_trims_log_start() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -80,6 +78,17 @@ async fn delete_records_trims_log_start() {
     );
 }
 
+/// `DeleteRecords`: the test produces 100 records and then trims from offset
+/// 50. The response carries a valid `low_watermark`, and the broker's
+/// `log_start_offset` moves forward.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_delete_records.feature",
+    name = "delete records trims log start"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_records_trims_log_start() {}
+
 /// The topic the restart case trims, kept clear of the one above so the two
 /// cases never share a partition directory.
 const RESTART_TOPIC: &str = "t-dr-restart";
@@ -110,15 +119,11 @@ struct TrimmedView {
     fetched_records: usize,
 }
 
-/// A `DeleteRecords` that lands inside the active segment survives a restart.
-///
-/// A trim onto a segment boundary needs nothing durable of its own: the
-/// segments below it are deleted, and the first surviving base offset *is* the
-/// log start. A trim inside a segment has no such witness, so the reopened log
-/// has to read the start back from its own checkpoint. Without that, the broker
-/// serves records an operator already deleted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_trim_inside_the_active_segment_survives_a_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin delete records: a trim inside the active segment survives a restart"
+)]
+async fn bdd_verify_a_trim_inside_the_active_segment_survives_a_restart() {
     // The directory outlives both brokers, which is what makes the second boot
     // a restart rather than a fresh cluster.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -182,6 +187,21 @@ async fn a_trim_inside_the_active_segment_survives_a_restart() {
 
     broker.shutdown().await;
 }
+
+/// A `DeleteRecords` that lands inside the active segment survives a restart.
+///
+/// A trim onto a segment boundary needs nothing durable of its own: the
+/// segments below it are deleted, and the first surviving base offset *is* the
+/// log start. A trim inside a segment has no such witness, so the reopened log
+/// has to read the start back from its own checkpoint. Without that, the broker
+/// serves records an operator already deleted.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_delete_records.feature",
+    name = "a trim inside the active segment survives a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_trim_inside_the_active_segment_survives_a_restart() {}
 
 /// Trim partition 0 of `topic` from `offset` and return the partition row.
 async fn trim(

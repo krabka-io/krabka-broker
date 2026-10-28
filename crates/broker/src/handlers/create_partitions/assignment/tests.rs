@@ -345,10 +345,11 @@ fn honored_assignments_pass_through_verbatim() {
     );
 }
 
-/// Kafka's `validateManualPartitionAssignment` refuses an explicit list with
-/// these messages, on brokers 0 to 2 and a topic of replication factor 2.
-#[test]
-fn invalid_explicit_assignments_answer_kafkas_messages() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create partitions assignment tests: invalid explicit assignments answer kafkas messages"
+)]
+fn bdd_verify_invalid_explicit_assignments_answer_kafkas_messages() {
     /// The replica lists of an explicit assignment, and the message that refuses it.
     struct RefusalCase {
         lists: &'static [&'static [i32]],
@@ -395,6 +396,15 @@ fn invalid_explicit_assignments_answer_kafkas_messages() {
         );
     }
 }
+
+/// Kafka's `validateManualPartitionAssignment` refuses an explicit list with
+/// these messages, on brokers 0 to 2 and a topic of replication factor 2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_partitions/assignment/tests.feature",
+    name = "invalid explicit assignments answer kafkas messages"
+)]
+fn invalid_explicit_assignments_answer_kafkas_messages() {}
 
 /// An automatic placement that cannot put `rf` replicas on the brokers
 /// answers the message of Kafka's placer. `createPartitions` lets that

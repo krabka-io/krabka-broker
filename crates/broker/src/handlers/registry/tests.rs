@@ -158,8 +158,11 @@ fn registry_reports_missing_keys() {
     assert!(registry.get(9999).is_none());
 }
 
-#[test]
-fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers registry tests: registry and api catalog cover the same kafka api keys"
+)]
+fn bdd_verify_registry_and_api_catalog_cover_the_same_kafka_api_keys() {
     let registry = build_registry();
     let registered: BTreeSet<ApiKeyCode> = registry.registered_api_keys().collect();
     let dispatched: BTreeSet<ApiKeyCode> = dispatched_apis()
@@ -185,6 +188,13 @@ fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
     assert!(dispatched.is_subset(&registered));
     assert!(registered_with_schema == dispatched);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/registry/tests.feature",
+    name = "registry and api catalog cover the same kafka api keys"
+)]
+fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {}
 
 /// The only krabka-private key in the catalog is `GetReplicaLogInfo` (1020),
 /// and it is inter-broker only, so no listener a client can reach advertises
@@ -272,15 +282,11 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
     ));
 }
 
-/// KIP-124 (#692): Kafka charges the request quota for every request, and
-/// exempts only the apis it answers through `sendResponseExemptThrottle` and
-/// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`,
-/// `ShareFetch` and `ApiVersions` charge it in their handler. Kafka defines no
-/// krabka-private api, so the ones in the private table are exempt. Every
-/// other registered api, `GetReplicaLogInfo` included, is charged by the
-/// dispatch loop.
-#[test]
-fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers registry tests: every api but kafkas exemptions is charged to the request quota"
+)]
+fn bdd_verify_every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
     use std::collections::BTreeMap;
 
     let registry = build_registry();
@@ -328,3 +334,17 @@ fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
 
     assert!(observed == expected);
 }
+
+/// KIP-124 (#692): Kafka charges the request quota for every request, and
+/// exempts only the apis it answers through `sendResponseExemptThrottle` and
+/// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`,
+/// `ShareFetch` and `ApiVersions` charge it in their handler. Kafka defines no
+/// krabka-private api, so the ones in the private table are exempt. Every
+/// other registered api, `GetReplicaLogInfo` included, is charged by the
+/// dispatch loop.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/registry/tests.feature",
+    name = "every api but kafkas exemptions is charged to the request quota"
+)]
+fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {}

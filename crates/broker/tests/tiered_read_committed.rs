@@ -83,8 +83,11 @@ fn committed_below_open(workload: &Workload) -> CommittedRead {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn read_committed_reads_of_a_transactional_range_agree_across_local_eviction() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered read committed: read committed reads of a transactional range agree across local eviction"
+)]
+async fn bdd_verify_read_committed_reads_of_a_transactional_range_agree_across_local_eviction() {
     let tiered = start_tiered_partition().await;
     let workload = write_workload(&tiered.client, TOPIC, tiered.topic_id).await;
     let lso = workload.open_first_offset;
@@ -163,3 +166,11 @@ async fn read_committed_reads_of_a_transactional_range_agree_across_local_evicti
 
     tiered.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_read_committed.feature",
+    name = "read committed reads of a transactional range agree across local eviction"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn read_committed_reads_of_a_transactional_range_agree_across_local_eviction() {}

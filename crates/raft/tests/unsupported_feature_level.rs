@@ -155,8 +155,11 @@ async fn refused_start(dir: &TempDir, cluster_id: Uuid) -> RaftError {
     refused
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unsupported feature level: a log finalized at an unstable level starts only with the flag on"
+)]
+async fn bdd_verify_a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     let dir = TempDir::new().unwrap();
     let cluster_id = Uuid::new_v4();
 
@@ -195,6 +198,14 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     controller.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a log finalized at an unstable level starts only with the flag on"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {}
+
 /// What the high-watermark file says when the node restarts.
 #[derive(Clone, Copy, Debug)]
 enum HighWatermarkFile {
@@ -223,19 +234,21 @@ const SHARE_VERSION_REFUSAL: &str = "Tried to apply FeatureLevelRecord \
     FeatureLevelRecord(name='share.version', featureLevel=2), \
     but this controller only supports versions 0-1";
 
-/// The high-watermark file is a cache, and a restart can recover a high
-/// watermark below the finalized level. The refusal must still come before
-/// the engine writes anything: an engine that started would elect itself,
-/// append to the log, commit the level, and only then stop.
-#[yare::parameterized(
-    at_log_start = { HighWatermarkFile::AtLogStart },
-    missing = { HighWatermarkFile::Missing },
-    below_a_superseding_level = { HighWatermarkFile::BelowASupersedingLevel },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unsupported feature level: a level above the recovered high watermark is refused before any write for {example}"
 )]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
-    high_watermark: HighWatermarkFile,
+async fn bdd_verify_a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
+    example: String,
 ) {
+    type Example = (HighWatermarkFile,);
+    let (high_watermark,): Example = match example.as_str() {
+        "at log start" => (HighWatermarkFile::AtLogStart,),
+        "missing" => (HighWatermarkFile::Missing,),
+        "below a superseding level" => (HighWatermarkFile::BelowASupersedingLevel,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let dir = TempDir::new().unwrap();
     let cluster_id = Uuid::new_v4();
     let (level, then, refusal) = match high_watermark {
@@ -267,8 +280,25 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
     check!(protected_metadata_files(&metadata_dir) == before);
 }
 
+/// The high-watermark file is a cache, and a restart can recover a high
+/// watermark below the finalized level. The refusal must still come before
+/// the engine writes anything: an engine that started would elect itself,
+/// append to the log, commit the level, and only then stop.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a level above the recovered high watermark is refused before any write"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
+async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(example: String) {
+    let _ = example;
+}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unsupported feature level: a controller stops when it replays a level it does not support"
+)]
+async fn bdd_verify_a_controller_stops_when_it_replays_a_level_it_does_not_support() {
     let dir = TempDir::new().unwrap();
     let controller = Controller::start(config().dir(&dir).cluster_id(Uuid::new_v4()).call())
         .await
@@ -310,8 +340,19 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
     controller.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a controller stops when it replays a level it does not support"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_that_stops_for_any_other_reason_reports_no_fault() {
+async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unsupported feature level: a controller that stops for any other reason reports no fault"
+)]
+async fn bdd_verify_a_controller_that_stops_for_any_other_reason_reports_no_fault() {
     let dir = TempDir::new().unwrap();
     let controller = Controller::start(
         config()
@@ -335,3 +376,11 @@ async fn a_controller_that_stops_for_any_other_reason_reports_no_fault() {
     check!(fatal.changed().await.is_err());
     check!(fatal.borrow().is_none());
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
+    name = "a controller that stops for any other reason reports no fault"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controller_that_stops_for_any_other_reason_reports_no_fault() {}

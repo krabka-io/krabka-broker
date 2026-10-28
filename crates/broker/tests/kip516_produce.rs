@@ -19,8 +19,9 @@ use krabka_protocol::owned::{
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
-#[tokio::test]
-async fn produce_unresolved_topic_id_returns_unknown_topic_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kip516 produce: produce unresolved topic id returns unknown topic id")]
+async fn bdd_verify_produce_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
         .send(create_topic_request(
@@ -80,3 +81,11 @@ async fn produce_unresolved_topic_id_returns_unknown_topic_id() {
     }
     assert!(actual == expected);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_produce.feature",
+    name = "produce unresolved topic id returns unknown topic id"
+)]
+#[tokio::test]
+async fn produce_unresolved_topic_id_returns_unknown_topic_id() {}

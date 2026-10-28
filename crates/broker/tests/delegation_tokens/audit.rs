@@ -69,15 +69,11 @@ fn secret_spellings(hmac: &[u8]) -> Vec<String> {
     vec![general_purpose::STANDARD.encode(hmac), hex]
 }
 
-/// Mint, renew and expire one token over a SASL-authenticated connection, and
-/// prove each mutation reached the audit topic naming that token's id.
-///
-/// The expire case is the load-bearing one. Its record can only carry the id
-/// if the broker read the id off the metadata image before the delete, so a
-/// lookup that moved after the mutation would leave this waiting on a record
-/// that never arrives.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delegation_token_mutations_reach_the_audit_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation tokens audit: delegation token mutations reach the audit topic"
+)]
+async fn bdd_verify_delegation_token_mutations_reach_the_audit_topic() {
     let (handle, _dir, addr) = start_broker().await;
     handle.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
@@ -159,3 +155,18 @@ async fn delegation_token_mutations_reach_the_audit_topic() {
 
     handle.shutdown().await;
 }
+
+/// Mint, renew and expire one token over a SASL-authenticated connection, and
+/// prove each mutation reached the audit topic naming that token's id.
+///
+/// The expire case is the load-bearing one. Its record can only carry the id
+/// if the broker read the id off the metadata image before the delete, so a
+/// lookup that moved after the mutation would leave this waiting on a record
+/// that never arrives.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/audit.feature",
+    name = "delegation token mutations reach the audit topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegation_token_mutations_reach_the_audit_topic() {}

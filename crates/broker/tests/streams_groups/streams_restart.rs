@@ -64,17 +64,11 @@ impl Member {
     }
 }
 
-/// A member that joins after a restart gets the task that the reloaded member
-/// gives up, as it would without the restart.
-///
-/// The broker spawns the actor of a reloaded group during the
-/// `__consumer_offsets` replay, before it connects the metadata source that the
-/// assignment reads. An actor that never saw the source assigned no task, so
-/// the reloaded member revoked both of its tasks and the new member got none:
-/// the Kafka system test `test_streams_should_failover_while_brokers_down`
-/// then saw no instance process a record.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams groups streams restart: a reloaded group assigns tasks to a member that joins after a restart"
+)]
+async fn bdd_verify_a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart() {
     let (broker, bootstrap, dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -125,3 +119,20 @@ async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart()
         "the members did not share the tasks after the restart"
     );
 }
+
+/// A member that joins after a restart gets the task that the reloaded member
+/// gives up, as it would without the restart.
+///
+/// The broker spawns the actor of a reloaded group during the
+/// `__consumer_offsets` replay, before it connects the metadata source that the
+/// assignment reads. An actor that never saw the source assigned no task, so
+/// the reloaded member revoked both of its tasks and the new member got none:
+/// the Kafka system test `test_streams_should_failover_while_brokers_down`
+/// then saw no instance process a record.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_restart.feature",
+    name = "a reloaded group assigns tasks to a member that joins after a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart() {}

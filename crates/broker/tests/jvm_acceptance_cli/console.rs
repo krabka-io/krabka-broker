@@ -20,9 +20,9 @@ use {
 // complete the kernel-level handshake but the broker never reads them,
 // and the Java AdminClient times out. A multi-thread runtime puts the
 // broker on a separate worker so the test's blocking calls don't starve it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn console_producer_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli console: console producer round trip")]
+async fn bdd_verify_console_producer_round_trip() {
     const TOPIC: &str = "krabka-broker-itest";
 
     let (broker, _dir) = start_console_broker(TOPIC, 1).await;
@@ -39,12 +39,21 @@ async fn console_producer_round_trip() {
     broker.shutdown().await;
 }
 
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "console producer round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_producer_round_trip() {}
+
 // Same multi-thread runtime caveat as `console_producer_round_trip`:
 // the test body makes blocking `Command::output()` calls; a
 // single-threaded runtime would starve the broker's accept loop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn rust_producer_to_console_consumer() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli console: rust producer to console consumer")]
+async fn bdd_verify_rust_producer_to_console_consumer() {
     use krabka_client_producer::{Acks, Compression, Producer, ProducerRecord};
 
     const TOPIC: &str = "krabka-rust-producer-itest";
@@ -88,30 +97,18 @@ async fn rust_producer_to_console_consumer() {
     broker.shutdown().await;
 }
 
-/// The JVM tools read a `message.timestamp.type=LogAppendTime` topic as a
-/// log-append-time topic: `kafka-console-consumer --property
-/// print.timestamp=true` prints `LogAppendTime:<ms>` rather than
-/// `CreateTime:<ms>`, and `GetOffsetShell --time <that ms>` resolves the stamp
-/// back to the batch's offset.
-///
-/// The printed prefix is the claim this case exists for. It comes from
-/// `ConsumerRecord.timestampType()`, which the JVM client reads out of the
-/// batch's attribute bit — the one the broker patched at append. A broker that
-/// answered the right `logAppendTimeMs` in the produce response but left the
-/// stored bit alone still prints `CreateTime` here, and no in-process test of
-/// the response row can see that.
-///
-/// The `--time` lookup is the second half: Kafka builds the time index from
-/// the rewritten `maxTimestamp`, so `offsetsForTimes` on such a topic answers
-/// in append time. A broker that stamped the header but indexed the producer's
-/// timestamp passes the print check and fails this one.
-///
-/// This case has never been executed: the machine it was written on has no
-/// working Docker daemon. Run it with
-/// `cargo test -p krabka-broker --test jvm_acceptance_cli -- --ignored --nocapture`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn console_consumer_prints_log_append_time() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "rust producer to console consumer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rust_producer_to_console_consumer() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli console: console consumer prints log append time")]
+async fn bdd_verify_console_consumer_prints_log_append_time() {
     const TOPIC: &str = "krabka-log-append-time";
 
     let (broker, _dir) = start_host_broker().await;
@@ -176,3 +173,33 @@ async fn console_consumer_prints_log_append_time() {
 
     broker.shutdown().await;
 }
+
+/// The JVM tools read a `message.timestamp.type=LogAppendTime` topic as a
+/// log-append-time topic: `kafka-console-consumer --property
+/// print.timestamp=true` prints `LogAppendTime:<ms>` rather than
+/// `CreateTime:<ms>`, and `GetOffsetShell --time <that ms>` resolves the stamp
+/// back to the batch's offset.
+///
+/// The printed prefix is the claim this case exists for. It comes from
+/// `ConsumerRecord.timestampType()`, which the JVM client reads out of the
+/// batch's attribute bit — the one the broker patched at append. A broker that
+/// answered the right `logAppendTimeMs` in the produce response but left the
+/// stored bit alone still prints `CreateTime` here, and no in-process test of
+/// the response row can see that.
+///
+/// The `--time` lookup is the second half: Kafka builds the time index from
+/// the rewritten `maxTimestamp`, so `offsetsForTimes` on such a topic answers
+/// in append time. A broker that stamped the header but indexed the producer's
+/// timestamp passes the print check and fails this one.
+///
+/// This case has never been executed: the machine it was written on has no
+/// working Docker daemon. Run it with
+/// `cargo test -p krabka-broker --test jvm_acceptance_cli -- --ignored --nocapture`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console.feature",
+    name = "console consumer prints log append time"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_consumer_prints_log_append_time() {}

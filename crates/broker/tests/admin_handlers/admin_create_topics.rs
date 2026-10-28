@@ -68,8 +68,11 @@ macro_rules! config_entries {
     };
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_topics_returns_the_configs_describe_configs_reports() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin create topics: create topics returns the configs describe configs reports"
+)]
+async fn bdd_verify_create_topics_returns_the_configs_describe_configs_reports() {
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
 
     let create = CreateTopicsRequest {
@@ -131,3 +134,11 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
 
     assert!(from_create == from_describe);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_create_topics.feature",
+    name = "create topics returns the configs describe configs reports"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_topics_returns_the_configs_describe_configs_reports() {}

@@ -31,8 +31,11 @@ use {
     std::time::Duration,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn diskless_acks_all_append_survives_the_acking_broker() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless e2e failover: diskless acks all append survives the acking broker"
+)]
+async fn bdd_verify_diskless_acks_all_append_survives_the_acking_broker() {
     // Park the object flusher for the length of the case. A flush would trim
     // the committed prefix out of both the leader's log and the voters', and
     // this case is about what the *WAL quorum* holds, not about what the
@@ -168,3 +171,11 @@ async fn diskless_acks_all_append_survives_the_acking_broker() {
 
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/failover.feature",
+    name = "diskless acks all append survives the acking broker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn diskless_acks_all_append_survives_the_acking_broker() {}

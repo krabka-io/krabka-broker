@@ -64,11 +64,11 @@ async fn handle_denies_cluster_alter_with_top_level_error() {
     broker_handle.shutdown().await;
 }
 
-/// A self-bootstrapped broker finalizes `metadata.version` 30 (4.3-IV0),
-/// `group.version` 1 and `transaction.version` 2, and leaves
-/// `share.version`, `streams.version` and ELR off.
-#[tokio::test]
-async fn requests_apply_atomically_with_kafkas_response_shape() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers update features tests: requests apply atomically with kafkas response shape"
+)]
+async fn bdd_verify_requests_apply_atomically_with_kafkas_response_shape() {
     let group = "group.version";
     let share = "share.version";
     let failing_case = |version: i16, case| {
@@ -161,6 +161,17 @@ async fn requests_apply_atomically_with_kafkas_response_shape() {
         broker_handle.shutdown().await;
     }
 }
+
+/// A self-bootstrapped broker finalizes `metadata.version` 30 (4.3-IV0),
+/// `group.version` 1 and `transaction.version` 2, and leaves
+/// `share.version`, `streams.version` and ELR off.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/update_features/tests.feature",
+    name = "requests apply atomically with kafkas response shape"
+)]
+#[tokio::test]
+async fn requests_apply_atomically_with_kafkas_response_shape() {}
 
 async fn wait_for_group_version_off(broker: &Broker) {
     time::timeout(Duration::from_secs(5), async {

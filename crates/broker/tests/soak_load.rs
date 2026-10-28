@@ -45,8 +45,11 @@ fn self_check() -> Contract {
     Contract::from_file(&manifest_dir().join("../../bench/soak/self-check.yaml")).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "soak load: an undisturbed load reads back once and hides what it aborted"
+)]
+async fn bdd_verify_an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
     let (_dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let admin = connect_client(&bootstrap, None).await;
@@ -121,10 +124,19 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
     check!(!evidence.commits.is_empty());
 }
 
-/// A record its producer sent once but that sits at two offsets is reported
-/// with both, and a record no soak producer wrote is left out of the ledger.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_skipped() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_load.feature",
+    name = "an undisturbed load reads back once and hides what it aborted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "soak load: a record stored twice is read back at both offsets and a stranger is skipped"
+)]
+async fn bdd_verify_a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_skipped() {
     let (_dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let admin = connect_client(&bootstrap, None).await;
@@ -175,3 +187,13 @@ async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_sk
             }
     );
 }
+
+/// A record its producer sent once but that sits at two offsets is reported
+/// with both, and a record no soak producer wrote is left out of the ledger.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_load.feature",
+    name = "a record stored twice is read back at both offsets and a stranger is skipped"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_skipped() {}

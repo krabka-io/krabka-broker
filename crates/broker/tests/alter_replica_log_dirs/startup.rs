@@ -23,15 +23,11 @@ use {
     std::fs,
 };
 
-/// Boot a broker, create a topic, produce records, shut down, then
-/// plant a `<topic>-<partition>-future/` directory in the OTHER log
-/// dir before the restart. The restart must (a) re-discover the
-/// stranded future log with `log_dir::scan_future`, (b) call
-/// `future_log::resume_move` for the real partition, and (c) drive
-/// the move to completion, so that `DescribeLogDirs` reports the
-/// partition in the target dir with `is_future_key=false`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn startup_resumes_move_for_existing_partition() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs startup: startup resumes move for existing partition"
+)]
+async fn bdd_verify_startup_resumes_move_for_existing_partition() {
     // First boot: create topic, produce a handful of records, then
     // shut down cleanly so the partition directory is left on disk.
     let (handle, primary, extra, addr) = start_two_dir_broker().await;
@@ -96,12 +92,24 @@ async fn startup_resumes_move_for_existing_partition() {
     handle.shutdown().await;
 }
 
-/// Plant a `<topic>-<partition>-future` directory in one of the
-/// configured log.dirs for a topic that does not exist, then start the
-/// broker. The startup scan in `Broker::start` must remove the
-/// stranded future dir. `DescribeLogDirs` then reports no future entries.
-#[tokio::test]
-async fn startup_cleans_up_stranded_future_dir() {
+/// Boot a broker, create a topic, produce records, shut down, then
+/// plant a `<topic>-<partition>-future/` directory in the OTHER log
+/// dir before the restart. The restart must (a) re-discover the
+/// stranded future log with `log_dir::scan_future`, (b) call
+/// `future_log::resume_move` for the real partition, and (c) drive
+/// the move to completion, so that `DescribeLogDirs` reports the
+/// partition in the target dir with `is_future_key=false`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/startup.feature",
+    name = "startup resumes move for existing partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_resumes_move_for_existing_partition() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("alter replica log dirs startup: startup cleans up stranded future dir")]
+async fn bdd_verify_startup_cleans_up_stranded_future_dir() {
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
 
@@ -133,3 +141,15 @@ async fn startup_cleans_up_stranded_future_dir() {
 
     handle.shutdown().await;
 }
+
+/// Plant a `<topic>-<partition>-future` directory in one of the
+/// configured log.dirs for a topic that does not exist, then start the
+/// broker. The startup scan in `Broker::start` must remove the
+/// stranded future dir. `DescribeLogDirs` then reports no future entries.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/startup.feature",
+    name = "startup cleans up stranded future dir"
+)]
+#[tokio::test]
+async fn startup_cleans_up_stranded_future_dir() {}

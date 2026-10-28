@@ -144,8 +144,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn member_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence member tests: member metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_member_metadata_bytes_match_kafka_schema() {
         let v = StreamsGroupMemberMetadataValue {
             instance_id: None,
             rack_id: None,
@@ -176,6 +179,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/member.feature",
+        name = "tests: member metadata bytes match kafka schema"
+    )]
+    fn member_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn null_user_endpoint_is_one_negative_byte() {

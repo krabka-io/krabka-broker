@@ -533,8 +533,9 @@ mod tests {
         krabka_units::prelude::{ByteSizeExt as _, TimeExt, bytes, millis, secs},
     };
 
-    #[test]
-    fn defaults_match_kafka_4x() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config tests: defaults match kafka 4x")]
+    fn bdd_verify_defaults_match_kafka_4x() {
         assert2::assert!(
             LogConfig::default()
                 == LogConfig {
@@ -581,8 +582,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn defaults_cross_the_raw_seams_as_kafkas_documented_numbers() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config.feature",
+        name = "tests: defaults match kafka 4x"
+    )]
+    fn defaults_match_kafka_4x() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tests: defaults cross the raw seams as kafkas documented numbers"
+    )]
+    fn bdd_verify_defaults_cross_the_raw_seams_as_kafkas_documented_numbers() {
         // The quantities exist to be handed to `.index` sizing, retention
         // arithmetic, and Kafka config reporting as plain integers; a
         // scale slip in a constructor would show up here.
@@ -596,29 +607,54 @@ mod tests {
         assert2::check!(c.delete_retention.millis_i64() == 86_400_000);
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config.feature",
+        name = "tests: defaults cross the raw seams as kafkas documented numbers"
+    )]
+    fn defaults_cross_the_raw_seams_as_kafkas_documented_numbers() {}
+
     #[test]
     fn default_cleanup_policy_is_delete() {
         let c = LogConfig::default();
         assert2::assert!(c.cleanup_policy == CleanupPolicy::Delete);
     }
 
-    #[yare::parameterized(
-        delete = { CleanupPolicy::Delete, false, true, "delete" },
-        compact = { CleanupPolicy::Compact, true, false, "compact" },
-        compact_and_delete = { CleanupPolicy::CompactAndDelete, true, true, "compact,delete" },
-        no_cleanup = { CleanupPolicy::NoCleanup, false, false, "" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config tests: a policy reports the halves of kafkas cleanup policy list it contains for {example}"
     )]
-    fn a_policy_reports_the_halves_of_kafkas_cleanup_policy_list_it_contains(
-        policy: CleanupPolicy,
-        compact: bool,
-        delete: bool,
-        rendered: &'static str,
+    fn bdd_verify_a_policy_reports_the_halves_of_kafkas_cleanup_policy_list_it_contains(
+        example: String,
     ) {
+        type Example = (CleanupPolicy, bool, bool, &'static str);
+        let (policy, compact, delete, rendered): Example = match example.as_str() {
+            "delete" => (CleanupPolicy::Delete, false, true, "delete"),
+            "compact" => (CleanupPolicy::Compact, true, false, "compact"),
+            "compact and delete" => (
+                CleanupPolicy::CompactAndDelete,
+                true,
+                true,
+                "compact,delete",
+            ),
+            "no cleanup" => (CleanupPolicy::NoCleanup, false, false, ""),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // `LogConfig` in Kafka derives `compact` and `delete` from the list by
         // membership, so `compact,delete` is both, and each name alone is one.
         assert2::check!(policy.contains_compact() == compact, "{policy:?}");
         assert2::check!(policy.contains_delete() == delete, "{policy:?}");
         assert2::check!(policy.as_str() == rendered, "{policy:?}");
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config.feature",
+        name = "tests: a policy reports the halves of kafkas cleanup policy list it contains"
+    )]
+    fn a_policy_reports_the_halves_of_kafkas_cleanup_policy_list_it_contains(example: String) {
+        let _ = example;
     }
 
     #[test]

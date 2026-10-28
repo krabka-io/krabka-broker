@@ -11,10 +11,9 @@ use {
     tokio::time,
 };
 
-/// 2. `submit_change` on a follower forwards to the leader, commits through
-///    record-carrying replication, and the topic appears in ALL three images.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_submit_change_propagates() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft engine sim replication: follower submit change propagates")]
+async fn bdd_verify_follower_submit_change_propagates() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(200);
 
@@ -60,3 +59,13 @@ async fn follower_submit_change_propagates() {
         net.get(id).unwrap().shutdown().await;
     }
 }
+
+/// 2. `submit_change` on a follower forwards to the leader, commits through
+///    record-carrying replication, and the topic appears in ALL three images.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/replication.feature",
+    name = "follower submit change propagates"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn follower_submit_change_propagates() {}

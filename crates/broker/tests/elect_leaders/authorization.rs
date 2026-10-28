@@ -27,15 +27,9 @@ use {
     tokio::time,
 };
 
-/// Single-broker SASL/PLAIN cluster.
-///
-/// alice authenticates with PLAIN credentials but has **no** ACLs. The test
-/// seeds a dummy ACL to disable the compat shim, which allows every operation
-/// while `image.acls` is empty. alice then sends `ElectLeaders Preferred` for
-/// topic "foo-auth-test" partition 0. Each row must carry
-/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_super_user_without_acl_denied() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("elect leaders authorization: non super user without acl denied")]
+async fn bdd_verify_non_super_user_without_acl_denied() {
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
@@ -122,3 +116,18 @@ async fn non_super_user_without_acl_denied() {
         "expected CLUSTER_AUTHORIZATION_FAILED (31) for alice; got {resp:?}"
     );
 }
+
+/// Single-broker SASL/PLAIN cluster.
+///
+/// alice authenticates with PLAIN credentials but has **no** ACLs. The test
+/// seeds a dummy ACL to disable the compat shim, which allows every operation
+/// while `image.acls` is empty. alice then sends `ElectLeaders Preferred` for
+/// topic "foo-auth-test" partition 0. Each row must carry
+/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/elect_leaders/authorization.feature",
+    name = "non super user without acl denied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_super_user_without_acl_denied() {}

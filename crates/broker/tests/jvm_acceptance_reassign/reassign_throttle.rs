@@ -16,9 +16,11 @@ use {
     assert2::assert,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign reassign throttle: jvm kafka reassign partitions with throttle end to end"
+)]
+async fn bdd_verify_jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
     const TOPIC: &str = "krabka-throttle-reassign-itest";
 
     let (cluster, _admin_props, admin_mount) = Box::pin(reassignment_cluster(TOPIC)).await;
@@ -113,3 +115,12 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
     cluster.h2.shutdown().await;
     cluster.h3.shutdown().await;
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_throttle.feature",
+    name = "jvm kafka reassign partitions with throttle end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {}

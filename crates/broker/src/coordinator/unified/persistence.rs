@@ -545,12 +545,11 @@ mod tests {
         }
     }
 
-    /// `GroupCoordinatorRecordHelpers.newOffsetCommitRecord`: a commit with a
-    /// per-commit expiry writes version 1, which has no leader epoch and no
-    /// topic id, and every other commit writes version 4, flexible, with the
-    /// topic id in tagged field 0 unless it is the zero id.
-    #[test]
-    fn offset_commit_value_writes_kafkas_version_and_bytes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence tests: offset commit value writes kafkas version and bytes"
+    )]
+    fn bdd_verify_offset_commit_value_writes_kafkas_version_and_bytes() {
         let v4_with_id = wire_bytes(&[
             "0004",                             // version
             "000000000000002a",                 // offset
@@ -597,6 +596,17 @@ mod tests {
             assert!(OffsetCommitValue::decode_value(&encoded).unwrap() == read);
         }
     }
+
+    /// `GroupCoordinatorRecordHelpers.newOffsetCommitRecord`: a commit with a
+    /// per-commit expiry writes version 1, which has no leader epoch and no
+    /// topic id, and every other commit writes version 4, flexible, with the
+    /// topic id in tagged field 0 unless it is the zero id.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence.feature",
+        name = "tests: offset commit value writes kafkas version and bytes"
+    )]
+    fn offset_commit_value_writes_kafkas_version_and_bytes() {}
 
     /// Every version Kafka defines decodes, the way `OffsetAndMetadata.
     /// fromRecord` reads it: a leader epoch only from version 3, an expiry only

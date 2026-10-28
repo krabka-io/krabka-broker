@@ -331,9 +331,9 @@ mod tests {
         values
     }
 
-    /// A resident set that does not move is the whole point of the lane.
-    #[test]
-    fn a_flat_series_is_level() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a flat series is level")]
+    fn bdd_verify_a_flat_series_is_level() {
         let judged = judge(&series(&[500.0; 40]), BOUND);
         assert!(let Verdict::Level { .. } = &judged);
         let Verdict::Level { rise, .. } = judged else {
@@ -342,17 +342,33 @@ mod tests {
         check!(rise.abs() < 1.0);
     }
 
-    /// Sampling jitter around a fixed mean is not drift.
-    #[test]
-    fn noise_around_a_flat_mean_is_level() {
+    /// A resident set that does not move is the whole point of the lane.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a flat series is level"
+    )]
+    fn a_flat_series_is_level() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: noise around a flat mean is level")]
+    fn bdd_verify_noise_around_a_flat_mean_is_level() {
         let wobble = [500.0, 512.0, 488.0, 505.0, 495.0, 517.0, 483.0, 501.0];
         let values: Vec<f64> = (0..40).map(|i| wobble[i % wobble.len()]).collect();
         check!(!judge(&series(&values), BOUND).is_failure());
     }
 
-    /// The failure this lane exists for: a series that climbs steadily.
-    #[test]
-    fn a_rising_series_drifts() {
+    /// Sampling jitter around a fixed mean is not drift.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: noise around a flat mean is level"
+    )]
+    fn noise_around_a_flat_mean_is_level() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a rising series drifts")]
+    fn bdd_verify_a_rising_series_drifts() {
         let values: Vec<f64> = (0..40)
             .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
             .collect();
@@ -367,30 +383,53 @@ mod tests {
         check!(judged.to_string().contains("trends upward"));
     }
 
-    /// Segment roll and retention make every log-directory series a sawtooth.
-    /// A rule that read the first and last sample would call this a leak
-    /// whenever the run ended near a tooth's peak.
-    #[test]
-    fn a_segment_roll_sawtooth_is_level() {
+    /// The failure this lane exists for: a series that climbs steadily.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a rising series drifts"
+    )]
+    fn a_rising_series_drifts() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a segment roll sawtooth is level")]
+    fn bdd_verify_a_segment_roll_sawtooth_is_level() {
         let values = sawtooth(10, 6, 400.0, 120.0, 0.0);
         check!(!judge(&series(&values), BOUND).is_failure());
     }
 
-    /// The same sawtooth on a baseline that creeps: what a log directory does
-    /// when retention deletes less than the producer writes. It must fail even
-    /// though the teeth dwarf the creep.
-    #[test]
-    fn a_sawtooth_on_a_rising_baseline_drifts() {
+    /// Segment roll and retention make every log-directory series a sawtooth.
+    /// A rule that read the first and last sample would call this a leak
+    /// whenever the run ended near a tooth's peak.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a segment roll sawtooth is level"
+    )]
+    fn a_segment_roll_sawtooth_is_level() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a sawtooth on a rising baseline drifts")]
+    fn bdd_verify_a_sawtooth_on_a_rising_baseline_drifts() {
         let values = sawtooth(10, 6, 400.0, 120.0, 40.0);
         let judged = judge(&series(&values), BOUND);
         check!(judged.is_failure(), "{judged}");
         assert!(let Verdict::Drift { .. } = judged);
     }
 
-    /// A ceiling breach names the sample that broke it, wherever in the run it
-    /// landed -- warm-up included.
-    #[test]
-    fn a_ceiling_breach_names_the_sample() {
+    /// The same sawtooth on a baseline that creeps: what a log directory does
+    /// when retention deletes less than the producer writes. It must fail even
+    /// though the teeth dwarf the creep.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a sawtooth on a rising baseline drifts"
+    )]
+    fn a_sawtooth_on_a_rising_baseline_drifts() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a ceiling breach names the sample")]
+    fn bdd_verify_a_ceiling_breach_names_the_sample() {
         let mut values = vec![500.0; 40];
         values[3] = 1_400.0;
         let judged = judge(&series(&values), BOUND);
@@ -403,19 +442,35 @@ mod tests {
         check!(judged.to_string().contains("over the 1000 widgets ceiling"));
     }
 
-    /// A ceiling is a ceiling, not an average: one breach fails a series whose
-    /// every other sample is comfortable.
-    #[test]
-    fn the_ceiling_outranks_a_flat_trend() {
+    /// A ceiling breach names the sample that broke it, wherever in the run it
+    /// landed -- warm-up included.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a ceiling breach names the sample"
+    )]
+    fn a_ceiling_breach_names_the_sample() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: the ceiling outranks a flat trend")]
+    fn bdd_verify_the_ceiling_outranks_a_flat_trend() {
         let mut values = vec![500.0; 40];
         values[39] = 1_001.0;
         check!(judge(&series(&values), BOUND).is_failure());
     }
 
-    /// A soak that sampled four times has measured nothing, and must not be
-    /// able to report level.
-    #[test]
-    fn too_few_samples_is_not_a_pass() {
+    /// A ceiling is a ceiling, not an average: one breach fails a series whose
+    /// every other sample is comfortable.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: the ceiling outranks a flat trend"
+    )]
+    fn the_ceiling_outranks_a_flat_trend() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: too few samples is not a pass")]
+    fn bdd_verify_too_few_samples_is_not_a_pass() {
         let judged = judge(&series(&[500.0; 4]), BOUND);
         assert!(let Verdict::TooFewSamples { .. } = &judged);
         let Verdict::TooFewSamples { judged: n, .. } = judged else {
@@ -425,27 +480,52 @@ mod tests {
         check!(judge(&series(&[]), BOUND).is_failure());
     }
 
-    /// A series that falls is not a drift failure: the tolerance is one-sided
-    /// on purpose, because a cache that shrinks is not a leak.
-    #[test]
-    fn a_falling_series_is_level() {
+    /// A soak that sampled four times has measured nothing, and must not be
+    /// able to report level.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: too few samples is not a pass"
+    )]
+    fn too_few_samples_is_not_a_pass() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: a falling series is level")]
+    fn bdd_verify_a_falling_series_is_level() {
         let values: Vec<f64> = (0..40)
             .map(|i| 5.0f64.mul_add(-f64::from(i), 900.0))
             .collect();
         check!(!judge(&series(&values), BOUND).is_failure());
     }
 
-    /// The floor keeps a near-zero series from being failed by its own noise:
-    /// 20% of a mean of 2 is 0.4, which one sample of jitter clears.
-    #[test]
-    fn the_floor_protects_a_near_zero_series() {
+    /// A series that falls is not a drift failure: the tolerance is one-sided
+    /// on purpose, because a cache that shrinks is not a leak.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: a falling series is level"
+    )]
+    fn a_falling_series_is_level() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: the floor protects a near zero series")]
+    fn bdd_verify_the_floor_protects_a_near_zero_series() {
         let values: Vec<f64> = (0..40).map(|i| f64::from(i % 5)).collect();
         check!(!judge(&series(&values), BOUND).is_failure());
     }
 
-    /// Every series is judged, and in the order given.
-    #[test]
-    fn judge_all_reports_one_verdict_per_series() {
+    /// The floor keeps a near-zero series from being failed by its own noise:
+    /// 20% of a mean of 2 is 0.4, which one sample of jitter clears.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: the floor protects a near zero series"
+    )]
+    fn the_floor_protects_a_near_zero_series() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak drift tests: judge all reports one verdict per series")]
+    fn bdd_verify_judge_all_reports_one_verdict_per_series() {
         let mut rising = series(
             &(0..40)
                 .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
@@ -470,4 +550,12 @@ mod tests {
         check!(verdicts[0].to_string().starts_with("rising:"));
         check!(verdicts[1].to_string().starts_with("flat:"));
     }
+
+    /// Every series is judged, and in the order given.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/drift.feature",
+        name = "tests: judge all reports one verdict per series"
+    )]
+    fn judge_all_reports_one_verdict_per_series() {}
 }

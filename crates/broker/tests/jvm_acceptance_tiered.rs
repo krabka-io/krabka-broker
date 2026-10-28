@@ -56,9 +56,9 @@ async fn start_minio_topic(topic: &str, rlmm: krabka_broker::RlmmKind) -> MinioT
 // Same multi-thread caveat as `console_producer_round_trip`: blocking
 // `Command::output()` calls would starve the broker accept loop on a
 // single-threaded runtime.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn tiered_storage_round_trip_through_minio() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance tiered: tiered storage round trip through minio")]
+async fn bdd_verify_tiered_storage_round_trip_through_minio() {
     const TOPIC: &str = "krabka-tiered-minio-itest";
 
     let minio_topic = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
@@ -85,18 +85,18 @@ async fn tiered_storage_round_trip_through_minio() {
     // `_minio` is dropped here; the container is removed via `docker rm -f`.
 }
 
-/// KIP-950 through the stock tool: `kafka-configs` refuses the bare
-/// `remote.storage.enable=false`, and accepts the flip that comes with
-/// `remote.log.delete.on.disable=true`. The bucket is empty afterwards and
-/// the partition's log start offset has risen to the local log start, so no
-/// consumer is left pointing at a segment the flip erased.
-///
-/// The refusal is the half a runbook hits first: Kafka answers it with
-/// `InvalidConfigurationException` and names both ways out, and an operator
-/// who reads only "it failed" would otherwise try the same thing again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn tiered_storage_disable_needs_delete_on_disable() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tiered.feature",
+    name = "tiered storage round trip through minio"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tiered_storage_round_trip_through_minio() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance tiered: tiered storage disable needs delete on disable")]
+async fn bdd_verify_tiered_storage_disable_needs_delete_on_disable() {
     const TOPIC: &str = "krabka-tiered-disable-itest";
 
     let minio_topic = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
@@ -167,6 +167,24 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
     minio_topic.broker.shutdown().await;
 }
 
+/// KIP-950 through the stock tool: `kafka-configs` refuses the bare
+/// `remote.storage.enable=false`, and accepts the flip that comes with
+/// `remote.log.delete.on.disable=true`. The bucket is empty afterwards and
+/// the partition's log start offset has risen to the local log start, so no
+/// consumer is left pointing at a segment the flip erased.
+///
+/// The refusal is the half a runbook hits first: Kafka answers it with
+/// `InvalidConfigurationException` and names both ways out, and an operator
+/// who reads only "it failed" would otherwise try the same thing again.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tiered.feature",
+    name = "tiered storage disable needs delete on disable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tiered_storage_disable_needs_delete_on_disable() {}
+
 // ---------------------------------------------------------------------------
 // Topic-backed RLMM durability test (KIP-405 S3 + durable RLMM restart).
 //
@@ -177,9 +195,9 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
 // broker restart.
 // ---------------------------------------------------------------------------
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn tiered_storage_topic_rlmm_survives_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance tiered: tiered storage topic rlmm survives restart")]
+async fn bdd_verify_tiered_storage_topic_rlmm_survives_restart() {
     const TOPIC: &str = "krabka-tiered-restart-itest";
 
     // Boot with the durable topic-backed RLMM.
@@ -281,6 +299,15 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // `_minio` is dropped here; `_dir` (log.dir) is also dropped — cleanup.
 }
 
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tiered.feature",
+    name = "tiered storage topic rlmm survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tiered_storage_topic_rlmm_survives_restart() {}
+
 // ---------------------------------------------------------------------------
 // KFC-3 point-in-time restore, read back by the JVM console consumer.
 //
@@ -327,9 +354,11 @@ fn restore_argv(minio_port: u16, log_dir: &Path) -> Vec<String> {
     .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn restored_cluster_serves_the_jvm_console_consumer() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance tiered: restored cluster serves the jvm console consumer"
+)]
+async fn bdd_verify_restored_cluster_serves_the_jvm_console_consumer() {
     const TOPIC: &str = "krabka-tiered-restore-itest";
 
     let MinioTopic {
@@ -404,6 +433,15 @@ async fn restored_cluster_serves_the_jvm_console_consumer() {
     restored_broker.shutdown().await;
     // `_minio` is dropped here; the container is removed via `docker rm -f`.
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tiered.feature",
+    name = "restored cluster serves the jvm console consumer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restored_cluster_serves_the_jvm_console_consumer() {}
 
 fn mutable_minio_config(port: u16) -> krabka_remote_storage::S3Config {
     krabka_remote_storage::S3Config {

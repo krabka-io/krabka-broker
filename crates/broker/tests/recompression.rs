@@ -161,8 +161,9 @@ async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Rec
 
 use crate::support::partitions::wait_for_compression;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn topic_compression_lz4_recompresses_producer_gzip_batch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("recompression: topic compression lz4 recompresses producer gzip batch")]
+async fn bdd_verify_topic_compression_lz4_recompresses_producer_gzip_batch() {
     const TOPIC: &str = "recompress-target";
     let StartedBroker { handle, addr } = start_broker().await;
 
@@ -192,12 +193,17 @@ async fn topic_compression_lz4_recompresses_producer_gzip_batch() {
     handle.shutdown().await;
 }
 
-/// Sanity check: when `compression.type=producer` (the Kafka default),
-/// the broker does NOT recompress. The served batch keeps the
-/// producer's gzip flag verbatim. Without this guard a regression that
-/// always recompresses would still satisfy the lz4 happy-path test.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/recompression.feature",
+    name = "topic compression lz4 recompresses producer gzip batch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn topic_compression_producer_preserves_producer_gzip() {
+async fn topic_compression_lz4_recompresses_producer_gzip_batch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("recompression: topic compression producer preserves producer gzip")]
+async fn bdd_verify_topic_compression_producer_preserves_producer_gzip() {
     const TOPIC: &str = "passthrough";
     let StartedBroker { handle, addr } = start_broker().await;
 
@@ -218,8 +224,21 @@ async fn topic_compression_producer_preserves_producer_gzip() {
     handle.shutdown().await;
 }
 
-#[test]
-fn stored_owned_batches_honor_every_codec_level() {
+/// Sanity check: when `compression.type=producer` (the Kafka default),
+/// the broker does NOT recompress. The served batch keeps the
+/// producer's gzip flag verbatim. Without this guard a regression that
+/// always recompresses would still satisfy the lz4 happy-path test.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/recompression.feature",
+    name = "topic compression producer preserves producer gzip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn topic_compression_producer_preserves_producer_gzip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("recompression: stored owned batches honor every codec level")]
+fn bdd_verify_stored_owned_batches_honor_every_codec_level() {
     use {
         krabka_log::{Log, LogConfig},
         krabka_units::gibibytes,
@@ -267,5 +286,12 @@ fn stored_owned_batches_honor_every_codec_level() {
         }
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/recompression.feature",
+    name = "stored owned batches honor every codec level"
+)]
+fn stored_owned_batches_honor_every_codec_level() {}
 
 krabka_macros::compression_bytes_fixture!(encoded_at_level, CompressionLevel);

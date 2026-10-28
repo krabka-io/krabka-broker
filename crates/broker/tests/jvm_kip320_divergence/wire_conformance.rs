@@ -145,17 +145,11 @@ public class Kip320Probe {
 }
 "#;
 
-/// Step 1 of Task 11: a JVM client and a Krabka broker exchange
-/// `OffsetForLeaderEpoch` + Fetch v12+. The test produces across two epochs on
-/// the Krabka leader, then runs the official Java consumer. That consumer
-/// issues `OffsetForLeaderEpoch` during position validation and decodes the
-/// tagged `diverging_epoch` / `current_leader` Fetch fields. The test asserts
-/// that the consumer drains both epochs without a deserialization or
-/// truncation fault, and that the old epoch's boundary matches the broker's
-/// view.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
-async fn kip320_wire_conformance_offset_for_leader_epoch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence wire conformance: kip320 wire conformance offset for leader epoch"
+)]
+async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
     const TOPIC: &str = "krabka-kip320-wire";
     let container = support::unique_container_name("krabka-kip320-wire-helper");
     // Allocated rather than fixed at 10692/10693: two runs of this suite would
@@ -319,3 +313,20 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
     docker_rm(&container);
     broker.shutdown().await;
 }
+
+/// Step 1 of Task 11: a JVM client and a Krabka broker exchange
+/// `OffsetForLeaderEpoch` + Fetch v12+. The test produces across two epochs on
+/// the Krabka leader, then runs the official Java consumer. That consumer
+/// issues `OffsetForLeaderEpoch` during position validation and decodes the
+/// tagged `diverging_epoch` / `current_leader` Fetch fields. The test asserts
+/// that the consumer drains both epochs without a deserialization or
+/// truncation fault, and that the old epoch's boundary matches the broker's
+/// view.
+#[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/wire_conformance.feature",
+    name = "kip320 wire conformance offset for leader epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kip320_wire_conformance_offset_for_leader_epoch() {}

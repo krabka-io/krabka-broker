@@ -16,15 +16,11 @@ use {
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
 };
 
-/// A literal freeze stops writes to the topic it names, and to nothing else.
-///
-/// This is the feature in one case. Both topics take a write before the freeze
-/// lands, so the refusal afterwards is the registry entry rather than a produce
-/// path that stopped working; and the control topic keeps taking writes after
-/// it, so the refusal is scoped rather than global. Delete this case and
-/// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze produce gate: a literal freeze refuses produce and the control topic still accepts"
+)]
+async fn bdd_verify_a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {
     let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
 
     check!(produce_outcome(&p.broker, &p.client, "orders", frozen).await == accepted(1));
@@ -41,16 +37,26 @@ async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() 
     p.broker.shutdown().await;
 }
 
-/// A prefixed freeze stops writes to every topic in the namespace, and stops at
-/// the namespace boundary.
+/// A literal freeze stops writes to the topic it names, and to nothing else.
 ///
-/// The namespace scope is the half an ACL cannot express atomically, and it is
-/// the reason this feature exists rather than a deny binding per topic. The
-/// case runs two controls on purpose: `CONTROL` shows the produce path works at
-/// all, and `tenant-b.orders` shows the prefix walk stops where the scope stops
-/// rather than matching every topic once the registry is non-empty.
+/// This is the feature in one case. Both topics take a write before the freeze
+/// lands, so the refusal afterwards is the registry entry rather than a produce
+/// path that stopped working; and the control topic keeps taking writes after
+/// it, so the refusal is scoped rather than global. Delete this case and
+/// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a literal freeze refuses produce and the control topic still accepts"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
+async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze produce gate: a prefix freeze refuses produce to every topic it covers"
+)]
+async fn bdd_verify_a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
     let p = support::start().await;
     let covered = create_topic(&p.broker, &p.client, "tenant-a.orders").await;
     let neighbour = create_topic(&p.broker, &p.client, "tenant-b.orders").await;
@@ -72,16 +78,27 @@ async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
     p.broker.shutdown().await;
 }
 
-/// A topic created after a covering prefix freeze is frozen the moment it
-/// exists.
+/// A prefixed freeze stops writes to every topic in the namespace, and stops at
+/// the namespace boundary.
 ///
-/// This is the disaster-recovery case the design is written for: an operator
-/// freezes a namespace *before* a restore writes into it, so the resolve has to
-/// run against the topic name at produce time and not against a set of names
-/// materialised when the freeze landed. A cached set would let the newest topic
-/// through, which is exactly the topic the restore is about to fill.
+/// The namespace scope is the half an ACL cannot express atomically, and it is
+/// the reason this feature exists rather than a deny binding per topic. The
+/// case runs two controls on purpose: `CONTROL` shows the produce path works at
+/// all, and `tenant-b.orders` shows the prefix walk stops where the scope stops
+/// rather than matching every topic once the registry is non-empty.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a prefix freeze refuses produce to every topic it covers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {
+async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze produce gate: a topic created after a covering prefix freeze is frozen on arrival"
+)]
+async fn bdd_verify_a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {
     let p = support::start().await;
     let control = create_topic(&p.broker, &p.client, CONTROL).await;
 
@@ -96,3 +113,19 @@ async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {
 
     p.broker.shutdown().await;
 }
+
+/// A topic created after a covering prefix freeze is frozen the moment it
+/// exists.
+///
+/// This is the disaster-recovery case the design is written for: an operator
+/// freezes a namespace *before* a restore writes into it, so the resolve has to
+/// run against the topic name at produce time and not against a set of names
+/// materialised when the freeze landed. A cached set would let the newest topic
+/// through, which is exactly the topic the restore is about to fill.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a topic created after a covering prefix freeze is frozen on arrival"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_arrival() {}

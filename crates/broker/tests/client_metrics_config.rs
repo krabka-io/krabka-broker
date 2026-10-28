@@ -73,22 +73,11 @@ fn assert_list_response(response: &ListConfigResourcesResponse) {
 
 // ── test ──────────────────────────────────────────────────────────────────────
 
-/// CONFIG ROUND-TRIP:
-///
-/// 1. `IncrementalAlterConfigs` for `CLIENT_METRICS` "sub-a" with
-///    `metrics=org.apache.kafka.consumer.` and `interval.ms=60000` (SET ops).
-///    Asserts per-resource `error_code` == NONE (0).
-///
-/// 2. `DescribeConfigs` for `CLIENT_METRICS` "sub-a". Asserts:
-///    - `metrics` value == "org.apache.kafka.consumer.", `config_source` == 7.
-///    - `interval.ms` value == "60000", `config_source` == 7.
-///    - the `match` entry is present at its default, `config_source` == 5.
-///
-/// 3. `ListConfigResources` (v1, `resource_types`=[16]). Asserts that the result
-///    contains a `ConfigResource` with `resource_type` 16 and `resource_name`
-///    "sub-a".
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_metrics_config_alter_describe_list_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client metrics config: client metrics config alter describe list round trip"
+)]
+async fn bdd_verify_client_metrics_config_alter_describe_list_round_trip() {
     let (_cluster, client) = start_n_node_client(1, "client-metrics-config-test").await;
 
     // ── Step 1: IncrementalAlterConfigs ──────────────────────────────────────
@@ -143,3 +132,25 @@ async fn client_metrics_config_alter_describe_list_round_trip() {
 
     assert_list_response(&list_resp);
 }
+
+/// CONFIG ROUND-TRIP:
+///
+/// 1. `IncrementalAlterConfigs` for `CLIENT_METRICS` "sub-a" with
+///    `metrics=org.apache.kafka.consumer.` and `interval.ms=60000` (SET ops).
+///    Asserts per-resource `error_code` == NONE (0).
+///
+/// 2. `DescribeConfigs` for `CLIENT_METRICS` "sub-a". Asserts:
+///    - `metrics` value == "org.apache.kafka.consumer.", `config_source` == 7.
+///    - `interval.ms` value == "60000", `config_source` == 7.
+///    - the `match` entry is present at its default, `config_source` == 5.
+///
+/// 3. `ListConfigResources` (v1, `resource_types`=[16]). Asserts that the result
+///    contains a `ConfigResource` with `resource_type` 16 and `resource_name`
+///    "sub-a".
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_metrics_config.feature",
+    name = "client metrics config alter describe list round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_metrics_config_alter_describe_list_round_trip() {}

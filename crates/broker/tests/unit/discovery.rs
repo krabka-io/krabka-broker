@@ -18,8 +18,9 @@ use {
     krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest,
 };
 
-#[tokio::test]
-async fn api_versions_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit discovery: api versions round trip")]
+async fn bdd_verify_api_versions_round_trip() {
     let p = support::start().await;
     let resp = api_versions(&p.client).await;
     assert!(resp.error_code == 0);
@@ -28,8 +29,17 @@ async fn api_versions_round_trip() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/discovery.feature",
+    name = "api versions round trip"
+)]
 #[tokio::test]
-async fn metadata_returns_this_broker_and_listed_topics() {
+async fn api_versions_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit discovery: metadata returns this broker and listed topics")]
+async fn bdd_verify_metadata_returns_this_broker_and_listed_topics() {
     let p = support::start().await;
     // Create a topic first.
     let create = create_topic_request(creatable_topic().name(("beta").into()).partitions(3).call());
@@ -57,11 +67,19 @@ async fn metadata_returns_this_broker_and_listed_topics() {
     p.broker.shutdown().await;
 }
 
-/// Kafka's `KafkaApis.getCoordinator`: the first group lookup finds no
-/// `__consumer_offsets`, asks for it, and answers `COORDINATOR_NOT_AVAILABLE`
-/// (15) with `Node.noNode()`. A retried lookup names this broker.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/discovery.feature",
+    name = "metadata returns this broker and listed topics"
+)]
 #[tokio::test]
-async fn find_coordinator_creates_the_offsets_topic_then_returns_self() {
+async fn metadata_returns_this_broker_and_listed_topics() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit discovery: find coordinator creates the offsets topic then returns self"
+)]
+async fn bdd_verify_find_coordinator_creates_the_offsets_topic_then_returns_self() {
     let p = support::start().await;
     let req = FindCoordinatorRequest {
         coordinator_keys: vec!["any-group".into()],
@@ -95,3 +113,14 @@ async fn find_coordinator_creates_the_offsets_topic_then_returns_self() {
     );
     p.broker.shutdown().await;
 }
+
+/// Kafka's `KafkaApis.getCoordinator`: the first group lookup finds no
+/// `__consumer_offsets`, asks for it, and answers `COORDINATOR_NOT_AVAILABLE`
+/// (15) with `Node.noNode()`. A retried lookup names this broker.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/discovery.feature",
+    name = "find coordinator creates the offsets topic then returns self"
+)]
+#[tokio::test]
+async fn find_coordinator_creates_the_offsets_topic_then_returns_self() {}

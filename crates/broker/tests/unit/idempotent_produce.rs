@@ -17,8 +17,9 @@ use {
     assert2::assert,
 };
 
-#[tokio::test]
-async fn idempotent_produce_dedups_duplicate_batch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit idempotent produce: idempotent produce dedups duplicate batch")]
+async fn bdd_verify_idempotent_produce_dedups_duplicate_batch() {
     let p = support::start().await;
 
     create_topic(&p, "idem", 1).await;
@@ -51,8 +52,17 @@ async fn idempotent_produce_dedups_duplicate_batch() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/idempotent_produce.feature",
+    name = "idempotent produce dedups duplicate batch"
+)]
 #[tokio::test]
-async fn out_of_order_returns_45() {
+async fn idempotent_produce_dedups_duplicate_batch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit idempotent produce: out of order returns 45")]
+async fn bdd_verify_out_of_order_returns_45() {
     let p = support::start().await;
 
     create_topic(&p, "ooo", 1).await;
@@ -86,3 +96,11 @@ async fn out_of_order_returns_45() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/idempotent_produce.feature",
+    name = "out of order returns 45"
+)]
+#[tokio::test]
+async fn out_of_order_returns_45() {}

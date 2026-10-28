@@ -71,11 +71,11 @@ async fn set_controller_mutation_quota(addr: SocketAddr) -> Vec<(QuotaEntity, i1
         .await
 }
 
-/// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
-/// may cross the limit, but the following mutation is rejected while debt
-/// remains.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_mutation_rate_throttles_create_topics() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller mutation quota: controller mutation rate throttles create topics"
+)]
+async fn bdd_verify_controller_mutation_rate_throttles_create_topics() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
@@ -127,10 +127,20 @@ async fn controller_mutation_rate_throttles_create_topics() {
     );
 }
 
-/// Test 2: No quota configured. Create a topic. Assert
-/// `throttle_time_ms` == 0.
+/// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
+/// may cross the limit, but the following mutation is rejected while debt
+/// remains.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
+    name = "controller mutation rate throttles create topics"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unthrottled_create_topics_unaffected() {
+async fn controller_mutation_rate_throttles_create_topics() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("controller mutation quota: unthrottled create topics unaffected")]
+async fn bdd_verify_unthrottled_create_topics_unaffected() {
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
     // No controller_mutation_rate quota configured.
@@ -145,10 +155,21 @@ async fn unthrottled_create_topics_unaffected() {
     assert!(throttle_ms == 0);
 }
 
-/// Test 3: Pre-create a topic as admin with no quota. Set rate=2.0 for
-/// alice. Alice deletes. Assert `throttle_time_ms` > 0.
+/// Test 2: No quota configured. Create a topic. Assert
+/// `throttle_time_ms` == 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
+    name = "unthrottled create topics unaffected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_mutation_rate_throttles_delete_topics() {
+async fn unthrottled_create_topics_unaffected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller mutation quota: controller mutation rate throttles delete topics"
+)]
+async fn bdd_verify_controller_mutation_rate_throttles_delete_topics() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
@@ -240,3 +261,13 @@ async fn controller_mutation_rate_throttles_delete_topics() {
          ({applied_seconds}s); got {phase}"
     );
 }
+
+/// Test 3: Pre-create a topic as admin with no quota. Set rate=2.0 for
+/// alice. Alice deletes. Assert `throttle_time_ms` > 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
+    name = "controller mutation rate throttles delete topics"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_mutation_rate_throttles_delete_topics() {}

@@ -17,8 +17,11 @@ use {
     std::collections::HashSet,
 };
 
-#[tokio::test]
-async fn alter_replica_log_dirs_rejects_unknown_target() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs errors: alter replica log dirs rejects unknown target"
+)]
+async fn bdd_verify_alter_replica_log_dirs_rejects_unknown_target() {
     let (handle, _primary, _extra, addr) = start().client_id(CLIENT_ID).call().await;
 
     let bogus = tempfile::tempdir().unwrap();
@@ -34,8 +37,19 @@ async fn alter_replica_log_dirs_rejects_unknown_target() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
+    name = "alter replica log dirs rejects unknown target"
+)]
 #[tokio::test]
-async fn alter_replica_log_dirs_rejects_unknown_replica() {
+async fn alter_replica_log_dirs_rejects_unknown_target() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs errors: alter replica log dirs rejects unknown replica"
+)]
+async fn bdd_verify_alter_replica_log_dirs_rejects_unknown_replica() {
     let (handle, _primary, extra, addr) = start_two_dir_broker().await;
 
     // Don't create the topic — naming a partition we don't host
@@ -52,12 +66,19 @@ async fn alter_replica_log_dirs_rejects_unknown_replica() {
     handle.shutdown().await;
 }
 
-/// Boot a two-dir broker with `SimpleAclAuthorizer`, no super-users, and
-/// no ACL grants, so every `authorize()` returns Deny. Cluster.Alter on
-/// `AlterReplicaLogDirs` (`api_key` 34) must come back as
-/// `CLUSTER_AUTHORIZATION_FAILED` for every listed partition.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
+    name = "alter replica log dirs rejects unknown replica"
+)]
 #[tokio::test]
-async fn alter_replica_log_dirs_denied_without_cluster_alter() {
+async fn alter_replica_log_dirs_rejects_unknown_replica() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs errors: alter replica log dirs denied without cluster alter"
+)]
+async fn bdd_verify_alter_replica_log_dirs_denied_without_cluster_alter() {
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
     let mut cfg = two_dir_config(primary.path(), extra.path());
@@ -92,3 +113,15 @@ async fn alter_replica_log_dirs_denied_without_cluster_alter() {
 
     handle.shutdown().await;
 }
+
+/// Boot a two-dir broker with `SimpleAclAuthorizer`, no super-users, and
+/// no ACL grants, so every `authorize()` returns Deny. Cluster.Alter on
+/// `AlterReplicaLogDirs` (`api_key` 34) must come back as
+/// `CLUSTER_AUTHORIZATION_FAILED` for every listed partition.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
+    name = "alter replica log dirs denied without cluster alter"
+)]
+#[tokio::test]
+async fn alter_replica_log_dirs_denied_without_cluster_alter() {}

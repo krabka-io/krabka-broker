@@ -362,11 +362,11 @@ mod tests {
         ]
     }
 
-    /// The whole response, the stored summary, and the appended records for
-    /// each request, over a stored state of epoch 5 and start offset 10 on
-    /// partition 0 of a three-partition topic.
-    #[tokio::test]
-    async fn initialize_state_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator handlers initialize tests: initialize state answers as kafka"
+    )]
+    async fn bdd_verify_initialize_state_answers_as_kafka() {
         for (rules, row) in [InitializationRules::Kafka431, InitializationRules::Trunk]
             .into_iter()
             .flat_map(|rules| rows(rules).into_iter().map(move |row| (rules, row)))
@@ -417,6 +417,17 @@ mod tests {
             check!(summary == row.summary, "{}, trunk {trunk}", row.name);
         }
     }
+
+    /// The whole response, the stored summary, and the appended records for
+    /// each request, over a stored state of epoch 5 and start offset 10 on
+    /// partition 0 of a three-partition topic.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/initialize.feature",
+        name = "tests: initialize state answers as kafka"
+    )]
+    #[tokio::test]
+    async fn initialize_state_answers_as_kafka() {}
 
     /// An empty topic list gets a response with no results.
     #[tokio::test]

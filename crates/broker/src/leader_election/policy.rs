@@ -1138,14 +1138,11 @@ mod tests {
         elect_leaderless_one(&pr, &ladder)
     }
 
-    /// `PartitionChangeBuilderTest` at 4.3.1: `testEligibleLeaderReplicas_ElectLastKnownLeader`,
-    /// `_ElectLastKnownLeaderShouldFail`, `_NotEligibleLastKnownLeader` and
-    /// `_ElrCanBeElected`, each with `useLastKnownLeaderInBalancedRecovery` on,
-    /// which is how Kafka runs it. The partition there has `leader = -1`, an
-    /// empty ISR and replicas `[1, 2, 3, 4]`; the state here is the same one
-    /// under krabka's marker.
-    #[test]
-    fn the_last_known_leader_is_elected_unclean_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "leader election policy tests: the last known leader is elected unclean as kafka does"
+    )]
+    fn bdd_verify_the_last_known_leader_is_elected_unclean_as_kafka_does() {
         let elected = |leader: u64, unclean: bool| super::FailoverDecision::Elect {
             leader: NodeId(leader),
             isr: vec![NodeId(leader)],
@@ -1351,6 +1348,19 @@ mod tests {
             assert!(decide_leaderless(&case) == case.expected, "{}", case.label);
         }
     }
+
+    /// `PartitionChangeBuilderTest` at 4.3.1: `testEligibleLeaderReplicas_ElectLastKnownLeader`,
+    /// `_ElectLastKnownLeaderShouldFail`, `_NotEligibleLastKnownLeader` and
+    /// `_ElrCanBeElected`, each with `useLastKnownLeaderInBalancedRecovery` on,
+    /// which is how Kafka runs it. The partition there has `leader = -1`, an
+    /// empty ISR and replicas `[1, 2, 3, 4]`; the state here is the same one
+    /// under krabka's marker.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/leader_election/policy.feature",
+        name = "tests: the last known leader is elected unclean as kafka does"
+    )]
+    fn the_last_known_leader_is_elected_unclean_as_kafka_does() {}
 
     /// Kafka's target ELR is `(elr ∪ isr) - targetIsr - uncleanShutdownReplicas`
     /// and `canElectLastKnownLeader` needs it empty. A fenced broker in the ISR

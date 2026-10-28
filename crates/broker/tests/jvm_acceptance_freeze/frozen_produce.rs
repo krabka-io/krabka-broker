@@ -18,22 +18,11 @@ use {
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
 };
 
-/// A produce to a frozen topic reaches `kafka-console-producer` as a
-/// `PolicyViolationException`, and an unfrozen topic is untouched.
-///
-/// This is the case KFC-9's compatibility section turns on. A stock producer
-/// must fail the batch, must not retry, and must surface the broker's own
-/// sentence -- which names the scope that matched, because a topic can be
-/// frozen by its own name or by a prefix over a thousand topics and the thaw
-/// is a different command in each case.
-///
-/// The three rows differ only in the topic the same tool writes to. The
-/// prefixed row matters on its own: its topic appears in no registry entry by
-/// name, so it exercises the prefix index rather than the literal one. The
-/// control row is what keeps the other two honest.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn the_jvm_console_producer_reads_a_freeze_as_a_policy_violation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance freeze frozen produce: the jvm console producer reads a freeze as a policy violation"
+)]
+async fn bdd_verify_the_jvm_console_producer_reads_a_freeze_as_a_policy_violation() {
     let (broker, client) = plain_topic_fixture(&[LITERAL_TOPIC, PREFIX_TOPIC, CONTROL_TOPIC]).await;
     freeze(&client, LITERAL_TOPIC, PATTERN_TYPE_LITERAL, LITERAL_REASON).await;
     freeze(&client, PREFIX_SCOPE, PATTERN_TYPE_PREFIXED, PREFIX_REASON).await;
@@ -77,3 +66,25 @@ async fn the_jvm_console_producer_reads_a_freeze_as_a_policy_violation() {
         }
     }
 }
+
+/// A produce to a frozen topic reaches `kafka-console-producer` as a
+/// `PolicyViolationException`, and an unfrozen topic is untouched.
+///
+/// This is the case KFC-9's compatibility section turns on. A stock producer
+/// must fail the batch, must not retry, and must surface the broker's own
+/// sentence -- which names the scope that matched, because a topic can be
+/// frozen by its own name or by a prefix over a thousand topics and the thaw
+/// is a different command in each case.
+///
+/// The three rows differ only in the topic the same tool writes to. The
+/// prefixed row matters on its own: its topic appears in no registry entry by
+/// name, so it exercises the prefix index rather than the literal one. The
+/// control row is what keeps the other two honest.
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_freeze/frozen_produce.feature",
+    name = "the jvm console producer reads a freeze as a policy violation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_jvm_console_producer_reads_a_freeze_as_a_policy_violation() {}

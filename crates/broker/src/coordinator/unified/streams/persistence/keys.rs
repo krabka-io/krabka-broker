@@ -152,8 +152,11 @@ mod tests {
         assert!(parse_streams_key(18, b"\x00\x02g1").is_err());
     }
 
-    #[test]
-    fn key_versions_match_kafka_api_keys() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence keys tests: key versions match kafka api keys"
+    )]
+    fn bdd_verify_key_versions_match_kafka_api_keys() {
         // apiKey of each schema at Apache Kafka tag 4.3.1, which defines no
         // streams record type 18.
         assert!(KEY_STREAMS_GROUP_METADATA == 17);
@@ -164,16 +167,43 @@ mod tests {
         assert!(KEY_STREAMS_TOPOLOGY == 23);
     }
 
-    #[test]
-    fn group_metadata_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/keys.feature",
+        name = "tests: key versions match kafka api keys"
+    )]
+    fn key_versions_match_kafka_api_keys() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence keys tests: group metadata key bytes match kafka schema"
+    )]
+    fn bdd_verify_group_metadata_key_bytes_match_kafka_schema() {
         // i16 apiKey 17, then a non-flexible i16-length group id.
         assert!(&encode_group_metadata_key("g1").unwrap()[..] == b"\x00\x11\x00\x02g1");
     }
 
-    #[test]
-    fn member_metadata_key_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/keys.feature",
+        name = "tests: group metadata key bytes match kafka schema"
+    )]
+    fn group_metadata_key_bytes_match_kafka_schema() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence keys tests: member metadata key bytes match kafka schema"
+    )]
+    fn bdd_verify_member_metadata_key_bytes_match_kafka_schema() {
         assert!(
             &encode_member_metadata_key("g1", "m1").unwrap()[..] == b"\x00\x13\x00\x02g1\x00\x02m1"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/keys.feature",
+        name = "tests: member metadata key bytes match kafka schema"
+    )]
+    fn member_metadata_key_bytes_match_kafka_schema() {}
 }

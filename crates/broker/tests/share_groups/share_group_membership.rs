@@ -15,12 +15,9 @@ use {
     tokio::time,
 };
 
-/// A single member joins and advances to epoch 1 with an empty assignment,
-/// because Kafka assigns only partitions whose share state is initialized.
-/// The join initializes them, and a later heartbeat receives every partition
-/// of the subscribed topic at a bumped epoch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_member_join_assignment() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group membership: single member join assignment")]
+async fn bdd_verify_single_member_join_assignment() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t1", 4).await;
@@ -63,10 +60,21 @@ async fn single_member_join_assignment() {
     );
 }
 
-/// Two members join the same group. After both converge, `ShareGroupDescribe`
-/// reports one group with both members and a non-trivial group epoch.
+/// A single member joins and advances to epoch 1 with an empty assignment,
+/// because Kafka assigns only partitions whose share state is initialized.
+/// The join initializes them, and a later heartbeat receives every partition
+/// of the subscribed topic at a bumped epoch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
+    name = "single member join assignment"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_members_then_describe() {
+async fn single_member_join_assignment() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group membership: two members then describe")]
+async fn bdd_verify_two_members_then_describe() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t2", 4).await;
@@ -107,11 +115,19 @@ async fn two_members_then_describe() {
     );
 }
 
-/// A member leaves by sending `member_epoch == -1`. The leave succeeds, and
-/// the broker keeps the group but reports it with zero members, in state
-/// "Empty".
+/// Two members join the same group. After both converge, `ShareGroupDescribe`
+/// reports one group with both members and a non-trivial group epoch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
+    name = "two members then describe"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn member_leave_epoch_minus_one() {
+async fn two_members_then_describe() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group membership: member leave epoch minus one")]
+async fn bdd_verify_member_leave_epoch_minus_one() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t3", 2).await;
@@ -141,11 +157,20 @@ async fn member_leave_epoch_minus_one() {
     );
 }
 
-/// Share-group state persists to `__consumer_offsets`. After a broker restart,
-/// a Rejoin on the same data dir, replay reconstructs the group and the member,
-/// and `ShareGroupDescribe` reports them.
+/// A member leaves by sending `member_epoch == -1`. The leave succeeds, and
+/// the broker keeps the group but reports it with zero members, in state
+/// "Empty".
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
+    name = "member leave epoch minus one"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn state_survives_restart() {
+async fn member_leave_epoch_minus_one() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group membership: state survives restart")]
+async fn bdd_verify_state_survives_restart() {
     let (member_id, dir) = {
         let (broker, bootstrap, dir) = boot().await;
         let client = connect(&bootstrap).await;
@@ -185,3 +210,14 @@ async fn state_survives_restart() {
         );
     }
 }
+
+/// Share-group state persists to `__consumer_offsets`. After a broker restart,
+/// a Rejoin on the same data dir, replay reconstructs the group and the member,
+/// and `ShareGroupDescribe` reports them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
+    name = "state survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn state_survives_restart() {}

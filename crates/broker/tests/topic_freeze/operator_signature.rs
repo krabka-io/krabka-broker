@@ -65,21 +65,20 @@ async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> BrokerWith
     BrokerWithClient { broker, client }
 }
 
-/// `freeze.require_signature` is what decides whether the broker takes an
-/// operator's word for a freeze.
-///
-/// The asymmetry it controls is deliberate and easy to lose: a freeze is the
-/// safe direction, and an operator has to reach it in one command on a cluster
-/// where nobody installed key material yet. That leaves a registry that can
-/// hold proved entries beside attested ones, and this setting is the only thing
-/// that removes the mixture. The refused arm carries its own control: the
-/// topic never froze, so it keeps taking writes.
-#[yare::parameterized(
-    attestation = { false },
-    required_signature = { true },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze operator signature: require signature decides whether an unsigned freeze is accepted for {example}"
 )]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(require_signature: bool) {
+async fn bdd_verify_require_signature_decides_whether_an_unsigned_freeze_is_accepted(
+    example: String,
+) {
+    type Example = (bool,);
+    let (require_signature,): Example = match example.as_str() {
+        "attestation" => (false,),
+        "required signature" => (true,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let (code, after) = if require_signature {
         (codes::OPERATOR_SIGNATURE_REQUIRED, accepted(2))
     } else {
@@ -108,17 +107,30 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(requir
     finish_with_control_record(broker, &client, control).await;
 }
 
-/// A signed freeze reaches the registry with its `key_id` and its signature
-/// intact, and the signature verifies away from the broker.
+/// `freeze.require_signature` is what decides whether the broker takes an
+/// operator's word for a freeze.
 ///
-/// The signature is the only part of a freeze record that the broker cannot
-/// forge, so it is the only part that proves who set it. That proof is worth
-/// nothing unless the exact bytes the operator signed come back out of
-/// `DescribeTopicFreezes`, which is why the whole entry is compared rather than
-/// a field at a time: a broker that dropped the signature, re-stamped
-/// `set_at_ms`, or rewrote `set_by` would still answer every other case here.
+/// The asymmetry it controls is deliberate and easy to lose: a freeze is the
+/// safe direction, and an operator has to reach it in one command on a cluster
+/// where nobody installed key material yet. That leaves a registry that can
+/// hold proved entries beside attested ones, and this setting is the only thing
+/// that removes the mixture. The refused arm carries its own control: the
+/// topic never froze, so it keeps taking writes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "require signature decides whether an unsigned freeze is accepted"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
+async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(example: String) {
+    let _ = example;
+}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze operator signature: a signed freeze round trips with its key id and signature intact"
+)]
+async fn bdd_verify_a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
     let OperatorCase {
         keys: _keys,
         logs: _logs,
@@ -161,21 +173,35 @@ async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
     check_frozen_then_shutdown(broker, &client, frozen, control).await;
 }
 
-/// An unsigned thaw is refused whatever `freeze.require_signature` says.
+/// A signed freeze reaches the registry with its `key_id` and its signature
+/// intact, and the signature verifies away from the broker.
 ///
-/// This is the half of the asymmetry that carries the security of the whole
-/// feature. A freeze that one unsigned command can lift is exactly as strong as
-/// the one credential that sends it, and when the incident is a compromise the
-/// attacker already holds that credential. `require_signature` is about the
-/// freeze direction alone, so it is asserted with the setting both on and off:
-/// a thaw that started depending on it would look correct in the strict
-/// configuration and be wide open in the default one.
-#[yare::parameterized(
-    default = { false },
-    required_signature = { true },
+/// The signature is the only part of a freeze record that the broker cannot
+/// forge, so it is the only part that proves who set it. That proof is worth
+/// nothing unless the exact bytes the operator signed come back out of
+/// `DescribeTopicFreezes`, which is why the whole entry is compared rather than
+/// a field at a time: a broker that dropped the signature, re-stamped
+/// `set_at_ms`, or rewrote `set_by` would still answer every other case here.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signed freeze round trips with its key id and signature intact"
 )]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(require_signature: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze operator signature: an unsigned thaw is refused whatever require signature says for {example}"
+)]
+async fn bdd_verify_an_unsigned_thaw_is_refused_whatever_require_signature_says(example: String) {
+    type Example = (bool,);
+    let (require_signature,): Example = match example.as_str() {
+        "default" => (false,),
+        "required signature" => (true,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let OperatorCase {
         keys: _keys,
         logs: _logs,
@@ -213,18 +239,30 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(require_sig
     finish_with_control_record(broker, &client, control).await;
 }
 
-/// A signature captured from a freeze cannot be replayed as the thaw.
+/// An unsigned thaw is refused whatever `freeze.require_signature` says.
 ///
-/// `frozen` and `set_at_ms` are both inside the signed bytes for this attack
-/// and no other. Drop `frozen` from the payload and the freeze record and the
-/// thaw record differ by one byte that nothing covers, so one captured
-/// signature would authorize both directions -- and the direction an attacker
-/// wants is the one that lifts the freeze. Both replays are asserted only on
-/// the error code, because all six signature checks answer
-/// `OPERATOR_SIGNATURE_INVALID` on purpose: a code that separated them would
-/// tell an attacker which check they got past.
+/// This is the half of the asymmetry that carries the security of the whole
+/// feature. A freeze that one unsigned command can lift is exactly as strong as
+/// the one credential that sends it, and when the incident is a compromise the
+/// attacker already holds that credential. `require_signature` is about the
+/// freeze direction alone, so it is asserted with the setting both on and off:
+/// a thaw that started depending on it would look correct in the strict
+/// configuration and be wide open in the default one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "an unsigned thaw is refused whatever require signature says"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
+async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(example: String) {
+    let _ = example;
+}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze operator signature: a signature captured from a freeze is refused as a thaw"
+)]
+async fn bdd_verify_a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
     let case = operator_case(false).await;
     let (broker, client, key) = (case.broker, case.client, case.key);
     let (frozen, control) = (case.frozen, case.control);
@@ -268,17 +306,29 @@ async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
     check_frozen_then_shutdown(broker, &client, frozen, control).await;
 }
 
-/// A signature survives a controller restart and still verifies from the
-/// reloaded image.
+/// A signature captured from a freeze cannot be replayed as the thaw.
 ///
-/// This is the durability claim the design makes about the proof rather than
-/// about the state: an auditor holding the operator public keys can say who
-/// froze a topic, from a broker that was not running when they signed. A broker
-/// that kept the registry across a restart but dropped the signature would pass
-/// every other durability case and quietly turn every proved entry into an
-/// attested one.
+/// `frozen` and `set_at_ms` are both inside the signed bytes for this attack
+/// and no other. Drop `frozen` from the payload and the freeze record and the
+/// thaw record differ by one byte that nothing covers, so one captured
+/// signature would authorize both directions -- and the direction an attacker
+/// wants is the one that lifts the freeze. Both replays are asserted only on
+/// the error code, because all six signature checks answer
+/// `OPERATOR_SIGNATURE_INVALID` on purpose: a code that separated them would
+/// tell an attacker which check they got past.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signature captured from a freeze is refused as a thaw"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signature_survives_a_controller_restart_and_still_verifies() {
+async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze operator signature: a signature survives a controller restart and still verifies"
+)]
+async fn bdd_verify_a_signature_survives_a_controller_restart_and_still_verifies() {
     let OperatorDirectories { keys, logs } = operator_directories();
     let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
     let started = support::start_with_operator_key(logs.path(), &key).await;
@@ -314,6 +364,23 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
     let control = support::topic_id_for(&client, CONTROL).await;
     check_frozen_then_shutdown(broker, &client, frozen, control).await;
 }
+
+/// A signature survives a controller restart and still verifies from the
+/// reloaded image.
+///
+/// This is the durability claim the design makes about the proof rather than
+/// about the state: an auditor holding the operator public keys can say who
+/// froze a topic, from a broker that was not running when they signed. A broker
+/// that kept the registry across a restart but dropped the signature would pass
+/// every other durability case and quietly turn every proved entry into an
+/// attested one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signature survives a controller restart and still verifies"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signature_survives_a_controller_restart_and_still_verifies() {}
 
 /// A running broker, its client, the operator key it trusts and the ids of the
 /// frozen and control topics.

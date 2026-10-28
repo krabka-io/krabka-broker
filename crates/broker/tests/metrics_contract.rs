@@ -631,8 +631,11 @@ fn referenced_names(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn every_dashboard_and_rule_series_is_one_the_registry_exports() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "metrics contract: every dashboard and rule series is one the registry exports"
+)]
+async fn bdd_verify_every_dashboard_and_rule_series_is_one_the_registry_exports() {
     let exported = exported_sample_names(&fresh_body().await);
     assert!(
         exported.contains("krabka_broker_api_requests_total"),
@@ -659,8 +662,17 @@ async fn every_dashboard_and_rule_series_is_one_the_registry_exports() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "every dashboard and rule series is one the registry exports"
+)]
 #[tokio::test]
-async fn checked_in_body_matches_a_fresh_registry() {
+async fn every_dashboard_and_rule_series_is_one_the_registry_exports() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics contract: checked in body matches a fresh registry")]
+async fn bdd_verify_checked_in_body_matches_a_fresh_registry() {
     let body = fresh_body().await;
     if let Ok(out) = env::var(BODY_OUT_ENV) {
         fs::write(&out, &body).unwrap_or_else(|error| panic!("write {out}: {error}"));
@@ -674,10 +686,17 @@ async fn checked_in_body_matches_a_fresh_registry() {
     );
 }
 
-/// The name expansion is what the Python check repeats, so its rules are
-/// pinned here on a body small enough to read.
-#[test]
-fn sample_names_expand_by_metric_type() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "checked in body matches a fresh registry"
+)]
+#[tokio::test]
+async fn checked_in_body_matches_a_fresh_registry() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics contract: sample names expand by metric type")]
+fn bdd_verify_sample_names_expand_by_metric_type() {
     let body = "\
 # HELP krabka_broker_a A counter.
 # TYPE krabka_broker_a counter
@@ -701,10 +720,20 @@ krabka_broker_a_total 1
     assert!(exported_sample_names(body) == expected);
 }
 
-/// Counter and gauge samples take one order whatever the encoder's hash map
-/// produced; histogram buckets keep the order the encoder wrote.
-#[test]
-fn canonical_body_sorts_counter_samples_and_keeps_bucket_order() {
+/// The name expansion is what the Python check repeats, so its rules are
+/// pinned here on a body small enough to read.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "sample names expand by metric type"
+)]
+fn sample_names_expand_by_metric_type() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "metrics contract: canonical body sorts counter samples and keeps bucket order"
+)]
+fn bdd_verify_canonical_body_sorts_counter_samples_and_keeps_bucket_order() {
     let body = "\
 # HELP krabka_broker_a A counter.
 # TYPE krabka_broker_a counter
@@ -734,8 +763,18 @@ krabka_broker_c_count 0
     assert!(canonical(body) == expected);
 }
 
-#[test]
-fn referenced_names_are_metric_tokens_only() {
+/// Counter and gauge samples take one order whatever the encoder's hash map
+/// produced; histogram buckets keep the order the encoder wrote.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "canonical body sorts counter samples and keeps bucket order"
+)]
+fn canonical_body_sorts_counter_samples_and_keeps_bucket_order() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics contract: referenced names are metric tokens only")]
+fn bdd_verify_referenced_names_are_metric_tokens_only() {
     let text = r#"sum by (topic) (rate(krabka_broker_topic_bytes_in_total{topic!="__x"}[5m]))
         / histogram_quantile(0.99, rate(krabka_broker_request_duration_seconds_bucket[5m]))"#;
     let expected: BTreeSet<String> = [
@@ -747,3 +786,10 @@ fn referenced_names_are_metric_tokens_only() {
     .collect();
     assert!(referenced_names(text) == expected);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics_contract.feature",
+    name = "referenced names are metric tokens only"
+)]
+fn referenced_names_are_metric_tokens_only() {}

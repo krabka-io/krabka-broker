@@ -24,10 +24,11 @@ use {
     },
 };
 
-/// The cluster is first moved to trunk's 4.4-IV2 (33), the level the RPC
-/// needs, through `UpdateFeatures` on the follower, which forwards it too.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unregister controller forward: a follower forwards unregister controller to the active controller"
+)]
+async fn bdd_verify_a_follower_forwards_unregister_controller_to_the_active_controller() {
     // Both the RPC and the level are Kafka trunk's, so every node runs with
     // Kafka's two `unstable.*.enable` settings on.
     let cluster = start_n_node_with(2, |_, cfg| {
@@ -100,3 +101,13 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
     );
     shutdown_cluster(cluster).await;
 }
+
+/// The cluster is first moved to trunk's 4.4-IV2 (33), the level the RPC
+/// needs, through `UpdateFeatures` on the follower, which forwards it too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unregister_controller_forward.feature",
+    name = "a follower forwards unregister controller to the active controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_forwards_unregister_controller_to_the_active_controller() {}

@@ -57,8 +57,11 @@ fn production_timings(config: &mut BrokerConfig) {
     config.heartbeat_timeout = defaults.heartbeat_timeout;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller failover: a gracefully stopped controller is replaced within the bound"
+)]
+async fn bdd_verify_a_gracefully_stopped_controller_is_replaced_within_the_bound() {
     let _g = support::cluster_lock().lock().await;
     let mut cluster =
         start_n_node_customized_with_retry(3, |_, config| production_timings(config), "cluster")
@@ -147,3 +150,11 @@ async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
     );
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_failover.feature",
+    name = "a gracefully stopped controller is replaced within the bound"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {}

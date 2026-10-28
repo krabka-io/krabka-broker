@@ -300,11 +300,11 @@ mod tests {
         expected: Option<Proposal>,
     }
 
-    /// One scan with a 1 s `replica.lag.time.max.ms`. In-sync followers follow
-    /// Kafka's `Partition.getOutOfSyncReplicas`, out-of-sync ones
-    /// `Partition.needsExpandIsr`.
-    #[test]
-    fn a_scan_proposes_the_isr_kafkas_rules_select() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "isr maintenance proposal tests: a scan proposes the isr kafkas rules select"
+    )]
+    fn bdd_verify_a_scan_proposes_the_isr_kafkas_rules_select() {
         let now = Instant::now() + Duration::from_secs(60);
         let follower_pair = |candidate| {
             follower_rows([(2, follower(now, 100, Some(10), Some(10))), (3, candidate)])
@@ -415,6 +415,16 @@ mod tests {
             );
         }
     }
+
+    /// One scan with a 1 s `replica.lag.time.max.ms`. In-sync followers follow
+    /// Kafka's `Partition.getOutOfSyncReplicas`, out-of-sync ones
+    /// `Partition.needsExpandIsr`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/isr_maintenance/proposal.feature",
+        name = "tests: a scan proposes the isr kafkas rules select"
+    )]
+    fn a_scan_proposes_the_isr_kafkas_rules_select() {}
 
     #[test]
     fn a_shrunk_follower_needs_a_new_fetch_before_rejoining() {

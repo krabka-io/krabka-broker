@@ -779,14 +779,11 @@ mod tests {
         );
     }
 
-    /// The records of one transition come in the order of Kafka's
-    /// `GroupMetadataManager`, which is also the order its replay accepts: a
-    /// classic tombstone before the consumer records of an upgrade, a removed
-    /// member's k8, k7 and k5 tombstones first, then the subscriptions, the
-    /// epoch, the targets and their metadata, the current assignments, and
-    /// the group tombstones of `createGroupTombstoneRecords` last.
-    #[test]
-    fn records_follow_kafkas_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor pending records tests: records follow kafkas order"
+    )]
+    fn bdd_verify_records_follow_kafkas_order() {
         use crate::coordinator::unified::persistence::{Key, encode_key as encode_classic_key};
 
         let ng = |key: NextGenKey| encode_next_gen_key(&key).unwrap();
@@ -951,6 +948,19 @@ mod tests {
             assert!(written == expected, "{case}");
         }
     }
+
+    /// The records of one transition come in the order of Kafka's
+    /// `GroupMetadataManager`, which is also the order its replay accepts: a
+    /// classic tombstone before the consumer records of an upgrade, a removed
+    /// member's k8, k7 and k5 tombstones first, then the subscriptions, the
+    /// epoch, the targets and their metadata, the current assignments, and
+    /// the group tombstones of `createGroupTombstoneRecords` last.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/pending_records.feature",
+        name = "tests: records follow kafkas order"
+    )]
+    fn records_follow_kafkas_order() {}
 
     #[test]
     fn pending_group_tombstone_removes_cached_seed() {

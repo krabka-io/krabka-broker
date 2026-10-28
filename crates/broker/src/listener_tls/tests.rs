@@ -141,10 +141,11 @@ fn invalid_configuration(message: &str) -> String {
     format!("org.apache.kafka.common.errors.InvalidConfigurationException: {message}")
 }
 
-/// Kafka's `createKeystore` and `createTruststore` refusals, and krabka's
-/// two of its own: a store that is not PEM, and an encrypted key.
-#[test]
-fn a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "listener tls tests: a store is checked as kafkas default ssl engine factory checks it"
+)]
+fn bdd_verify_a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {
     let fixture = Fixture::new();
     let renewed = identity("localhost", &["localhost"]);
     let keystore = fixture.keystore_file("renewed.pem", &renewed);
@@ -242,6 +243,15 @@ fn a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {
         );
     }
 }
+
+/// Kafka's `createKeystore` and `createTruststore` refusals, and krabka's
+/// two of its own: a store that is not PEM, and an encrypted key.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/listener_tls/tests.feature",
+    name = "a store is checked as kafkas default ssl engine factory checks it"
+)]
+fn a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {}
 
 /// `CertificateEntries.ensureCompatible`: a new keystore keeps the DN and
 /// every SAN, and adding a SAN is allowed.

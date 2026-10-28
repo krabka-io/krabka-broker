@@ -7,4 +7,7 @@ exports_files(["Cargo.toml"])
 
 crate_proc_macro(name = "macros")
 
-crate_tests(lib = "macros")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "macros",
+)

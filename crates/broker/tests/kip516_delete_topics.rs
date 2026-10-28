@@ -8,8 +8,11 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-#[tokio::test]
-async fn delete_topics_by_unknown_id_returns_unknown_topic_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip516 delete topics: delete topics by unknown id returns unknown topic id"
+)]
+async fn bdd_verify_delete_topics_by_unknown_id_returns_unknown_topic_id() {
     let p = support::start().await;
     let bogus = WireUuid(uuid::Uuid::from_u128(0xc0ff_ee00).into_bytes());
 
@@ -31,3 +34,11 @@ async fn delete_topics_by_unknown_id_returns_unknown_topic_id() {
     assert!(r.error_code == 100); // UNKNOWN_TOPIC_ID
     assert!(r.topic_id == bogus); // requested id echoed
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_delete_topics.feature",
+    name = "delete topics by unknown id returns unknown topic id"
+)]
+#[tokio::test]
+async fn delete_topics_by_unknown_id_returns_unknown_topic_id() {}

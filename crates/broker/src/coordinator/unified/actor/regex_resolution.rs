@@ -519,12 +519,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `maybeUpdateRegularExpressions`, row by row: the state of the
-    /// group before the heartbeat, the heartbeat, and whether it resolves and
-    /// what it reports. Every row starts from a group whose member `m1`
-    /// subscribes to `a.*`, resolved at version 5 at `NOW_MS - since`.
-    #[test]
-    fn the_conditions_of_a_refresh_follow_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor regex resolution tests: the conditions of a refresh follow kafka"
+    )]
+    fn bdd_verify_the_conditions_of_a_refresh_follow_kafka() {
         struct Row {
             name: &'static str,
             /// Time since the last resolution, in milliseconds.
@@ -673,6 +672,17 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `maybeUpdateRegularExpressions`, row by row: the state of the
+    /// group before the heartbeat, the heartbeat, and whether it resolves and
+    /// what it reports. Every row starts from a group whose member `m1`
+    /// subscribes to `a.*`, resolved at version 5 at `NOW_MS - since`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/regex_resolution.feature",
+        name = "tests: the conditions of a refresh follow kafka"
+    )]
+    fn the_conditions_of_a_refresh_follow_kafka() {}
 
     /// A stored pattern, including an omitted heartbeat field that keeps it,
     /// obeys the same inclusive minimum-refresh boundary at any group size.

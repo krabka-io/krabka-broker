@@ -16,12 +16,22 @@ use {
 
 const METADATA_TOPIC: &str = "__remote_log_metadata";
 
-/// The bootstrap completes against the loopback listener. The activation
-/// gauge flips and the broker provisions the `__remote_log_metadata` topic.
-#[test]
-fn topic_rlmm_activates_against_loopback() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm loopback: topic rlmm activates against loopback"
+)]
+fn bdd_verify_topic_rlmm_activates_against_loopback() {
     run_broker_test(topic_rlmm_activates_against_loopback_case());
 }
+
+/// The bootstrap completes against the loopback listener. The activation
+/// gauge flips and the broker provisions the `__remote_log_metadata` topic.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_loopback.feature",
+    name = "topic rlmm activates against loopback"
+)]
+fn topic_rlmm_activates_against_loopback() {}
 
 async fn topic_rlmm_activates_against_loopback_case() {
     let (broker, _log_dir, _remote_dir) = start_broker_with_topic_rlmm().await;
@@ -35,15 +45,25 @@ async fn topic_rlmm_activates_against_loopback_case() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm loopback: topic rlmm copy then fetch round trip"
+)]
+fn bdd_verify_topic_rlmm_copy_then_fetch_round_trip() {
+    run_broker_test(topic_rlmm_copy_then_fetch_round_trip_case());
+}
+
 /// Produce enough to seal several segments, wait for the RLM copy task to
 /// tier one through the topic-backed RLMM, then read the records back at
 /// offset 0. That RLMM publishes `CopySegment*` events to
 /// `__remote_log_metadata` over the loopback and consumes them back to update
 /// its cache.
-#[test]
-fn topic_rlmm_copy_then_fetch_round_trip() {
-    run_broker_test(topic_rlmm_copy_then_fetch_round_trip_case());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_loopback.feature",
+    name = "topic rlmm copy then fetch round trip"
+)]
+fn topic_rlmm_copy_then_fetch_round_trip() {}
 
 async fn topic_rlmm_copy_then_fetch_round_trip_case() {
     const TOPIC: &str = "tiered-topic-rlmm-itest";

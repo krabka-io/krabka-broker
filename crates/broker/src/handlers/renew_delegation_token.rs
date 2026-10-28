@@ -194,13 +194,9 @@ mod tests {
         stored_expiry_fixture(controller, token_id).expect("token remains")
     }
 
-    /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
-    /// stored expiry alone. A super user that is neither owner nor renewer
-    /// gets `DELEGATION_TOKEN_OWNER_MISMATCH`, as `allowedToRenew` gives it,
-    /// and an expired token answers `DELEGATION_TOKEN_EXPIRED` before the
-    /// owner check.
-    #[tokio::test]
-    async fn refusals_follow_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers renew delegation token tests: refusals follow kafka order")]
+    async fn bdd_verify_refusals_follow_kafka_order() {
         token_fixtures::check_refusals()
             .cases(|live, expired| {
                 mutation_credential_refusals(&live.hmac)
@@ -247,11 +243,24 @@ mod tests {
             .await;
     }
 
-    /// The owner or a renewer renews to `min(max, now + min(default,
-    /// period))` for a positive period and `min(max, now + default)`
-    /// otherwise, even when that is earlier than the current expiry.
+    /// Refusals come in Kafka's order, carry Kafka's expiry, and leave the
+    /// stored expiry alone. A super user that is neither owner nor renewer
+    /// gets `DELEGATION_TOKEN_OWNER_MISMATCH`, as `allowedToRenew` gives it,
+    /// and an expired token answers `DELEGATION_TOKEN_EXPIRED` before the
+    /// owner check.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/renew_delegation_token.feature",
+        name = "tests: refusals follow kafka order"
+    )]
     #[tokio::test]
-    async fn renews_to_kafka_capped_expiry() {
+    async fn refusals_follow_kafka_order() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers renew delegation token tests: renews to kafka capped expiry"
+    )]
+    async fn bdd_verify_renews_to_kafka_capped_expiry() {
         let TokenFixture {
             directory: _dir,
             controller,
@@ -388,4 +397,15 @@ mod tests {
         }
         controller.cancel().await;
     }
+
+    /// The owner or a renewer renews to `min(max, now + min(default,
+    /// period))` for a positive period and `min(max, now + default)`
+    /// otherwise, even when that is earlier than the current expiry.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/renew_delegation_token.feature",
+        name = "tests: renews to kafka capped expiry"
+    )]
+    #[tokio::test]
+    async fn renews_to_kafka_capped_expiry() {}
 }

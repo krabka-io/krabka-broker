@@ -575,11 +575,11 @@ mod tests {
         check!(!g.rebalance_from_empty);
     }
 
-    /// #797: Kafka's `hasSatisfiedHeartbeat`. A member that waits in
-    /// `JoinGroup` cannot heartbeat: an existing one does not expire while it
-    /// waits, and a new one has the new-member join timeout.
-    #[test]
-    fn members_waiting_in_join_group_expire_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified classic state membership tests: members waiting in join group expire as kafka does"
+    )]
+    fn bdd_verify_members_waiting_in_join_group_expire_as_kafka_does() {
         let session = Duration::from_secs(10);
         for (name, is_new, awaiting, elapsed, dropped) in [
             (
@@ -636,6 +636,16 @@ mod tests {
             );
         }
     }
+
+    /// #797: Kafka's `hasSatisfiedHeartbeat`. A member that waits in
+    /// `JoinGroup` cannot heartbeat: an existing one does not expire while it
+    /// waits, and a new one has the new-member join timeout.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/classic_state/membership.feature",
+        name = "tests: members waiting in join group expire as kafka does"
+    )]
+    fn members_waiting_in_join_group_expire_as_kafka_does() {}
 
     /// A `MEMBER_ID_REQUIRED` id that never joins goes away after its
     /// session timeout, and the expiry is reported so that the caller can

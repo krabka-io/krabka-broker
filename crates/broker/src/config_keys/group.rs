@@ -829,11 +829,11 @@ mod tests {
         }
     }
 
-    /// Kafka 4.3.1's `GroupConfig.validateValues` names the broker key a value
-    /// broke, and accepts every key of its `CONFIG_DEF`, whatever krabka's
-    /// coordinators apply. Each row is a key, a value and the outcome.
-    #[test]
-    fn group_overrides_are_validated_with_kafka_4_3_1s_rules_and_messages() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys group tests: group overrides are validated with kafka 4 3 1s rules and messages"
+    )]
+    fn bdd_verify_group_overrides_are_validated_with_kafka_4_3_1s_rules_and_messages() {
         let cases: [Row; 22] = [
             Row {
                 key: "consumer.session.timeout.ms",
@@ -982,6 +982,16 @@ mod tests {
         }
     }
 
+    /// Kafka 4.3.1's `GroupConfig.validateValues` names the broker key a value
+    /// broke, and accepts every key of its `CONFIG_DEF`, whatever krabka's
+    /// coordinators apply. Each row is a key, a value and the outcome.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/group.feature",
+        name = "tests: group overrides are validated with kafka 4 3 1s rules and messages"
+    )]
+    fn group_overrides_are_validated_with_kafka_4_3_1s_rules_and_messages() {}
+
     /// The parse runs in `CONFIG_DEF`'s order, so the first bad value in it
     /// is the one named, whatever the names sort to.
     #[test]
@@ -1103,8 +1113,11 @@ mod tests {
         overrides(&[(key, value)])
     }
 
-    #[test]
-    fn kafkas_group_key_roster_has_every_trunk_key() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys group tests: kafkas group key roster has every trunk key"
+    )]
+    fn bdd_verify_kafkas_group_key_roster_has_every_trunk_key() {
         check!(KAFKA_GROUP_KEYS.len() == 27);
         let names: Vec<&str> = KAFKA_GROUP_KEYS.iter().map(|key| key.name).collect();
         let mut sorted = names.clone();
@@ -1115,6 +1128,13 @@ mod tests {
         ordered.sort_unstable();
         check!(ordered == names);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/group.feature",
+        name = "tests: kafkas group key roster has every trunk key"
+    )]
+    fn kafkas_group_key_roster_has_every_trunk_key() {}
 
     /// Kafka's `GroupCoordinatorConfig` `require`s, for each protocol's
     /// broker assignment interval, in the constructor's order: below the

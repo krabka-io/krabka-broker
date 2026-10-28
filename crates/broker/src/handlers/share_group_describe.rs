@@ -300,14 +300,11 @@ mod tests {
             .expect("seed share group");
     }
 
-    /// Kafka's `handleShareGroupDescribe` with an ACL authorizer: denied rows
-    /// come first, a missing group names itself in the message, topic names
-    /// come from the image (a topic it lacks is left out), the operations
-    /// bitfield is filled on request, and a group whose assignment names a
-    /// topic the caller cannot `Describe` is replaced by Kafka's
-    /// `TOPIC_AUTHORIZATION_FAILED` row.
-    #[tokio::test]
-    async fn handle_matches_kafka_with_acls() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers share group describe tests: handle matches kafka with acls"
+    )]
+    async fn bdd_verify_handle_matches_kafka_with_acls() {
         use krabka_protocol::owned::{
             common::share_group_describe_response::{
                 assignment::Assignment, topic_partitions::TopicPartitions,
@@ -403,6 +400,20 @@ mod tests {
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `handleShareGroupDescribe` with an ACL authorizer: denied rows
+    /// come first, a missing group names itself in the message, topic names
+    /// come from the image (a topic it lacks is left out), the operations
+    /// bitfield is filled on request, and a group whose assignment names a
+    /// topic the caller cannot `Describe` is replaced by Kafka's
+    /// `TOPIC_AUTHORIZATION_FAILED` row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/share_group_describe.feature",
+        name = "tests: handle matches kafka with acls"
+    )]
+    #[tokio::test]
+    async fn handle_matches_kafka_with_acls() {}
 
     /// `INVALID_GROUP_ID` for an empty id, ahead of the shard rows, and
     /// Kafka's message for a group of another type.

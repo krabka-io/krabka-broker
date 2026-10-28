@@ -766,16 +766,26 @@ mod tests {
         assert2::assert!(cfg.assignor_enabled(name) == cfg.find_assignor(name).is_some());
     }
 
-    /// Kafka's `group.consumer.max.size` defaults to `Integer.MAX_VALUE`
-    /// (`CONSUMER_GROUP_MAX_SIZE_DEFAULT`), so a group of 201 members, or a
-    /// classic group of that size that upgrades, is not refused.
-    #[test]
-    fn default_member_cap_is_kafkas_integer_max() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified config tests: default member cap is kafkas integer max"
+    )]
+    fn bdd_verify_default_member_cap_is_kafkas_integer_max() {
         let max_size = NextGenConfig::default().max_size;
 
         assert!(max_size == usize::try_from(i32::MAX).unwrap());
         assert!(max_size > 200);
     }
+
+    /// Kafka's `group.consumer.max.size` defaults to `Integer.MAX_VALUE`
+    /// (`CONSUMER_GROUP_MAX_SIZE_DEFAULT`), so a group of 201 members, or a
+    /// classic group of that size that upgrades, is not refused.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/config.feature",
+        name = "tests: default member cap is kafkas integer max"
+    )]
+    fn default_member_cap_is_kafkas_integer_max() {}
 
     #[test]
     fn migration_policy_default_is_bidirectional() {

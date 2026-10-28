@@ -81,18 +81,30 @@ fn sample() -> RemoteLogSegmentMetadata {
         .call()
 }
 
-#[yare::parameterized(
-    offset = { IndexType::Offset, ".index" },
-    timestamp = { IndexType::Timestamp, ".timeindex" },
-    producer_snapshot = { IndexType::ProducerSnapshot, ".snapshot" },
-    leader_epoch = { IndexType::LeaderEpoch, ".leader_epoch_checkpoint" },
-    transaction = { IndexType::Transaction, ".txnindex" },
-)]
-fn index_suffixes_match_kafka(index_type: IndexType, want: &str) {
+#[cfg(test)]
+#[rstest_bdd_macros::then("storage manager tests: index suffixes match kafka for {example}")]
+fn bdd_verify_index_suffixes_match_kafka(example: String) {
+    type Example<'a> = (IndexType, &'a str);
+    let (index_type, want): Example<'_> = match example.as_str() {
+        "offset" => (IndexType::Offset, ".index"),
+        "timestamp" => (IndexType::Timestamp, ".timeindex"),
+        "producer snapshot" => (IndexType::ProducerSnapshot, ".snapshot"),
+        "leader epoch" => (IndexType::LeaderEpoch, ".leader_epoch_checkpoint"),
+        "transaction" => (IndexType::Transaction, ".txnindex"),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     // Filesystem-backed stores key files off these exact suffixes.
     check!(index_type.suffix() == want, "{index_type:?}");
     check!(IndexType::from_suffix(want) == Some(index_type));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage_manager/tests.feature",
+    name = "index suffixes match kafka"
+)]
+fn index_suffixes_match_kafka(example: String) { let _ = example; }
 
 #[yare::parameterized(
     log = { LOG_FILE_SUFFIX },
@@ -105,8 +117,9 @@ fn from_suffix_rejects_non_index_suffixes(suffix: &str) {
     check!(IndexType::from_suffix(suffix) == None, "{suffix:?}");
 }
 
-#[test]
-fn local_tiered_storage_names_match_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("storage manager tests: local tiered storage names match kafka")]
+fn bdd_verify_local_tiered_storage_names_match_kafka() {
     let metadata = sample();
 
     check!(partition_dir_name(&metadata) == "orders-7-AAAAAAAAAAAAAAAAAAAAAQ");
@@ -116,8 +129,16 @@ fn local_tiered_storage_names_match_kafka() {
     );
 }
 
-#[test]
-fn object_store_key_components_match_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage_manager/tests.feature",
+    name = "local tiered storage names match kafka"
+)]
+fn local_tiered_storage_names_match_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("storage manager tests: object store key components match kafka")]
+fn bdd_verify_object_store_key_components_match_kafka() {
     // The two halves of the S3 key that the object-store backend writes.
     let metadata = metadata().call();
 
@@ -128,8 +149,16 @@ fn object_store_key_components_match_kafka() {
     );
 }
 
-#[test]
-fn parses_the_pinned_kafka_names() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage_manager/tests.feature",
+    name = "object store key components match kafka"
+)]
+fn object_store_key_components_match_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("storage manager tests: parses the pinned kafka names")]
+fn bdd_verify_parses_the_pinned_kafka_names() {
     check!(
         parse_partition_dir_name("orders-7-AAAAAAAAAAAAAAAAAAAAAQ")
             == Some(PartitionDirName {
@@ -155,6 +184,13 @@ fn parses_the_pinned_kafka_names() {
             })
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage_manager/tests.feature",
+    name = "parses the pinned kafka names"
+)]
+fn parses_the_pinned_kafka_names() {}
 
 #[test]
 fn parse_partition_dir_name_splits_a_hyphenated_topic_from_the_right() {
@@ -204,15 +240,29 @@ fn parse_segment_file_name_rejects_malformed_names(name: &str) {
     check!(parse_segment_file_name(name) == None, "{name:?}");
 }
 
-#[yare::parameterized(
-    empty = { "" },
-    short = { "AAAA" },
-    long = { "AAAAAAAAAAAAAAAAAAAAAQAA" },
-    invalid_tail = { "A" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "storage manager tests: decode kafka uuid rejects wrong length base64 for {example}"
 )]
-fn decode_kafka_uuid_rejects_wrong_length_base64(encoded: &str) {
+fn bdd_verify_decode_kafka_uuid_rejects_wrong_length_base64(example: String) {
+    type Example<'a> = (&'a str,);
+    let (encoded,): Example<'_> = match example.as_str() {
+        "empty" => ("",),
+        "short" => ("AAAA",),
+        "long" => ("AAAAAAAAAAAAAAAAAAAAAQAA",),
+        "invalid tail" => ("A",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(decode_kafka_uuid(encoded) == None, "{encoded:?}");
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage_manager/tests.feature",
+    name = "decode kafka uuid rejects wrong length base64"
+)]
+fn decode_kafka_uuid_rejects_wrong_length_base64(example: String) { let _ = example; }
 
 proptest! {
     #[test]

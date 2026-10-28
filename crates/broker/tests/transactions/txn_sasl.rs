@@ -15,21 +15,9 @@ use {
     std::env,
 };
 
-/// Full transactional flow over a `SASL_PLAINTEXT`/`PLAIN` listener.
-///
-/// Regression test for a producer-side coordinator-connection credential
-/// omission. `init_transactions` opens a *dedicated* connection to the
-/// transaction coordinator, and `send_offsets_to_transaction` opens another one
-/// to the group coordinator. If either drops the retained `ClientSecurity`, the
-/// secured listener rejects the connection and the call fails with
-/// `Client(Disconnected)`.
-///
-/// The test drives init, begin, send, `send_offsets_to_transaction`, and commit
-/// end to end with a SASL-authenticated producer, which exercises both
-/// secondary connections. A `read_committed` consumer then confirms that the
-/// records committed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_authenticated_transactional_flow_commits() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions txn sasl: sasl authenticated transactional flow commits")]
+async fn bdd_verify_sasl_authenticated_transactional_flow_commits() {
     let (broker, bootstrap, _dir) = boot_single_sasl(&[("alice", "alice-secret")]).await;
     create_topic_sasl(
         &bootstrap,
@@ -92,3 +80,24 @@ async fn sasl_authenticated_transactional_flow_commits() {
     consumer.close().await.unwrap();
     broker.shutdown().await;
 }
+
+/// Full transactional flow over a `SASL_PLAINTEXT`/`PLAIN` listener.
+///
+/// Regression test for a producer-side coordinator-connection credential
+/// omission. `init_transactions` opens a *dedicated* connection to the
+/// transaction coordinator, and `send_offsets_to_transaction` opens another one
+/// to the group coordinator. If either drops the retained `ClientSecurity`, the
+/// secured listener rejects the connection and the call fails with
+/// `Client(Disconnected)`.
+///
+/// The test drives init, begin, send, `send_offsets_to_transaction`, and commit
+/// end to end with a SASL-authenticated producer, which exercises both
+/// secondary connections. A `read_committed` consumer then confirms that the
+/// records committed.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_sasl.feature",
+    name = "sasl authenticated transactional flow commits"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_authenticated_transactional_flow_commits() {}

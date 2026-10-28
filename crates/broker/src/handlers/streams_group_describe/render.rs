@@ -315,11 +315,11 @@ mod tests {
         assert!(topology == expected_rendered_topology());
     }
 
-    /// Kafka renders the subtopologies by id and every topic list by name,
-    /// for the stored topology (`StreamsTopology`) and for the configured
-    /// one (`ConfiguredTopology`), whatever order the members sent.
-    #[test]
-    fn topologies_render_in_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers streams group describe render tests: topologies render in kafka order"
+    )]
+    fn bdd_verify_topologies_render_in_kafka_order() {
         use {
             crate::coordinator::unified::streams::topology::ConfiguredSubtopology,
             std::collections::BTreeSet,
@@ -398,6 +398,16 @@ mod tests {
         assert!(rendered_stored == wire(0));
         assert!(rendered_configured == wire(3));
     }
+
+    /// Kafka renders the subtopologies by id and every topic list by name,
+    /// for the stored topology (`StreamsTopology`) and for the configured
+    /// one (`ConfiguredTopology`), whatever order the members sent.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/streams_group_describe/render.feature",
+        name = "tests: topologies render in kafka order"
+    )]
+    fn topologies_render_in_kafka_order() {}
 
     #[test]
     fn task_map_to_ids_preserves_sorted_task_maps() {

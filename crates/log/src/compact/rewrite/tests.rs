@@ -441,13 +441,9 @@ fn one_record_batch(base: i64, producer: ProducerIdAndEpoch, key: Option<&[u8]>)
     }
 }
 
-/// Which bare headers `Cleaner.cleanInto` keeps (#1198): a batch emptied by
-/// the pass is written again only when it is its producer's last data batch
-/// (or, for a producer that wrote only transaction markers, a marker of its
-/// current epoch), or when it is the last batch of the whole round. Each case
-/// is `(label, batches, the active producer, the base offsets that survive)`.
-#[test]
-fn retain_empty_follows_kafkas_cleaner_rules() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("compact rewrite tests: retain empty follows kafkas cleaner rules")]
+fn bdd_verify_retain_empty_follows_kafkas_cleaner_rules() {
     // A commit marker whose delete horizon has elapsed, so the pass drops its
     // record, from producer 1000 at epoch 7.
     let mut marker = control_batch(0, 1000, 1 /* COMMIT */);
@@ -527,6 +523,18 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
         assert2::assert!(survivors == expected, "{label}");
     }
 }
+
+/// Which bare headers `Cleaner.cleanInto` keeps (#1198): a batch emptied by
+/// the pass is written again only when it is its producer's last data batch
+/// (or, for a producer that wrote only transaction markers, a marker of its
+/// current epoch), or when it is the last batch of the whole round. Each case
+/// is `(label, batches, the active producer, the base offsets that survive)`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/compact/rewrite/tests.feature",
+    name = "retain empty follows kafkas cleaner rules"
+)]
+fn retain_empty_follows_kafkas_cleaner_rules() {}
 
 /// The bare header a `RETAIN_EMPTY` batch leaves is Kafka's
 /// `DefaultRecordBatch.writeEmptyHeader`: no compression, no delete horizon

@@ -52,18 +52,11 @@ fn idempotent_batch(pid: i64, base_seq: i32, values: &[&str]) -> RecordBatch {
     b
 }
 
-/// Bug D regression. A failover-rejoin divergence can TRUNCATE an idempotent
-/// batch off the leader's log, which also reverts the producer state. A retry
-/// of that same batch must then RE-APPEND. It must not deduplicate against the
-/// now-truncated offset and stall its `acks=all` high-watermark gate forever.
-///
-/// Without the producer-state revert on truncation, the retry resolves to
-/// `Decision::Duplicate{base_offset}` and waits for `HW >= base_offset + N`.
-/// The truncated log can never reach that, so every attempt returns
-/// `REQUEST_TIMED_OUT`, which is a permanent stall on the
-/// cluster.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "durability: idempotent retry reappends after truncation instead of stalling"
+)]
+async fn bdd_verify_idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic()
         .broker(&broker)
@@ -111,8 +104,27 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
     );
 }
 
+/// Bug D regression. A failover-rejoin divergence can TRUNCATE an idempotent
+/// batch off the leader's log, which also reverts the producer state. A retry
+/// of that same batch must then RE-APPEND. It must not deduplicate against the
+/// now-truncated offset and stall its `acks=all` high-watermark gate forever.
+///
+/// Without the producer-state revert on truncation, the retry resolves to
+/// `Decision::Duplicate{base_offset}` and waits for `HW >= base_offset + N`.
+/// The truncated log can never reach that, so every attempt returns
+/// `REQUEST_TIMED_OUT`, which is a permanent stall on the
+/// cluster.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "idempotent retry reappends after truncation instead of stalling"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disk_backed_restart_recovers_idempotent_producer_state() {
+async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: disk backed restart recovers idempotent producer state")]
+async fn bdd_verify_disk_backed_restart_recovers_idempotent_producer_state() {
     let dir = TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
 
@@ -161,8 +173,17 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "disk backed restart recovers idempotent producer state"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acks_one_returns_quickly_on_rf1_broker() {
+async fn disk_backed_restart_recovers_idempotent_producer_state() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: acks one returns quickly on rf1 broker")]
+async fn bdd_verify_acks_one_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic()
         .broker(&broker)
@@ -186,8 +207,17 @@ async fn acks_one_returns_quickly_on_rf1_broker() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "acks one returns quickly on rf1 broker"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acks_all_returns_quickly_on_rf1_broker() {
+async fn acks_one_returns_quickly_on_rf1_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: acks all returns quickly on rf1 broker")]
+async fn bdd_verify_acks_all_returns_quickly_on_rf1_broker() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic()
         .broker(&broker)
@@ -212,8 +242,17 @@ async fn acks_all_returns_quickly_on_rf1_broker() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "acks all returns quickly on rf1 broker"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_clamps_at_hw_when_followers_lag() {
+async fn acks_all_returns_quickly_on_rf1_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: consumer clamps at hw when followers lag")]
+async fn bdd_verify_consumer_clamps_at_hw_when_followers_lag() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic()
         .broker(&broker)
@@ -254,12 +293,17 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "consumer clamps at hw when followers lag"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// Regression-pin for the `min(HW, lso)` behavior, which is equivalent to
-// plain `lso` for rf=1 (HW = LEO immediately). Previously flaked with the
-// `INVALID_TXN_STATE` race fixed in `Producer::flush` (it now waits for
-// in-flight Produce batches before `EndTxn`).
-async fn read_committed_under_rf1_unchanged() {
+async fn consumer_clamps_at_hw_when_followers_lag() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: read committed under rf1 unchanged")]
+async fn bdd_verify_read_committed_under_rf1_unchanged() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic()
         .broker(&broker)
@@ -318,8 +362,17 @@ async fn read_committed_under_rf1_unchanged() {
     broker.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "read committed under rf1 unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_committed_under_rf1_unchanged() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("durability: acks all completes via isr shrink when follower dead")]
+async fn bdd_verify_acks_all_completes_via_isr_shrink_when_follower_dead() {
     support::init_tracing();
     let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("shrink").call().await;
     // Wait for all 3 replicas to join the ISR before killing broker 3
@@ -351,18 +404,19 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     shutdown_cluster(cluster).await;
 }
 
-/// A produce that waits on a stalled follower must land in the remote-time
-/// histogram, not the local-time one.
-///
-/// This is the metric that separates a lagging follower from a slow disk. The
-/// scenario is the one `acks_all_completes_via_isr_shrink_when_follower_dead`
-/// drives: three brokers, all three in the ISR, then one is killed, so the
-/// `acks=all` high-watermark gate waits out `replica_lag_time_max` before the
-/// ISR shrinks and the produce completes. The leader's own append is a
-/// millisecond of local disk, and the seconds the client waited are all in the
-/// high-watermark gate.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "acks all completes via isr shrink when follower dead"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
+async fn acks_all_completes_via_isr_shrink_when_follower_dead() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "durability: acks all stalled follower wait lands in remote time not local time"
+)]
+async fn bdd_verify_acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     support::init_tracing();
     let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("phase-stall").call().await;
     cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
@@ -413,6 +467,24 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// A produce that waits on a stalled follower must land in the remote-time
+/// histogram, not the local-time one.
+///
+/// This is the metric that separates a lagging follower from a slow disk. The
+/// scenario is the one `acks_all_completes_via_isr_shrink_when_follower_dead`
+/// drives: three brokers, all three in the ISR, then one is killed, so the
+/// `acks=all` high-watermark gate waits out `replica_lag_time_max` before the
+/// ISR shrinks and the produce completes. The leader's own append is a
+/// millisecond of local disk, and the seconds the client waited are all in the
+/// high-watermark gate.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "acks all stalled follower wait lands in remote time not local time"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {}
 
 /// Partitions the overlapped-wait case produces to in one request. Wide
 /// enough that N sequential `timeout.ms` waits and one overlapped wait are
@@ -486,25 +558,11 @@ async fn produce_every_partition(
         .collect()
 }
 
-/// One `acks=-1` request to many partitions waits for the high watermark once,
-/// not once per partition.
-///
-/// Kafka appends every partition of a request to the local log and then
-/// registers a single `DelayedProduce` covering all of them with the request's
-/// `timeout.ms`, so the replication waits overlap and one timeout bounds the
-/// request. A handler that instead awaits each partition's watermark inline,
-/// before the next partition is appended, turns one round trip into N and one
-/// timeout into N of them.
-///
-/// The scenario holds the follower's fetch back for good: the cluster is two
-/// brokers, and the second one is stopped. Its replicas can never acknowledge,
-/// and the surviving broker cannot shrink the ISR either, because a two-voter
-/// quorum is gone with it. Every partition the survivor leads therefore waits
-/// out the full `timeout.ms` and answers `REQUEST_TIMED_OUT`,
-/// which is exactly the case where the difference between one wait and N of
-/// them is a wall-clock fact rather than a scheduling detail.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "durability: acks all waits for every partition at once not one after another"
+)]
+async fn bdd_verify_acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     support::init_tracing();
     let mut cluster = registered_cluster(2).await;
     let bootstrap_1 = cluster[0].1.listen_addr.to_string();
@@ -568,3 +626,28 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// One `acks=-1` request to many partitions waits for the high watermark once,
+/// not once per partition.
+///
+/// Kafka appends every partition of a request to the local log and then
+/// registers a single `DelayedProduce` covering all of them with the request's
+/// `timeout.ms`, so the replication waits overlap and one timeout bounds the
+/// request. A handler that instead awaits each partition's watermark inline,
+/// before the next partition is appended, turns one round trip into N and one
+/// timeout into N of them.
+///
+/// The scenario holds the follower's fetch back for good: the cluster is two
+/// brokers, and the second one is stopped. Its replicas can never acknowledge,
+/// and the surviving broker cannot shrink the ISR either, because a two-voter
+/// quorum is gone with it. Every partition the survivor leads therefore waits
+/// out the full `timeout.ms` and answers `REQUEST_TIMED_OUT`,
+/// which is exactly the case where the difference between one wait and N of
+/// them is a wall-clock fact rather than a scheduling detail.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/durability.feature",
+    name = "acks all waits for every partition at once not one after another"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {}

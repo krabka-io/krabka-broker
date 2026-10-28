@@ -190,8 +190,11 @@ mod tests {
         Gone,
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn one_turn_records_kafkas_event_queue_measurements() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "event queue tests: one turn records kafkas event queue measurements"
+    )]
+    async fn bdd_verify_one_turn_records_kafkas_event_queue_measurements() {
         let ms = Duration::from_millis;
         let cases = [
             TurnCase {
@@ -253,4 +256,12 @@ mod tests {
             check!(recorder.record() == case.expected, "{}", case.name);
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/event_queue.feature",
+        name = "tests: one turn records kafkas event queue measurements"
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn one_turn_records_kafkas_event_queue_measurements() {}
 }

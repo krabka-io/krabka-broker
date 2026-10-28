@@ -138,12 +138,20 @@ mod tests {
         assert2::assert!(n > 0);
     }
 
-    #[test]
-    fn rejects_wrong_scenario_id() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("payload tests: rejects wrong scenario id")]
+    fn bdd_verify_rejects_wrong_scenario_id() {
         let mut t = template(bytes(64));
         let b = stamp_into(&mut t, 42);
         assert2::assert!(read_send_nanos(&b, 7).is_none());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/payload.feature",
+        name = "tests: rejects wrong scenario id"
+    )]
+    fn rejects_wrong_scenario_id() {}
 
     #[test]
     fn rejects_short() {

@@ -34,8 +34,11 @@ fn create_partitions_request(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin create partitions: automatic placement takes a fenced broker only as a last resort"
+)]
+async fn bdd_verify_automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     let mut cluster = registered_cluster(3).await;
     // Stop a broker that is neither the one the test talks to nor the
     // controller leader. Its controlled shutdown ends fenced, as Kafka's
@@ -123,11 +126,19 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     assert!(rejected.topics[0].error_code == 38);
 }
 
-/// `CreatePartitions`: a request that extends a 1-partition topic to 3
-/// returns `error_code == 0`. All three partitions then materialise in the
-/// broker's local registry within a few seconds.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_partitions_extends_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
+    name = "automatic placement takes a fenced broker only as a last resort"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin create partitions: create partitions extends topic"
+)]
+async fn bdd_verify_create_partitions_extends_topic() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -147,13 +158,22 @@ async fn create_partitions_extends_topic() {
     }
 }
 
-/// `CreatePartitions`: explicit `assignments` list. The topic's rf is 1 on a
-/// single-broker cluster, and the operator pins the new partition to
-/// broker 0. The handler must accept it (`error_code` == 0) and materialise
-/// the partition. A second call with a wrong-length assignment list must
-/// return `INVALID_REPLICA_ASSIGNMENT` (39).
+/// `CreatePartitions`: a request that extends a 1-partition topic to 3
+/// returns `error_code == 0`. All three partitions then materialise in the
+/// broker's local registry within a few seconds.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
+    name = "create partitions extends topic"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_partitions_honors_explicit_assignments() {
+async fn create_partitions_extends_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin create partitions: create partitions honors explicit assignments"
+)]
+async fn bdd_verify_create_partitions_honors_explicit_assignments() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -213,3 +233,16 @@ async fn create_partitions_honors_explicit_assignments() {
         "partition 2 must NOT have been created on an INVALID_REPLICA_ASSIGNMENT path",
     );
 }
+
+/// `CreatePartitions`: explicit `assignments` list. The topic's rf is 1 on a
+/// single-broker cluster, and the operator pins the new partition to
+/// broker 0. The handler must accept it (`error_code` == 0) and materialise
+/// the partition. A second call with a wrong-length assignment list must
+/// return `INVALID_REPLICA_ASSIGNMENT` (39).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
+    name = "create partitions honors explicit assignments"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_partitions_honors_explicit_assignments() {}

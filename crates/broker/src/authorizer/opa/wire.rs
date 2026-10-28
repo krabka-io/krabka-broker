@@ -163,15 +163,29 @@ fn resource_type_str(t: ResourceType) -> &'static str {
 mod tests {
     use super::*;
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "authorizer opa wire tests: operation str maps kafka names for {example}"
+    )]
+    fn bdd_verify_operation_str_maps_kafka_names(example: String) {
+        type Example<'a> = (AclOperation, &'a str);
+        let (op, want): Example<'_> = match example.as_str() {
+            "read" => (AclOperation::Read, "READ"),
+            "write" => (AclOperation::Write, "WRITE"),
+            "two phase commit" => (AclOperation::TwoPhaseCommit, "TWO_PHASE_COMMIT"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        assert2::assert!(operation_str(op) == want, "{op:?}");
+    }
+
     /// The OPA input's `operation` string must be the Kafka enum name,
     /// including KIP-939's `TWO_PHASE_COMMIT`. This pins the mapping, so the
     /// test catches a regression or a blanket mutation of `operation_str`.
-    #[yare::parameterized(
-        read = { AclOperation::Read, "READ" },
-        write = { AclOperation::Write, "WRITE" },
-        two_phase_commit = { AclOperation::TwoPhaseCommit, "TWO_PHASE_COMMIT" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/authorizer/opa/wire.feature",
+        name = "tests: operation str maps kafka names"
     )]
-    fn operation_str_maps_kafka_names(op: AclOperation, want: &str) {
-        assert2::assert!(operation_str(op) == want, "{op:?}");
-    }
+    fn operation_str_maps_kafka_names(example: String) { let _ = example; }
 }

@@ -30,9 +30,9 @@ use {
 // above acks_all_durability (10092/10192/10292) to dodge
 // TIME_WAIT collisions when JVM tests run sequentially via the nextest
 // broker-jvm-acceptance test group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn acks_all_survives_leader_crash() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance durability leader crash: acks all survives leader crash")]
+async fn bdd_verify_acks_all_survives_leader_crash() {
     const TOPIC: &str = "krabka-acks-all-crash-itest";
 
     let client_ports = [10392u16, 10492, 10592];
@@ -132,3 +132,12 @@ async fn acks_all_survives_leader_crash() {
         h.shutdown().await;
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/leader_crash.feature",
+    name = "acks all survives leader crash"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_survives_leader_crash() {}

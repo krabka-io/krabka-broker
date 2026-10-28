@@ -396,18 +396,40 @@ impl SaslPair {
     async fn shutdown(self) { self.broker.shutdown().await; }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_4_3_1_client_authenticates_with_every_mechanism() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl kafka 4 3 1 client: kafka 4 3 1 client authenticates with every mechanism"
+)]
+async fn bdd_verify_kafka_4_3_1_client_authenticates_with_every_mechanism() {
     let pair = SaslPair::start("sasl-accept").await;
     pair.check_cases(&positive_cases());
     pair.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/kafka_4_3_1_client.feature",
+    name = "kafka 4 3 1 client authenticates with every mechanism"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_4_3_1_client_authenticates_with_every_mechanism() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl kafka 4 3 1 client: kafka 4 3 1 client reports kafkas refusal for bad credentials"
+)]
+async fn bdd_verify_kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials() {
     let pair = SaslPair::start("sasl-refuse").await;
     pair.check_cases(&negative_cases());
     pair.shutdown().await;
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/kafka_4_3_1_client.feature",
+    name = "kafka 4 3 1 client reports kafkas refusal for bad credentials"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials() {}

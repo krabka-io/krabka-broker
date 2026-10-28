@@ -66,8 +66,11 @@ fn loopback_config(log_dir: &Path) -> BrokerConfig {
     cfg
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_is_503_during_startup_and_200_once_the_broker_is_up() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "health probes: readyz is 503 during startup and 200 once the broker is up"
+)]
+async fn bdd_verify_readyz_is_503_during_startup_and_200_once_the_broker_is_up() {
     let log_dir = tempfile::tempdir().unwrap();
     let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
     let probes = serve_probes(state.clone()).await;
@@ -105,11 +108,17 @@ async fn readyz_is_503_during_startup_and_200_once_the_broker_is_up() {
     handle.shutdown().await;
 }
 
-/// The 503 body names the condition rather than reporting a generic failure,
-/// and it names the first one that is unmet, so a partly-started node does not
-/// report the condition it already satisfied.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "readyz is 503 during startup and 200 once the broker is up"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_names_each_condition_as_startup_advances() {
+async fn readyz_is_503_during_startup_and_200_once_the_broker_is_up() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("health probes: readyz names each condition as startup advances")]
+async fn bdd_verify_readyz_names_each_condition_as_startup_advances() {
     let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
     let probes = serve_probes(state.clone()).await;
 
@@ -128,6 +137,17 @@ async fn readyz_names_each_condition_as_startup_advances() {
         "{body}"
     );
 }
+
+/// The 503 body names the condition rather than reporting a generic failure,
+/// and it names the first one that is unmet, so a partly-started node does not
+/// report the condition it already satisfied.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "readyz names each condition as startup advances"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_names_each_condition_as_startup_advances() {}
 
 /// A running broker, its health state, and the address its probes are served on.
 struct RunningProbes {
@@ -152,11 +172,9 @@ async fn running_probe_fixture() -> RunningProbes {
     }
 }
 
-/// A broker that is up stays ready: the metadata condition is evaluated live
-/// on every request, so a probe some way past startup must not start failing
-/// on its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_stays_200_while_the_broker_runs() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("health probes: readyz stays 200 while the broker runs")]
+async fn bdd_verify_readyz_stays_200_while_the_broker_runs() {
     let RunningProbes {
         log_dir: _log_dir,
         state: _state,
@@ -173,8 +191,20 @@ async fn readyz_stays_200_while_the_broker_runs() {
     handle.shutdown().await;
 }
 
+/// A broker that is up stays ready: the metadata condition is evaluated live
+/// on every request, so a probe some way past startup must not start failing
+/// on its own.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "readyz stays 200 while the broker runs"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_is_503_when_shutting_down() {
+async fn readyz_stays_200_while_the_broker_runs() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("health probes: readyz is 503 when shutting down")]
+async fn bdd_verify_readyz_is_503_when_shutting_down() {
     let RunningProbes {
         log_dir: _log_dir,
         state,
@@ -195,14 +225,17 @@ async fn readyz_is_503_when_shutting_down() {
     handle.shutdown().await;
 }
 
-/// A draining node reports the drain ahead of every other pending condition.
-///
-/// A roll script polls `/readyz` to decide when the previous node has left
-/// rotation. A broker that answered `log_dir_recovery` while it was in fact
-/// handing leadership away would tell that script the node is still coming
-/// up, not going down, and the two call for opposite actions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "readyz is 503 when shutting down"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutting_down_outranks_every_other_not_ready_condition() {
+async fn readyz_is_503_when_shutting_down() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("health probes: shutting down outranks every other not ready condition")]
+async fn bdd_verify_shutting_down_outranks_every_other_not_ready_condition() {
     let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
     let probes = serve_probes(state.clone()).await;
 
@@ -218,3 +251,17 @@ async fn shutting_down_outranks_every_other_not_ready_condition() {
     check!(status.contains("503 Service Unavailable"), "{status}");
     check!(body.starts_with("not ready: shutting_down: "), "{body}");
 }
+
+/// A draining node reports the drain ahead of every other pending condition.
+///
+/// A roll script polls `/readyz` to decide when the previous node has left
+/// rotation. A broker that answered `log_dir_recovery` while it was in fact
+/// handing leadership away would tell that script the node is still coming
+/// up, not going down, and the two call for opposite actions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "shutting down outranks every other not ready condition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_outranks_every_other_not_ready_condition() {}

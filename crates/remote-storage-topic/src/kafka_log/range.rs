@@ -245,58 +245,82 @@ mod tests {
         retry_backoff: Duration::from_millis(200),
     };
 
-    #[yare::parameterized(
-        advances_one = { 4, 10, Some(5), RangeStep::Continue(5) },
-        skips_compacted_offsets = { 4, 10, Some(8), RangeStep::Continue(8) },
-        reaches_end = { 4, 10, Some(10), RangeStep::Done },
-        passes_end = { 4, 10, Some(12), RangeStep::Done },
-        no_batch = { 4, 10, None, RangeStep::Stalled },
-        no_progress = { 4, 10, Some(4), RangeStep::Stalled },
-        regresses = { 4, 10, Some(3), RangeStep::Stalled },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: range steps follow batch progress to the end for {example}"
     )]
-    fn range_steps_follow_batch_progress_to_the_end(
-        current: i64,
-        end: i64,
-        next: Option<i64>,
-        expected: RangeStep,
-    ) {
+    fn bdd_verify_range_steps_follow_batch_progress_to_the_end(example: String) {
+        type Example = (i64, i64, Option<i64>, RangeStep);
+        let (current, end, next, expected): Example = match example.as_str() {
+            "advances one" => (4, 10, Some(5), RangeStep::Continue(5)),
+            "skips compacted offsets" => (4, 10, Some(8), RangeStep::Continue(8)),
+            "reaches end" => (4, 10, Some(10), RangeStep::Done),
+            "passes end" => (4, 10, Some(12), RangeStep::Done),
+            "no batch" => (4, 10, None, RangeStep::Stalled),
+            "no progress" => (4, 10, Some(4), RangeStep::Stalled),
+            "regresses" => (4, 10, Some(3), RangeStep::Stalled),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(
             next_range_step(current, end, next) == expected,
             "current {current}, end {end}, next {next:?}"
         );
     }
 
-    #[yare::parameterized(
-        not_leader = { ClientError::Server { error_code: 6 }, true },
-        fenced_epoch = { ClientError::Server { error_code: 74 }, true },
-        unknown_leader_epoch = { ClientError::Server { error_code: 75 }, true },
-        leader_unavailable = { ClientError::Server { error_code: 5 }, true },
-        replica_unavailable = { ClientError::Server { error_code: 9 }, true },
-        storage_error = { ClientError::Server { error_code: 56 }, true },
-        offset_unavailable = { ClientError::Server { error_code: 78 }, true },
-        unknown_topic = { ClientError::Server { error_code: 100 }, true },
-        unknown_server = { ClientError::Server { error_code: -1 }, true },
-        disconnected = { ClientError::Disconnected, true },
-        timeout = { ClientError::Timeout(secs(30)), true },
-        connection_reset = { ClientError::Io(ErrorKind::ConnectionReset.into()), true },
-        connection_refused = {
-            ClientError::Connect {
-                addr: "127.0.0.1:9092".parse().unwrap(),
-                source: ErrorKind::ConnectionRefused.into(),
-            },
-            true,
-        },
-        offset_out_of_range = { ClientError::Server { error_code: 1 }, false },
-        corrupt_message = { ClientError::Server { error_code: 2 }, false },
-        topic_authorization = { ClientError::Server { error_code: 29 }, false },
-        unsupported_version = { ClientError::Server { error_code: 35 }, false },
-        invalid_config = { ClientError::InvalidConfig("bad".into()), false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: range steps follow batch progress to the end"
     )]
-    fn retriable_fetch_failures_are_leader_moves_and_broken_connections(
-        error: ClientError,
-        expected: bool,
+    fn range_steps_follow_batch_progress_to_the_end(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: retriable fetch failures are leader moves and broken connections for {example}"
+    )]
+    fn bdd_verify_retriable_fetch_failures_are_leader_moves_and_broken_connections(
+        example: String,
     ) {
+        type Example = (ClientError, bool);
+        let (error, expected): Example = match example.as_str() {
+            "not leader" => (ClientError::Server { error_code: 6 }, true),
+            "fenced epoch" => (ClientError::Server { error_code: 74 }, true),
+            "unknown leader epoch" => (ClientError::Server { error_code: 75 }, true),
+            "leader unavailable" => (ClientError::Server { error_code: 5 }, true),
+            "replica unavailable" => (ClientError::Server { error_code: 9 }, true),
+            "storage error" => (ClientError::Server { error_code: 56 }, true),
+            "offset unavailable" => (ClientError::Server { error_code: 78 }, true),
+            "unknown topic" => (ClientError::Server { error_code: 100 }, true),
+            "unknown server" => (ClientError::Server { error_code: -1 }, true),
+            "disconnected" => (ClientError::Disconnected, true),
+            "timeout" => (ClientError::Timeout(secs(30)), true),
+            "connection reset" => (ClientError::Io(ErrorKind::ConnectionReset.into()), true),
+            "connection refused" => (
+                ClientError::Connect {
+                    addr: "127.0.0.1:9092".parse().unwrap(),
+                    source: ErrorKind::ConnectionRefused.into(),
+                },
+                true,
+            ),
+            "offset out of range" => (ClientError::Server { error_code: 1 }, false),
+            "corrupt message" => (ClientError::Server { error_code: 2 }, false),
+            "topic authorization" => (ClientError::Server { error_code: 29 }, false),
+            "unsupported version" => (ClientError::Server { error_code: 35 }, false),
+            "invalid config" => (ClientError::InvalidConfig("bad".into()), false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(range_fetch_retriable(&error) == expected, "{error:?}");
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: retriable fetch failures are leader moves and broken connections"
+    )]
+    fn retriable_fetch_failures_are_leader_moves_and_broken_connections(example: String) {
+        let _ = example;
     }
 
     fn fetched(offset: i64, value: Option<&'static [u8]>) -> FetchedRecord {
@@ -319,8 +343,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn page_records_keep_the_fetch_offset_up_to_the_range_end() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: page records keep the fetch offset up to the range end"
+    )]
+    fn bdd_verify_page_records_keep_the_fetch_offset_up_to_the_range_end() {
         let page = vec![
             fetched(3, Some(b"before")),
             fetched(4, Some(b"first")),
@@ -332,6 +359,13 @@ mod tests {
 
         assert!(records == vec![record(4, Some(b"first")), record(6, None)]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: page records keep the fetch offset up to the range end"
+    )]
+    fn page_records_keep_the_fetch_offset_up_to_the_range_end() {}
 
     /// One call a range read made through [`ScriptedFetcher`].
     #[derive(Debug, PartialEq, Eq)]
@@ -408,8 +442,11 @@ mod tests {
         Ok(records)
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: a retriable fetch failure looks the leader up again and resumes"
+    )]
+    async fn bdd_verify_a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {
         let fetcher = ScriptedFetcher::new([Ok(1), Ok(2)], [
             Ok(page(0..2)),
             Err(ClientError::Server { error_code: 6 }),
@@ -445,8 +482,19 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: a retriable fetch failure looks the leader up again and resumes"
+    )]
     #[tokio::test(start_paused = true)]
-    async fn a_partition_without_a_leader_is_looked_up_again() {
+    async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: a partition without a leader is looked up again"
+    )]
+    async fn bdd_verify_a_partition_without_a_leader_is_looked_up_again() {
         let fetcher = ScriptedFetcher::new(
             [
                 Err(RangeReadFailure::retriable("no leader yet".into())),
@@ -467,8 +515,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_fatal_failure_stops_the_read_with_its_cause() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: a partition without a leader is looked up again"
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn a_partition_without_a_leader_is_looked_up_again() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: a fatal failure stops the read with its cause"
+    )]
+    async fn bdd_verify_a_fatal_failure_stops_the_read_with_its_cause() {
         let fetcher = ScriptedFetcher::new(
             [
                 Ok(1),
@@ -494,8 +553,19 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: a fatal failure stops the read with its cause"
+    )]
     #[tokio::test]
-    async fn a_fetch_that_makes_no_progress_stalls_the_read() {
+    async fn a_fatal_failure_stops_the_read_with_its_cause() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: a fetch that makes no progress stalls the read"
+    )]
+    async fn bdd_verify_a_fetch_that_makes_no_progress_stalls_the_read() {
         let fetcher = ScriptedFetcher::new([Ok(1)], [Ok(FetchPartitionResult {
             records: Vec::new(),
             next_offset: None,
@@ -510,8 +580,19 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: a fetch that makes no progress stalls the read"
+    )]
     #[tokio::test]
-    async fn a_visitor_error_stops_the_read_before_the_next_record() {
+    async fn a_fetch_that_makes_no_progress_stalls_the_read() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: a visitor error stops the read before the next record"
+    )]
+    async fn bdd_verify_a_visitor_error_stops_the_read_before_the_next_record() {
         let fetcher = ScriptedFetcher::new([Ok(1)], [Ok(page(0..3))]);
         let mut seen = Vec::new();
 
@@ -533,20 +614,43 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: a visitor error stops the read before the next record"
+    )]
     #[tokio::test]
-    async fn an_empty_read_sends_nothing() {
+    async fn a_visitor_error_stops_the_read_before_the_next_record() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log range tests: an empty read sends nothing")]
+    async fn bdd_verify_an_empty_read_sends_nothing() {
         let fetcher = ScriptedFetcher::new([], []);
 
         check!(read(&fetcher, 1, 5, 5).await.unwrap().is_empty());
         check!(fetcher.calls().is_empty());
     }
 
-    #[yare::parameterized(
-        negative = { -1 },
-        upper_bound = { 2 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: an empty read sends nothing"
     )]
-    #[test_macro(tokio::test)]
-    async fn out_of_range_read_sends_nothing(partition: i32) {
+    #[tokio::test]
+    async fn an_empty_read_sends_nothing() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log range tests: out of range read sends nothing for {example}"
+    )]
+    async fn bdd_verify_out_of_range_read_sends_nothing(example: String) {
+        type Example = (i32,);
+        let (partition,): Example = match example.as_str() {
+            "negative" => (-1,),
+            "upper bound" => (2,),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let fetcher = ScriptedFetcher::new([], []);
 
         check!(matches!(
@@ -556,4 +660,12 @@ mod tests {
         ));
         check!(fetcher.calls().is_empty());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/range.feature",
+        name = "tests: out of range read sends nothing"
+    )]
+    #[tokio::test]
+    async fn out_of_range_read_sends_nothing(example: String) { let _ = example; }
 }

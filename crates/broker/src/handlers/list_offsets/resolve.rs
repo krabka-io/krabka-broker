@@ -1249,8 +1249,11 @@ mod tests {
         assert!(actual == expected);
     }
 
-    #[test]
-    fn a_raised_lagging_high_watermark_error_fences_what_kafka_fences() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers list offsets resolve tests: a raised lagging high watermark error fences what kafka fences"
+    )]
+    fn bdd_verify_a_raised_lagging_high_watermark_error_fences_what_kafka_fences() {
         const LAST_FETCHABLE: i64 = 3;
         // (kind, candidate offset, fenced)
         let cases = [
@@ -1288,6 +1291,13 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_offsets/resolve.feature",
+        name = "tests: a raised lagging high watermark error fences what kafka fences"
+    )]
+    fn a_raised_lagging_high_watermark_error_fences_what_kafka_fences() {}
 
     /// KIP-207 over the wire, one row per request shape, in the two states
     /// `Partition.fetchOffsetForTimestamp` distinguishes: the high watermark

@@ -93,9 +93,9 @@ mod tests {
         krabka_units::prelude::{ByteSizeExt, TimeExt},
     };
 
-    /// The defaults are the numbers Kafka's `MetadataLogConfig` documents.
-    #[test]
-    fn defaults_are_kafkas() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config metadata log tests: defaults are kafkas")]
+    fn bdd_verify_defaults_are_kafkas() {
         let config = MetadataLogConfig::default();
         check!(
             (
@@ -115,11 +115,27 @@ mod tests {
         check!(MIN_METADATA_LOG_SEGMENT_SIZE.bytes_u64() == 8 * 1024 * 1024);
     }
 
-    #[test]
-    fn the_partition_directory_is_kafkas() {
+    /// The defaults are the numbers Kafka's `MetadataLogConfig` documents.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/metadata_log.feature",
+        name = "tests: defaults are kafkas"
+    )]
+    fn defaults_are_kafkas() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config metadata log tests: the partition directory is kafkas")]
+    fn bdd_verify_the_partition_directory_is_kafkas() {
         check!(
             metadata_partition_dir(Path::new("/mnt/kafka/kafka-metadata-logs"))
                 == PathBuf::from("/mnt/kafka/kafka-metadata-logs/__cluster_metadata-0")
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/metadata_log.feature",
+        name = "tests: the partition directory is kafkas"
+    )]
+    fn the_partition_directory_is_kafkas() {}
 }

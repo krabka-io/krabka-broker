@@ -131,8 +131,9 @@ fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
     checker.assert_properties();
 }
 
-#[test]
-fn three_voters_election_safety() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft model: three voters election safety")]
+fn bdd_verify_three_voters_election_safety() {
     run(
         ConsensusModel::elections(&[NodeId(1), NodeId(2), NodeId(3)]),
         "three_voters_election_safety",
@@ -140,8 +141,16 @@ fn three_voters_election_safety() {
     );
 }
 
-#[test]
-fn two_voters_linearizable() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_model.feature",
+    name = "three voters election safety"
+)]
+fn three_voters_election_safety() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft model: two voters linearizable")]
+fn bdd_verify_two_voters_linearizable() {
     run(
         ConsensusModel::linearizable(&[NodeId(1), NodeId(2)], 2),
         "two_voters_linearizable",
@@ -149,8 +158,16 @@ fn two_voters_linearizable() {
     );
 }
 
-#[test]
-fn three_voters_faults() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_model.feature",
+    name = "two voters linearizable"
+)]
+fn two_voters_linearizable() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft model: three voters faults")]
+fn bdd_verify_three_voters_faults() {
     // Election + log-matching safety under an adversarial network: message
     // loss, duplication, and a single crash/recover. 3 voters so a crash leaves
     // a majority that can still make progress.
@@ -161,8 +178,16 @@ fn three_voters_faults() {
     );
 }
 
-#[test]
-fn three_voters_append() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_model.feature",
+    name = "three voters faults"
+)]
+fn three_voters_faults() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft model: three voters append")]
+fn bdd_verify_three_voters_append() {
     // Leader completeness under a stale majority: three voters, client appends,
     // and one crash at a time, so a committed prefix can live on a bare
     // majority while the crashed voter misses it. The `leader_completeness`
@@ -175,8 +200,16 @@ fn three_voters_append() {
     );
 }
 
-#[test]
-fn two_voters_append_via_linearizable() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_model.feature",
+    name = "three voters append"
+)]
+fn three_voters_append() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft model: two voters append via linearizable")]
+fn bdd_verify_two_voters_append_via_linearizable() {
     run(
         // The diskless linearizability leg deliberately uses the design's
         // exhaustive tiny bound: two voters, two stateless appenders, and two
@@ -187,3 +220,10 @@ fn two_voters_append_via_linearizable() {
         PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA,
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_model.feature",
+    name = "two voters append via linearizable"
+)]
+fn two_voters_append_via_linearizable() {}

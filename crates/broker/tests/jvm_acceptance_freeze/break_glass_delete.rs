@@ -16,21 +16,11 @@ use {
     assert2::check,
 };
 
-/// `kafka-topics --delete` with no break-glass proposal fails, and carries the
-/// broker's own refusal.
-///
-/// The tool holds every right Kafka asks for and the cluster is healthy, so
-/// nothing in the Kafka protocol explains the failure except the message. That
-/// makes the message the feature, and a response that dropped `error_message`
-/// would still carry the right code while telling the operator nothing.
-///
-/// The create and the list around the delete are the control. The same binary,
-/// against the same broker, must still create a topic and still list it
-/// afterwards -- so a refusal here is the gate, and the topic really did
-/// survive it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn kafka_topics_delete_carries_the_brokers_break_glass_refusal() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance freeze break glass delete: kafka topics delete carries the brokers break glass refusal"
+)]
+async fn bdd_verify_kafka_topics_delete_carries_the_brokers_break_glass_refusal() {
     let broker = start_jvm_broker(gate_on).await;
     let bootstrap = broker.container.as_str();
 
@@ -85,3 +75,24 @@ async fn kafka_topics_delete_carries_the_brokers_break_glass_refusal() {
         "the refusal must have left the topic in place, got {listed:?}"
     );
 }
+
+/// `kafka-topics --delete` with no break-glass proposal fails, and carries the
+/// broker's own refusal.
+///
+/// The tool holds every right Kafka asks for and the cluster is healthy, so
+/// nothing in the Kafka protocol explains the failure except the message. That
+/// makes the message the feature, and a response that dropped `error_message`
+/// would still carry the right code while telling the operator nothing.
+///
+/// The create and the list around the delete are the control. The same binary,
+/// against the same broker, must still create a topic and still list it
+/// afterwards -- so a refusal here is the gate, and the topic really did
+/// survive it.
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_freeze/break_glass_delete.feature",
+    name = "kafka topics delete carries the brokers break glass refusal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_topics_delete_carries_the_brokers_break_glass_refusal() {}

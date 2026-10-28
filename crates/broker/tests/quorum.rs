@@ -66,8 +66,9 @@ async fn create_topic_at(address: String, topic: &str) {
     assert!(response.topics[0].error_code == 0);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_node_cluster_elects_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("quorum: three node cluster elects leader")]
+async fn bdd_verify_three_node_cluster_elects_leader() {
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
     // Each node's controller leader channel converges to the same elected id.
@@ -80,8 +81,17 @@ async fn three_node_cluster_elects_leader() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/quorum.feature",
+    name = "three node cluster elects leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn create_topic_on_any_node_propagates() {
+async fn three_node_cluster_elects_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("quorum: create topic on any node propagates")]
+async fn bdd_verify_create_topic_on_any_node_propagates() {
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
     wait_for_leader(&cluster).await;
@@ -110,8 +120,17 @@ async fn create_topic_on_any_node_propagates() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/quorum.feature",
+    name = "create topic on any node propagates"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn leader_kill_recovers() {
+async fn create_topic_on_any_node_propagates() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("quorum: leader kill recovers")]
+async fn bdd_verify_leader_kill_recovers() {
     let _g = cluster_lock().lock().await;
     let mut cluster = support::start_n_node_with_retry(3).await;
     wait_for_leader(&cluster).await;
@@ -155,8 +174,17 @@ async fn leader_kill_recovers() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/quorum.feature",
+    name = "leader kill recovers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_forwards_create_topic() {
+async fn leader_kill_recovers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("quorum: follower forwards create topic")]
+async fn bdd_verify_follower_forwards_create_topic() {
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
     wait_for_leader(&cluster).await;
@@ -180,6 +208,14 @@ async fn follower_forwards_create_topic() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/quorum.feature",
+    name = "follower forwards create topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn follower_forwards_create_topic() {}
+
 // macOS-gated for the same reason quorum.rs is windows-gated at the
 // module level: the hosted macos-latest runner's task scheduler
 // reorders openraft's internal callbacks under the short raft timings,
@@ -190,8 +226,9 @@ async fn follower_forwards_create_topic() {
 // this test keeps macOS coverage on leader election, follower
 // forwarding, and kill/recover.
 #[cfg(not(target_os = "macos"))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_topic_creates_one_wins() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("quorum: concurrent topic creates one wins")]
+async fn bdd_verify_concurrent_topic_creates_one_wins() {
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
     wait_for_leader(&cluster).await;
@@ -241,3 +278,12 @@ async fn concurrent_topic_creates_one_wins() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(not(target_os = "macos"))]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/quorum.feature",
+    name = "concurrent topic creates one wins"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_topic_creates_one_wins() {}

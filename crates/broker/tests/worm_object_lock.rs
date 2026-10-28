@@ -49,9 +49,11 @@ const RECORDS: usize = 200;
 // Same multi-thread caveat as the other container suites: blocking
 // `Command::output()` calls would starve the broker accept loop on a
 // single-threaded runtime.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "worm object lock: object lock bucket refuses delete of an archived segment"
+)]
+async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
     let minio_port = minio_port();
     let _minio = MinioContainer::start();
     minio_make_locked_bucket(BUCKET);
@@ -195,6 +197,15 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
 
     // `_minio` is dropped here; the container is removed with `docker rm -f`.
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/worm_object_lock.feature",
+    name = "object lock bucket refuses delete of an archived segment"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {}
 
 /// A running WORM broker and its `log.dir`, which the caller keeps alive.
 struct WormBroker {

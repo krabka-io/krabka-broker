@@ -10,6 +10,19 @@ use crate::{
     legacy_round_trip::run_round_trip,
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance legacy cross version: jvm legacy 010 produce modern consume"
+)]
+async fn bdd_verify_jvm_legacy_010_produce_modern_consume() {
+    run_round_trip(
+        "legacy-010-produce-modern-consume",
+        KAFKA_IMAGE_LEGACY,
+        KAFKA_IMAGE,
+    )
+    .await;
+}
+
 /// Test 2: legacy producer, modern consumer.
 ///
 /// A Kafka 0.10.1 console-producer sends 3 records. A Kafka 2.6
@@ -17,13 +30,24 @@ use crate::{
 /// The test validates that the up-conversion writes a well-formed v2
 /// `RecordBatch` to the log that a modern client can decode, and not
 /// only bytes that a Krabka broker accepts on its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_legacy_010_produce_modern_consume() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_legacy/cross_version.feature",
+    name = "jvm legacy 010 produce modern consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_legacy_010_produce_modern_consume() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance legacy cross version: jvm modern produce legacy 010 consume"
+)]
+async fn bdd_verify_jvm_modern_produce_legacy_010_consume() {
     run_round_trip(
-        "legacy-010-produce-modern-consume",
-        KAFKA_IMAGE_LEGACY,
+        "modern-produce-legacy-010-consume",
         KAFKA_IMAGE,
+        KAFKA_IMAGE_LEGACY,
     )
     .await;
 }
@@ -36,13 +60,11 @@ async fn jvm_legacy_010_produce_modern_consume() {
 /// client can parse the bytes `down_convert_for_fetch` emits as a v0/v1
 /// `MessageSet`. That is the load-bearing concern for down-conversion
 /// correctness.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_modern_produce_legacy_010_consume() {
-    run_round_trip(
-        "modern-produce-legacy-010-consume",
-        KAFKA_IMAGE,
-        KAFKA_IMAGE_LEGACY,
-    )
-    .await;
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_legacy/cross_version.feature",
+    name = "jvm modern produce legacy 010 consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_modern_produce_legacy_010_consume() {}

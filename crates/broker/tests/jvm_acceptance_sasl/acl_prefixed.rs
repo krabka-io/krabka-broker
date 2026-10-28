@@ -15,23 +15,9 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: a prefixed topic ACL grants exactly the prefix.
-///
-/// Admin provisions:
-/// - `Allow Read Topic PREFIXED "team-"` for alice (Describe implied by Read)
-/// - `Allow Read Group LITERAL "cg-prefixed"` for alice (Describe implied by Read)
-///
-/// Admin then creates two topics: `team-foo`, which the prefix covers, and
-/// `other-foo`, which it does NOT cover. Admin seeds one record into each.
-/// Admin is a super-user, so it bypasses authorize.
-///
-/// Alice's consumer:
-/// 1. `--topic team-foo` succeeds and reads the seeded record. This
-///    exercises the PREFIXED Read path in `authorize`.
-/// 2. `--topic other-foo` fails with `TopicAuthorizationException`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_prefixed_topic_acl_works() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl acl prefixed: jvm prefixed topic acl works")]
+async fn bdd_verify_jvm_prefixed_topic_acl_works() {
     const PREFIX: &str = "team-";
     const TOPIC_OK: &str = "team-foo";
     const TOPIC_DENIED: &str = "other-foo";
@@ -162,3 +148,26 @@ async fn jvm_prefixed_topic_acl_works() {
 
     broker.shutdown().await;
 }
+
+/// JVM acceptance: a prefixed topic ACL grants exactly the prefix.
+///
+/// Admin provisions:
+/// - `Allow Read Topic PREFIXED "team-"` for alice (Describe implied by Read)
+/// - `Allow Read Group LITERAL "cg-prefixed"` for alice (Describe implied by Read)
+///
+/// Admin then creates two topics: `team-foo`, which the prefix covers, and
+/// `other-foo`, which it does NOT cover. Admin seeds one record into each.
+/// Admin is a super-user, so it bypasses authorize.
+///
+/// Alice's consumer:
+/// 1. `--topic team-foo` succeeds and reads the seeded record. This
+///    exercises the PREFIXED Read path in `authorize`.
+/// 2. `--topic other-foo` fails with `TopicAuthorizationException`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_prefixed.feature",
+    name = "jvm prefixed topic acl works"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_prefixed_topic_acl_works() {}

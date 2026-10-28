@@ -100,13 +100,11 @@ fn topic(
     }
 }
 
-/// Kafka's `DefaultAutoTopicCreationManager.creatableTopic` gives each
-/// coordinator topic its configured partition count, replication factor and
-/// topic configs. The values below differ per topic, so a mix-up of two
-/// settings shows. Any other name gets the broker defaults only when the
-/// operator supplied them, and -1 else.
-#[test]
-fn creatable_topic_follows_kafkas_creatable_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auto topic creation tests: creatable topic follows kafkas creatable topic"
+)]
+fn bdd_verify_creatable_topic_follows_kafkas_creatable_topic() {
     let mut config = BrokerConfig::for_tests(PathBuf::from("/tmp"));
     config.offsets_topic_num_partitions = 11;
     config.offsets_topic_replication_factor = 3;
@@ -241,6 +239,18 @@ fn creatable_topic_follows_kafkas_creatable_topic() {
     }
 }
 
+/// Kafka's `DefaultAutoTopicCreationManager.creatableTopic` gives each
+/// coordinator topic its configured partition count, replication factor and
+/// topic configs. The values below differ per topic, so a mix-up of two
+/// settings shows. Any other name gets the broker defaults only when the
+/// operator supplied them, and -1 else.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
+    name = "creatable topic follows kafkas creatable topic"
+)]
+fn creatable_topic_follows_kafkas_creatable_topic() {}
+
 /// Before the broker binds itself, a request creates nothing, and its caller
 /// retries as it does for any other `COORDINATOR_NOT_AVAILABLE`.
 #[tokio::test]
@@ -251,10 +261,11 @@ async fn an_unbound_request_creates_nothing() {
     check!(!creation.is_in_flight(bootstrap::OFFSETS_TOPIC));
 }
 
-/// KIP-1191: the dead-letter topic asks for the cluster's default partition
-/// count and replication factor, opts itself in, and pins `CreateTime`.
-#[test]
-fn the_dead_letter_topic_is_created_as_kafka_creates_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auto topic creation tests: the dead letter topic is created as kafka creates it"
+)]
+fn bdd_verify_the_dead_letter_topic_is_created_as_kafka_creates_it() {
     check!(
         dead_letter_topic("dlq.orders")
             == topic()
@@ -272,6 +283,15 @@ fn the_dead_letter_topic_is_created_as_kafka_creates_it() {
                 .call()
     );
 }
+
+/// KIP-1191: the dead-letter topic asks for the cluster's default partition
+/// count and replication factor, opts itself in, and pins `CreateTime`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
+    name = "the dead letter topic is created as kafka creates it"
+)]
+fn the_dead_letter_topic_is_created_as_kafka_creates_it() {}
 
 /// An unbound component cannot create the dead-letter topic: the write
 /// fails, and the leader archives the record regardless.
@@ -364,13 +384,11 @@ fn result_row(name: &str, error_code: i16, error_message: Option<&str>) -> Creat
     }
 }
 
-/// The completion of Kafka's `sendCreateTopicRequestWithErrorCaching`. The
-/// in-flight marks clear. A request that got no answer caches its message
-/// for every topic. An answer caches each row that is not `NONE`,
-/// `TOPIC_ALREADY_EXISTS` included, with the default message of its code
-/// when the row carries a null or empty one.
-#[test]
-fn a_finished_streams_creation_caches_kafkas_errors() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auto topic creation tests: a finished streams creation caches kafkas errors"
+)]
+fn bdd_verify_a_finished_streams_creation_caches_kafkas_errors() {
     let names = ["a", "b", "c", "d"].map(str::to_owned);
     let response = CreateTopicsResponse {
         throttle_time_ms: 0,
@@ -438,6 +456,18 @@ fn a_finished_streams_creation_caches_kafkas_errors() {
         );
     }
 }
+
+/// The completion of Kafka's `sendCreateTopicRequestWithErrorCaching`. The
+/// in-flight marks clear. A request that got no answer caches its message
+/// for every topic. An answer caches each row that is not `NONE`,
+/// `TOPIC_ALREADY_EXISTS` included, with the default message of its code
+/// when the row carries a null or empty one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
+    name = "a finished streams creation caches kafkas errors"
+)]
+fn a_finished_streams_creation_caches_kafkas_errors() {}
 
 /// Kafka's `createStreamsInternalTopics` skips a topic whose last failure has
 /// not expired and a topic whose creation is in flight. It sends a request

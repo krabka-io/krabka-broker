@@ -24,8 +24,9 @@ impl TopicRegexResolver for OrdersResolver {
     }
 }
 
-#[test]
-fn a_consumer_can_implement_and_call_a_custom_resolver() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("regex resolver: a consumer can implement and call a custom resolver")]
+fn bdd_verify_a_consumer_can_implement_and_call_a_custom_resolver() {
     let resolver: &dyn TopicRegexResolver = &OrdersResolver;
     let subscriptions = resolver.resolve(&BTreeSet::from(["orders.*".to_owned()]));
     assert!(
@@ -37,3 +38,10 @@ fn a_consumer_can_implement_and_call_a_custom_resolver() {
             },)])
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/regex_resolver.feature",
+    name = "a consumer can implement and call a custom resolver"
+)]
+fn a_consumer_can_implement_and_call_a_custom_resolver() {}

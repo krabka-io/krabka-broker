@@ -32,19 +32,11 @@ async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
 
 use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
-/// A follower whose leader hint just went dead answers `DescribeQuorum` with
-/// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
-/// follower still believes the crashed node is the leader (it only learns
-/// otherwise from its own fetch timeout, which this test outruns), so
-/// `ControllerHandle::forward_raw`'s dial to it fails with
-/// `RaftError::Network`, exactly the "dial itself failed" case the fix
-/// catches and answers instead of propagating.
-///
-/// The leader crashes rather than stopping gracefully: a graceful stop resigns
-/// and sends `EndQuorumEpoch`, so the follower would elect itself at once and
-/// answer as the leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe quorum forward no leader: a follower whose leader just died answers not leader instead of closing"
+)]
+async fn bdd_verify_a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing() {
     let mut cluster = start_n_node_with_retry(2).await;
 
     let node0_client = build_client(cluster[0].1.listen_addr).await;
@@ -85,3 +77,22 @@ async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing
 
     shutdown_cluster(cluster).await;
 }
+
+/// A follower whose leader hint just went dead answers `DescribeQuorum` with
+/// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
+/// follower still believes the crashed node is the leader (it only learns
+/// otherwise from its own fetch timeout, which this test outruns), so
+/// `ControllerHandle::forward_raw`'s dial to it fails with
+/// `RaftError::Network`, exactly the "dial itself failed" case the fix
+/// catches and answers instead of propagating.
+///
+/// The leader crashes rather than stopping gracefully: a graceful stop resigns
+/// and sends `EndQuorumEpoch`, so the follower would elect itself at once and
+/// answer as the leader.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_quorum_forward_no_leader.feature",
+    name = "a follower whose leader just died answers not leader instead of closing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing() {}

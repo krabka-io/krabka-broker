@@ -209,12 +209,11 @@ mod tests {
         }
     }
 
-    /// Rows of (case, starting state, last re-auth start, requested
-    /// mechanism) and expected (error code, mechanism list returned, close,
-    /// next state, last re-auth start afterwards), after Kafka's
-    /// `SaslServerAuthenticator` and `KafkaChannel`.
-    #[test]
-    fn handshake_follows_kafkas_initial_and_reauthentication_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth handshake tests: handshake follows kafkas initial and reauthentication rules"
+    )]
+    fn bdd_verify_handshake_follows_kafkas_initial_and_reauthentication_rules() {
         /// What a handshake must answer and leave behind.
         struct Expected {
             code: i16,
@@ -398,4 +397,15 @@ mod tests {
             assert!(last_start_ms == last_after, "{name}");
         }
     }
+
+    /// Rows of (case, starting state, last re-auth start, requested
+    /// mechanism) and expected (error code, mechanism list returned, close,
+    /// next state, last re-auth start afterwards), after Kafka's
+    /// `SaslServerAuthenticator` and `KafkaChannel`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/handshake.feature",
+        name = "tests: handshake follows kafkas initial and reauthentication rules"
+    )]
+    fn handshake_follows_kafkas_initial_and_reauthentication_rules() {}
 }

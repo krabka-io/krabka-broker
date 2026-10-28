@@ -11,14 +11,9 @@ use crate::jvm_acceptance::{
     start_sasl_plaintext_broker,
 };
 
-/// End-to-end `SASL_PLAINTEXT` + PLAIN drive of the JVM `kafka-topics`,
-/// `kafka-console-producer`, and `kafka-console-consumer` tools against a
-/// Rust broker with a `SASL_PLAINTEXT` listener and a single provisioned
-/// PLAIN user. The test verifies the produce/consume round-trip end-to-end
-/// through the official Kafka client.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_sasl_plain_produce_consume() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl plain: jvm sasl plain produce consume")]
+async fn bdd_verify_jvm_sasl_plain_produce_consume() {
     const TOPIC: &str = "krabka-sasl-plain-itest";
     const USER: &str = "alice";
     const PASS: &str = "wonderland";
@@ -37,3 +32,17 @@ async fn jvm_sasl_plain_produce_consume() {
 
     broker.shutdown().await;
 }
+
+/// End-to-end `SASL_PLAINTEXT` + PLAIN drive of the JVM `kafka-topics`,
+/// `kafka-console-producer`, and `kafka-console-consumer` tools against a
+/// Rust broker with a `SASL_PLAINTEXT` listener and a single provisioned
+/// PLAIN user. The test verifies the produce/consume round-trip end-to-end
+/// through the official Kafka client.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/plain.feature",
+    name = "jvm sasl plain produce consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_plain_produce_consume() {}

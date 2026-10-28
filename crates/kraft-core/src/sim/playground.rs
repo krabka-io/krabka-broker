@@ -141,8 +141,9 @@ mod tests {
             .map_or(0, |node| node.log_len)
     }
 
-    #[test]
-    fn interactive_bootstrap_elects_one_leader() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim playground tests: interactive bootstrap elects one leader")]
+    fn bdd_verify_interactive_bootstrap_elects_one_leader() {
         let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
         // Fresh cluster: no leader, election timers armed, bus empty.
         assert2::assert!((sim.leaders().is_empty(), sim.snapshot().nodes.len()) == (true, 3));
@@ -155,8 +156,18 @@ mod tests {
         check!((snap.leaders.len(), snap.clock_ms > 0, snap.step_count > 0) == (1, true, true));
     }
 
-    #[test]
-    fn interactive_partition_then_heal_keeps_one_leader() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/playground.feature",
+        name = "tests: interactive bootstrap elects one leader"
+    )]
+    fn interactive_bootstrap_elects_one_leader() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "sim playground tests: interactive partition then heal keeps one leader"
+    )]
+    fn bdd_verify_interactive_partition_then_heal_keeps_one_leader() {
         let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
         step_until(&mut sim, 10_000, |s| !s.leaders().is_empty());
         sim.run_until_stable(10_000);
@@ -171,8 +182,16 @@ mod tests {
         assert2::assert!(sim.leaders().len() == 1);
     }
 
-    #[test]
-    fn drop_next_removes_a_message_and_records_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/playground.feature",
+        name = "tests: interactive partition then heal keeps one leader"
+    )]
+    fn interactive_partition_then_heal_keeps_one_leader() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim playground tests: drop next removes a message and records it")]
+    fn bdd_verify_drop_next_removes_a_message_and_records_it() {
         let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
         // Fire the first timer so there is election traffic on the bus.
         while sim.in_flight().is_empty() && sim.step_once() {}
@@ -188,8 +207,16 @@ mod tests {
         assert2::assert!(matches!(last.action, TraceAction::Drop { .. }));
     }
 
-    #[test]
-    fn accessors_and_bus_faults_report_consistently() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/playground.feature",
+        name = "tests: drop next removes a message and records it"
+    )]
+    fn drop_next_removes_a_message_and_records_it() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim playground tests: accessors and bus faults report consistently")]
+    fn bdd_verify_accessors_and_bus_faults_report_consistently() {
         let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
         assert2::assert!(
             (sim.voter_ids(), sim.clock_ms()) == (vec![NodeId(1), NodeId(2), NodeId(3)], 0)
@@ -211,8 +238,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn append_targets_the_current_leader() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/playground.feature",
+        name = "tests: accessors and bus faults report consistently"
+    )]
+    fn accessors_and_bus_faults_report_consistently() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim playground tests: append targets the current leader")]
+    fn bdd_verify_append_targets_the_current_leader() {
         let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
         // No leader yet -> append is a no-op.
         assert2::assert!(!sim.append(2));
@@ -226,4 +261,11 @@ mod tests {
         let after = log_len(&sim, leader);
         assert2::assert!(after == before + 2);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/playground.feature",
+        name = "tests: append targets the current leader"
+    )]
+    fn append_targets_the_current_leader() {}
 }

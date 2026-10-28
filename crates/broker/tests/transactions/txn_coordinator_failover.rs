@@ -170,8 +170,11 @@ async fn read_committed(bootstrap: &str, last: &str) -> Vec<String> {
     read_committed_through(bootstrap, TOPIC, last, SETTLE).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_transaction_commits_through_the_next_coordinator() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn coordinator failover: a transaction commits through the next coordinator"
+)]
+async fn bdd_verify_a_transaction_commits_through_the_next_coordinator() {
     let mut cluster = registered_transaction_cluster(|_, config| {
         config.transaction_state_num_partitions = 1;
         config.transaction_state_replication_factor = 3;
@@ -244,3 +247,11 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_coordinator_failover.feature",
+    name = "a transaction commits through the next coordinator"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transaction_commits_through_the_next_coordinator() {}

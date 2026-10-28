@@ -531,14 +531,9 @@ fn grade(contract: &Contract, evidence: &Evidence, dir: &Path) -> bool {
     }
 }
 
-/// The sustained-load contract, executed against three broker containers and
-/// judged.
-///
-/// See the module documentation for what runs, what it writes and what fails
-/// it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "requires Docker and //packaging:image; runs in the container matrix and, with KRABKA_SOAK_CONTRACT, the scheduled soak"]
-async fn the_sustained_load_contract_holds() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("soak contract: the sustained load contract holds")]
+async fn bdd_verify_the_sustained_load_contract_holds() {
     let source = contract_source();
     let text = fs::read_to_string(&source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
@@ -705,13 +700,25 @@ async fn the_sustained_load_contract_holds() {
     );
 }
 
-/// The rollback the lifecycle contract may not take is refused by its source
-/// release before it changes the log, and the candidate reopens the log.
+/// The sustained-load contract, executed against three broker containers and
+/// judged.
 ///
-/// See the `rollback_guard` module documentation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker, //packaging:image and the lifecycle contract's source release image"]
-async fn an_unsupported_rollback_is_refused_before_it_damages_data() {
+/// See the module documentation for what runs, what it writes and what fails
+/// it.
+#[ignore = "requires Docker and //packaging:image; runs in the container matrix and, with KRABKA_SOAK_CONTRACT, the scheduled soak"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_contract.feature",
+    name = "the sustained load contract holds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn the_sustained_load_contract_holds() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "soak contract: an unsupported rollback is refused before it damages data"
+)]
+async fn bdd_verify_an_unsupported_rollback_is_refused_before_it_damages_data() {
     let contract = lifecycle_contract();
     let dir = evidence_dir();
     let outcome = rollback_guard::refuse_unsupported_rollback(&contract, &image())
@@ -729,3 +736,16 @@ async fn an_unsupported_rollback_is_refused_before_it_damages_data() {
         "the candidate did not read the record back"
     );
 }
+
+/// The rollback the lifecycle contract may not take is refused by its source
+/// release before it changes the log, and the candidate reopens the log.
+///
+/// See the `rollback_guard` module documentation.
+#[ignore = "requires Docker, //packaging:image and the lifecycle contract's source release image"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_contract.feature",
+    name = "an unsupported rollback is refused before it damages data"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unsupported_rollback_is_refused_before_it_damages_data() {}

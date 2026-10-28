@@ -21,24 +21,11 @@ use {
     assert2::check,
 };
 
-/// `kafka-leader-election --election-type unclean` fails without an approved
-/// proposal, and stops failing once two people approve one.
-///
-/// This is the case that proves an approval is a standing authorization rather
-/// than a request field. `kafka-leader-election` sends the stock `ElectLeaders`
-/// that KIP-460 defines, with nowhere to put a proposal id, and the operator
-/// gets the approval out of band through the krabka-private APIs. The tool is
-/// byte-for-byte the same on both runs; only the metadata image differs.
-///
-/// The success run exits zero rather than electing anything. The partition is
-/// healthy on a single node, so an unclean election answers
-/// `ELECTION_NOT_NEEDED` (84), which `LeaderElectionCommand` counts as a no-op
-/// and not a failure. That is the honest signal available here: the request
-/// got past the two-person rule, which is the whole of what the approval
-/// changed. The assertions say exactly that and no more.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn kafka_leader_election_needs_an_approved_proposal_for_an_unclean_election() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance freeze break glass election: kafka leader election needs an approved proposal for an unclean election"
+)]
+async fn bdd_verify_kafka_leader_election_needs_an_approved_proposal_for_an_unclean_election() {
     let users = [PROPOSER, APPROVER_ONE, APPROVER_TWO];
     let broker = start_jvm_broker(|config| {
         sasl_listener(config, &users);
@@ -89,3 +76,27 @@ async fn kafka_leader_election_needs_an_approved_proposal_for_an_unclean_electio
         "the tool must report on the partition it was asked about, got {allowed:?}"
     );
 }
+
+/// `kafka-leader-election --election-type unclean` fails without an approved
+/// proposal, and stops failing once two people approve one.
+///
+/// This is the case that proves an approval is a standing authorization rather
+/// than a request field. `kafka-leader-election` sends the stock `ElectLeaders`
+/// that KIP-460 defines, with nowhere to put a proposal id, and the operator
+/// gets the approval out of band through the krabka-private APIs. The tool is
+/// byte-for-byte the same on both runs; only the metadata image differs.
+///
+/// The success run exits zero rather than electing anything. The partition is
+/// healthy on a single node, so an unclean election answers
+/// `ELECTION_NOT_NEEDED` (84), which `LeaderElectionCommand` counts as a no-op
+/// and not a failure. That is the honest signal available here: the request
+/// got past the two-person rule, which is the whole of what the approval
+/// changed. The assertions say exactly that and no more.
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_freeze/break_glass_election.feature",
+    name = "kafka leader election needs an approved proposal for an unclean election"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_leader_election_needs_an_approved_proposal_for_an_unclean_election() {}

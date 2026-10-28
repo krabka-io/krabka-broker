@@ -585,16 +585,26 @@ mod tests {
         assert!(!g.dirty);
     }
 
-    /// Kafka 4.3's `StreamsGroup` constructor starts a group at group epoch 1
-    /// and `TargetAssignmentMetadata.INITIAL`, target assignment epoch 1.
-    #[test]
-    fn a_new_group_starts_at_kafkas_initial_epochs() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams state tests: a new group starts at kafkas initial epochs"
+    )]
+    fn bdd_verify_a_new_group_starts_at_kafkas_initial_epochs() {
         let g = StreamsGroupState::new("g");
         check!(
             (g.group_epoch, g.assignment_epoch, g.target.epoch, g.phase)
                 == (1, 1, 1, StreamsGroupStatePhase::Empty)
         );
     }
+
+    /// Kafka 4.3's `StreamsGroup` constructor starts a group at group epoch 1
+    /// and `TargetAssignmentMetadata.INITIAL`, target assignment epoch 1.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/state.feature",
+        name = "tests: a new group starts at kafkas initial epochs"
+    )]
+    fn a_new_group_starts_at_kafkas_initial_epochs() {}
 
     #[test]
     fn bump_epoch_increments_and_dirties() {
@@ -917,12 +927,11 @@ mod tests {
         ]
     }
 
-    /// Kafka's `CurrentAssignmentBuilder`. Each row puts `m1` and maybe a
-    /// second member in a group with a target at epoch 2, reconciles `m1`
-    /// with the owned tasks of its heartbeat, and compares the whole
-    /// reconciliation state of `m1` afterwards.
-    #[test]
-    fn reconcile_member_follows_kafka_current_assignment_builder() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams state tests: reconcile member follows kafka current assignment builder"
+    )]
+    fn bdd_verify_reconcile_member_follows_kafka_current_assignment_builder() {
         let rows = builder_rows().into_iter().chain(held_back_builder_rows());
         for BuilderRow {
             name,
@@ -982,6 +991,17 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `CurrentAssignmentBuilder`. Each row puts `m1` and maybe a
+    /// second member in a group with a target at epoch 2, reconciles `m1`
+    /// with the owned tasks of its heartbeat, and compares the whole
+    /// reconciliation state of `m1` afterwards.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/state.feature",
+        name = "tests: reconcile member follows kafka current assignment builder"
+    )]
+    fn reconcile_member_follows_kafka_current_assignment_builder() {}
 
     /// Kafka's `scheduleStreamsGroupRebalanceTimeout`: a member that enters
     /// `UnrevokedTasks` must revoke within its rebalance timeout, or it is

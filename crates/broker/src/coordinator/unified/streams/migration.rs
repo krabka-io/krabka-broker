@@ -193,12 +193,11 @@ mod tests {
         );
     }
 
-    /// The streams tombstones follow Kafka 4.3.1's
-    /// `StreamsGroup.createGroupTombstoneRecords`: k22 and k21 for each
-    /// member, k20, k19 for each member, then k17 and k23. Kafka defines no
-    /// type 18, so none is written.
-    #[test]
-    fn streams_tombstone_batch_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams migration tests: streams tombstone batch follows kafka"
+    )]
+    fn bdd_verify_streams_tombstone_batch_follows_kafka() {
         let g = "g";
         let rows = [
             ("no members", vec![], vec![
@@ -224,11 +223,22 @@ mod tests {
         }
     }
 
-    /// Kafka 4.3.1's `classicGroupJoinToClassicGroup` for a drained streams
-    /// group: the streams tombstones, then `newEmptyGroupMetadataRecord`, in
-    /// one batch.
-    #[test]
-    fn streams_to_classic_batch_follows_kafka() {
+    /// The streams tombstones follow Kafka 4.3.1's
+    /// `StreamsGroup.createGroupTombstoneRecords`: k22 and k21 for each
+    /// member, k20, k19 for each member, then k17 and k23. Kafka defines no
+    /// type 18, so none is written.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/migration.feature",
+        name = "tests: streams tombstone batch follows kafka"
+    )]
+    fn streams_tombstone_batch_follows_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams migration tests: streams to classic batch follows kafka"
+    )]
+    fn bdd_verify_streams_to_classic_batch_follows_kafka() {
         use crate::coordinator::unified::persistence::GroupMetadataValue;
 
         let batch = streams_to_classic_batch("g", 123).unwrap();
@@ -257,4 +267,14 @@ mod tests {
         assert2::check!(records == expected);
         assert2::check!(batch.max_timestamp == 123);
     }
+
+    /// Kafka 4.3.1's `classicGroupJoinToClassicGroup` for a drained streams
+    /// group: the streams tombstones, then `newEmptyGroupMetadataRecord`, in
+    /// one batch.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/migration.feature",
+        name = "tests: streams to classic batch follows kafka"
+    )]
+    fn streams_to_classic_batch_follows_kafka() {}
 }

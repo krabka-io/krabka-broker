@@ -279,8 +279,11 @@ mod tests {
         tokio::{sync::Notify, task},
     };
 
-    #[tokio::test]
-    async fn initial_connection_retries_without_reassignment() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log consumer tests: initial connection retries without reassignment"
+    )]
+    async fn bdd_verify_initial_connection_retries_without_reassignment() {
         let cancel = CancellationToken::new();
         let mut attempts = 0;
         let client = connect_with_retry(&cancel, Duration::ZERO, || {
@@ -296,8 +299,19 @@ mod tests {
         assert!(attempts == 2);
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/consumer.feature",
+        name = "tests: initial connection retries without reassignment"
+    )]
     #[tokio::test]
-    async fn initial_connection_and_retry_delay_are_cancellable() {
+    async fn initial_connection_retries_without_reassignment() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log consumer tests: initial connection and retry delay are cancellable"
+    )]
+    async fn bdd_verify_initial_connection_and_retry_delay_are_cancellable() {
         let cancel = CancellationToken::new();
         let pending = connect_with_retry::<(), &str, _, _>(
             &cancel,
@@ -330,8 +344,19 @@ mod tests {
         assert!(retrying.await.is_none());
     }
 
-    #[test]
-    fn metadata_event_channel_uses_configured_capacity() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/consumer.feature",
+        name = "tests: initial connection and retry delay are cancellable"
+    )]
+    #[tokio::test]
+    async fn initial_connection_and_retry_delay_are_cancellable() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log consumer tests: metadata event channel uses configured capacity"
+    )]
+    fn bdd_verify_metadata_event_channel_uses_configured_capacity() {
         let MetadataEventChannel {
             sender: tx,
             receiver: _rx,
@@ -339,8 +364,18 @@ mod tests {
         check!(tx.max_capacity() == 2048);
     }
 
-    #[tokio::test]
-    async fn assignment_handle_tracks_spawned_partitions() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/consumer.feature",
+        name = "tests: metadata event channel uses configured capacity"
+    )]
+    fn metadata_event_channel_uses_configured_capacity() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log consumer tests: assignment handle tracks spawned partitions"
+    )]
+    async fn bdd_verify_assignment_handle_tracks_spawned_partitions() {
         let (tx, _rx) = mpsc::channel::<MetadataEventRecord>(1);
         let state = Arc::new(ConsumerState {
             bootstrap: "invalid-bootstrap".into(),
@@ -381,8 +416,19 @@ mod tests {
         state.cancel_all();
     }
 
-    #[test]
-    fn partition_fetches_route_to_the_metadata_leader() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/consumer.feature",
+        name = "tests: assignment handle tracks spawned partitions"
+    )]
+    #[tokio::test]
+    async fn assignment_handle_tracks_spawned_partitions() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log consumer tests: partition fetches route to the metadata leader"
+    )]
+    fn bdd_verify_partition_fetches_route_to_the_metadata_leader() {
         use krabka_protocol::owned::metadata_response::{
             MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
         };
@@ -403,4 +449,11 @@ mod tests {
         check!(partition_leader(&metadata, METADATA_TOPIC, 2) == Some(9));
         check!(partition_leader(&metadata, METADATA_TOPIC, 1) == None);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/consumer.feature",
+        name = "tests: partition fetches route to the metadata leader"
+    )]
+    fn partition_fetches_route_to_the_metadata_leader() {}
 }

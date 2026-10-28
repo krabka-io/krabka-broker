@@ -20,9 +20,11 @@ use {
     tokio::time,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_reassign_partitions_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign reassign execute: jvm kafka reassign partitions end to end"
+)]
+async fn bdd_verify_jvm_kafka_reassign_partitions_end_to_end() {
     const TOPIC: &str = "krabka-reassign-itest";
 
     let (cluster, _admin_props, admin_mount) = Box::pin(reassignment_cluster(TOPIC)).await;
@@ -60,6 +62,15 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     cluster.h2.shutdown().await;
     cluster.h3.shutdown().await;
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "jvm kafka reassign partitions end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_reassign_partitions_end_to_end() {}
 
 /// Write one record into `topic` with `kafka-console-producer`.
 fn produce_one_record(admin_mount: &str, topic: &str) {
@@ -232,17 +243,11 @@ fn assert_generated_plan_is_usable(
     }
 }
 
-/// `--generate` produces a usable plan on krabka and on Apache Kafka.
-///
-/// The tool builds the proposal itself, out of `DescribeTopics` and
-/// `DescribeCluster`; what a broker contributes is the current assignment and
-/// the broker set. So the rule the two sides share is that the plan is
-/// *usable* -- it covers the topic's partitions, and every replica in it is a
-/// broker the operator named -- and a broker that mis-reported either would
-/// hand the operator a document that `--execute` then refuses.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign reassign execute: reassign partitions generate produces a usable plan on both"
+)]
+async fn bdd_verify_reassign_partitions_generate_produces_a_usable_plan_on_both() {
     const TOPIC: &str = "krabka-generate-itest";
     const PARTITIONS: i32 = 3;
 
@@ -305,22 +310,28 @@ async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {
     comparison.broker.shutdown().await;
 }
 
-/// A second `--execute --additional` leaves the first reassignment running.
+/// `--generate` produces a usable plan on krabka and on Apache Kafka.
 ///
-/// Without `--additional` the tool cancels every reassignment its document
-/// does not mention, which is the behaviour that loses an operator's
-/// half-finished move when they start a second one. The flag is client-side,
-/// but what it protects is server state, so the assertion is made against the
-/// metadata image rather than against what the tool said about itself.
-///
-/// # Why this half has no oracle
-///
-/// A reassignment that is still running is one whose new replica has not
-/// caught up, and on a single stock node there is no second broker to move a
-/// replica to. The oracle in this file cannot host the premise.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// The tool builds the proposal itself, out of `DescribeTopics` and
+/// `DescribeCluster`; what a broker contributes is the current assignment and
+/// the broker set. So the rule the two sides share is that the plan is
+/// *usable* -- it covers the topic's partitions, and every replica in it is a
+/// broker the operator named -- and a broker that mis-reported either would
+/// hand the operator a document that `--execute` then refuses.
 #[ignore = "requires Docker"]
-async fn reassign_partitions_additional_keeps_the_reassignment_already_running() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "reassign partitions generate produces a usable plan on both"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign reassign execute: reassign partitions additional keeps the reassignment already running"
+)]
+async fn bdd_verify_reassign_partitions_additional_keeps_the_reassignment_already_running() {
     const TOPIC: &str = "krabka-additional-itest";
 
     let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
@@ -411,3 +422,25 @@ async fn reassign_partitions_additional_keeps_the_reassignment_already_running()
         handle.shutdown().await;
     }
 }
+
+/// A second `--execute --additional` leaves the first reassignment running.
+///
+/// Without `--additional` the tool cancels every reassignment its document
+/// does not mention, which is the behaviour that loses an operator's
+/// half-finished move when they start a second one. The flag is client-side,
+/// but what it protects is server state, so the assertion is made against the
+/// metadata image rather than against what the tool said about itself.
+///
+/// # Why this half has no oracle
+///
+/// A reassignment that is still running is one whose new replica has not
+/// caught up, and on a single stock node there is no second broker to move a
+/// replica to. The oracle in this file cannot host the premise.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "reassign partitions additional keeps the reassignment already running"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_additional_keeps_the_reassignment_already_running() {}

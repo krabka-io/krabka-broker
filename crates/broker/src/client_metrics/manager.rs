@@ -612,11 +612,11 @@ mod tests {
         })
     }
 
-    /// Kafka's `validatePushRequest` order after a `GetTelemetrySubscriptions`
-    /// at T: terminating, throttle, subscription id, compression, size. The
-    /// push timestamp moves once the throttle check passes (#678).
-    #[test]
-    fn push_checks_follow_kafkas_order_and_timestamps() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "client metrics manager tests: push checks follow kafkas order and timestamps"
+    )]
+    fn bdd_verify_push_checks_follow_kafkas_order_and_timestamps() {
         let m = manager();
         let img = all_metrics_img("60000");
         let attrs = attrs();
@@ -711,6 +711,16 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `validatePushRequest` order after a `GetTelemetrySubscriptions`
+    /// at T: terminating, throttle, subscription id, compression, size. The
+    /// push timestamp moves once the throttle check passes (#678).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/client_metrics/manager.feature",
+        name = "tests: push checks follow kafkas order and timestamps"
+    )]
+    fn push_checks_follow_kafkas_order_and_timestamps() {}
 
     /// Where Kafka records the terminating flag (#1246). 4.3.1 records it in
     /// a `finally`, after the checks read the old flag, on every push: a
@@ -943,11 +953,9 @@ mod tests {
         }
     }
 
-    /// Kafka's `validateGetRequest`: a get inside the interval since the last
-    /// get or push is throttled, unless the last push asked the client to
-    /// fetch again. A throttled get leaves the timestamps alone.
-    #[test]
-    fn get_throttle_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("client metrics manager tests: get throttle follows kafka")]
+    fn bdd_verify_get_throttle_follows_kafka() {
         let m = manager();
         let img = all_metrics_img("100");
         let attrs = attrs();
@@ -1009,6 +1017,16 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `validateGetRequest`: a get inside the interval since the last
+    /// get or push is throttled, unless the last push asked the client to
+    /// fetch again. A throttled get leaves the timestamps alone.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/client_metrics/manager.feature",
+        name = "tests: get throttle follows kafka"
+    )]
+    fn get_throttle_follows_kafka() {}
 
     /// A zero id asks for a new one, and any other id is kept (#665).
     #[test]

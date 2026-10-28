@@ -259,8 +259,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn rows_follow_kafkas_delete_topics_validation() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers delete topics request tests: rows follow kafkas delete topics validation"
+    )]
+    fn bdd_verify_rows_follow_kafkas_delete_topics_validation() {
         let cases = [
             Case {
                 label: "a name and an id each name one topic",
@@ -411,6 +414,13 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/delete_topics/request.feature",
+        name = "tests: rows follow kafkas delete topics validation"
+    )]
+    fn rows_follow_kafkas_delete_topics_validation() {}
 
     /// A request of many distinct names and ids, each sent twice, answers one
     /// `INVALID_REQUEST` row per name and per id, in first-row order, and

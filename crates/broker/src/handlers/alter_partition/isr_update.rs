@@ -295,12 +295,11 @@ mod tests {
         assert2::assert,
     };
 
-    /// Kafka's `ReplicationControlManager.validateAlterPartitionData`, in its
-    /// order. The partition has leader 2, replicas `[2, 4, 6]`, leader epoch 9
-    /// and partition epoch 11. Each row changes one input of an otherwise
-    /// valid request, or two where the order between two checks is the point.
-    #[test]
-    fn a_row_is_validated_in_kafkas_order_with_kafkas_codes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition isr update tests: a row is validated in kafkas order with kafkas codes"
+    )]
+    fn bdd_verify_a_row_is_validated_in_kafkas_order_with_kafkas_codes() {
         struct Case {
             name: &'static str,
             broker_id: i32,
@@ -438,6 +437,17 @@ mod tests {
         }
     }
 
+    /// Kafka's `ReplicationControlManager.validateAlterPartitionData`, in its
+    /// order. The partition has leader 2, replicas `[2, 4, 6]`, leader epoch 9
+    /// and partition epoch 11. Each row changes one input of an otherwise
+    /// valid request, or two where the order between two checks is the point.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
+        name = "tests: a row is validated in kafkas order with kafkas codes"
+    )]
+    fn a_row_is_validated_in_kafkas_order_with_kafkas_codes() {}
+
     #[derive(Clone, Copy)]
     enum EpochStateAdmission {
         Admitted,
@@ -567,8 +577,11 @@ mod tests {
         expected: i16,
     }
 
-    #[test]
-    fn rows_are_validated_in_kafkas_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition isr update tests: rows are validated in kafkas order"
+    )]
+    fn bdd_verify_rows_are_validated_in_kafkas_order() {
         let fixture = PartitionFixture {
             partition_epoch: PartitionEpoch(10),
             ..Default::default()
@@ -670,6 +683,13 @@ mod tests {
         }
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
+        name = "tests: rows are validated in kafkas order"
+    )]
+    fn rows_are_validated_in_kafkas_order() {}
+
     /// Two proposals built from the same ISR: the leader shrinks to `[1]`,
     /// then a stale expand to `[1, 2, 3]` built at the same leader epoch
     /// arrives. The controller has moved to partition epoch 11, so Kafka
@@ -744,8 +764,11 @@ mod tests {
         assert!(changes.is_empty());
     }
 
-    #[test]
-    fn error_response_matches_kafkas_default_fields() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition isr update tests: error response matches kafkas default fields"
+    )]
+    fn bdd_verify_error_response_matches_kafkas_default_fields() {
         let image = non_default_partition_image();
         let mut changes = Vec::new();
         let resp = response_for_non_default_partition(&image, &mut changes, 8);
@@ -758,6 +781,13 @@ mod tests {
         assert!(resp == expected);
         assert!(changes.is_empty());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
+        name = "tests: error response matches kafkas default fields"
+    )]
+    fn error_response_matches_kafkas_default_fields() {}
 
     #[test]
     fn explicit_v2_isr_wins_when_epoch_states_are_also_present() {

@@ -646,12 +646,22 @@ mod tests {
         check!(compile_full_match(pattern).err().as_deref() == Some(message));
     }
 
-    #[test]
-    fn rejects_patterns_over_kafka_string_bound_before_translation() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "re2j tests: rejects patterns over kafka string bound before translation"
+    )]
+    fn bdd_verify_rejects_patterns_over_kafka_string_bound_before_translation() {
         let pattern = format!("\\Q{}\\E", "x".repeat(MAX_PATTERN_BYTES));
         let error = compile_full_match(&pattern).expect_err("oversized pattern rejected");
         check!(error.contains("Kafka string limit"));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/re2j.feature",
+        name = "tests: rejects patterns over kafka string bound before translation"
+    )]
+    fn rejects_patterns_over_kafka_string_bound_before_translation() {}
 
     /// `Matcher.matches()` matches the whole input, and an inline `(?m)` does
     /// not change that.
@@ -667,10 +677,18 @@ mod tests {
         check!(!multiline.is_match("other\ntxn"));
     }
 
-    #[test]
-    fn an_unsupported_flag_carries_kafkas_message() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("re2j tests: an unsupported flag carries kafkas message")]
+    fn bdd_verify_an_unsupported_flag_carries_kafkas_message() {
         check!(compile_full_match("(?x)txn").err() == Some(INVALID_PERL_OP.to_owned()));
         check!(unsupported_inline_flag("[(?x)]").is_none());
         check!(unsupported_inline_flag("\\(?x)").is_none());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/re2j.feature",
+        name = "tests: an unsupported flag carries kafkas message"
+    )]
+    fn an_unsupported_flag_carries_kafkas_message() {}
 }

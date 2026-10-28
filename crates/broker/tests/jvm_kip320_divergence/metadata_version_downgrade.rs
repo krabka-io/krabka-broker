@@ -84,12 +84,11 @@ async fn wait_for_voter_registrations(cluster: &MixedCluster) {
     }
 }
 
-/// 4.0-IV3 (25) to 3.7-IV1 (16) crosses 4.0-IV1 and 3.7-IV2, which both
-/// changed metadata, so Kafka refuses it as a safe and as an unsafe downgrade,
-/// with its own message for each, and nothing changes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + published controller/data ports; Linux-bound"]
-async fn metadata_version_downgrade_refuses_lossy_levels() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence metadata version downgrade: metadata version downgrade refuses lossy levels"
+)]
+async fn bdd_verify_metadata_version_downgrade_refuses_lossy_levels() {
     const EXISTING_TOPIC: &str = "krabka-mv-capability-existing";
     const UPPER_LEVEL: i16 = 25; // 4.0-IV3.
 
@@ -184,3 +183,15 @@ async fn metadata_version_downgrade_refuses_lossy_levels() {
     );
     cluster.shutdown().await;
 }
+
+/// 4.0-IV3 (25) to 3.7-IV1 (16) crosses 4.0-IV1 and 3.7-IV2, which both
+/// changed metadata, so Kafka refuses it as a safe and as an unsafe downgrade,
+/// with its own message for each, and nothing changes.
+#[ignore = "requires Docker + published controller/data ports; Linux-bound"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/metadata_version_downgrade.feature",
+    name = "metadata version downgrade refuses lossy levels"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metadata_version_downgrade_refuses_lossy_levels() {}

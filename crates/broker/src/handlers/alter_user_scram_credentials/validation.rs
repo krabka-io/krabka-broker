@@ -247,8 +247,11 @@ mod tests {
         assert!(records.is_empty());
     }
 
-    #[test]
-    fn process_upsertion_rejects_iterations_above_kafka_maximum() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter user scram credentials validation tests: process upsertion rejects iterations above kafka maximum"
+    )]
+    fn bdd_verify_process_upsertion_rejects_iterations_above_kafka_maximum() {
         let mut records = Vec::new();
         let mut upsertion = valid_upsertion("alice");
         upsertion.iterations = KAFKA_MAX_SCRAM_ITERATIONS + 1;
@@ -265,8 +268,18 @@ mod tests {
         assert!(records.is_empty());
     }
 
-    #[test]
-    fn process_upsertion_allows_kafka_maximum_iterations() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature",
+        name = "tests: process upsertion rejects iterations above kafka maximum"
+    )]
+    fn process_upsertion_rejects_iterations_above_kafka_maximum() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter user scram credentials validation tests: process upsertion allows kafka maximum iterations"
+    )]
+    fn bdd_verify_process_upsertion_allows_kafka_maximum_iterations() {
         let mut records = Vec::new();
         let mut upsertion = valid_upsertion("alice");
         upsertion.iterations = KAFKA_MAX_SCRAM_ITERATIONS;
@@ -276,6 +289,13 @@ mod tests {
         assert!(r == expected_result("alice", 0, None));
         assert!(records.len() == 1);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature",
+        name = "tests: process upsertion allows kafka maximum iterations"
+    )]
+    fn process_upsertion_allows_kafka_maximum_iterations() {}
 
     #[test]
     fn process_upsertion_validates_boundaries_and_records_success() {

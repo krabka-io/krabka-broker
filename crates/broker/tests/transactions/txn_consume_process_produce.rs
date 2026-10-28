@@ -15,17 +15,11 @@ use {
     std::time::{Duration, Instant},
 };
 
-/// Consume-process-produce loop with `send_offsets_to_transaction`. After the
-/// commit, 5 records must appear on the output topic under `read_committed`.
-///
-/// This verifies the atomic-output half of the pattern: the transactional
-/// offset commit and the output produces are flushed and committed together,
-/// and the output records become visible under `read_committed` once the commit
-/// marker advances the LSO. `txn_offset_commit_materialize.rs` separately
-/// verifies that the same marker makes committed offsets visible through
-/// `OffsetFetch` and drops them on abort.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_offsets_to_transaction_atomic_with_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn consume process produce: send offsets to transaction atomic with records"
+)]
+async fn bdd_verify_send_offsets_to_transaction_atomic_with_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "input").await;
     create_topic(&bootstrap, "output").await;
@@ -115,3 +109,20 @@ async fn send_offsets_to_transaction_atomic_with_records() {
     c2.close().await.unwrap();
     broker.shutdown().await;
 }
+
+/// Consume-process-produce loop with `send_offsets_to_transaction`. After the
+/// commit, 5 records must appear on the output topic under `read_committed`.
+///
+/// This verifies the atomic-output half of the pattern: the transactional
+/// offset commit and the output produces are flushed and committed together,
+/// and the output records become visible under `read_committed` once the commit
+/// marker advances the LSO. `txn_offset_commit_materialize.rs` separately
+/// verifies that the same marker makes committed offsets visible through
+/// `OffsetFetch` and drops them on abort.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_consume_process_produce.feature",
+    name = "send offsets to transaction atomic with records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_offsets_to_transaction_atomic_with_records() {}

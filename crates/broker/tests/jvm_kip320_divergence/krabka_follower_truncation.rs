@@ -10,11 +10,11 @@ use {
     tokio::time,
 };
 
-/// Parks the Krabka replica behind a phantom leader, then verifies that it
-/// adopts the promoted JVM leader's divergent epoch and resumes replication.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + a published controller/data port; Linux-bound"]
-async fn kip320_krabka_follower_truncates_from_jvm_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence krabka follower truncation: kip320 krabka follower truncates from jvm leader"
+)]
+async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
     const TOPIC: &str = "krabka-kip320-krabka-follower";
     let (container, cluster, bootstrap_all, prefix_leo) =
         prepare_divergence(TOPIC, DivergenceDirection::KrabkaFollower).await;
@@ -125,3 +125,14 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
 
     cluster.shutdown().await;
 }
+
+/// Parks the Krabka replica behind a phantom leader, then verifies that it
+/// adopts the promoted JVM leader's divergent epoch and resumes replication.
+#[ignore = "requires Docker + a published controller/data port; Linux-bound"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/krabka_follower_truncation.feature",
+    name = "kip320 krabka follower truncates from jvm leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kip320_krabka_follower_truncates_from_jvm_leader() {}

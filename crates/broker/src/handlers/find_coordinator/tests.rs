@@ -375,11 +375,11 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
     broker_handle.shutdown().await;
 }
 
-/// A denied group id keeps its own row. At v4+ Kafka's row has no message; at
-/// v0-v3 the answer goes through `getErrorResponse`, which carries the default
-/// message of the code and `Node.noNode()`.
-#[tokio::test]
-async fn denied_group_key_answers_kafka_row_shape_per_version() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers find coordinator tests: denied group key answers kafka row shape per version"
+)]
+async fn bdd_verify_denied_group_key_answers_kafka_row_shape_per_version() {
     krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
     let rows = vec![
         VersionedResponse {
@@ -404,6 +404,17 @@ async fn denied_group_key_answers_kafka_row_shape_per_version() {
         .await;
     broker_handle.shutdown().await;
 }
+
+/// A denied group id keeps its own row. At v4+ Kafka's row has no message; at
+/// v0-v3 the answer goes through `getErrorResponse`, which carries the default
+/// message of the code and `Node.noNode()`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/find_coordinator/tests.feature",
+    name = "denied group key answers kafka row shape per version"
+)]
+#[tokio::test]
+async fn denied_group_key_answers_kafka_row_shape_per_version() {}
 
 /// With `ClusterAction` granted, a malformed share key gets its own
 /// `INVALID_REQUEST` row with no message and a valid key resolves.

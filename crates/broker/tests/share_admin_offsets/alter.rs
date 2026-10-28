@@ -38,22 +38,9 @@ fn alter_request(start_offset: i64) -> AlterShareGroupOffsetsRequest {
     }
 }
 
-/// Alter resets the SPSO of an empty group.
-///
-/// The persister re-initializes its state at the requested offset, the broker
-/// invalidates the leader cache, and a later `ShareFetch` acquires from the new
-/// offset.
-///
-/// The group has *no members* when Alter runs, so the membership lifecycle has
-/// never seeded the share-state. Alter thus initializes from absent at the
-/// group's current epoch, 1, with `start_offset = 5`, and records the
-/// partition as initialized, as Kafka's `alterShareGroupOffsets` does. A later
-/// first join finds the partition initialized and does not initialize it
-/// again, so the SPSO from Alter survives and the first `ShareFetch` acquires
-/// from offset 5. The test thus exercises the real acquire path against the
-/// reset and invalidated leader cache.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_resets_empty_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share admin offsets alter: alter resets empty group")]
+async fn bdd_verify_alter_resets_empty_group() {
     let (_permit, _broker, client, _dir, tid) =
         Box::pin(seeded_empty_group().count(6).call()).await;
 
@@ -99,11 +86,31 @@ async fn alter_resets_empty_group() {
     );
 }
 
-/// Alter on a non-empty group is rejected at the top level.
+/// Alter resets the SPSO of an empty group.
 ///
-/// The group has a live member, so the response carries `NON_EMPTY_GROUP`.
+/// The persister re-initializes its state at the requested offset, the broker
+/// invalidates the leader cache, and a later `ShareFetch` acquires from the new
+/// offset.
+///
+/// The group has *no members* when Alter runs, so the membership lifecycle has
+/// never seeded the share-state. Alter thus initializes from absent at the
+/// group's current epoch, 1, with `start_offset = 5`, and records the
+/// partition as initialized, as Kafka's `alterShareGroupOffsets` does. A later
+/// first join finds the partition initialized and does not initialize it
+/// again, so the SPSO from Alter survives and the first `ShareFetch` acquires
+/// from offset 5. The test thus exercises the real acquire path against the
+/// reset and invalidated leader cache.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/alter.feature",
+    name = "alter resets empty group"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_non_empty_group_fenced() {
+async fn alter_resets_empty_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share admin offsets alter: alter non empty group fenced")]
+async fn bdd_verify_alter_non_empty_group_fenced() {
     let (_permit, broker, client, _dir, tid) = Box::pin(seeded_empty_group().call()).await;
 
     // Live member present (steady-state heartbeat), never leaves.
@@ -122,3 +129,14 @@ async fn alter_non_empty_group_fenced() {
         resp.error_code
     );
 }
+
+/// Alter on a non-empty group is rejected at the top level.
+///
+/// The group has a live member, so the response carries `NON_EMPTY_GROUP`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/alter.feature",
+    name = "alter non empty group fenced"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_non_empty_group_fenced() {}

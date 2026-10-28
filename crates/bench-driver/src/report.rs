@@ -1268,8 +1268,11 @@ mod tests {
         check_failover_violation(dir.path(), &krabka, expected);
     }
 
-    #[test]
-    fn failover_gate_fails_when_krabka_message_rate_recovers_slower_than_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "report tests: failover gate fails when krabka message rate recovers slower than kafka"
+    )]
+    fn bdd_verify_failover_gate_fails_when_krabka_message_rate_recovers_slower_than_kafka() {
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.samples[3].producer_rate = per_sec(8500);
         check_slow_rate_recovery(
@@ -1277,6 +1280,13 @@ mod tests {
             "Krabka producer rate recovery 4s is slower than kafka 2s",
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/report.feature",
+        name = "tests: failover gate fails when krabka message rate recovers slower than kafka"
+    )]
+    fn failover_gate_fails_when_krabka_message_rate_recovers_slower_than_kafka() {}
 
     #[test]
     fn failover_gate_fails_when_krabka_message_rate_never_recovers() {
@@ -1301,8 +1311,11 @@ mod tests {
         assert_violation_contains(&violations, "Krabka producer rate did not recover");
     }
 
-    #[test]
-    fn failover_gate_fails_when_krabka_consumer_rate_recovers_slower_than_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "report tests: failover gate fails when krabka consumer rate recovers slower than kafka"
+    )]
+    fn bdd_verify_failover_gate_fails_when_krabka_consumer_rate_recovers_slower_than_kafka() {
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.samples[3].consumer_rate = per_sec(8000);
         check_slow_rate_recovery(
@@ -1311,8 +1324,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failover_gate_rejects_worse_drops_and_latency_than_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/report.feature",
+        name = "tests: failover gate fails when krabka consumer rate recovers slower than kafka"
+    )]
+    fn failover_gate_fails_when_krabka_consumer_rate_recovers_slower_than_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "report tests: failover gate rejects worse drops and latency than kafka"
+    )]
+    fn bdd_verify_failover_gate_rejects_worse_drops_and_latency_than_kafka() {
         let rows = [
             (
                 MessageCount(5),
@@ -1334,6 +1357,13 @@ mod tests {
             check_failover_violation(dir.path(), &krabka, expected);
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/report.feature",
+        name = "tests: failover gate rejects worse drops and latency than kafka"
+    )]
+    fn failover_gate_rejects_worse_drops_and_latency_than_kafka() {}
 
     fn write_comparison_runs(dir: &Path) {
         write_run(

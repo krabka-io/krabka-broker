@@ -22,45 +22,126 @@ const ASKER: VoteAsker = VoteAsker {
     known_leader: None,
 };
 
-/// Each answer is read as Kafka's `maybeHandleCommonResponse` and then
-/// `handleVoteResponse` read it.
-#[yare::parameterized(
-    older_epoch = { ASKER, 0, false, Some(NodeId(2)), 4, VoteResponseStep::Ignore },
-    unknown_leader_epoch = { ASKER, UNKNOWN_LEADER_EPOCH, false, None, 5, VoteResponseStep::Ignore },
-    newer_epoch_with_a_leader = {
-        ASKER, 0, false, Some(NodeId(3)), 6, VoteResponseStep::Follow { leader_id: NodeId(3), epoch: 6 }
-    },
-    newer_epoch_fenced_with_a_leader = {
-        ASKER, FENCED_LEADER_EPOCH, false, Some(NodeId(3)), 6,
-        VoteResponseStep::Follow { leader_id: NodeId(3), epoch: 6 }
-    },
-    newer_epoch_without_a_leader = {
-        ASKER, 0, false, None, 6, VoteResponseStep::Unattached { epoch: 6 }
-    },
-    newer_epoch_naming_the_asker = { ASKER, 0, false, Some(NodeId(1)), 6, VoteResponseStep::Ignore },
-    same_epoch_leader_while_none_is_known = {
-        ASKER, 0, false, Some(NodeId(3)), 5, VoteResponseStep::Follow { leader_id: NodeId(3), epoch: 5 }
-    },
-    same_epoch_leader_with_not_leader = {
-        ASKER, NOT_LEADER_OR_FOLLOWER, false, Some(NodeId(3)), 5,
-        VoteResponseStep::Follow { leader_id: NodeId(3), epoch: 5 }
-    },
-    same_epoch_leader_while_one_is_known = {
-        VoteAsker { known_leader: Some(NodeId(2)), ..ASKER }, 0, false, Some(NodeId(3)), 5,
-        VoteResponseStep::Count { epoch: 5, granted: false }
-    },
-    same_epoch_grant = { ASKER, 0, true, None, 5, VoteResponseStep::Count { epoch: 5, granted: true } },
-    same_epoch_refusal = { ASKER, 0, false, None, 5, VoteResponseStep::Count { epoch: 5, granted: false } },
-    same_epoch_error = { ASKER, INVALID_VOTER_KEY, false, None, 5, VoteResponseStep::Ignore },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller vote response tests: a vote answer is read as kafka reads it for {example}"
 )]
-fn a_vote_answer_is_read_as_kafka_reads_it(
-    asker: VoteAsker,
-    error_code: i16,
-    granted: bool,
-    leader_id: Option<NodeId>,
-    epoch: Epoch,
-    expected: VoteResponseStep,
-) {
+fn bdd_verify_a_vote_answer_is_read_as_kafka_reads_it(example: String) {
+    type Example = (
+        VoteAsker,
+        i16,
+        bool,
+        Option<NodeId>,
+        Epoch,
+        VoteResponseStep,
+    );
+    let (asker, error_code, granted, leader_id, epoch, expected): Example = match example.as_str() {
+        "older epoch" => (
+            ASKER,
+            0,
+            false,
+            Some(NodeId(2)),
+            4,
+            VoteResponseStep::Ignore,
+        ),
+        "unknown leader epoch" => (
+            ASKER,
+            UNKNOWN_LEADER_EPOCH,
+            false,
+            None,
+            5,
+            VoteResponseStep::Ignore,
+        ),
+        "newer epoch with a leader" => (
+            ASKER,
+            0,
+            false,
+            Some(NodeId(3)),
+            6,
+            VoteResponseStep::Follow {
+                leader_id: NodeId(3),
+                epoch: 6,
+            },
+        ),
+        "newer epoch fenced with a leader" => (
+            ASKER,
+            FENCED_LEADER_EPOCH,
+            false,
+            Some(NodeId(3)),
+            6,
+            VoteResponseStep::Follow {
+                leader_id: NodeId(3),
+                epoch: 6,
+            },
+        ),
+        "newer epoch without a leader" => {
+            (ASKER, 0, false, None, 6, VoteResponseStep::Unattached {
+                epoch: 6,
+            })
+        }
+        "newer epoch naming the asker" => (
+            ASKER,
+            0,
+            false,
+            Some(NodeId(1)),
+            6,
+            VoteResponseStep::Ignore,
+        ),
+        "same epoch leader while none is known" => (
+            ASKER,
+            0,
+            false,
+            Some(NodeId(3)),
+            5,
+            VoteResponseStep::Follow {
+                leader_id: NodeId(3),
+                epoch: 5,
+            },
+        ),
+        "same epoch leader with not leader" => (
+            ASKER,
+            NOT_LEADER_OR_FOLLOWER,
+            false,
+            Some(NodeId(3)),
+            5,
+            VoteResponseStep::Follow {
+                leader_id: NodeId(3),
+                epoch: 5,
+            },
+        ),
+        "same epoch leader while one is known" => (
+            VoteAsker {
+                known_leader: Some(NodeId(2)),
+                ..ASKER
+            },
+            0,
+            false,
+            Some(NodeId(3)),
+            5,
+            VoteResponseStep::Count {
+                epoch: 5,
+                granted: false,
+            },
+        ),
+        "same epoch grant" => (ASKER, 0, true, None, 5, VoteResponseStep::Count {
+            epoch: 5,
+            granted: true,
+        }),
+        "same epoch refusal" => (ASKER, 0, false, None, 5, VoteResponseStep::Count {
+            epoch: 5,
+            granted: false,
+        }),
+        "same epoch error" => (
+            ASKER,
+            INVALID_VOTER_KEY,
+            false,
+            None,
+            5,
+            VoteResponseStep::Ignore,
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let answer = VoteAnswer {
         error_code,
         granted,
@@ -69,6 +150,15 @@ fn a_vote_answer_is_read_as_kafka_reads_it(
     };
     assert2::assert!(vote_response_step(asker, answer) == expected);
 }
+
+/// Each answer is read as Kafka's `maybeHandleCommonResponse` and then
+/// `handleVoteResponse` read it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/vote_response/tests.feature",
+    name = "a vote answer is read as kafka reads it"
+)]
+fn a_vote_answer_is_read_as_kafka_reads_it(example: String) { let _ = example; }
 
 /// A Vote answer encoded as voter 2 sends it.
 fn answer(granted: bool, leader_id: Option<NodeId>, epoch: Epoch) -> bytes::Bytes {

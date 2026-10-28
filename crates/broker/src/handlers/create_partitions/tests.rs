@@ -685,12 +685,11 @@ async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_
     }
 }
 
-/// #744: Kafka's `ControllerApis.createPartitions` answers a duplicated name
-/// once with `INVALID_REQUEST` and grows none of its rows, and the
-/// controller's count checks answer with Kafka's messages. Topic `t` has 2
-/// partitions of replication factor 1.
-#[tokio::test]
-async fn rows_follow_kafkas_duplicate_and_count_checks() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create partitions tests: rows follow kafkas duplicate and count checks"
+)]
+async fn bdd_verify_rows_follow_kafkas_duplicate_and_count_checks() {
     fn row(name: &str, error_code: i16, message: Option<&str>) -> CreatePartitionsTopicResult {
         expected_result(name, error_code, message.map(str::to_owned))
     }
@@ -789,6 +788,18 @@ async fn rows_follow_kafkas_duplicate_and_count_checks() {
     }
     assert!(actual == expected);
 }
+
+/// #744: Kafka's `ControllerApis.createPartitions` answers a duplicated name
+/// once with `INVALID_REQUEST` and grows none of its rows, and the
+/// controller's count checks answer with Kafka's messages. Topic `t` has 2
+/// partitions of replication factor 1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_partitions/tests.feature",
+    name = "rows follow kafkas duplicate and count checks"
+)]
+#[tokio::test]
+async fn rows_follow_kafkas_duplicate_and_count_checks() {}
 
 /// Both operations initially observe the same count. Only one may create the
 /// new indices; the other must see the committed count on its next attempt.

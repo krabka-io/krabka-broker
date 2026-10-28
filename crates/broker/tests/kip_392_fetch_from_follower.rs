@@ -193,8 +193,11 @@ async fn assert_leader_serves_same_rack(client: &Client, topic_id: WireUuid) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip 392 fetch from follower: rack aware consumer is redirected to same rack follower"
+)]
+async fn bdd_verify_rack_aware_consumer_is_redirected_to_same_rack_follower() {
     let _g = cluster_lock().lock().await;
 
     let cluster = start_rack_aware_cluster(&[RACK_A, RACK_B]).await;
@@ -289,3 +292,11 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip_392_fetch_from_follower.feature",
+    name = "rack aware consumer is redirected to same rack follower"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {}

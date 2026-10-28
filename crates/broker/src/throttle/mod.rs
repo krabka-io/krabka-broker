@@ -306,19 +306,33 @@ mod tests {
         assert2::assert!(ThrottledReplicas::parse(input).is_err(), "{input}");
     }
 
-    #[yare::parameterized(
-        whitespace_means_none = { " ", ThrottledReplicas::None },
-        trimmed_wildcard_means_all = { " * ", ThrottledReplicas::All },
-        spaced_pairs = {
-            " 0:1 , 2:3 ",
-            ThrottledReplicas::List(vec![replica(0, 1), replica(2, 3)])
-        },
-        empty_segments_are_ignored = {
-            "0:1,,1:2",
-            ThrottledReplicas::List(vec![replica(0, 1), replica(1, 2)])
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "throttle mod tests: kafka list spellings parse as kafka reads them for {example}"
     )]
-    fn kafka_list_spellings_parse_as_kafka_reads_them(input: &str, want: ThrottledReplicas) {
+    fn bdd_verify_kafka_list_spellings_parse_as_kafka_reads_them(example: String) {
+        type Example<'a> = (&'a str, ThrottledReplicas);
+        let (input, want): Example<'_> = match example.as_str() {
+            "whitespace means none" => (" ", ThrottledReplicas::None),
+            "trimmed wildcard means all" => (" * ", ThrottledReplicas::All),
+            "spaced pairs" => (
+                " 0:1 , 2:3 ",
+                ThrottledReplicas::List(vec![replica(0, 1), replica(2, 3)]),
+            ),
+            "empty segments are ignored" => (
+                "0:1,,1:2",
+                ThrottledReplicas::List(vec![replica(0, 1), replica(1, 2)]),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(ThrottledReplicas::parse(input) == Ok(want), "{input:?}");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/throttle/mod.feature",
+        name = "tests: kafka list spellings parse as kafka reads them"
+    )]
+    fn kafka_list_spellings_parse_as_kafka_reads_them(example: String) { let _ = example; }
 }

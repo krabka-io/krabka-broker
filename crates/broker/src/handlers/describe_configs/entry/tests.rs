@@ -99,12 +99,11 @@ fn the_chain_head_decides_the_value_and_the_source() {
     );
 }
 
-/// A name Kafka does not define has no row: `KafkaConfig.configType` is empty,
-/// so the entry is `UNKNOWN`-typed, its value is withheld (`maybeSensitive`
-/// treats an untyped key as sensitive), and, being in no dynamic set, it is
-/// read-only.
-#[test]
-fn a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs entry tests: a name kafka does not define is untyped withheld and read only"
+)]
+fn bdd_verify_a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
     let entry = config_entry(
         None,
         "plugin.custom.key",
@@ -137,6 +136,17 @@ fn a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
             }
     );
 }
+
+/// A name Kafka does not define has no row: `KafkaConfig.configType` is empty,
+/// so the entry is `UNKNOWN`-typed, its value is withheld (`maybeSensitive`
+/// treats an untyped key as sensitive), and, being in no dynamic set, it is
+/// read-only.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/entry/tests.feature",
+    name = "a name kafka does not define is untyped withheld and read only"
+)]
+fn a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {}
 
 /// The same row as `log.retention.ms` would carry, so the chain test does not
 /// depend on a key krabka happens to have.

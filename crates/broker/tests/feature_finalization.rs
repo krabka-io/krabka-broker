@@ -39,12 +39,11 @@ async fn start_with_unstable_features() -> support::InProcess {
     .await
 }
 
-/// #784: by default a node supports `metadata.version` only up to 4.3.1's
-/// latest production level, so trunk's 4.5-IV0 is refused with the text a
-/// Kafka 4.3.1 controller answers (`QuorumFeatures.reasonNotSupported`) and the
-/// supported range `ApiVersions` advertises stops at 30.
-#[tokio::test]
-async fn an_unstable_metadata_version_is_refused_by_default() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "feature finalization: an unstable metadata version is refused by default"
+)]
+async fn bdd_verify_an_unstable_metadata_version_is_refused_by_default() {
     let p = support::start().await;
     let resp = p
         .client
@@ -81,10 +80,23 @@ async fn an_unstable_metadata_version_is_refused_by_default() {
     p.broker.shutdown().await;
 }
 
-/// A cluster bootstraps at 4.3-IV0 and, on a node that supports unstable
-/// feature levels, opts into Kafka trunk's 4.4 levels by finalizing them.
+/// #784: by default a node supports `metadata.version` only up to 4.3.1's
+/// latest production level, so trunk's 4.5-IV0 is refused with the text a
+/// Kafka 4.3.1 controller answers (`QuorumFeatures.reasonNotSupported`) and the
+/// supported range `ApiVersions` advertises stops at 30.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "an unstable metadata version is refused by default"
+)]
 #[tokio::test]
-async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
+async fn an_unstable_metadata_version_is_refused_by_default() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "feature finalization: finalizes metadata version and surfaces in api versions"
+)]
+async fn bdd_verify_finalizes_metadata_version_and_surfaces_in_api_versions() {
     let p = start_with_unstable_features().await;
 
     let resp = p
@@ -117,6 +129,16 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
 
     p.broker.shutdown().await;
 }
+
+/// A cluster bootstraps at 4.3-IV0 and, on a node that supports unstable
+/// feature levels, opts into Kafka trunk's 4.4 levels by finalizing them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "finalizes metadata version and surfaces in api versions"
+)]
+#[tokio::test]
+async fn finalizes_metadata_version_and_surfaces_in_api_versions() {}
 
 fn share_version_update(level: i16) -> UpdateFeaturesRequest {
     UpdateFeaturesRequest {
@@ -161,10 +183,9 @@ async fn share_version_in_api_versions(p: &support::InProcess) -> ShareVersion {
     }
 }
 
-/// KIP-1191: `share.version` 2 is trunk's `SV_2`. A default node supports
-/// 0-1 as Kafka 4.3.1 does and refuses level 2.
-#[tokio::test]
-async fn share_version_two_is_refused_by_default() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("feature finalization: share version two is refused by default")]
+async fn bdd_verify_share_version_two_is_refused_by_default() {
     let p = support::start().await;
     assert!(share_version_in_api_versions(&p).await == ShareVersion::new(1, 1));
 
@@ -186,11 +207,21 @@ async fn share_version_two_is_refused_by_default() {
     p.broker.shutdown().await;
 }
 
-/// KIP-1191: with `unstable.feature.versions.enable` on, `ApiVersions`
-/// advertises `share.version` 0-2, `UpdateFeatures` finalizes level 2, and
-/// `validate_only` persists nothing.
+/// KIP-1191: `share.version` 2 is trunk's `SV_2`. A default node supports
+/// 0-1 as Kafka 4.3.1 does and refuses level 2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "share version two is refused by default"
+)]
 #[tokio::test]
-async fn share_version_two_is_finalizable_under_unstable_feature_versions() {
+async fn share_version_two_is_refused_by_default() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "feature finalization: share version two is finalizable under unstable feature versions"
+)]
+async fn bdd_verify_share_version_two_is_finalizable_under_unstable_feature_versions() {
     let p = start_with_unstable_features().await;
     assert!(share_version_in_api_versions(&p).await == ShareVersion::new(2, 1));
 
@@ -220,6 +251,17 @@ async fn share_version_two_is_finalizable_under_unstable_feature_versions() {
     p.broker.shutdown().await;
 }
 
+/// KIP-1191: with `unstable.feature.versions.enable` on, `ApiVersions`
+/// advertises `share.version` 0-2, `UpdateFeatures` finalizes level 2, and
+/// `validate_only` persists nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "share version two is finalizable under unstable feature versions"
+)]
+#[tokio::test]
+async fn share_version_two_is_finalizable_under_unstable_feature_versions() {}
+
 /// Kafka answers a failed feature with `INVALID_UPDATE_VERSION` (95) at the
 /// top level, a message naming the feature, and no rows, at every version.
 fn assert_feature_error(resp: &UpdateFeaturesResponse, feature: &str) {
@@ -235,8 +277,9 @@ fn assert_feature_error(resp: &UpdateFeaturesResponse, feature: &str) {
     );
 }
 
-#[tokio::test]
-async fn rejects_unsupported_feature() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("feature finalization: rejects unsupported feature")]
+async fn bdd_verify_rejects_unsupported_feature() {
     let p = support::start().await;
     let mut req = metadata_version_update(1);
     req.feature_updates[0].feature = "not.a.feature".into();
@@ -245,8 +288,17 @@ async fn rejects_unsupported_feature() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "rejects unsupported feature"
+)]
 #[tokio::test]
-async fn rejects_level_above_supported_max() {
+async fn rejects_unsupported_feature() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("feature finalization: rejects level above supported max")]
+async fn bdd_verify_rejects_level_above_supported_max() {
     let p = support::start().await;
     let resp = p
         .client
@@ -257,6 +309,14 @@ async fn rejects_level_above_supported_max() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "rejects level above supported max"
+)]
+#[tokio::test]
+async fn rejects_level_above_supported_max() {}
+
 fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
     api_versions
         .finalized_features
@@ -266,8 +326,9 @@ fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
         .max_version_level
 }
 
-#[tokio::test]
-async fn validate_only_does_not_persist() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("feature finalization: validate only does not persist")]
+async fn bdd_verify_validate_only_does_not_persist() {
     let p = start_with_unstable_features().await;
 
     // A self-bootstrapped broker already finalizes metadata.version=4.3-IV0, so
@@ -308,8 +369,17 @@ async fn validate_only_does_not_persist() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "validate only does not persist"
+)]
 #[tokio::test]
-async fn rejects_level_below_min_floor() {
+async fn validate_only_does_not_persist() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("feature finalization: rejects level below min floor")]
+async fn bdd_verify_rejects_level_below_min_floor() {
     let p = support::start().await;
     // Level 6 is below the supported minimum (METADATA_VERSION_MIN = 7).
     let resp = p
@@ -320,3 +390,11 @@ async fn rejects_level_below_min_floor() {
     assert_feature_error(&resp, "metadata.version");
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/feature_finalization.feature",
+    name = "rejects level below min floor"
+)]
+#[tokio::test]
+async fn rejects_level_below_min_floor() {}

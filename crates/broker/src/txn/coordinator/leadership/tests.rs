@@ -294,8 +294,11 @@ fn an_election_before_the_log_opens_loads_once_it_opens() {
     ]);
 }
 
-#[test]
-fn the_load_status_gives_the_kafka_error_code() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn coordinator leadership tests: the load status gives the kafka error code"
+)]
+fn bdd_verify_the_load_status_gives_the_kafka_error_code() {
     let cases = [
         (None, Some(NOT_COORDINATOR)),
         (
@@ -313,3 +316,10 @@ fn the_load_status_gives_the_kafka_error_code() {
         assert!(coordinator_error(status) == expected, "{status:?}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/coordinator/leadership/tests.feature",
+    name = "the load status gives the kafka error code"
+)]
+fn the_load_status_gives_the_kafka_error_code() {}

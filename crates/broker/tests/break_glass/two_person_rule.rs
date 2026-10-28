@@ -25,17 +25,11 @@ use {
     },
 };
 
-/// The whole two-person loop: Alice opens a proposal, Bob and Carol approve it,
-/// and the transition it authorizes then runs.
-///
-/// This is the case no other suite in the workspace can write. Every existing
-/// break-glass test over the wire ends at a refusal, because one `PLAINTEXT`
-/// listener has one principal. Delete this and the feature keeps every refusal
-/// it promises and loses the only proof that an approval is ever honoured: a
-/// gate that refused a fully approved proposal, or an approve handler that
-/// stored nothing, would pass the rest of this file untouched.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_proposal_two_approvals_and_the_transition_they_authorize() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass two person rule: a proposal two approvals and the transition they authorize"
+)]
+async fn bdd_verify_a_proposal_two_approvals_and_the_transition_they_authorize() {
     let ClusterClients {
         cluster,
         clients: [alice, bob, carol],
@@ -105,6 +99,23 @@ async fn a_proposal_two_approvals_and_the_transition_they_authorize() {
     cluster.broker.shutdown().await;
 }
 
+/// The whole two-person loop: Alice opens a proposal, Bob and Carol approve it,
+/// and the transition it authorizes then runs.
+///
+/// This is the case no other suite in the workspace can write. Every existing
+/// break-glass test over the wire ends at a refusal, because one `PLAINTEXT`
+/// listener has one principal. Delete this and the feature keeps every refusal
+/// it promises and loses the only proof that an approval is ever honoured: a
+/// gate that refused a fully approved proposal, or an approve handler that
+/// stored nothing, would pass the rest of this file untouched.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/two_person_rule.feature",
+    name = "a proposal two approvals and the transition they authorize"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_proposal_two_approvals_and_the_transition_they_authorize() {}
+
 /// A cluster with a pending delete-topic proposal, the proposer's and the
 /// first approver's clients, and the proposal id.
 struct ProposedDelete {
@@ -128,15 +139,9 @@ async fn proposed_delete_fixture() -> ProposedDelete {
     }
 }
 
-/// A second approval from one principal is not a second person.
-///
-/// `required_approvals = 2` is a rule about people, not about rows. A handler
-/// that appended Bob's approval twice would satisfy the count while one
-/// credential authorized a data-losing transition on its own, which is the
-/// exact failure the feature exists to stop. The refusal is asserted, and so is
-/// the consequence: the transition still refuses afterwards.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_principal_cannot_stand_in_for_two() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("break glass two person rule: one principal cannot stand in for two")]
+async fn bdd_verify_one_principal_cannot_stand_in_for_two() {
     let ProposedDelete {
         cluster,
         alice,
@@ -169,14 +174,26 @@ async fn one_principal_cannot_stand_in_for_two() {
     cluster.broker.shutdown().await;
 }
 
-/// The proposer may not approve their own proposal.
+/// A second approval from one principal is not a second person.
 ///
-/// Without this check the rule is a two-click rule: one person opens a proposal
-/// and approves it, and only one more click stands between one credential and
-/// an unclean election. The broker answers `BREAK_GLASS_DUPLICATE_APPROVER`
-/// (1007), because the proposer already counts as one of the two people.
+/// `required_approvals = 2` is a rule about people, not about rows. A handler
+/// that appended Bob's approval twice would satisfy the count while one
+/// credential authorized a data-losing transition on its own, which is the
+/// exact failure the feature exists to stop. The refusal is asserted, and so is
+/// the consequence: the transition still refuses afterwards.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/two_person_rule.feature",
+    name = "one principal cannot stand in for two"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_proposer_cannot_approve_their_own_proposal() {
+async fn one_principal_cannot_stand_in_for_two() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass two person rule: the proposer cannot approve their own proposal"
+)]
+async fn bdd_verify_the_proposer_cannot_approve_their_own_proposal() {
     let ClusterClients {
         cluster,
         clients: [alice],
@@ -196,19 +213,25 @@ async fn the_proposer_cannot_approve_their_own_proposal() {
     cluster.broker.shutdown().await;
 }
 
-/// A principal outside `break_glass.approvers` is refused on both ends of the
-/// workflow.
+/// The proposer may not approve their own proposal.
 ///
-/// The approver set comes from `broker.toml` and not from the metadata log, so
-/// an attacker who can write the log still cannot add themselves to it. That
-/// only holds if the broker actually consults the set. Mallory holds a valid
-/// SASL credential and every Kafka right the cluster asks for, and the broker
-/// refuses her `BREAK_GLASS_NOT_AN_APPROVER` (1008) whether she proposes or
-/// approves. The proposer check matters as much as the approver one: a
-/// proposer outside the set turns a rule about three people into a rule about
-/// two people and a stranger.
+/// Without this check the rule is a two-click rule: one person opens a proposal
+/// and approves it, and only one more click stands between one credential and
+/// an unclean election. The broker answers `BREAK_GLASS_DUPLICATE_APPROVER`
+/// (1007), because the proposer already counts as one of the two people.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/two_person_rule.feature",
+    name = "the proposer cannot approve their own proposal"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_principal_outside_the_approver_set_is_refused() {
+async fn the_proposer_cannot_approve_their_own_proposal() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass two person rule: a principal outside the approver set is refused"
+)]
+async fn bdd_verify_a_principal_outside_the_approver_set_is_refused() {
     let ClusterClients {
         cluster,
         clients: [alice, mallory],
@@ -238,16 +261,30 @@ async fn a_principal_outside_the_approver_set_is_refused() {
     cluster.broker.shutdown().await;
 }
 
-/// An approval joins back to the login that made it.
+/// A principal outside `break_glass.approvers` is refused on both ends of the
+/// workflow.
 ///
-/// The `PrivilegedAction` row says `User:bob` approved from an address. On its
-/// own that is a claim about a name; what makes it evidence is the
-/// `Authentication` row from the same session, which says that address
-/// presented Bob's credential to this broker. The two rows join by
-/// `principal.name` and `src_endpoint`, so this case reads the approval back
-/// off the audit topic and then finds its login.
+/// The approver set comes from `broker.toml` and not from the metadata log, so
+/// an attacker who can write the log still cannot add themselves to it. That
+/// only holds if the broker actually consults the set. Mallory holds a valid
+/// SASL credential and every Kafka right the cluster asks for, and the broker
+/// refuses her `BREAK_GLASS_NOT_AN_APPROVER` (1008) whether she proposes or
+/// approves. The proposer check matters as much as the approver one: a
+/// proposer outside the set turns a rule about three people into a rule about
+/// two people and a stranger.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/two_person_rule.feature",
+    name = "a principal outside the approver set is refused"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_approval_joins_to_the_login_that_made_it() {
+async fn a_principal_outside_the_approver_set_is_refused() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass two person rule: an approval joins to the login that made it"
+)]
+async fn bdd_verify_an_approval_joins_to_the_login_that_made_it() {
     let ProposedDelete {
         cluster: _cluster,
         alice,
@@ -279,3 +316,19 @@ async fn an_approval_joins_to_the_login_that_made_it() {
         "no Authentication row joins to {approval:?}; rows were {records:?}"
     );
 }
+
+/// An approval joins back to the login that made it.
+///
+/// The `PrivilegedAction` row says `User:bob` approved from an address. On its
+/// own that is a claim about a name; what makes it evidence is the
+/// `Authentication` row from the same session, which says that address
+/// presented Bob's credential to this broker. The two rows join by
+/// `principal.name` and `src_endpoint`, so this case reads the approval back
+/// off the audit topic and then finds its login.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/two_person_rule.feature",
+    name = "an approval joins to the login that made it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_joins_to_the_login_that_made_it() {}

@@ -199,15 +199,11 @@ async fn produce_when_partition_ready(
 // Tests.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Spec §4.2 test 1.
-///
-/// The OPA mock returns `{"result": false}` for every POST. `alice`
-/// authenticates through SASL/PLAIN and sends Produce against a topic that the
-/// super-user `admin` created beforehand. The per-partition response must carry
-/// `TOPIC_AUTHORIZATION_FAILED (29)`, because alice's Write check on the topic
-/// goes through OPA, which always denies it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "opa authorizer: produce blocked by opa returns topic authorization failed"
+)]
+async fn bdd_verify_produce_blocked_by_opa_returns_topic_authorization_failed() {
     let OpaFixture {
         opa: _opa,
         handle,
@@ -240,19 +236,24 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
     );
 }
 
-/// Spec §4.2 test 2.
+/// Spec §4.2 test 1.
 ///
-/// The OPA mock returns `{"result": true}` for every POST. `alice`
-/// authenticates and produces, and the per-partition response row must carry
-/// `error_code = 0`.
-///
-/// `produce_when_partition_ready` waits on the broker handle, event-driven, for
-/// the partition's local writer to materialise, and only then sends the single
-/// Produce. That wait closes the raft commit-then-apply gap between
-/// `CreateTopics` returning and the partition appearing in the local
-/// `MetadataImage`, so the test needs no fixed sleep.
+/// The OPA mock returns `{"result": false}` for every POST. `alice`
+/// authenticates through SASL/PLAIN and sends Produce against a topic that the
+/// super-user `admin` created beforehand. The per-partition response must carry
+/// `TOPIC_AUTHORIZATION_FAILED (29)`, because alice's Write check on the topic
+/// goes through OPA, which always denies it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/opa_authorizer.feature",
+    name = "produce blocked by opa returns topic authorization failed"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_allowed_by_opa_succeeds() {
+async fn produce_blocked_by_opa_returns_topic_authorization_failed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("opa authorizer: produce allowed by opa succeeds")]
+async fn bdd_verify_produce_allowed_by_opa_succeeds() {
     let OpaFixture {
         opa: _opa,
         handle,
@@ -276,6 +277,25 @@ async fn produce_allowed_by_opa_succeeds() {
          error_code=0, got {p:?}"
     );
 }
+
+/// Spec §4.2 test 2.
+///
+/// The OPA mock returns `{"result": true}` for every POST. `alice`
+/// authenticates and produces, and the per-partition response row must carry
+/// `error_code = 0`.
+///
+/// `produce_when_partition_ready` waits on the broker handle, event-driven, for
+/// the partition's local writer to materialise, and only then sends the single
+/// Produce. That wait closes the raft commit-then-apply gap between
+/// `CreateTopics` returning and the partition appearing in the local
+/// `MetadataImage`, so the test needs no fixed sleep.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/opa_authorizer.feature",
+    name = "produce allowed by opa succeeds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_allowed_by_opa_succeeds() {}
 
 async fn opa_fixture(allowed: bool) -> OpaFixture {
     let opa = MockServer::start().await;

@@ -74,8 +74,11 @@ mod tests {
         expected: EventQueueScrape,
     }
 
-    #[test]
-    fn each_recorder_call_reaches_its_kafka_named_series() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "metrics event queue tests: each recorder call reaches its kafka named series"
+    )]
+    fn bdd_verify_each_recorder_call_reaches_its_kafka_named_series() {
         let cases = [
             RecorderCase {
                 name: "nothing recorded",
@@ -138,4 +141,11 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/metrics/event_queue.feature",
+        name = "tests: each recorder call reaches its kafka named series"
+    )]
+    fn each_recorder_call_reaches_its_kafka_named_series() {}
 }

@@ -196,12 +196,11 @@ mod tests {
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
     }
 
-    /// #736 and #793: from v5 a missing protocol type or name answers
-    /// `INCONSISTENT_GROUP_PROTOCOL` before the group ACL, and an empty group
-    /// id answers `INVALID_GROUP_ID` after it. Every error reply carries only
-    /// its `error_code`, as Kafka's `SyncGroupRequest.getErrorResponse`.
-    #[tokio::test]
-    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers sync group tests: handle checks mandatory protocol fields acl and group id in kafka order"
+    )]
+    async fn bdd_verify_handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order() {
         struct Row {
             name: &'static str,
             version: i16,
@@ -309,6 +308,18 @@ mod tests {
         denied_handle.shutdown().await;
         allowed_handle.shutdown().await;
     }
+
+    /// #736 and #793: from v5 a missing protocol type or name answers
+    /// `INCONSISTENT_GROUP_PROTOCOL` before the group ACL, and an empty group
+    /// id answers `INVALID_GROUP_ID` after it. Every error reply carries only
+    /// its `error_code`, as Kafka's `SyncGroupRequest.getErrorResponse`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/sync_group.feature",
+        name = "tests: handle checks mandatory protocol fields acl and group id in kafka order"
+    )]
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order() {}
 
     #[tokio::test]
     async fn handle_denies_group_read_and_preserves_error_response_shape() {

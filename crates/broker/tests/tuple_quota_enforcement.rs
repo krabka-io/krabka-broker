@@ -49,22 +49,9 @@ use {
 // Integration test
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sets `(user=alice, client-id=app-x) producer_byte_rate=1024`.
-///
-/// * A produce of about 4 KB as (alice, app-x) gives `throttle_time_ms > 0`,
-///   because the tuple matches.
-/// * A produce of about 4 KB as (alice, other) gives `throttle_time_ms == 0`,
-///   because no quota matches.
-///
-/// The second assertion verifies that the tuple quota does NOT fire on an
-/// unmatched `client_id`, that is, that no `(user=alice)` fallback quota is
-/// set.
-///
-/// This test covers the end-to-end behaviour: the Produce handler must pass
-/// `ctx.client_id` to the quota lookup. If it passes `""`, no tuple quota ever
-/// matches and both produces return `throttle_time_ms == 0`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tuple_quota_throttles_only_matching_client_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("tuple quota enforcement: tuple quota throttles only matching client id")]
+async fn bdd_verify_tuple_quota_throttles_only_matching_client_id() {
     let admin_password = uuid::Uuid::new_v4().to_string();
     let alice_password = uuid::Uuid::new_v4().to_string();
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
@@ -184,3 +171,25 @@ async fn tuple_quota_throttles_only_matching_client_id() {
 
     handle.shutdown().await;
 }
+
+/// Sets `(user=alice, client-id=app-x) producer_byte_rate=1024`.
+///
+/// * A produce of about 4 KB as (alice, app-x) gives `throttle_time_ms > 0`,
+///   because the tuple matches.
+/// * A produce of about 4 KB as (alice, other) gives `throttle_time_ms == 0`,
+///   because no quota matches.
+///
+/// The second assertion verifies that the tuple quota does NOT fire on an
+/// unmatched `client_id`, that is, that no `(user=alice)` fallback quota is
+/// set.
+///
+/// This test covers the end-to-end behaviour: the Produce handler must pass
+/// `ctx.client_id` to the quota lookup. If it passes `""`, no tuple quota ever
+/// matches and both produces return `throttle_time_ms == 0`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tuple_quota_enforcement.feature",
+    name = "tuple quota throttles only matching client id"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tuple_quota_throttles_only_matching_client_id() {}

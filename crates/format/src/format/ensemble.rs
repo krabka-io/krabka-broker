@@ -208,49 +208,62 @@ mod tests {
 
     type Verdict = Result<Option<ClusterId>, String>;
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "format ensemble tests: verify matches kafka meta properties ensemble for {example}"
+    )]
+    fn bdd_verify_verify_matches_kafka_meta_properties_ensemble(example: String) {
+        type Example = (Ensemble, Option<ClusterId>, Verdict);
+        let (ensemble, expected, want): Example = match example.as_str() {
+            "nothing formatted" => (formatted(vec![]), None, Ok(None)),
+            "no records given id" => (
+                formatted(vec![]),
+                Some(ClusterId(Uuid::from_u128(0xc1))),
+                Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
+            ),
+            "set supplies id" => (
+                formatted(vec![
+                    directory("/a", meta(0xc1, 1, 0x1000)),
+                    directory("/b", meta(0xc1, 1, 0x2000)),
+                ]),
+                None,
+                Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
+            ),
+            "given id disagrees" => (
+                formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
+                Some(ClusterId(Uuid::from_u128(0xc2))),
+                Err(format!(
+                    "Invalid cluster.id in: {}. Expected {}, but read {}",
+                    Path::new("/a").join(META_PROPERTIES).display(),
+                    ClusterId(Uuid::from_u128(0xc2)),
+                    ClusterId(Uuid::from_u128(0xc1))
+                )),
+            ),
+            "another nodes directory" => (
+                formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
+                Some(ClusterId(Uuid::from_u128(0xc1))),
+                Err(node_id_mismatch_message()
+                    .stored(2)
+                    .previous(1)
+                    .path(&Path::new("/a").join(META_PROPERTIES))
+                    .call()),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        assert2::check!(ensemble.verify(expected, 1) == want);
+    }
+
     /// The formatted set agrees with `--cluster-id` and `--node-id`, with
     /// Kafka's message for each way it can fail. `verify_ensemble` has the
     /// full table of Kafka's checks; these cases pin what `format` passes
     /// to it.
-    #[yare::parameterized(
-        nothing_formatted = { formatted(vec![]), None, Ok(None) },
-        no_records_given_id = {
-            formatted(vec![]),
-            Some(ClusterId(Uuid::from_u128(0xc1))),
-            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
-        },
-        set_supplies_id = {
-            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000)), directory("/b", meta(0xc1, 1, 0x2000))]),
-            None,
-            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
-        },
-        given_id_disagrees = {
-            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
-            Some(ClusterId(Uuid::from_u128(0xc2))),
-            Err(format!(
-                "Invalid cluster.id in: {}. Expected {}, but read {}",
-                Path::new("/a").join(META_PROPERTIES).display(),
-                ClusterId(Uuid::from_u128(0xc2)),
-                ClusterId(Uuid::from_u128(0xc1))
-            )),
-        },
-        another_nodes_directory = {
-            formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
-            Some(ClusterId(Uuid::from_u128(0xc1))),
-            Err(node_id_mismatch_message()
-                .stored(2)
-                .previous(1)
-                .path(&Path::new("/a").join(META_PROPERTIES))
-                .call()),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/format/ensemble.feature",
+        name = "tests: verify matches kafka meta properties ensemble"
     )]
-    fn verify_matches_kafka_meta_properties_ensemble(
-        ensemble: Ensemble,
-        expected: Option<ClusterId>,
-        want: Verdict,
-    ) {
-        assert2::check!(ensemble.verify(expected, 1) == want);
-    }
+    fn verify_matches_kafka_meta_properties_ensemble(example: String) { let _ = example; }
 
     /// Only what a run writes before `meta.properties` makes a directory with
     /// no marker count as empty.

@@ -457,6 +457,32 @@ mod tests {
         streams-group-assignor KRABKA_STREAMS_GROUP_ASSIGNOR None ------------+\n\
 ";
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "bin broker runtime args tests: message max bytes takes kafkas int at least zero for {example}"
+    )]
+    fn bdd_verify_message_max_bytes_takes_kafkas_int_at_least_zero(example: String) {
+        type Example = (&'static str, Option<u64>);
+        let (value, expected): Example = match example.as_str() {
+            "zero" => ("0B", Some(0)),
+            "bytes" => ("2048B", Some(2048)),
+            "int max" => ("2147483647B", Some(2_147_483_647)),
+            "mebibytes" => ("1MiB", Some(1_048_576)),
+            "negative" => ("-1B", None),
+            "above int max" => ("2147483648B", None),
+            "gibibytes" => ("2GiB", None),
+            "fractional byte" => ("1.5B", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        let _guard = env_guard();
+        let parsed = Args::try_parse_from(["krabka-broker", "--message-max-bytes", value])
+            .ok()
+            .and_then(|args| args.runtime.message_max_bytes)
+            .map(ByteSizeExt::bytes_u64);
+        check!(parsed == expected, "--message-max-bytes={value}");
+    }
+
     /// `--message-max-bytes` takes exactly the values Kafka's `INT` with
     /// `atLeast(0)` takes.
     ///
@@ -465,25 +491,10 @@ mod tests {
     /// of type INT". The topic-level `max.message.bytes` this key defaults
     /// enforces the same domain, so an operator cannot set a broker-wide cap
     /// through the flag that `kafka-configs --alter` would refuse on a topic.
-    #[yare::parameterized(
-        zero = { "0B", Some(0) },
-        bytes = { "2048B", Some(2048) },
-        int_max = { "2147483647B", Some(2_147_483_647) },
-        mebibytes = { "1MiB", Some(1_048_576) },
-        negative = { "-1B", None },
-        above_int_max = { "2147483648B", None },
-        gibibytes = { "2GiB", None },
-        fractional_byte = { "1.5B", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/bin/broker/runtime_args.feature",
+        name = "tests: message max bytes takes kafkas int at least zero"
     )]
-    fn message_max_bytes_takes_kafkas_int_at_least_zero(
-        value: &'static str,
-        expected: Option<u64>,
-    ) {
-        let _guard = env_guard();
-        let parsed = Args::try_parse_from(["krabka-broker", "--message-max-bytes", value])
-            .ok()
-            .and_then(|args| args.runtime.message_max_bytes)
-            .map(ByteSizeExt::bytes_u64);
-        check!(parsed == expected, "--message-max-bytes={value}");
-    }
+    fn message_max_bytes_takes_kafkas_int_at_least_zero(example: String) { let _ = example; }
 }

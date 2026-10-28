@@ -17,8 +17,11 @@ use {
 
 mod support;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn only_a_broker_holds_the_audit_partition_under_an_isolated_controller() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit isolated controller: only a broker holds the audit partition under an isolated controller"
+)]
+async fn bdd_verify_only_a_broker_holds_the_audit_partition_under_an_isolated_controller() {
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(2).await;
     let voters = vec![(1_u64, controller_addrs[0])];
@@ -91,3 +94,11 @@ async fn only_a_broker_holds_the_audit_partition_under_an_isolated_controller() 
     broker.shutdown().await;
     controller.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit_isolated_controller.feature",
+    name = "only a broker holds the audit partition under an isolated controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_broker_holds_the_audit_partition_under_an_isolated_controller() {}

@@ -155,8 +155,11 @@ mod tests {
         persistence: TokenPersistence,
     }
 
-    #[tokio::test]
-    async fn refusals_follow_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers expire delegation token tests: refusals follow kafka order"
+    )]
+    async fn bdd_verify_refusals_follow_kafka_order() {
         token_fixtures::check_refusals()
             .cases(|live, expired| {
                 mutation_credential_refusals(&live.hmac)
@@ -212,11 +215,17 @@ mod tests {
             .await;
     }
 
-    /// The owner or a renewer deletes the token for a negative period, even an
-    /// expired one, and answers `now`; a non-negative period sets
-    /// `min(max, now + period)`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/expire_delegation_token.feature",
+        name = "tests: refusals follow kafka order"
+    )]
     #[tokio::test]
-    async fn expires_to_kafka_deadline() {
+    async fn refusals_follow_kafka_order() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers expire delegation token tests: expires to kafka deadline")]
+    async fn bdd_verify_expires_to_kafka_deadline() {
         let TokenFixture {
             directory: _dir,
             controller,
@@ -332,4 +341,15 @@ mod tests {
         }
         controller.cancel().await;
     }
+
+    /// The owner or a renewer deletes the token for a negative period, even an
+    /// expired one, and answers `now`; a non-negative period sets
+    /// `min(max, now + period)`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/expire_delegation_token.feature",
+        name = "tests: expires to kafka deadline"
+    )]
+    #[tokio::test]
+    async fn expires_to_kafka_deadline() {}
 }

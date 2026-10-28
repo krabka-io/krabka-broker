@@ -279,8 +279,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn read_kafka_request_decodes_nonflex_and_flexible_headers() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "raft handshake frame tests: read kafka request decodes nonflex and flexible headers"
+    )]
+    async fn bdd_verify_read_kafka_request_decodes_nonflex_and_flexible_headers() {
         let nonflex = request_frame()
             .correlation(42)
             .maybe_client_id(None)
@@ -330,8 +333,19 @@ mod tests {
         assert!(decoded == request(API_KEY_API_VERSIONS, 3, 44, b"api-body"));
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame.feature",
+        name = "tests: read kafka request decodes nonflex and flexible headers"
+    )]
     #[tokio::test]
-    async fn read_kafka_request_rejects_short_and_truncated_headers() {
+    async fn read_kafka_request_decodes_nonflex_and_flexible_headers() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "raft handshake frame tests: read kafka request rejects short and truncated headers"
+    )]
+    async fn bdd_verify_read_kafka_request_rejects_short_and_truncated_headers() {
         for payload_len in 0..4 {
             let mut frame = Vec::new();
             frame.extend_from_slice(&u32::try_from(payload_len).unwrap().to_be_bytes());
@@ -370,22 +384,30 @@ mod tests {
         }
     }
 
-    /// A size prefix over the limit fails as a SASL failure, before any of the
-    /// frame is read: the stream holds the four size bytes and nothing else, so
-    /// a reader that tried to fill the frame would fail with an I/O error. The
-    /// limit is inclusive, and a prefix that reads as a negative Kafka int is
-    /// over it.
-    #[yare::parameterized(
-        exact_limit = { 4096_u32, false },
-        one_over_limit = { 4097, true },
-        maximum_u32 = { u32::MAX, true },
-        negative_kafka_length = { i32::MIN.cast_unsigned(), true },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame.feature",
+        name = "tests: read kafka request rejects short and truncated headers"
     )]
-    #[test_macro(tokio::test)]
-    async fn read_kafka_request_refuses_a_frame_over_the_sasl_receive_limit(
-        size: u32,
-        refused: bool,
+    #[tokio::test]
+    async fn read_kafka_request_rejects_short_and_truncated_headers() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "raft handshake frame tests: read kafka request refuses a frame over the sasl receive limit for {example}"
+    )]
+    async fn bdd_verify_read_kafka_request_refuses_a_frame_over_the_sasl_receive_limit(
+        example: String,
     ) {
+        type Example = (u32, bool);
+        let (size, refused): Example = match example.as_str() {
+            "exact limit" => (4096_u32, false),
+            "one over limit" => (4097, true),
+            "maximum u32" => (u32::MAX, true),
+            "negative kafka length" => (i32::MIN.cast_unsigned(), true),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let (mut client, mut server) = io::duplex(64);
         client
             .write_all(&size.to_be_bytes())
@@ -401,8 +423,26 @@ mod tests {
         );
     }
 
+    /// A size prefix over the limit fails as a SASL failure, before any of the
+    /// frame is read: the stream holds the four size bytes and nothing else, so
+    /// a reader that tried to fill the frame would fail with an I/O error. The
+    /// limit is inclusive, and a prefix that reads as a negative Kafka int is
+    /// over it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame.feature",
+        name = "tests: read kafka request refuses a frame over the sasl receive limit"
+    )]
     #[tokio::test]
-    async fn read_kafka_request_accepts_exact_client_id_end_boundary() {
+    async fn read_kafka_request_refuses_a_frame_over_the_sasl_receive_limit(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "raft handshake frame tests: read kafka request accepts exact client id end boundary"
+    )]
+    async fn bdd_verify_read_kafka_request_accepts_exact_client_id_end_boundary() {
         let frame = request_frame()
             .correlation(45)
             .maybe_client_id(Some(Some(&b"client"[..])))
@@ -411,14 +451,33 @@ mod tests {
         assert!(decoded == request(17, 1, 45, b""));
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame.feature",
+        name = "tests: read kafka request accepts exact client id end boundary"
+    )]
     #[tokio::test]
-    async fn read_kafka_request_accepts_exact_header_prefix_frame() {
+    async fn read_kafka_request_accepts_exact_client_id_end_boundary() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "raft handshake frame tests: read kafka request accepts exact header prefix frame"
+    )]
+    async fn bdd_verify_read_kafka_request_accepts_exact_header_prefix_frame() {
         // A null client id and empty body make the frame exactly 10 bytes,
         // the minimum legal v1 request header.
         let frame = request_frame().correlation(46).maybe_client_id(None).call();
         let decoded = read_request_from_frame(frame).await.expect("exact prefix");
         assert!(decoded == request(17, 1, 46, b""));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/raft_handshake/frame.feature",
+        name = "tests: read kafka request accepts exact header prefix frame"
+    )]
+    #[tokio::test]
+    async fn read_kafka_request_accepts_exact_header_prefix_frame() {}
 
     #[tokio::test]
     async fn write_response_uses_expected_header_versions() {

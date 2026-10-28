@@ -240,8 +240,9 @@ fn leader_epoch(handle: &BrokerHandle, partition: i32) -> i32 {
         .0
 }
 
-#[tokio::test]
-async fn offline_log_dir_is_reported_as_an_offline_replica() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("offline replicas: offline log dir is reported as an offline replica")]
+async fn bdd_verify_offline_log_dir_is_reported_as_an_offline_replica() {
     let TwoDirBroker {
         handle,
         primary,
@@ -350,6 +351,14 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offline_replicas.feature",
+    name = "offline log dir is reported as an offline replica"
+)]
+#[tokio::test]
+async fn offline_log_dir_is_reported_as_an_offline_replica() {}
+
 /// The three-node suite below drives the fencing half of the projection.
 mod support;
 
@@ -393,12 +402,11 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
     }
 }
 
-/// A `Metadata` response served by a broker that is not the controller must
-/// report the replicas of a dead broker offline. The fencing state lives in
-/// the controller's heartbeat registry, so it only reaches this node if the
-/// controller writes it to the metadata log.
-#[tokio::test]
-async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "offline replicas: a follower reports the replicas of a fenced broker offline"
+)]
+async fn bdd_verify_a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
     let mut cluster = registered_cluster(3).await;
     create_topic_named(cluster[0].0.listen_addr(), FENCED_TOPIC, 1, 3).await;
     for (handle, _, _) in &cluster {
@@ -442,3 +450,15 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// A `Metadata` response served by a broker that is not the controller must
+/// report the replicas of a dead broker offline. The fencing state lives in
+/// the controller's heartbeat registry, so it only reaches this node if the
+/// controller writes it to the metadata log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offline_replicas.feature",
+    name = "a follower reports the replicas of a fenced broker offline"
+)]
+#[tokio::test]
+async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {}

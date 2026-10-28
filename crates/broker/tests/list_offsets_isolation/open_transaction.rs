@@ -34,11 +34,11 @@ enum Resolution {
     Abort,
 }
 
-/// `LATEST` under `read_committed` stops at the first record of an open
-/// transaction, and catches up with `read_uncommitted` once that transaction
-/// resolves either way.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn read_committed_latest_stops_at_an_open_transaction() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list offsets isolation open transaction: read committed latest stops at an open transaction"
+)]
+async fn bdd_verify_read_committed_latest_stops_at_an_open_transaction() {
     let p = support::start().await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
@@ -145,3 +145,14 @@ async fn read_committed_latest_stops_at_an_open_transaction() {
 
     p.broker.shutdown().await;
 }
+
+/// `LATEST` under `read_committed` stops at the first record of an open
+/// transaction, and catches up with `read_uncommitted` once that transaction
+/// resolves either way.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_offsets_isolation/open_transaction.feature",
+    name = "read committed latest stops at an open transaction"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_committed_latest_stops_at_an_open_transaction() {}

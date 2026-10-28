@@ -58,11 +58,11 @@ fn kafka_errors(run: &CliRun) -> BTreeSet<String> {
         .collect()
 }
 
-/// `kafka-acls --list` reports the same refusal against krabka with no
-/// authorizer as against Apache Kafka with none.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl acl security disabled: acl list is refused as apache kafka refuses it with no authorizer"
+)]
+async fn bdd_verify_acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
     // No `KAFKA_AUTHORIZER_CLASS_NAME`: this oracle is the unsecured broker
     // the case is about, which is also the image's own default.
     let comparison = OracleComparison::start("acls-disabled").await;
@@ -105,3 +105,14 @@ async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
 
     comparison.broker.shutdown().await;
 }
+
+/// `kafka-acls --list` reports the same refusal against krabka with no
+/// authorizer as against Apache Kafka with none.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_security_disabled.feature",
+    name = "acl list is refused as apache kafka refuses it with no authorizer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {}

@@ -425,8 +425,11 @@ storage_dir = "/var/lib/krabka/tier"
         }
     }
 
-    #[test]
-    fn kafka_metadata_section_parses_with_defaults() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: kafka metadata section parses with defaults"
+    )]
+    fn bdd_verify_kafka_metadata_section_parses_with_defaults() {
         let toml = r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
@@ -446,8 +449,18 @@ bootstrap = "127.0.0.1:9092"
         check!(km.event_queue_capacity.capacity() == 1024);
         check!(km.snapshot_interval == secs(60));
     }
-    #[test]
-    fn kafka_metadata_section_honors_overrides() {
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: kafka metadata section parses with defaults"
+    )]
+    fn kafka_metadata_section_parses_with_defaults() {}
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: kafka metadata section honors overrides"
+    )]
+    fn bdd_verify_kafka_metadata_section_honors_overrides() {
         let toml = r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
@@ -476,20 +489,34 @@ snapshot_interval = "90s"
         check!(km.event_queue_capacity.capacity() == 2048);
         check!(km.snapshot_interval == secs(90));
     }
-    #[yare::parameterized(
-        min_isr = { "min_isr", "0" },
-        topic_create_timeout_zero = { "topic_create_timeout", "\"0ms\"" },
-        topic_create_timeout_fractional = { "topic_create_timeout", "\"0.5ms\"" },
-        topic_create_timeout_overflow = { "topic_create_timeout", "\"2147483648ms\"" },
-        fetch_max_wait_zero = { "fetch_max_wait", "\"0ms\"" },
-        fetch_max_bytes_zero = { "fetch_max_bytes", "\"0B\"" },
-        fetch_max_bytes_fractional = { "fetch_max_bytes", "\"0.5B\"" },
-        fetch_max_bytes_overflow = { "fetch_max_bytes", "\"2147483648B\"" },
-        fetch_retry_backoff_zero = { "fetch_retry_backoff", "\"0ms\"" },
-        event_queue_capacity_zero = { "event_queue_capacity", "0" },
-        snapshot_interval_zero = { "snapshot_interval", "\"0s\"" },
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: kafka metadata section honors overrides"
     )]
-    fn kafka_metadata_section_rejects_invalid_policy(field: &str, value: &str) {
+    fn kafka_metadata_section_honors_overrides() {}
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: kafka metadata section rejects invalid policy for {example}"
+    )]
+    fn bdd_verify_kafka_metadata_section_rejects_invalid_policy(example: String) {
+        type Example<'a> = (&'a str, &'a str);
+        let (field, value): Example<'_> = match example.as_str() {
+            "min isr" => ("min_isr", "0"),
+            "topic create timeout zero" => ("topic_create_timeout", "\"0ms\""),
+            "topic create timeout fractional" => ("topic_create_timeout", "\"0.5ms\""),
+            "topic create timeout overflow" => ("topic_create_timeout", "\"2147483648ms\""),
+            "fetch max wait zero" => ("fetch_max_wait", "\"0ms\""),
+            "fetch max bytes zero" => ("fetch_max_bytes", "\"0B\""),
+            "fetch max bytes fractional" => ("fetch_max_bytes", "\"0.5B\""),
+            "fetch max bytes overflow" => ("fetch_max_bytes", "\"2147483648B\""),
+            "fetch retry backoff zero" => ("fetch_retry_backoff", "\"0ms\""),
+            "event queue capacity zero" => ("event_queue_capacity", "0"),
+            "snapshot interval zero" => ("snapshot_interval", "\"0s\""),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let source = format!(
             "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
              [remote_storage.kafka_metadata]\n{field} = {value}\n"
@@ -501,8 +528,18 @@ snapshot_interval = "90s"
             .expect_err("invalid metadata policy must fail");
         assert2::assert!(error.to_string().contains(field), "{field}: {error}");
     }
-    #[test]
-    fn reader_bounds_and_index_cache_size_default_to_kafkas_values() {
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: kafka metadata section rejects invalid policy"
+    )]
+    fn kafka_metadata_section_rejects_invalid_policy(example: String) { let _ = example; }
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: reader bounds and index cache size default to kafkas values"
+    )]
+    fn bdd_verify_reader_bounds_and_index_cache_size_default_to_kafkas_values() {
         let toml = r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
@@ -512,6 +549,13 @@ storage_dir = "/tmp/tier"
         check!(cfg.remote_reader_max_pending_tasks == 100);
         check!(cfg.remote_index_cache_size == gibibytes(1));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: reader bounds and index cache size default to kafkas values"
+    )]
+    fn reader_bounds_and_index_cache_size_default_to_kafkas_values() {}
 
     #[test]
     fn reader_bounds_and_index_cache_size_are_overridable() {
@@ -528,25 +572,39 @@ index_cache_size = "256MiB"
         check!(cfg.remote_index_cache_size == mebibytes(256));
     }
 
-    /// The two KIP-405 sweep bounds default to Kafka's thread-pool sizes,
-    /// and an operator who names them gets what they named.
-    #[yare::parameterized(
-        defaults = { "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n", 10, 10 },
-        overridden = {
-            "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
-             copier_threads = 32\nexpiration_threads = 4\n",
-            32,
-            4,
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: sweep bounds default to kafkas thread pool sizes and are overridable for {example}"
     )]
-    fn sweep_bounds_default_to_kafkas_thread_pool_sizes_and_are_overridable(
-        source: &str,
-        copier: usize,
-        expiration: usize,
+    fn bdd_verify_sweep_bounds_default_to_kafkas_thread_pool_sizes_and_are_overridable(
+        example: String,
     ) {
+        type Example<'a> = (&'a str, usize, usize);
+        let (source, copier, expiration): Example<'_> = match example.as_str() {
+            "defaults" => ("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n", 10, 10),
+            "overridden" => (
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
+             copier_threads = 32\nexpiration_threads = 4\n",
+                32,
+                4,
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let config = configured_unwrap_parse(source).unwrap();
         assert2::check!(config.remote_copier_threads == copier);
         assert2::check!(config.remote_expiration_threads == expiration);
+    }
+
+    /// The two KIP-405 sweep bounds default to Kafka's thread-pool sizes,
+    /// and an operator who names them gets what they named.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: sweep bounds default to kafkas thread pool sizes and are overridable"
+    )]
+    fn sweep_bounds_default_to_kafkas_thread_pool_sizes_and_are_overridable(example: String) {
+        let _ = example;
     }
 
     #[yare::parameterized(
@@ -612,8 +670,11 @@ bucket = "b"
         );
     }
 
-    #[test]
-    fn kafka_metadata_in_memory_true_opts_out_to_in_memory_rlmm() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config remote storage tests: kafka metadata in memory true opts out to in memory rlmm"
+    )]
+    fn bdd_verify_kafka_metadata_in_memory_true_opts_out_to_in_memory_rlmm() {
         let toml = r#"
 [remote_storage]
 storage_dir = "/tmp/tier"
@@ -628,6 +689,13 @@ in_memory = true
             cfg.remote_log_metadata
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/remote_storage.feature",
+        name = "tests: kafka metadata in memory true opts out to in memory rlmm"
+    )]
+    fn kafka_metadata_in_memory_true_opts_out_to_in_memory_rlmm() {}
 
     /// The copy deadline reaches `BrokerConfig`, and it defaults to the
     /// production constant when the TOML omits it.

@@ -554,13 +554,11 @@ fn add_request(id: u64, directory: u128) -> AddVoter {
     }
 }
 
-/// `LeaderState.isReplicaCaughtUp` reads the state of the exact `(id, directory
-/// id)` key that fetched, and a replica counts as caught up once a fetch has
-/// reached the leader's log end, or the log end the previous fetch saw. A
-/// candidate that is only a record or two behind under continuous appends is
-/// admitted.
-#[tokio::test]
-async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests control records: add voter admits a candidate by kafkas caught up rule"
+)]
+async fn bdd_verify_add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
     struct Case {
         label: &'static str,
         fetches: Vec<Fetch>,
@@ -664,6 +662,19 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
     }
 }
 
+/// `LeaderState.isReplicaCaughtUp` reads the state of the exact `(id, directory
+/// id)` key that fetched, and a replica counts as caught up once a fetch has
+/// reached the leader's log end, or the log end the previous fetch saw. A
+/// candidate that is only a record or two behind under continuous appends is
+/// admitted.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "add voter admits a candidate by kafkas caught up rule"
+)]
+#[tokio::test]
+async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {}
+
 /// Kafka drops an observer that has been silent for five minutes in
 /// `observerStates()`, which only `DescribeQuorum` calls, while
 /// `isReplicaCaughtUp` reads the same map with a window of an hour. A fetch by
@@ -706,12 +717,11 @@ async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
     );
 }
 
-/// `AddVoterHandler` answers from the leader's own state before it contacts the
-/// candidate: a candidate the leader has never seen fetch still gets the
-/// pending-change, duplicate-id and `kraft.version` answers, and a request that
-/// passes them is admitted without appending anything.
-#[tokio::test]
-async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests control records: a check only add runs the local admission checks in kafkas order"
+)]
+async fn bdd_verify_a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
     use crate::reconfig::{ReconfigOutcome, VoterChange};
 
     let check_add = |leader: &mut Engine, request: AddVoter| {
@@ -778,6 +788,18 @@ async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
         "kraft.version 0"
     );
 }
+
+/// `AddVoterHandler` answers from the leader's own state before it contacts the
+/// candidate: a candidate the leader has never seen fetch still gets the
+/// pending-change, duplicate-id and `kraft.version` answers, and a request that
+/// passes them is admitted without appending anything.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    name = "a check only add runs the local admission checks in kafkas order"
+)]
+#[tokio::test]
+async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {}
 
 /// `LeaderState.updateVoterAndObserverStates` keeps a replica's `ReplicaState`
 /// as it crosses between the observer and voter maps: a candidate that becomes a

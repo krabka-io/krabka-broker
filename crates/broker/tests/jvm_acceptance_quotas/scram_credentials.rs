@@ -10,16 +10,11 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: `kafka-configs --describe --entity-type users` round-trip for
-/// SCRAM credentials (KIP-554 read half, `api_key` 50).
-///
-/// Three-broker SASL/PLAINTEXT cluster. The test provisions alice's
-/// SCRAM-SHA-512 credential with `kafka-configs --alter --add-config
-/// SCRAM-SHA-512=[...]`, then describes it and asserts exit 0 and
-/// `SCRAM-SHA-512` in stdout.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas scram credentials: jvm kafka configs describe users scram credentials end to end"
+)]
+async fn bdd_verify_jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
     let (h1, _h2, _h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
         Box::pin(start_three_broker_sasl_plaintext_jvm_cluster().call()).await;
     nc_check_connectivity();
@@ -58,3 +53,19 @@ async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
 
     let _ = h1; // keep alive
 }
+
+/// JVM acceptance: `kafka-configs --describe --entity-type users` round-trip for
+/// SCRAM credentials (KIP-554 read half, `api_key` 50).
+///
+/// Three-broker SASL/PLAINTEXT cluster. The test provisions alice's
+/// SCRAM-SHA-512 credential with `kafka-configs --alter --add-config
+/// SCRAM-SHA-512=[...]`, then describes it and asserts exit 0 and
+/// `SCRAM-SHA-512` in stdout.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/scram_credentials.feature",
+    name = "jvm kafka configs describe users scram credentials end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {}

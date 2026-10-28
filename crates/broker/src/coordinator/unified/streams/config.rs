@@ -613,8 +613,9 @@ where
 mod tests {
     use {super::*, assert2::assert};
 
-    #[test]
-    fn defaults_are_kafka_ga() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("coordinator unified streams config tests: defaults are kafka ga")]
+    fn bdd_verify_defaults_are_kafka_ga() {
         assert!(
             StreamsGroupConfig::default()
                 == StreamsGroupConfig {
@@ -642,23 +643,34 @@ mod tests {
         );
     }
 
-    /// Kafka trunk's `GroupConfig` parses `streams.rack.aware.assignment.tags`
-    /// as a `LIST` and refuses a repeated or an empty tag key, and
-    /// `DescribeConfigs` reports the parsed list joined with commas.
-    #[yare::parameterized(
-        empty = { "", Ok((vec![], "")) },
-        whitespace = { "  ", Ok((vec![], "")) },
-        one_tag = { "zone", Ok((vec!["zone"], "zone")) },
-        trimmed_ordered_tags = { " zone ,\track ", Ok((vec!["zone", "rack"], "zone,rack")) },
-        duplicate_tag = { "rack,zone,rack", Err("duplicate") },
-        duplicate_after_trim = { "zone, zone", Err("duplicate") },
-        empty_entry = { "zone,,rack", Err("empty") },
-        trailing_empty_entry = { "zone,", Err("empty") },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
+        name = "tests: defaults are kafka ga"
     )]
-    fn rack_aware_assignment_tags_parse_as_kafkas_group_config_does(
-        value: &str,
-        want: Result<(Vec<&'static str>, &'static str), &'static str>,
-    ) {
+    fn defaults_are_kafka_ga() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams config tests: rack aware assignment tags parse as kafkas group config does for {example}"
+    )]
+    fn bdd_verify_rack_aware_assignment_tags_parse_as_kafkas_group_config_does(example: String) {
+        type Example<'a> = (
+            &'a str,
+            Result<(Vec<&'static str>, &'static str), &'static str>,
+        );
+        let (value, want): Example<'_> = match example.as_str() {
+            "empty" => ("", Ok((vec![], ""))),
+            "whitespace" => ("  ", Ok((vec![], ""))),
+            "one tag" => ("zone", Ok((vec!["zone"], "zone"))),
+            "trimmed ordered tags" => (" zone ,\track ", Ok((vec!["zone", "rack"], "zone,rack"))),
+            "duplicate tag" => ("rack,zone,rack", Err("duplicate")),
+            "duplicate after trim" => ("zone, zone", Err("duplicate")),
+            "empty entry" => ("zone,,rack", Err("empty")),
+            "trailing empty entry" => ("zone,", Err("empty")),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         const DUPLICATE: &str =
             "streams.rack.aware.assignment.tags must not contain duplicate tag keys.";
         const EMPTY: &str =
@@ -686,6 +698,18 @@ mod tests {
         assert2::assert!(got == want, "{value:?}");
     }
 
+    /// Kafka trunk's `GroupConfig` parses `streams.rack.aware.assignment.tags`
+    /// as a `LIST` and refuses a repeated or an empty tag key, and
+    /// `DescribeConfigs` reports the parsed list joined with commas.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
+        name = "tests: rack aware assignment tags parse as kafkas group config does"
+    )]
+    fn rack_aware_assignment_tags_parse_as_kafkas_group_config_does(example: String) {
+        let _ = example;
+    }
+
     #[test]
     fn group_overrides_are_validated_and_applied() {
         let overrides = maplit::btreemap! {
@@ -702,39 +726,46 @@ mod tests {
         assert!(got.assignor == StreamsAssignorKind::HighlyAvailable);
     }
 
-    #[yare::parameterized(
-        latest = { "latest", Some(ShareAutoOffsetReset::Latest) },
-        earliest = { "earliest", Some(ShareAutoOffsetReset::Earliest) },
-        one_hour = {
-            "by_duration:PT1H",
-            Some(ShareAutoOffsetReset::ByDuration(Duration::from_secs(3_600))),
-        },
-        normalized_duration = {
-            "by_duration:P1DT2H3M4.5S",
-            Some(ShareAutoOffsetReset::ByDuration(Duration::new(93_784, 500_000_000))),
-        },
-        zero_duration = {
-            "by_duration:PT0S",
-            Some(ShareAutoOffsetReset::ByDuration(Duration::ZERO)),
-        },
-        negative_duration = { "by_duration:-PT1H", None },
-        negative_component = { "by_duration:PT-1H", None },
-        missing_time = { "by_duration:PT", None },
-        missing_date = { "by_duration:P", None },
-        empty_duration = { "by_duration:", None },
-        missing_colon = { "by_duration", None },
-        missing_iso_prefix = { "by_duration:1H", None },
-        invalid_component = { "by_duration:PT1X", None },
-        weeks = { "by_duration:P1W", None },
-        out_of_order_components = { "by_duration:PT1M1H", None },
-        case_sensitive = { "Earliest", None },
-        unknown = { "none", None },
-        empty = { "", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams config tests: share auto offset reset parses the three kafka forms for {example}"
     )]
-    fn share_auto_offset_reset_parses_the_three_kafka_forms(
-        value: &str,
-        want: Option<ShareAutoOffsetReset>,
-    ) {
+    fn bdd_verify_share_auto_offset_reset_parses_the_three_kafka_forms(example: String) {
+        type Example<'a> = (&'a str, Option<ShareAutoOffsetReset>);
+        let (value, want): Example<'_> = match example.as_str() {
+            "latest" => ("latest", Some(ShareAutoOffsetReset::Latest)),
+            "earliest" => ("earliest", Some(ShareAutoOffsetReset::Earliest)),
+            "one hour" => (
+                "by_duration:PT1H",
+                Some(ShareAutoOffsetReset::ByDuration(Duration::from_secs(3_600))),
+            ),
+            "normalized duration" => (
+                "by_duration:P1DT2H3M4.5S",
+                Some(ShareAutoOffsetReset::ByDuration(Duration::new(
+                    93_784,
+                    500_000_000,
+                ))),
+            ),
+            "zero duration" => (
+                "by_duration:PT0S",
+                Some(ShareAutoOffsetReset::ByDuration(Duration::ZERO)),
+            ),
+            "negative duration" => ("by_duration:-PT1H", None),
+            "negative component" => ("by_duration:PT-1H", None),
+            "missing time" => ("by_duration:PT", None),
+            "missing date" => ("by_duration:P", None),
+            "empty duration" => ("by_duration:", None),
+            "missing colon" => ("by_duration", None),
+            "missing iso prefix" => ("by_duration:1H", None),
+            "invalid component" => ("by_duration:PT1X", None),
+            "weeks" => ("by_duration:P1W", None),
+            "out of order components" => ("by_duration:PT1M1H", None),
+            "case sensitive" => ("Earliest", None),
+            "unknown" => ("none", None),
+            "empty" => ("", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // Kafka 4.3.1 types this key STRING with
         // `[latest, earliest, by_duration:PnDTnHnMn.nS]`, defaults it to
         // `latest`, and validates it with
@@ -747,6 +778,13 @@ mod tests {
             .map(|config| config.share_auto_offset_reset);
         assert2::assert!(got == want, "{KEY_SHARE_AUTO_OFFSET_RESET}={value}");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
+        name = "tests: share auto offset reset parses the three kafka forms"
+    )]
+    fn share_auto_offset_reset_parses_the_three_kafka_forms(example: String) { let _ = example; }
 
     #[test]
     fn share_auto_offset_reset_describe_config_defaults_to_latest() {

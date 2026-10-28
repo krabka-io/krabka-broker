@@ -17,9 +17,11 @@ use {
 // Same multi-thread runtime caveat as `console_producer_round_trip`:
 // the test body makes blocking `Command::output()` calls; a
 // single-threaded runtime would starve the broker's accept loop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn console_consumer_with_group_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli console groups: console consumer with group round trip"
+)]
+async fn bdd_verify_console_consumer_with_group_round_trip() {
     const TOPIC: &str = "krabka-broker-grp-itest";
 
     let (broker, _dir) = start_console_broker(TOPIC, 1).await;
@@ -51,6 +53,15 @@ async fn console_consumer_with_group_round_trip() {
     broker.shutdown().await;
 }
 
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
+    name = "console consumer with group round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_consumer_with_group_round_trip() {}
+
 // KIP-345 static membership: the JVM consumer with
 // `group.instance.id` set should round-trip through the coordinator
 // (JoinGroup → SyncGroup → Heartbeat → Fetch with the v3+
@@ -58,9 +69,11 @@ async fn console_consumer_with_group_round_trip() {
 // `kafka-consumer-groups --describe` must surface the instance id under
 // HOST/CONSUMER-ID columns, confirming the broker persisted it on the
 // member metadata.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn console_consumer_with_static_membership() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli console groups: console consumer with static membership"
+)]
+async fn bdd_verify_console_consumer_with_static_membership() {
     const TOPIC: &str = "krabka-broker-static-itest";
     const GROUP: &str = "krabka-static-grp";
     const INSTANCE: &str = "client-static-1";
@@ -104,18 +117,20 @@ async fn console_consumer_with_static_membership() {
     broker.shutdown().await;
 }
 
-/// KIP-429 JVM acceptance: drive `kafka-console-consumer` with the JVM
-/// `CooperativeStickyAssignor` against Krabka. The test validates that
-/// Krabka's `JoinGroup` vote rule accepts `cooperative-sticky` and that the
-/// broker forwards the negotiated `protocol_name` correctly, so the JVM
-/// client's `AbstractCoordinator.onJoinComplete` accepts the response.
-///
-/// The test uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]). The
-/// cooperative-sticky assignor in `cp-kafka:6.1.1` (Kafka 2.7) still lacked
-/// several rebalance race fixes that landed in Kafka 3.x.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn cooperative_sticky_kafka_console_consumer() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
+    name = "console consumer with static membership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_consumer_with_static_membership() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli console groups: cooperative sticky kafka console consumer"
+)]
+async fn bdd_verify_cooperative_sticky_kafka_console_consumer() {
     const TOPIC: &str = "coop-jvm";
 
     let (broker, _dir) = start_host_broker().await;
@@ -169,3 +184,21 @@ async fn cooperative_sticky_kafka_console_consumer() {
 
     broker.shutdown().await;
 }
+
+/// KIP-429 JVM acceptance: drive `kafka-console-consumer` with the JVM
+/// `CooperativeStickyAssignor` against Krabka. The test validates that
+/// Krabka's `JoinGroup` vote rule accepts `cooperative-sticky` and that the
+/// broker forwards the negotiated `protocol_name` correctly, so the JVM
+/// client's `AbstractCoordinator.onJoinComplete` accepts the response.
+///
+/// The test uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]). The
+/// cooperative-sticky assignor in `cp-kafka:6.1.1` (Kafka 2.7) still lacked
+/// several rebalance race fixes that landed in Kafka 3.x.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
+    name = "cooperative sticky kafka console consumer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cooperative_sticky_kafka_console_consumer() {}

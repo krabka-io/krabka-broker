@@ -364,50 +364,144 @@ mod tests {
 
     const NODES: [i32; 3] = [1, 2, 3];
 
-    #[yare::parameterized(
-        controller = { Target::Controller, Roles { controller: Some(3), leader: Some(1) }, Ok(3) },
-        leader = { Target::Leader, Roles { controller: Some(3), leader: Some(1) }, Ok(1) },
-        follower = { Target::Follower, Roles { controller: Some(3), leader: Some(1) }, Ok(2) },
-        follower_when_one_node_is_both = { Target::Follower, Roles { controller: Some(1), leader: Some(1) }, Ok(2) },
-        broker = { Target::Broker(2), Roles::default(), Ok(3) },
-        broker_out_of_range = { Target::Broker(3), Roles::default(), Err(()) },
-        no_controller = { Target::Controller, Roles::default(), Err(()) },
-        unresolved_any = { Target::Any, Roles::default(), Err(()) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: a target resolves against the cluster as it is for {example}"
     )]
-    fn a_target_resolves_against_the_cluster_as_it_is(
-        target: Target,
-        roles: Roles,
-        expected: Result<i32, ()>,
-    ) {
+    fn bdd_verify_a_target_resolves_against_the_cluster_as_it_is(example: String) {
+        type Example = (Target, Roles, Result<i32, ()>);
+        let (target, roles, expected): Example = match example.as_str() {
+            "controller" => (
+                Target::Controller,
+                Roles {
+                    controller: Some(3),
+                    leader: Some(1),
+                },
+                Ok(3),
+            ),
+            "leader" => (
+                Target::Leader,
+                Roles {
+                    controller: Some(3),
+                    leader: Some(1),
+                },
+                Ok(1),
+            ),
+            "follower" => (
+                Target::Follower,
+                Roles {
+                    controller: Some(3),
+                    leader: Some(1),
+                },
+                Ok(2),
+            ),
+            "follower when one node is both" => (
+                Target::Follower,
+                Roles {
+                    controller: Some(1),
+                    leader: Some(1),
+                },
+                Ok(2),
+            ),
+            "broker" => (Target::Broker(2), Roles::default(), Ok(3)),
+            "broker out of range" => (Target::Broker(3), Roles::default(), Err(())),
+            "no controller" => (Target::Controller, Roles::default(), Err(())),
+            "unresolved any" => (Target::Any, Roles::default(), Err(())),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(resolve_target(target, &NODES, roles).map_err(|_| ()) == expected);
     }
 
-    #[yare::parameterized(
-        controller_wins_over_leader = { 1, Roles { controller: Some(1), leader: Some(1) }, "controller" },
-        leader = { 2, Roles { controller: Some(1), leader: Some(2) }, "leader" },
-        follower = { 3, Roles { controller: Some(1), leader: Some(2) }, "follower" },
-        unknown = { 3, Roles { controller: None, leader: Some(2) }, "broker" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: a target resolves against the cluster as it is"
     )]
-    fn a_target_records_the_one_role_it_held(node: i32, roles: Roles, role: &str) {
+    fn a_target_resolves_against_the_cluster_as_it_is(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: a target records the one role it held for {example}"
+    )]
+    fn bdd_verify_a_target_records_the_one_role_it_held(example: String) {
+        type Example<'a> = (i32, Roles, &'a str);
+        let (node, roles, role): Example<'_> = match example.as_str() {
+            "controller wins over leader" => (
+                1,
+                Roles {
+                    controller: Some(1),
+                    leader: Some(1),
+                },
+                "controller",
+            ),
+            "leader" => (
+                2,
+                Roles {
+                    controller: Some(1),
+                    leader: Some(2),
+                },
+                "leader",
+            ),
+            "follower" => (
+                3,
+                Roles {
+                    controller: Some(1),
+                    leader: Some(2),
+                },
+                "follower",
+            ),
+            "unknown" => (
+                3,
+                Roles {
+                    controller: None,
+                    leader: Some(2),
+                },
+                "broker",
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(role_of(node, roles) == role);
     }
 
-    #[test]
-    fn a_node_leads_the_partitions_it_is_leader_of_that_can_move() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: a target records the one role it held"
+    )]
+    fn a_target_records_the_one_role_it_held(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: a node leads the partitions it is leader of that can move"
+    )]
+    fn bdd_verify_a_node_leads_the_partitions_it_is_leader_of_that_can_move() {
         let led: BTreeSet<_> = [("a".to_owned(), 0), ("b".to_owned(), 0)].into();
         check!(led_by(&cluster(), 1) == led);
         check!(led_by(&cluster(), 3).is_empty());
     }
 
-    #[yare::parameterized(
-        still_led_by_target = { &[(0, 1), (1, 2)], false },
-        moved = { &[(0, 2), (1, 3)], true },
-        leaderless = { &[(0, -1), (1, 3)], false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: a node leads the partitions it is leader of that can move"
     )]
-    fn failover_needs_a_live_leader_elsewhere_for_every_partition(
-        leaders: &[(i32, i32)],
-        expected: bool,
-    ) {
+    fn a_node_leads_the_partitions_it_is_leader_of_that_can_move() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: failover needs a live leader elsewhere for every partition for {example}"
+    )]
+    fn bdd_verify_failover_needs_a_live_leader_elsewhere_for_every_partition(example: String) {
+        type Example<'a> = (&'a [(i32, i32)], bool);
+        let (leaders, expected): Example<'_> = match example.as_str() {
+            "still led by target" => (&[(0, 1), (1, 2)], false),
+            "moved" => (&[(0, 2), (1, 3)], true),
+            "leaderless" => (&[(0, -1), (1, 3)], false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let states: Vec<_> = leaders
             .iter()
             .map(|(partition, leader)| state("a", *partition, *leader, &[2, 3]))
@@ -416,21 +510,44 @@ mod tests {
         check!(not_failed_over(&states, &led, 1).is_empty() == expected);
     }
 
-    #[test]
-    fn nothing_led_has_nothing_to_fail_over() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: failover needs a live leader elsewhere for every partition"
+    )]
+    fn failover_needs_a_live_leader_elsewhere_for_every_partition(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract topology tests: nothing led has nothing to fail over")]
+    fn bdd_verify_nothing_led_has_nothing_to_fail_over() {
         check!(not_failed_over(&cluster(), &BTreeSet::new(), 1).is_empty());
     }
 
-    #[yare::parameterized(
-        complete = { &[("a", 2)], true },
-        shrunk = { &[("a", 2), ("b", 1)], false },
-        missing_partition = { &[("a", 3)], false },
-        unknown_topic = { &[("c", 1)], false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: nothing led has nothing to fail over"
     )]
-    fn the_isr_is_complete_only_when_every_partition_holds_every_replica(
-        topics: &[(&str, i32)],
-        expected: bool,
+    fn nothing_led_has_nothing_to_fail_over() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: the isr is complete only when every partition holds every replica for {example}"
+    )]
+    fn bdd_verify_the_isr_is_complete_only_when_every_partition_holds_every_replica(
+        example: String,
     ) {
+        type Example<'a> = (&'a [(&'a str, i32)], bool);
+        let (topics, expected): Example<'_> = match example.as_str() {
+            "complete" => (&[("a", 2)], true),
+            "shrunk" => (&[("a", 2), ("b", 1)], false),
+            "missing partition" => (&[("a", 3)], false),
+            "unknown topic" => (&[("c", 1)], false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let topics: Vec<_> = topics
             .iter()
             .map(|(name, n)| ((*name).to_owned(), *n))
@@ -438,8 +555,20 @@ mod tests {
         check!(isr_complete(&cluster(), &topics) == expected);
     }
 
-    #[test]
-    fn the_controller_is_the_node_whose_gauge_reads_one() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: the isr is complete only when every partition holds every replica"
+    )]
+    fn the_isr_is_complete_only_when_every_partition_holds_every_replica(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract topology tests: the controller is the node whose gauge reads one"
+    )]
+    fn bdd_verify_the_controller_is_the_node_whose_gauge_reads_one() {
         let body = |value: u8| {
             format!(
                 "# TYPE krabka_broker_active_controller gauge\nkrabka_broker_active_controller {value}\n"
@@ -449,4 +578,11 @@ mod tests {
         check!(active_controller(&[(1, body(0))]) == None);
         check!(active_controller(&[]) == None);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/topology.feature",
+        name = "tests: the controller is the node whose gauge reads one"
+    )]
+    fn the_controller_is_the_node_whose_gauge_reads_one() {}
 }

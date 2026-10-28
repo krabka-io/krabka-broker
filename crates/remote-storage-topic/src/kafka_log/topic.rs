@@ -189,30 +189,43 @@ fn to_wire_uuid(u: uuid::Uuid) -> WireUuid { WireUuid(*u.as_bytes()) }
 mod tests {
     use {super::*, assert2::assert};
 
-    #[yare::parameterized(
-        defaults = {
-            KafkaMetadataLogConfig::new("127.0.0.1:9092"),
-            [("cleanup.policy", "delete"), ("min.insync.replicas", "2"), ("retention.ms", "-1")]
-        },
-        min_isr_override = {
-            KafkaMetadataLogConfig {
-                min_isr: Some(1),
-                ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-            },
-            [("cleanup.policy", "delete"), ("min.insync.replicas", "1"), ("retention.ms", "-1")],
-        },
-        compacted = {
-            KafkaMetadataLogConfig {
-                compacted: true,
-                ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-            },
-            [("cleanup.policy", "compact"), ("min.insync.replicas", "2"), ("retention.ms", "-1")],
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka log topic tests: creation configs follow kafkas metadata topic for {example}"
     )]
-    fn creation_configs_follow_kafkas_metadata_topic(
-        cfg: KafkaMetadataLogConfig,
-        expected: [(&str, &str); 3],
-    ) {
+    fn bdd_verify_creation_configs_follow_kafkas_metadata_topic(example: String) {
+        type Example<'a> = (KafkaMetadataLogConfig, [(&'a str, &'a str); 3]);
+        let (cfg, expected): Example<'_> = match example.as_str() {
+            "defaults" => (KafkaMetadataLogConfig::new("127.0.0.1:9092"), [
+                ("cleanup.policy", "delete"),
+                ("min.insync.replicas", "2"),
+                ("retention.ms", "-1"),
+            ]),
+            "min isr override" => (
+                KafkaMetadataLogConfig {
+                    min_isr: Some(1),
+                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+                },
+                [
+                    ("cleanup.policy", "delete"),
+                    ("min.insync.replicas", "1"),
+                    ("retention.ms", "-1"),
+                ],
+            ),
+            "compacted" => (
+                KafkaMetadataLogConfig {
+                    compacted: true,
+                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+                },
+                [
+                    ("cleanup.policy", "compact"),
+                    ("min.insync.replicas", "2"),
+                    ("retention.ms", "-1"),
+                ],
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let expected = expected
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -220,12 +233,27 @@ mod tests {
         assert2::assert!(creation_configs(&cfg) == expected);
     }
 
-    #[test]
-    fn unset_min_isr_leaves_the_cluster_default() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/topic.feature",
+        name = "tests: creation configs follow kafkas metadata topic"
+    )]
+    fn creation_configs_follow_kafkas_metadata_topic(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("kafka log topic tests: unset min isr leaves the cluster default")]
+    fn bdd_verify_unset_min_isr_leaves_the_cluster_default() {
         let cfg = KafkaMetadataLogConfig {
             min_isr: None,
             ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
         };
         assert!(!creation_configs(&cfg).contains_key("min.insync.replicas"));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_log/topic.feature",
+        name = "tests: unset min isr leaves the cluster default"
+    )]
+    fn unset_min_isr_leaves_the_cluster_default() {}
 }

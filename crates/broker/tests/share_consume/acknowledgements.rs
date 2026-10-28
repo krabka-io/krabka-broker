@@ -23,11 +23,9 @@ use {
     krabka_protocol::owned::share_fetch_response::PartitionData,
 };
 
-/// Acquire 3 records, Accept them all, and observe the SPSO advance. The test
-/// then restarts the broker on the same data dir to prove the broker persisted
-/// the advance.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consume_accept_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume acknowledgements: consume accept restart")]
+async fn bdd_verify_consume_accept_restart() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
@@ -100,9 +98,20 @@ async fn consume_accept_restart() {
     }
 }
 
-/// Release re-delivers the same offsets with an incremented `delivery_count`.
+/// Acquire 3 records, Accept them all, and observe the SPSO advance. The test
+/// then restarts the broker on the same data dir to prove the broker persisted
+/// the advance.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
+    name = "consume accept restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn release_redelivers() {
+async fn consume_accept_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume acknowledgements: release redelivers")]
+async fn bdd_verify_release_redelivers() {
     let AcquiredPair { fixture, row } = acquired_pair().await;
     let session = fixture.session();
 
@@ -129,11 +138,18 @@ async fn release_redelivers() {
     );
 }
 
-/// Reject archives the records: the broker never re-delivers them AND the SPSO
-/// advances past them. A freshly produced offset is the only thing the test
-/// acquires.
+/// Release re-delivers the same offsets with an incremented `delivery_count`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
+    name = "release redelivers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reject_archives() {
+async fn release_redelivers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume acknowledgements: reject archives")]
+async fn bdd_verify_reject_archives() {
     let AcquiredPair { fixture, row: _row } = acquired_pair().await;
     let session = fixture.session();
 
@@ -180,6 +196,17 @@ async fn reject_archives() {
         row3.acquired_records
     );
 }
+
+/// Reject archives the records: the broker never re-delivers them AND the SPSO
+/// advances past them. A freshly produced offset is the only thing the test
+/// acquires.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
+    name = "reject archives"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reject_archives() {}
 
 struct AcquiredPair {
     fixture: ConsumptionFixture,

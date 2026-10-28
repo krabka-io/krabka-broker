@@ -156,16 +156,11 @@ async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
     check!(image.topics().filter(|t| t.name == OFFSETS_TOPIC).count() == 1);
 }
 
-/// Kafka creates each coordinator topic with an explicit config map:
-/// `GroupCoordinatorService.groupMetadataTopicConfigs`,
-/// `TransactionCoordinator.transactionStateTopicConfigs` and
-/// `ShareCoordinatorService.shareGroupStateTopicConfigs`. The values below are
-/// Kafka's defaults for `offsets.topic.segment.bytes`,
-/// `transaction.state.log.segment.bytes`, `transaction.state.log.min.isr`,
-/// `share.coordinator.state.topic.segment.bytes` and
-/// `share.coordinator.state.topic.min.isr`.
-#[tokio::test]
-async fn internal_topics_are_created_with_kafkas_topic_configs() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator bootstrap topic bootstrap tests: internal topics are created with kafkas topic configs"
+)]
+async fn bdd_verify_internal_topics_are_created_with_kafkas_topic_configs() {
     let dir = tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     tolerate_starved_heartbeats(&mut config);
@@ -224,3 +219,19 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
     }
     handle.shutdown().await;
 }
+
+/// Kafka creates each coordinator topic with an explicit config map:
+/// `GroupCoordinatorService.groupMetadataTopicConfigs`,
+/// `TransactionCoordinator.transactionStateTopicConfigs` and
+/// `ShareCoordinatorService.shareGroupStateTopicConfigs`. The values below are
+/// Kafka's defaults for `offsets.topic.segment.bytes`,
+/// `transaction.state.log.segment.bytes`, `transaction.state.log.min.isr`,
+/// `share.coordinator.state.topic.segment.bytes` and
+/// `share.coordinator.state.topic.min.isr`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/bootstrap/topic_bootstrap_tests.feature",
+    name = "internal topics are created with kafkas topic configs"
+)]
+#[tokio::test]
+async fn internal_topics_are_created_with_kafkas_topic_configs() {}

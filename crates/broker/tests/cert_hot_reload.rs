@@ -81,8 +81,9 @@ async fn handshake_against(
         .map_err(io::Error::other)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reload_tls_swaps_served_cert() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("cert hot reload: reload tls swaps served cert")]
+async fn bdd_verify_reload_tls_swaps_served_cert() {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let CertFixture {
@@ -134,11 +135,17 @@ async fn reload_tls_swaps_served_cert() {
     handle.shutdown().await;
 }
 
-/// The periodic watcher reloads when the files' mtime changes on disk. This
-/// proves the mtime-polling path, not only the explicit `reload_tls` trigger.
-/// The test uses a 100 ms tick to stay fast.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cert_hot_reload.feature",
+    name = "reload tls swaps served cert"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn periodic_watcher_reloads_on_mtime_change() {
+async fn reload_tls_swaps_served_cert() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("cert hot reload: periodic watcher reloads on mtime change")]
+async fn bdd_verify_periodic_watcher_reloads_on_mtime_change() {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let mut fixture = cert_fixture();
@@ -181,6 +188,17 @@ async fn periodic_watcher_reloads_on_mtime_change() {
 
     handle.shutdown().await;
 }
+
+/// The periodic watcher reloads when the files' mtime changes on disk. This
+/// proves the mtime-polling path, not only the explicit `reload_tls` trigger.
+/// The test uses a 100 ms tick to stay fast.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cert_hot_reload.feature",
+    name = "periodic watcher reloads on mtime change"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn periodic_watcher_reloads_on_mtime_change() {}
 
 /// The directories a case keeps alive, the certificate and key paths it
 /// rotates, and the broker config that serves them.

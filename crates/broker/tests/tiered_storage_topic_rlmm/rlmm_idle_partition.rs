@@ -35,10 +35,20 @@ const EARLIEST_TIMESTAMP: i64 = -2;
 /// Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP` (KIP-405).
 const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 
-#[test]
-fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm idle partition: an idle tiered partition leaves local disk through its last record"
+)]
+fn bdd_verify_an_idle_tiered_partition_leaves_local_disk_through_its_last_record() {
     run_broker_test(an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case());
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_idle_partition.feature",
+    name = "an idle tiered partition leaves local disk through its last record"
+)]
+fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record() {}
 
 async fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case() {
     let (broker, _log_dir, remote_dir) = start_broker_with_topic_rlmm().await;

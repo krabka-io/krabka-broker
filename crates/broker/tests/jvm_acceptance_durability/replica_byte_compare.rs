@@ -33,9 +33,11 @@ use {
 // alongside `kafka-topics` / `kafka-console-producer` — it's a standard
 // Apache Kafka tool. We mount each broker's partition dir into a fresh
 // container as `-v <host>:/data:ro` and dump the first segment file.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn three_node_replication_byte_compare() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance durability replica byte compare: three node replication byte compare"
+)]
+async fn bdd_verify_three_node_replication_byte_compare() {
     const TOPIC: &str = "krabka-replication-itest";
 
     // Distinct ports from `three_node_jvm_round_trip` (which uses
@@ -128,3 +130,12 @@ async fn three_node_replication_byte_compare() {
         h.shutdown().await;
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/replica_byte_compare.feature",
+    name = "three node replication byte compare"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_node_replication_byte_compare() {}

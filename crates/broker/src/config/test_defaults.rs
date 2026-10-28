@@ -298,8 +298,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn with_internal_topics_for_caps_at_kafka_defaults() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config test defaults tests: with internal topics for caps at kafka defaults"
+    )]
+    fn bdd_verify_with_internal_topics_for_caps_at_kafka_defaults() {
         let cases = [
             (1, InternalTopicSizes {
                 offsets_replication_factor: 1,
@@ -343,6 +346,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/test_defaults.feature",
+        name = "tests: with internal topics for caps at kafka defaults"
+    )]
+    fn with_internal_topics_for_caps_at_kafka_defaults() {}
 
     #[test]
     fn for_tests_uses_bootstrap_mode() {

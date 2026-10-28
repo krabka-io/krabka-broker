@@ -23,20 +23,11 @@ use {
     },
 };
 
-/// An approved proposal outlives the controller that recorded it.
-///
-/// The approver set is a per-node file value, and the design leans on the
-/// proposal itself living in the metadata log so that any node which becomes
-/// controller can spend it. If an approval only existed on the node that took
-/// it, an incident response would die with the controller that a rolling
-/// restart or a crash removed — which is exactly when a break-glass approval
-/// matters most.
-///
-/// A `PLAINTEXT` listener has one principal, so the two approvals are written
-/// straight into the metadata log here. What has to survive the failover is the
-/// record; the wire path that produces it is proved on the SASL broker above.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_approved_proposal_survives_a_controller_failover() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass failover: an approved proposal survives a controller failover"
+)]
+async fn bdd_verify_an_approved_proposal_survives_a_controller_failover() {
     let mut cluster = start_gated_cluster(3, BackgroundUncleanRecovery::Off).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
@@ -112,6 +103,26 @@ async fn an_approved_proposal_survives_a_controller_failover() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// An approved proposal outlives the controller that recorded it.
+///
+/// The approver set is a per-node file value, and the design leans on the
+/// proposal itself living in the metadata log so that any node which becomes
+/// controller can spend it. If an approval only existed on the node that took
+/// it, an incident response would die with the controller that a rolling
+/// restart or a crash removed — which is exactly when a break-glass approval
+/// matters most.
+///
+/// A `PLAINTEXT` listener has one principal, so the two approvals are written
+/// straight into the metadata log here. What has to survive the failover is the
+/// record; the wire path that produces it is proved on the SASL broker above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/failover.feature",
+    name = "an approved proposal survives a controller failover"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approved_proposal_survives_a_controller_failover() {}
 
 /// One unsigned approval by `user`, in the metadata form.
 fn approval_by(user: &str) -> StoredApproval {

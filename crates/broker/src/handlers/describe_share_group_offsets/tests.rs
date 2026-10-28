@@ -74,8 +74,11 @@ krabka_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
-#[tokio::test]
-async fn handle_error_scenarios_preserve_expected_rows() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe share group offsets tests: handle error scenarios preserve expected rows"
+)]
+async fn bdd_verify_handle_error_scenarios_preserve_expected_rows() {
     let version = describe_share_group_offsets_response::MAX_VERSION;
     let cases: Vec<ShareRefusalCase<Vec<RequestGroup<'_>>, DescribeShareGroupOffsetsResponse>> = vec![
         ShareRefusalPolicy::unsupported("disabled feature preserves group error rows").with_input(
@@ -171,3 +174,11 @@ async fn handle_error_scenarios_preserve_expected_rows() {
         invoke [handle(&broker, request(&row.input), version, &ctx)];
     };
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_share_group_offsets/tests.feature",
+    name = "handle error scenarios preserve expected rows"
+)]
+#[tokio::test]
+async fn handle_error_scenarios_preserve_expected_rows() {}

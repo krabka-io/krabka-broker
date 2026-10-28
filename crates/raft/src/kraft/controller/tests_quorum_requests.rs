@@ -186,8 +186,9 @@ fn engine_with_local_directory() -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
-#[tokio::test]
-async fn vote_runs_kafka_request_checks() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft controller tests quorum requests: vote runs kafka request checks")]
+async fn bdd_verify_vote_runs_kafka_request_checks() {
     struct Row {
         label: &'static str,
         request: VoteRequest,
@@ -338,6 +339,14 @@ async fn vote_runs_kafka_request_checks() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "vote runs kafka request checks"
+)]
+#[tokio::test]
+async fn vote_runs_kafka_request_checks() {}
+
 /// A granted standard vote moves the voter to the candidate's epoch and names
 /// no leader.
 #[tokio::test]
@@ -442,8 +451,11 @@ fn begin_answer(error_code: i16, leader_id: i32, leader_epoch: i32) -> BeginQuor
     }
 }
 
-#[tokio::test]
-async fn begin_quorum_epoch_runs_kafka_request_checks() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests quorum requests: begin quorum epoch runs kafka request checks"
+)]
+async fn bdd_verify_begin_quorum_epoch_runs_kafka_request_checks() {
     struct Row {
         label: &'static str,
         request: BeginQuorumEpochRequest,
@@ -512,6 +524,14 @@ async fn begin_quorum_epoch_runs_kafka_request_checks() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "begin quorum epoch runs kafka request checks"
+)]
+#[tokio::test]
+async fn begin_quorum_epoch_runs_kafka_request_checks() {}
+
 #[tokio::test]
 async fn a_begin_quorum_epoch_body_that_does_not_decode_gets_no_answer() {
     let EngineInDir {
@@ -548,8 +568,11 @@ fn candidates(ids: &[i32]) -> Vec<eqe_req::ReplicaInfo> {
         .collect()
 }
 
-#[tokio::test]
-async fn end_quorum_epoch_runs_kafka_request_checks() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests quorum requests: end quorum epoch runs kafka request checks"
+)]
+async fn bdd_verify_end_quorum_epoch_runs_kafka_request_checks() {
     struct Row {
         label: &'static str,
         request: EndQuorumEpochRequest,
@@ -660,6 +683,14 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         check!(engine.core.role().name() == role, "{label}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "end quorum epoch runs kafka request checks"
+)]
+#[tokio::test]
+async fn end_quorum_epoch_runs_kafka_request_checks() {}
 
 fn fetch_snapshot_request(
     edit: impl FnOnce(&mut FetchSnapshotRequest, &mut fs_req::PartitionSnapshot),
@@ -786,8 +817,11 @@ fn single_voter_leader_with_checkpoints() -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
-#[tokio::test]
-async fn fetch_snapshot_runs_kafka_request_checks() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests quorum requests: fetch snapshot runs kafka request checks"
+)]
+async fn bdd_verify_fetch_snapshot_runs_kafka_request_checks() {
     struct Row {
         label: &'static str,
         request: FetchSnapshotRequest,
@@ -978,6 +1012,14 @@ async fn fetch_snapshot_runs_kafka_request_checks() {
         check!(body == encode(&expected, FETCH_SNAPSHOT_VERSION), "{label}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    name = "fetch snapshot runs kafka request checks"
+)]
+#[tokio::test]
+async fn fetch_snapshot_runs_kafka_request_checks() {}
 
 /// A follower refuses `FetchSnapshot` at its own epoch and names the leader.
 #[tokio::test]

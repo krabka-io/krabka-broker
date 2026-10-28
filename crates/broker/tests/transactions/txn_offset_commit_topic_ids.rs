@@ -24,13 +24,11 @@ use {
 /// answers `ILLEGAL_GENERATION (22)` below v6.
 const GROUP_ID_NOT_FOUND: i16 = 69;
 
-/// The first transaction sends a generation for a group the coordinator does
-/// not hold, and the v6-only `GROUP_ID_NOT_FOUND` shows which version the
-/// producer negotiated for this topic. The second commits offsets for a
-/// simple consumer group through the same topic id, and the group's committed
-/// offsets are what the transaction sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_offsets_to_transaction_commits_by_topic_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn offset commit topic ids: send offsets to transaction commits by topic id"
+)]
+async fn bdd_verify_send_offsets_to_transaction_commits_by_topic_id() {
     let (broker, bootstrap, _dir) = boot_single_trunk().await;
     create_topic(&bootstrap, "v6-in").await;
 
@@ -82,3 +80,16 @@ async fn send_offsets_to_transaction_commits_by_topic_id() {
 
     broker.shutdown().await;
 }
+
+/// The first transaction sends a generation for a group the coordinator does
+/// not hold, and the v6-only `GROUP_ID_NOT_FOUND` shows which version the
+/// producer negotiated for this topic. The second commits offsets for a
+/// simple consumer group through the same topic id, and the group's committed
+/// offsets are what the transaction sent.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_offset_commit_topic_ids.feature",
+    name = "send offsets to transaction commits by topic id"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_offsets_to_transaction_commits_by_topic_id() {}

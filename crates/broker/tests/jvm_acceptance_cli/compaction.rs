@@ -17,27 +17,11 @@ use {
     krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel},
 };
 
-/// `kafka-console-consumer` sees a compacted topic with only
-/// the latest value per key.
-///
-/// 1. Spin up a single-broker cluster with a fast cleaner interval (3s).
-/// 2. `kafka-topics --create --topic compacted-jvm --config cleanup.policy=compact
-///    --partitions 1 --replication-factor 1`, on a broker whose default
-///    segment size is `SEGMENT_SIZE`
-/// 3. `kafka-console-producer --property parse.key=true --property key.separator=:`
-///    with this stdin:
-///      k1:v1
-///      k1:v2
-///      k2:v3
-///      k1:v4
-///      k3:v5
-/// 4. Sleep 8s to let the 3s cleaner tick and the segment rolls happen.
-/// 5. `kafka-console-consumer --topic compacted-jvm --from-beginning --timeout-ms 5000`
-/// 6. Assert stdout contains `v4`, `v3`, `v5` (latest per-key values).
-/// 7. Assert stdout does NOT contain `v1` or `v2` (stale values compacted away).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli compaction: jvm kafka console consumer sees compacted topic end to end"
+)]
+async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     const TOPIC: &str = "compacted-jvm";
     /// Segment size the broker boots with, and so the size the topic
     /// inherits: small enough that a handful of records seal a segment the
@@ -245,3 +229,30 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
 
     broker.shutdown().await;
 }
+
+/// `kafka-console-consumer` sees a compacted topic with only
+/// the latest value per key.
+///
+/// 1. Spin up a single-broker cluster with a fast cleaner interval (3s).
+/// 2. `kafka-topics --create --topic compacted-jvm --config cleanup.policy=compact
+///    --partitions 1 --replication-factor 1`, on a broker whose default
+///    segment size is `SEGMENT_SIZE`
+/// 3. `kafka-console-producer --property parse.key=true --property key.separator=:`
+///    with this stdin:
+///      k1:v1
+///      k1:v2
+///      k2:v3
+///      k1:v4
+///      k3:v5
+/// 4. Sleep 8s to let the 3s cleaner tick and the segment rolls happen.
+/// 5. `kafka-console-consumer --topic compacted-jvm --from-beginning --timeout-ms 5000`
+/// 6. Assert stdout contains `v4`, `v3`, `v5` (latest per-key values).
+/// 7. Assert stdout does NOT contain `v1` or `v2` (stale values compacted away).
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/compaction.feature",
+    name = "jvm kafka console consumer sees compacted topic end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {}

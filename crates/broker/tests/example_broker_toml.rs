@@ -49,8 +49,9 @@ fn parse(relative: &str, text: &str) -> FileConfig {
 
 // `OpaAuthorizer::new` captures the current tokio runtime handle, so the apply
 // step runs inside one, as it does in the binary.
-#[tokio::test]
-async fn examples_parse_and_apply_as_written() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("example broker toml: examples parse and apply as written")]
+async fn bdd_verify_examples_parse_and_apply_as_written() {
     for relative in EXAMPLES {
         let file = parse(relative, &read_example(relative));
         let mut config = BrokerConfig::default();
@@ -63,11 +64,19 @@ async fn examples_parse_and_apply_as_written() {
     }
 }
 
-/// A follower verifies the leader's certificate against
-/// `inter_broker_server_name`. Over a TLS inter-broker listener, the default
-/// `localhost` matches no peer certificate, and replication never starts.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples parse and apply as written"
+)]
 #[tokio::test]
-async fn examples_with_a_tls_inter_broker_listener_name_its_server() {
+async fn examples_parse_and_apply_as_written() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "example broker toml: examples with a tls inter broker listener name its server"
+)]
+async fn bdd_verify_examples_with_a_tls_inter_broker_listener_name_its_server() {
     let default_name = BrokerConfig::default().inter_broker_server_name;
     for relative in EXAMPLES {
         let file = parse(relative, &read_example(relative));
@@ -83,8 +92,22 @@ async fn examples_with_a_tls_inter_broker_listener_name_its_server() {
     }
 }
 
-#[test]
-fn examples_parse_with_every_disabled_setting_enabled() {
+/// A follower verifies the leader's certificate against
+/// `inter_broker_server_name`. Over a TLS inter-broker listener, the default
+/// `localhost` matches no peer certificate, and replication never starts.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples with a tls inter broker listener name its server"
+)]
+#[tokio::test]
+async fn examples_with_a_tls_inter_broker_listener_name_its_server() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "example broker toml: examples parse with every disabled setting enabled"
+)]
+fn bdd_verify_examples_parse_with_every_disabled_setting_enabled() {
     for relative in EXAMPLES {
         let text = read_example(relative);
         let enabled = enable_disabled_settings(&text);
@@ -100,8 +123,16 @@ fn examples_parse_with_every_disabled_setting_enabled() {
     }
 }
 
-#[test]
-fn single_node_example_covers_the_local_surface() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples parse with every disabled setting enabled"
+)]
+fn examples_parse_with_every_disabled_setting_enabled() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("example broker toml: single node example covers the local surface")]
+fn bdd_verify_single_node_example_covers_the_local_surface() {
     let file = parse(EXAMPLES[0], &read_example(EXAMPLES[0]));
     check!(file.broker_id == Some(1));
     check!(file.controller_quorum_voters.is_empty());
@@ -120,8 +151,16 @@ fn single_node_example_covers_the_local_surface() {
     check!(file.delegation_token.is_some());
 }
 
-#[test]
-fn three_node_example_covers_the_cluster_surface() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "single node example covers the local surface"
+)]
+fn single_node_example_covers_the_local_surface() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("example broker toml: three node example covers the cluster surface")]
+fn bdd_verify_three_node_example_covers_the_cluster_surface() {
     let file = parse(EXAMPLES[1], &read_example(EXAMPLES[1]));
     check!(file.controller_quorum_voters.len() == 3);
     check!(file.bootstrap_servers.len() == 3);
@@ -162,6 +201,13 @@ fn three_node_example_covers_the_cluster_surface() {
             .is_some_and(|storage| storage.worm.is_some())
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "three node example covers the cluster surface"
+)]
+fn three_node_example_covers_the_cluster_surface() {}
 
 use repository::checked_in_schema;
 
@@ -255,8 +301,9 @@ fn check_table_keys(root: &Json, node: &Json, table: &toml::Table, path: &str) {
     }
 }
 
-#[test]
-fn every_example_key_is_in_the_schema() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("example broker toml: every example key is in the schema")]
+fn bdd_verify_every_example_key_is_in_the_schema() {
     let schema = checked_in_schema();
     for relative in EXAMPLES {
         let enabled = enable_disabled_settings(&read_example(relative));
@@ -266,3 +313,10 @@ fn every_example_key_is_in_the_schema() {
         check_table_keys(&schema, &schema, &table, relative);
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "every example key is in the schema"
+)]
+fn every_example_key_is_in_the_schema() {}

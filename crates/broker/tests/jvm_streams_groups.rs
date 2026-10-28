@@ -172,31 +172,9 @@ const TOOL_DEBUG_PREAMBLE: &str = concat!(
     "export KAFKA_LOG4J_OPTS='-Dlog4j2.configurationFile=/tmp/d.yaml'\n",
 );
 
-/// The headline differential test: make a KIP-1071 streams group live on Krabka
-/// with the native `krabka-client-core` client (`StreamsGroupHeartbeat`, api
-/// 88). Then drive the REAL Apache Kafka 4.1.0 `kafka-streams-groups.sh` admin
-/// tool against Krabka and prove it round-trips the streams-group admin wire
-/// path. That tool is the JVM `StreamsGroupCommand` that wraps `AdminClient`.
-///
-/// We assert these checkpoints, read from the JVM tool's own DEBUG wire logs:
-///
-///  1. The JVM `AdminClient` negotiated `ApiVersions` with Krabka. The response
-///     advertised `StreamsGroupDescribe (apiKey=89)` plus the finalized
-///     `streams.version` feature, so the KIP-1071 admin surface is visible to
-///     the real client.
-///  2. The tool issued `LIST_GROUPS apiVersion=5` with `typesFilter=[Streams]`,
-///     the KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter. Krabka
-///     answered with the live streams group (`errorCode=0`).
-///  3. `StreamsGroupCommand.describeGroups()` then resolved the coordinator and
-///     issued `StreamsGroupDescribe` (api 89). Krabka returned the full group,
-///     which the JVM `DescribeStreamsGroupsHandler` accepts. That group holds
-///     the state and epochs, the resolved topology, and the member with its
-///     active task assignment. The handler rejects a describe whose topology is
-///     absent, so the topology must be populated. Checkpoint 3 guards against a
-///     regression there.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_streams_groups_admin_round_trips_krabka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm streams groups: jvm streams groups admin round trips krabka")]
+async fn bdd_verify_jvm_streams_groups_admin_round_trips_krabka() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "streams-input";
@@ -288,3 +266,34 @@ async fn jvm_streams_groups_admin_round_trips_krabka() {
         );
     }
 }
+
+/// The headline differential test: make a KIP-1071 streams group live on Krabka
+/// with the native `krabka-client-core` client (`StreamsGroupHeartbeat`, api
+/// 88). Then drive the REAL Apache Kafka 4.1.0 `kafka-streams-groups.sh` admin
+/// tool against Krabka and prove it round-trips the streams-group admin wire
+/// path. That tool is the JVM `StreamsGroupCommand` that wraps `AdminClient`.
+///
+/// We assert these checkpoints, read from the JVM tool's own DEBUG wire logs:
+///
+///  1. The JVM `AdminClient` negotiated `ApiVersions` with Krabka. The response
+///     advertised `StreamsGroupDescribe (apiKey=89)` plus the finalized
+///     `streams.version` feature, so the KIP-1071 admin surface is visible to
+///     the real client.
+///  2. The tool issued `LIST_GROUPS apiVersion=5` with `typesFilter=[Streams]`,
+///     the KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter. Krabka
+///     answered with the live streams group (`errorCode=0`).
+///  3. `StreamsGroupCommand.describeGroups()` then resolved the coordinator and
+///     issued `StreamsGroupDescribe` (api 89). Krabka returned the full group,
+///     which the JVM `DescribeStreamsGroupsHandler` accepts. That group holds
+///     the state and epochs, the resolved topology, and the member with its
+///     active task assignment. The handler rejects a describe whose topology is
+///     absent, so the topology must be populated. Checkpoint 3 guards against a
+///     regression there.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_streams_groups.feature",
+    name = "jvm streams groups admin round trips krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_streams_groups_admin_round_trips_krabka() {}

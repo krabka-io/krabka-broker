@@ -99,20 +99,20 @@ async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
 // ── KIP-511 validation paths ────────────────────────────────────────────────
 
-#[yare::parameterized(
-    valid = { "krabka-client-core", "0.1.1", 0, Some(true) },
-    empty_name = { "", "1.0.0", INVALID_REQUEST, Some(false) },
-    empty_version = { "krabka", "", INVALID_REQUEST, None::<bool> },
-    invalid_name = { "has space", "1.0.0", INVALID_REQUEST, None::<bool> },
-    leading_dash_version = { "krabka", "-1.0.0", INVALID_REQUEST, None::<bool> },
-)]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn v3_client_info_validation(
-    software_name: &'static str,
-    software_version: &'static str,
-    expected_error: i16,
-    api_list_nonempty: Option<bool>,
-) {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client software versions: v3 client info validation for {example}")]
+async fn bdd_verify_v3_client_info_validation(example: String) {
+    type Example = (&'static str, &'static str, i16, Option<bool>);
+    let (software_name, software_version, expected_error, api_list_nonempty): Example =
+        match example.as_str() {
+            "valid" => ("krabka-client-core", "0.1.1", 0, Some(true)),
+            "empty name" => ("", "1.0.0", INVALID_REQUEST, Some(false)),
+            "empty version" => ("krabka", "", INVALID_REQUEST, None::<bool>),
+            "invalid name" => ("has space", "1.0.0", INVALID_REQUEST, None::<bool>),
+            "leading dash version" => ("krabka", "-1.0.0", INVALID_REQUEST, None::<bool>),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
     let BootedBroker {
         kafka_addr,
         metrics_addr: _metrics_addr,
@@ -131,8 +131,17 @@ async fn v3_client_info_validation(
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "v3 client info validation"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_v3_does_not_validate_client_info() {
+async fn v3_client_info_validation(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client software versions: pre v3 does not validate client info")]
+async fn bdd_verify_pre_v3_does_not_validate_client_info() {
     // v0-2 don't carry the fields. The codegen leaves them as default
     // empty strings on the wire — KIP-511 says don't validate. Apache
     // Kafka brokers happily accept v0/v1/v2 calls from old clients that
@@ -156,10 +165,21 @@ async fn pre_v3_does_not_validate_client_info() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "pre v3 does not validate client info"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_v3_does_not_validate_client_info() {}
+
 // ── Prometheus metric ──────────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn accepted_v3_handshake_bumps_client_software_versions_counter() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client software versions: accepted v3 handshake bumps client software versions counter"
+)]
+async fn bdd_verify_accepted_v3_handshake_bumps_client_software_versions_counter() {
     let BootedBroker {
         kafka_addr,
         metrics_addr,
@@ -201,8 +221,17 @@ async fn accepted_v3_handshake_bumps_client_software_versions_counter() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "accepted v3 handshake bumps client software versions counter"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejected_v3_handshake_does_not_bump_counter() {
+async fn accepted_v3_handshake_bumps_client_software_versions_counter() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client software versions: rejected v3 handshake does not bump counter")]
+async fn bdd_verify_rejected_v3_handshake_does_not_bump_counter() {
     let BootedBroker {
         kafka_addr,
         metrics_addr,
@@ -236,8 +265,17 @@ async fn rejected_v3_handshake_does_not_bump_counter() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "rejected v3 handshake does not bump counter"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_v3_handshake_does_not_bump_counter() {
+async fn rejected_v3_handshake_does_not_bump_counter() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client software versions: pre v3 handshake does not bump counter")]
+async fn bdd_verify_pre_v3_handshake_does_not_bump_counter() {
     let BootedBroker {
         kafka_addr,
         metrics_addr,
@@ -262,3 +300,11 @@ async fn pre_v3_handshake_does_not_bump_counter() {
 
     handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_software_versions.feature",
+    name = "pre v3 handshake does not bump counter"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_v3_handshake_does_not_bump_counter() {}

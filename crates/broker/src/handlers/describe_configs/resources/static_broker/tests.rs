@@ -78,10 +78,11 @@ fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs
     }
 }
 
-/// A node still on Kafka's built-in defaults reports both keys at
-/// `DEFAULT_CONFIG`, with the default as their one synonym.
-#[test]
-fn kafka_defaults_report_at_default_config_source() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers describe configs resources static broker tests: kafka defaults report at default config source"
+)]
+fn bdd_verify_kafka_defaults_report_at_default_config_source() {
     let entries = static_broker_entries(kafka_default_static_broker(), &both_expiry_keys, BOTH);
 
     assert!(
@@ -98,6 +99,15 @@ fn kafka_defaults_report_at_default_config_source() {
             ]
     );
 }
+
+/// A node still on Kafka's built-in defaults reports both keys at
+/// `DEFAULT_CONFIG`, with the default as their one synonym.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/describe_configs/resources/static_broker/tests.feature",
+    name = "kafka defaults report at default config source"
+)]
+fn kafka_defaults_report_at_default_config_source() {}
 
 /// The second `apache/kafka:4.3.1` output quoted on the module: the operator's
 /// value heads the chain at `STATIC_BROKER_CONFIG`, and Kafka's default stays

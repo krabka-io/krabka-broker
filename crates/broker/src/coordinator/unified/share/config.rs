@@ -136,10 +136,9 @@ mod tests {
         std::{borrow::Cow, collections::BTreeMap},
     };
 
-    /// The defaults of the share keys of Kafka 4.3.1's
-    /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
-    #[test]
-    fn defaults_are_kafkas() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("coordinator unified share config tests: defaults are kafkas")]
+    fn bdd_verify_defaults_are_kafkas() {
         let expected = ShareGroupConfig {
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
@@ -164,6 +163,15 @@ mod tests {
         };
         assert!(ShareGroupConfig::default() == expected);
     }
+
+    /// The defaults of the share keys of Kafka 4.3.1's
+    /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/config.feature",
+        name = "tests: defaults are kafkas"
+    )]
+    fn defaults_are_kafkas() {}
 
     /// Kafka's `shareGroupSessionTimeoutMs`, `shareGroupHeartbeatIntervalMs`
     /// and `shareGroupAssignmentIntervalMs`: a `share.*` override replaces the

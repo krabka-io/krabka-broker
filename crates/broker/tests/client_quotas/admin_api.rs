@@ -19,12 +19,9 @@ use {
     assert2::assert,
 };
 
-/// Test 1: `AlterClientQuotas` sets `(user=alice) producer_byte_rate=1024`.
-///
-/// The value then appears in the metadata image and in
-/// `DescribeClientQuotas`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_then_describe_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas admin api: alter then describe round trip")]
+async fn bdd_verify_alter_then_describe_round_trip() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
@@ -79,16 +76,21 @@ async fn alter_then_describe_round_trip() {
     handle.shutdown().await;
 }
 
-/// Test 5: a non-super-user cannot alter client quotas.
+/// Test 1: `AlterClientQuotas` sets `(user=alice) producer_byte_rate=1024`.
 ///
-/// alice is authenticated, is not a super-user, and has no ACLs. alice sends
-/// `AlterClientQuotas`. Every entry must carry
-/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
-///
-/// The test seeds a dummy ACL first. The dummy ACL disables the compat shim,
-/// which allows every operation while the image holds no ACLs.
+/// The value then appears in the metadata image and in
+/// `DescribeClientQuotas`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/admin_api.feature",
+    name = "alter then describe round trip"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_super_user_denied() {
+async fn alter_then_describe_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas admin api: non super user denied")]
+async fn bdd_verify_non_super_user_denied() {
     let credentials = [("admin", "admin-secret"), ("alice", "alice-secret")];
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &credentials).await;
@@ -128,3 +130,19 @@ async fn non_super_user_denied() {
         "all entries must carry CLUSTER_AUTHORIZATION_FAILED (31); got {resp:?}"
     );
 }
+
+/// Test 5: a non-super-user cannot alter client quotas.
+///
+/// alice is authenticated, is not a super-user, and has no ACLs. alice sends
+/// `AlterClientQuotas`. Every entry must carry
+/// `CLUSTER_AUTHORIZATION_FAILED (31)`.
+///
+/// The test seeds a dummy ACL first. The dummy ACL disables the compat shim,
+/// which allows every operation while the image holds no ACLs.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/admin_api.feature",
+    name = "non super user denied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_super_user_denied() {}

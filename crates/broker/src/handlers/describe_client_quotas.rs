@@ -613,10 +613,11 @@ mod tests {
         );
     }
 
-    /// Kafka's `ClientQuotasImage.describe` rejects a bad filter before any
-    /// match, with `entries = null` (#674). Valid filters still match.
-    #[tokio::test]
-    async fn invalid_filters_answer_kafkas_top_level_error() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe client quotas tests: invalid filters answer kafkas top level error"
+    )]
+    async fn bdd_verify_invalid_filters_answer_kafkas_top_level_error() {
         /// A case label, the filter components, and the whole response they must answer with.
         struct RefusalRow {
             label: &'static str,
@@ -788,6 +789,16 @@ mod tests {
         check!(names == vec![None, Some("alice".to_owned())]);
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `ClientQuotasImage.describe` rejects a bad filter before any
+    /// match, with `entries = null` (#674). Valid filters still match.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_client_quotas.feature",
+        name = "tests: invalid filters answer kafkas top level error"
+    )]
+    #[tokio::test]
+    async fn invalid_filters_answer_kafkas_top_level_error() {}
 
     #[tokio::test]
     async fn successful_empty_match_uses_some_empty_entries() {

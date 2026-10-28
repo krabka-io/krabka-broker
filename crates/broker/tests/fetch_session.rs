@@ -87,10 +87,11 @@ fn fetch_topic(name: &str, topic_id: WireUuid, partitions: Vec<FetchPartition>) 
     fetch_topic_row(name, topic_id, partitions)
 }
 
-/// A new session opens, the immediate incremental is empty, and one produced
-/// batch appears on the next incremental as the only partition.
-#[tokio::test]
-async fn new_session_then_incremental_filters_unchanged_partitions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fetch session: new session then incremental filters unchanged partitions"
+)]
+async fn bdd_verify_new_session_then_incremental_filters_unchanged_partitions() {
     let TopicSession {
         p,
         tid: _tid,
@@ -140,10 +141,19 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     p.broker.shutdown().await;
 }
 
-/// The broker drops forgotten partitions from the cached subscription, and
-/// they never reappear on later fetches, even after a produce.
+/// A new session opens, the immediate incremental is empty, and one produced
+/// batch appears on the next incremental as the only partition.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "new session then incremental filters unchanged partitions"
+)]
 #[tokio::test]
-async fn forgotten_topics_drop_partitions_from_subscription() {
+async fn new_session_then_incremental_filters_unchanged_partitions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch session: forgotten topics drop partitions from subscription")]
+async fn bdd_verify_forgotten_topics_drop_partitions_from_subscription() {
     let TopicSession {
         p,
         tid,
@@ -194,10 +204,19 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
     p.broker.shutdown().await;
 }
 
-/// A wrong `session_id` gives `FETCH_SESSION_ID_NOT_FOUND` at the top level
-/// with no per-partition rows.
+/// The broker drops forgotten partitions from the cached subscription, and
+/// they never reappear on later fetches, even after a produce.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "forgotten topics drop partitions from subscription"
+)]
 #[tokio::test]
-async fn unknown_session_id_returns_not_found() {
+async fn forgotten_topics_drop_partitions_from_subscription() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch session: unknown session id returns not found")]
+async fn bdd_verify_unknown_session_id_returns_not_found() {
     let p = support::start().await;
     let setup = FetchSessionSetup::incremental(FetchSessionId(999_999));
     let r = p
@@ -218,9 +237,19 @@ async fn unknown_session_id_returns_not_found() {
     p.broker.shutdown().await;
 }
 
-/// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
+/// A wrong `session_id` gives `FETCH_SESSION_ID_NOT_FOUND` at the top level
+/// with no per-partition rows.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "unknown session id returns not found"
+)]
 #[tokio::test]
-async fn stale_session_epoch_returns_invalid_epoch() {
+async fn unknown_session_id_returns_not_found() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch session: stale session epoch returns invalid epoch")]
+async fn bdd_verify_stale_session_epoch_returns_invalid_epoch() {
     let OpenedTopicSession {
         p,
         tid: _tid,
@@ -247,10 +276,18 @@ async fn stale_session_epoch_returns_invalid_epoch() {
     p.broker.shutdown().await;
 }
 
-/// A close request with epoch=-1 returns a full response and drops the cache
-/// entry. A later request with the same id is `NOT_FOUND`.
+/// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "stale session epoch returns invalid epoch"
+)]
 #[tokio::test]
-async fn close_session_drops_cache_entry() {
+async fn stale_session_epoch_returns_invalid_epoch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch session: close session drops cache entry")]
+async fn bdd_verify_close_session_drops_cache_entry() {
     let OpenedTopicSession {
         p,
         tid,
@@ -293,11 +330,21 @@ async fn close_session_drops_cache_entry() {
     p.broker.shutdown().await;
 }
 
-/// `session_id=0` with a stray epoch, that is, not 0 and not -1, is an
-/// incremental fetch. Kafka's `FetchManager.newContext` looks the id up, and
-/// id 0 is never allocated, so it answers `FETCH_SESSION_ID_NOT_FOUND`.
+/// A close request with epoch=-1 returns a full response and drops the cache
+/// entry. A later request with the same id is `NOT_FOUND`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "close session drops cache entry"
+)]
 #[tokio::test]
-async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
+async fn close_session_drops_cache_entry() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fetch session: sessionless zero id with stray epoch is session id not found"
+)]
+async fn bdd_verify_sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     let p = support::start().await;
     let r = p
         .client
@@ -314,10 +361,20 @@ async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     p.broker.shutdown().await;
 }
 
-/// A sessionless request, `session_id=0` with session_epoch=-1, returns a
-/// full response with `session_id=0`. This is the legacy path.
+/// `session_id=0` with a stray epoch, that is, not 0 and not -1, is an
+/// incremental fetch. Kafka's `FetchManager.newContext` looks the id up, and
+/// id 0 is never allocated, so it answers `FETCH_SESSION_ID_NOT_FOUND`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "sessionless zero id with stray epoch is session id not found"
+)]
 #[tokio::test]
-async fn sessionless_full_fetch_round_trip() {
+async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("fetch session: sessionless full fetch round trip")]
+async fn bdd_verify_sessionless_full_fetch_round_trip() {
     let p = support::start().await;
     create_topic(&p, "t", 1).await;
     let tid = topic_id_for(&p.client, "t").await;
@@ -348,6 +405,16 @@ async fn sessionless_full_fetch_round_trip() {
     assert!(total == 2);
     p.broker.shutdown().await;
 }
+
+/// A sessionless request, `session_id=0` with session_epoch=-1, returns a
+/// full response with `session_id=0`. This is the legacy path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_session.feature",
+    name = "sessionless full fetch round trip"
+)]
+#[tokio::test]
+async fn sessionless_full_fetch_round_trip() {}
 
 async fn open_session(
     client: &krabka_client_core::Client,

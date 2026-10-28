@@ -81,18 +81,11 @@ async fn isolation_fixture(level: Option<&str>) -> IsolationFixture {
     }
 }
 
-/// F2 (`read_committed`): with `share.isolation.level = read_committed`, a
-/// share fetch never surfaces records from an OPEN transaction (offsets past
-/// the LSO).
-///
-/// A transactional producer begins a txn and sends 3 records but does NOT
-/// commit. The partition's HWM is then 3 while the LSO stays at 0. A
-/// `read_committed` share fetch clamps its read window to `min(LSO, HWM) = 0`,
-/// so it acquires nothing. After the txn commits, the LSO advances to 3 and the
-/// same group then acquires all 3. This proves the clamp tracked the LSO, and
-/// that the broker merely deferred the records and did not lose them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn read_committed_skips_open_txn_then_sees_committed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume isolation level: read committed skips open txn then sees committed"
+)]
+async fn bdd_verify_read_committed_skips_open_txn_then_sees_committed() {
     let IsolationFixture {
         permit: _permit,
         broker,
@@ -164,6 +157,24 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     .unwrap();
 }
 
+/// F2 (`read_committed`): with `share.isolation.level = read_committed`, a
+/// share fetch never surfaces records from an OPEN transaction (offsets past
+/// the LSO).
+///
+/// A transactional producer begins a txn and sends 3 records but does NOT
+/// commit. The partition's HWM is then 3 while the LSO stays at 0. A
+/// `read_committed` share fetch clamps its read window to `min(LSO, HWM) = 0`,
+/// so it acquires nothing. After the txn commits, the LSO advances to 3 and the
+/// same group then acquires all 3. This proves the clamp tracked the LSO, and
+/// that the broker merely deferred the records and did not lose them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/isolation_level.feature",
+    name = "read committed skips open txn then sees committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_committed_skips_open_txn_then_sees_committed() {}
+
 /// What a share group sees of one transaction followed by one plain record:
 /// the offsets it acquired and the record values that it got.
 #[derive(Debug, PartialEq, Eq)]
@@ -181,16 +192,11 @@ impl Seen {
     }
 }
 
-/// Kafka's `SharePartition.filterAbortedTransactionalAcquiredRecords`: under
-/// `read_committed`, a share group never acquires the data of an aborted
-/// transaction. The share consumer cannot drop it itself, because a
-/// `ShareFetch` response has no aborted-transactions field.
-///
-/// Each row writes a transaction of three records at offsets 0-2 and ends it,
-/// which puts the marker at offset 3. It then produces one plain record `v0`
-/// at offset 4. The marker is never acquired.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn aborted_transaction_data_is_archived_under_read_committed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume isolation level: aborted transaction data is archived under read committed"
+)]
+async fn bdd_verify_aborted_transaction_data_is_archived_under_read_committed() {
     let cases = [
         (
             "read_committed, commit",
@@ -229,6 +235,22 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
     }
     assert!(actual == expected);
 }
+
+/// Kafka's `SharePartition.filterAbortedTransactionalAcquiredRecords`: under
+/// `read_committed`, a share group never acquires the data of an aborted
+/// transaction. The share consumer cannot drop it itself, because a
+/// `ShareFetch` response has no aborted-transactions field.
+///
+/// Each row writes a transaction of three records at offsets 0-2 and ends it,
+/// which puts the marker at offset 3. It then produces one plain record `v0`
+/// at offset 4. The marker is never acquired.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/isolation_level.feature",
+    name = "aborted transaction data is archived under read committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn aborted_transaction_data_is_archived_under_read_committed() {}
 
 /// `isolation_level` is the group's `share.isolation.level`, or `None` for a
 /// group with no override.

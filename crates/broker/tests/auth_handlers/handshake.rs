@@ -54,14 +54,11 @@ use {
     },
 };
 
-/// `ApiVersions`, `api_key` 18, is on the pre-auth allowlist and must succeed
-/// without any SASL exchange.
-///
-/// The response should decode without an error. The supported-api list should
-/// include `api_keys` 17, which is `SaslHandshake`, and 36, which is
-/// `SaslAuthenticate`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn api_versions_reachable_pre_auth_on_sasl_listener() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers handshake: api versions reachable pre auth on sasl listener"
+)]
+async fn bdd_verify_api_versions_reachable_pre_auth_on_sasl_listener() {
     let BrokerSocket {
         log_dir: _log_dir,
         handle,
@@ -95,15 +92,23 @@ async fn api_versions_reachable_pre_auth_on_sasl_listener() {
     handle.shutdown().await;
 }
 
-/// A pre-auth `Metadata` request on a `SASL_PLAINTEXT` listener must not
-/// succeed.
+/// `ApiVersions`, `api_key` 18, is on the pre-auth allowlist and must succeed
+/// without any SASL exchange.
 ///
-/// `Metadata`, `api_key` 3, is not on the pre-auth allowlist. T12 closes the
-/// TCP connection and does not encode a typed error response. So the read
-/// after the `Metadata` request must return an I/O error, either
-/// `UnexpectedEof` or a connection reset, and not a well-formed response.
+/// The response should decode without an error. The supported-api list should
+/// include `api_keys` 17, which is `SaslHandshake`, and 36, which is
+/// `SaslAuthenticate`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "api versions reachable pre auth on sasl listener"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_rejected_pre_auth_on_sasl_listener() {
+async fn api_versions_reachable_pre_auth_on_sasl_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers handshake: metadata rejected pre auth on sasl listener")]
+async fn bdd_verify_metadata_rejected_pre_auth_on_sasl_listener() {
     let BrokerSocket {
         log_dir: _log_dir,
         handle,
@@ -141,12 +146,24 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
     handle.shutdown().await;
 }
 
-/// A `SaslHandshake` with an unsupported mechanism, GSSAPI, must return
-/// `error_code = 33`, which is `UNSUPPORTED_SASL_MECHANISM`, with the enabled
-/// list, and then close the connection, as Kafka's `SaslServerAuthenticator`
-/// does. A new connection may then negotiate the supported mechanism, PLAIN.
+/// A pre-auth `Metadata` request on a `SASL_PLAINTEXT` listener must not
+/// succeed.
+///
+/// `Metadata`, `api_key` 3, is not on the pre-auth allowlist. T12 closes the
+/// TCP connection and does not encode a typed error response. So the read
+/// after the `Metadata` request must return an I/O error, either
+/// `UnexpectedEof` or a connection reset, and not a well-formed response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "metadata rejected pre auth on sasl listener"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unsupported_mechanism_answers_33_then_closes() {
+async fn metadata_rejected_pre_auth_on_sasl_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers handshake: unsupported mechanism answers 33 then closes")]
+async fn bdd_verify_unsupported_mechanism_answers_33_then_closes() {
     let BrokerSocket {
         log_dir: _log_dir,
         handle,
@@ -234,6 +251,18 @@ async fn unsupported_mechanism_answers_33_then_closes() {
     handle.shutdown().await;
 }
 
+/// A `SaslHandshake` with an unsupported mechanism, GSSAPI, must return
+/// `error_code = 33`, which is `UNSUPPORTED_SASL_MECHANISM`, with the enabled
+/// list, and then close the connection, as Kafka's `SaslServerAuthenticator`
+/// does. A new connection may then negotiate the supported mechanism, PLAIN.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "unsupported mechanism answers 33 then closes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_mechanism_answers_33_then_closes() {}
+
 async fn start_plain_sasl_broker(log_dir: &Path) -> krabka_broker::BrokerHandle {
     let mut cfg = sasl_plaintext_mechanisms(log_dir.to_path_buf(), vec![SaslMechanism::Plain]);
     cfg.plain_credentials
@@ -275,12 +304,9 @@ async fn write_raw_frame(stream: &mut TcpStream, payload: &[u8]) {
     stream.flush().await.unwrap();
 }
 
-/// `SaslHandshake` v0: Kafka's `enableKafkaSaslAuthenticateHeaders` stays
-/// off, so the client sends its PLAIN token as a raw size-prefixed frame with
-/// no Kafka request header, and the broker answers with a raw (here empty)
-/// size-prefixed token. The connection is then authenticated.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v0_handshake_runs_the_exchange_as_raw_tokens() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers handshake: v0 handshake runs the exchange as raw tokens")]
+async fn bdd_verify_v0_handshake_runs_the_exchange_as_raw_tokens() {
     let PlainHandshake {
         log_dir: _log_dir,
         handle,
@@ -316,10 +342,23 @@ async fn v0_handshake_runs_the_exchange_as_raw_tokens() {
     handle.shutdown().await;
 }
 
-/// A v0 raw token with a bad credential has no response shape to carry an
-/// error, so Kafka closes the connection without one.
+/// `SaslHandshake` v0: Kafka's `enableKafkaSaslAuthenticateHeaders` stays
+/// off, so the client sends its PLAIN token as a raw size-prefixed frame with
+/// no Kafka request header, and the broker answers with a raw (here empty)
+/// size-prefixed token. The connection is then authenticated.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "v0 handshake runs the exchange as raw tokens"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v0_raw_token_with_bad_credentials_closes_without_response() {
+async fn v0_handshake_runs_the_exchange_as_raw_tokens() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers handshake: v0 raw token with bad credentials closes without response"
+)]
+async fn bdd_verify_v0_raw_token_with_bad_credentials_closes_without_response() {
     let PlainHandshake {
         log_dir: _log_dir,
         handle,
@@ -331,11 +370,21 @@ async fn v0_raw_token_with_bad_credentials_closes_without_response() {
     handle.shutdown().await;
 }
 
-/// After a handshake chose a mechanism, Kafka accepts only
-/// `SaslAuthenticate`: an `ApiVersions` gets its own error response with
-/// `ILLEGAL_SASL_STATE` (34), and then the connection closes.
+/// A v0 raw token with a bad credential has no response shape to carry an
+/// error, so Kafka closes the connection without one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "v0 raw token with bad credentials closes without response"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn api_versions_after_the_handshake_answers_34_then_closes() {
+async fn v0_raw_token_with_bad_credentials_closes_without_response() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers handshake: api versions after the handshake answers 34 then closes"
+)]
+async fn bdd_verify_api_versions_after_the_handshake_answers_34_then_closes() {
     let PlainHandshake {
         log_dir: _log_dir,
         handle,
@@ -373,6 +422,17 @@ async fn api_versions_after_the_handshake_answers_34_then_closes() {
 
     handle.shutdown().await;
 }
+
+/// After a handshake chose a mechanism, Kafka accepts only
+/// `SaslAuthenticate`: an `ApiVersions` gets its own error response with
+/// `ILLEGAL_SASL_STATE` (34), and then the connection closes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "api versions after the handshake answers 34 then closes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn api_versions_after_the_handshake_answers_34_then_closes() {}
 
 /// A PLAIN SASL broker, the log directory that backs it, and an open socket.
 struct PlainHandshake {
@@ -609,15 +669,12 @@ fn mid_exchange_cases() -> Vec<MidExchangeCase> {
     ]
 }
 
-/// After a handshake chose a mechanism, Kafka's
-/// `SaslServerAuthenticator.handleSaslToken` parses any request but
-/// `SaslAuthenticate` and answers it with that request's own
-/// `getErrorResponse` for `IllegalSaslStateException`: `ILLEGAL_SASL_STATE`
-/// (34) in the request's own response shape and version. The answer and the
-/// close wait out the failed-authentication delay. A request it cannot parse,
-/// or whose error response is null, closes at once with no answer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can_parse_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers handshake: a request after the handshake answers illegal sasl state when kafka can parse it"
+)]
+async fn bdd_verify_a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can_parse_it()
+ {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg =
         sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![SaslMechanism::Plain]);
@@ -679,3 +736,18 @@ async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can
 
     handle.shutdown().await;
 }
+
+/// After a handshake chose a mechanism, Kafka's
+/// `SaslServerAuthenticator.handleSaslToken` parses any request but
+/// `SaslAuthenticate` and answers it with that request's own
+/// `getErrorResponse` for `IllegalSaslStateException`: `ILLEGAL_SASL_STATE`
+/// (34) in the request's own response shape and version. The answer and the
+/// close wait out the failed-authentication delay. A request it cannot parse,
+/// or whose error response is null, closes at once with no answer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/handshake.feature",
+    name = "a request after the handshake answers illegal sasl state when kafka can parse it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can_parse_it() {}

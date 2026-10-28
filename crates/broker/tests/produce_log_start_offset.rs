@@ -96,9 +96,11 @@ async fn seeded_orders() -> SeededOrders {
     }
 }
 
-/// An accepted produce reports the partition's real log start offset.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_accepted_produce_reports_the_trimmed_log_start_offset() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce log start offset: an accepted produce reports the trimmed log start offset"
+)]
+async fn bdd_verify_an_accepted_produce_reports_the_trimmed_log_start_offset() {
     let SeededOrders {
         process: p,
         topic_id,
@@ -121,15 +123,20 @@ async fn an_accepted_produce_reports_the_trimmed_log_start_offset() {
     p.broker.shutdown().await;
 }
 
-/// An idempotent retry is an accepted produce too, so its row carries the same
-/// real log start offset rather than the sentinel.
-///
-/// The retry is recognized by `(producer_id, epoch, sequence)` and answered
-/// with the offset the first send was already assigned, without appending
-/// anything. That row is built on a different code path from the append's, so
-/// a fix that reached only the append would leave this one at -1.
+/// An accepted produce reports the partition's real log start offset.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_start_offset.feature",
+    name = "an accepted produce reports the trimmed log start offset"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {
+async fn an_accepted_produce_reports_the_trimmed_log_start_offset() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce log start offset: an idempotent retry reports the trimmed log start offset"
+)]
+async fn bdd_verify_an_idempotent_retry_reports_the_trimmed_log_start_offset() {
     let SeededOrders {
         process: p,
         topic_id,
@@ -153,6 +160,21 @@ async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {
 
     p.broker.shutdown().await;
 }
+
+/// An idempotent retry is an accepted produce too, so its row carries the same
+/// real log start offset rather than the sentinel.
+///
+/// The retry is recognized by `(producer_id, epoch, sequence)` and answered
+/// with the offset the first send was already assigned, without appending
+/// anything. That row is built on a different code path from the append's, so
+/// a fix that reached only the append would leave this one at -1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_start_offset.feature",
+    name = "an idempotent retry reports the trimmed log start offset"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {}
 
 /// The partition row an accepted produce answers with.
 use crate::support::produce::expected_partition_success as accepted;

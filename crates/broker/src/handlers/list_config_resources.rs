@@ -297,13 +297,11 @@ mod tests {
         topics
     }
 
-    /// Kafka's `KafkaApis.handleListConfigResources`: membership decides which
-    /// types are listed (a repeated type lists once), the rows follow the
-    /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
-    /// `TOPIC`, and broker rows come from `getBrokerNodes(listenerName)`, so
-    /// broker 3 (SSL only) is absent. v0 lists client metrics only.
-    #[test]
-    fn collect_resources_matches_kafka_filter_and_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers list config resources tests: collect resources matches kafka filter and order"
+    )]
+    fn bdd_verify_collect_resources_matches_kafka_filter_and_order() {
         let img = populated_image();
         let all = [
             listed(RESOURCE_TYPE_GROUP, "g-1"),
@@ -380,6 +378,18 @@ mod tests {
             assert2::check!(out == rows(&expected), "case {name}");
         }
     }
+
+    /// Kafka's `KafkaApis.handleListConfigResources`: membership decides which
+    /// types are listed (a repeated type lists once), the rows follow the
+    /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
+    /// `TOPIC`, and broker rows come from `getBrokerNodes(listenerName)`, so
+    /// broker 3 (SSL only) is absent. v0 lists client metrics only.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_config_resources.feature",
+        name = "tests: collect resources matches kafka filter and order"
+    )]
+    fn collect_resources_matches_kafka_filter_and_order() {}
 
     krabka_macros::wire_codec_helpers! {
         test_context ["admin-client"];

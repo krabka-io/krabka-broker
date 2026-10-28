@@ -227,8 +227,11 @@ fn get_nullable_i32_array(buf: &mut &[u8]) -> Result<Option<Vec<i32>>, ProtocolE
 mod tests {
     use {super::*, crate::coordinator::unified::test_support::wire_bytes, assert2::assert};
 
-    #[test]
-    fn target_assignment_member_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen assignment tests: target assignment member bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
         let v = TargetAssignmentMemberValue {
             topic_partitions: vec![AssignedTopicPartitions {
                 topic_id: Uuid([1; 16]),
@@ -248,6 +251,13 @@ mod tests {
         assert!(&v.encode()[..] == &want[..]);
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
+        name = "tests: target assignment member bytes match kafka schema"
+    )]
+    fn target_assignment_member_bytes_match_kafka_schema() {}
+
     #[test]
     fn target_assignment_member_roundtrip() {
         let v = TargetAssignmentMemberValue {
@@ -259,8 +269,11 @@ mod tests {
         assert!(TargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn current_member_assignment_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen assignment tests: current member assignment bytes match kafka schema"
+    )]
+    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
         let v = CurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
@@ -303,6 +316,13 @@ mod tests {
         assert!(&encoded[..] == &want[..]);
         assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == v);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
+        name = "tests: current member assignment bytes match kafka schema"
+    )]
+    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     /// Kafka's `Utils.assignmentFromTopicPartitions`: the stored epochs when
     /// there is one per partition, and otherwise the member epoch raised to 0.
@@ -367,8 +387,11 @@ mod tests {
         assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == want);
     }
 
-    #[test]
-    fn member_state_discriminants_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen assignment tests: member state discriminants match kafka"
+    )]
+    fn bdd_verify_member_state_discriminants_match_kafka() {
         // org.apache.kafka.coordinator.group.modern.MemberState.
         assert!(MemberAssignmentState::Stable as i8 == 0);
         assert!(MemberAssignmentState::UnrevokedPartitions as i8 == 1);
@@ -379,6 +402,13 @@ mod tests {
         );
         assert!(MemberAssignmentState::from_i8(3).is_err());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
+        name = "tests: member state discriminants match kafka"
+    )]
+    fn member_state_discriminants_match_kafka() {}
 
     #[test]
     fn assignment_records_reject_a_missing_tagged_trailer() {

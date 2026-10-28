@@ -25,10 +25,9 @@ use {
     tokio::{sync::OwnedSemaphorePermit, time},
 };
 
-/// The background sweep reverts an acquired-but-unacknowledged lock that
-/// expires, so the next fetch re-delivers at an incremented count.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lock_timeout_redelivers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume lock lifetime: lock timeout redelivers")]
+async fn bdd_verify_lock_timeout_redelivers() {
     let LockFixture {
         permit: _permit,
         broker,
@@ -52,10 +51,19 @@ async fn lock_timeout_redelivers() {
     fetch_redelivered(&client, ShareFetchSetup::from(session)).await;
 }
 
-/// The broker archives a record that exhausts `max_delivery_attempts` without
-/// an Accept (poison pill). Later fetches acquire nothing and the SPSO advances.
+/// The background sweep reverts an acquired-but-unacknowledged lock that
+/// expires, so the next fetch re-delivers at an incremented count.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "lock timeout redelivers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delivery_limit_archives() {
+async fn lock_timeout_redelivers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume lock lifetime: delivery limit archives")]
+async fn bdd_verify_delivery_limit_archives() {
     let LockFixture {
         permit: _permit,
         broker,
@@ -97,18 +105,19 @@ async fn delivery_limit_archives() {
     fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
 }
 
-/// F1 (renew): a renew-ack extends the acquisition lock. The broker does NOT
-/// re-acquire a record that it would otherwise re-deliver after the lock expires.
-///
-/// Config: `record_lock_duration = 500ms` (sweeper ticks at 250ms). Acquire
-/// offset 0 with a 500ms lock, then send a renew-ack about 200ms in. The
-/// renew-ack resets the deadline to renew-time + 500ms (≈ T0+700ms). Then check
-/// at about T0+600ms, which is PAST the original 500ms deadline but BEFORE the
-/// renewed 700ms deadline. The sweeper would already have swept and re-delivered
-/// an un-renewed lock. The renew kept the record Acquired, so the fetch acquires
-/// nothing.
+/// The broker archives a record that exhausts `max_delivery_attempts` without
+/// an Accept (poison pill). Later fetches acquire nothing and the SPSO advances.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "delivery limit archives"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn renew_extends_lock_not_redelivered() {
+async fn delivery_limit_archives() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume lock lifetime: renew extends lock not redelivered")]
+async fn bdd_verify_renew_extends_lock_not_redelivered() {
     let LockFixture {
         permit: _permit,
         broker: _broker,
@@ -148,11 +157,27 @@ async fn renew_extends_lock_not_redelivered() {
     fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
 }
 
-/// F1 (control): the SAME timing WITHOUT a renew re-acquires the offset after
-/// the lock expires, at `delivery_count` 2. This proves the renew above
-/// suppressed the redelivery, and that slack in the timing did not.
+/// F1 (renew): a renew-ack extends the acquisition lock. The broker does NOT
+/// re-acquire a record that it would otherwise re-deliver after the lock expires.
+///
+/// Config: `record_lock_duration = 500ms` (sweeper ticks at 250ms). Acquire
+/// offset 0 with a 500ms lock, then send a renew-ack about 200ms in. The
+/// renew-ack resets the deadline to renew-time + 500ms (≈ T0+700ms). Then check
+/// at about T0+600ms, which is PAST the original 500ms deadline but BEFORE the
+/// renewed 700ms deadline. The sweeper would already have swept and re-delivered
+/// an un-renewed lock. The renew kept the record Acquired, so the fetch acquires
+/// nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "renew extends lock not redelivered"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_renew_redelivers_after_lock_expiry() {
+async fn renew_extends_lock_not_redelivered() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume lock lifetime: no renew redelivers after lock expiry")]
+async fn bdd_verify_no_renew_redelivers_after_lock_expiry() {
     let fixture = Box::pin(lock_fixture(Duration::from_millis(500), None)).await;
     let (session, _) = acquire_initial_session(&fixture.client, &fixture.member, fixture.tid).await;
 
@@ -164,6 +189,17 @@ async fn no_renew_redelivers_after_lock_expiry() {
     fetch_redelivered(&fixture.client, ShareFetchSetup::from(session)).await;
     drop(fixture);
 }
+
+/// F1 (control): the SAME timing WITHOUT a renew re-acquires the offset after
+/// the lock expires, at `delivery_count` 2. This proves the renew above
+/// suppressed the redelivery, and that slack in the timing did not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "no renew redelivers after lock expiry"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_renew_redelivers_after_lock_expiry() {}
 
 /// A joined share-group member and the owners that keep its broker running.
 struct LockFixture {

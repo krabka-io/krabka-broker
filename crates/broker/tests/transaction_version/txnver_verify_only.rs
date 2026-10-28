@@ -68,22 +68,11 @@ async fn await_transaction_coordinator(client: &Client) -> ProducerIdentity {
     }
 }
 
-/// At the default `TV_2`, verify-only `AddPartitionsToTxn` (KIP-890) returns
-/// per-partition `NONE (0)` for a partition already in the ongoing txn and
-/// `TRANSACTION_ABORTABLE (120)` for one that was never added.
-///
-/// Flow: `InitProducerId` → `AddPartitionsToTxn` (`verify_only=false`) adding
-/// `(t,0)` → `AddPartitionsToTxn` (`verify_only=true`) querying both `(t,0)`
-/// (added → NONE) and `(t,1)` (never added → `TRANSACTION_ABORTABLE`).
-///
-/// The test sends this over a single connection to the in-process broker,
-/// which is its own transaction coordinator. `Client::send` negotiates the
-/// highest mutually supported version. The broker advertises v5, which carries
-/// the same batched `transactions` array and `verify_only` field as v4 and
-/// routes through the identical `handle_v4` verify path, so the assertions
-/// hold at either version.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver verify only: tv2 verify only add partitions reports per partition codes"
+)]
+async fn bdd_verify_tv2_verify_only_add_partitions_reports_per_partition_codes() {
     let (broker, bootstrap, _dir) = boot_single().await;
     let client = admin_client(&bootstrap).await;
     // Two partitions so (t,1) is a real partition that simply isn't in the txn.
@@ -148,3 +137,25 @@ async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {
 
     broker.shutdown().await;
 }
+
+/// At the default `TV_2`, verify-only `AddPartitionsToTxn` (KIP-890) returns
+/// per-partition `NONE (0)` for a partition already in the ongoing txn and
+/// `TRANSACTION_ABORTABLE (120)` for one that was never added.
+///
+/// Flow: `InitProducerId` → `AddPartitionsToTxn` (`verify_only=false`) adding
+/// `(t,0)` → `AddPartitionsToTxn` (`verify_only=true`) querying both `(t,0)`
+/// (added → NONE) and `(t,1)` (never added → `TRANSACTION_ABORTABLE`).
+///
+/// The test sends this over a single connection to the in-process broker,
+/// which is its own transaction coordinator. `Client::send` negotiates the
+/// highest mutually supported version. The broker advertises v5, which carries
+/// the same batched `transactions` array and `verify_only` field as v4 and
+/// routes through the identical `handle_v4` verify path, so the assertions
+/// hold at either version.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_verify_only.feature",
+    name = "tv2 verify only add partitions reports per partition codes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tv2_verify_only_add_partitions_reports_per_partition_codes() {}

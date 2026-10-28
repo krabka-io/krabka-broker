@@ -596,11 +596,11 @@ mod tests {
         }
     }
 
-    /// The produce row that Kafka's `AddPartitionsToTxnManager` and
-    /// `ReplicaManager.postVerificationCallback` build from a coordinator
-    /// answer.
-    #[test]
-    fn a_coordinator_answer_maps_to_the_kafka_produce_row() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers produce producer checks tests: a coordinator answer maps to the kafka produce row"
+    )]
+    fn bdd_verify_a_coordinator_answer_maps_to_the_kafka_produce_row() {
         let not_verified = |underlying: &str| {
             Some(format!(
                 "Unable to verify the partition has been added to the transaction. Underlying error: {underlying}"
@@ -672,6 +672,16 @@ mod tests {
             );
         }
     }
+
+    /// The produce row that Kafka's `AddPartitionsToTxnManager` and
+    /// `ReplicaManager.postVerificationCallback` build from a coordinator
+    /// answer.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/produce/producer_checks.feature",
+        name = "tests: a coordinator answer maps to the kafka produce row"
+    )]
+    fn a_coordinator_answer_maps_to_the_kafka_produce_row() {}
 
     /// An idempotent retry, `Decision::Duplicate`, under `acks=all` waits
     /// again for the HW to reach the duplicate's *last offset + 1* before it

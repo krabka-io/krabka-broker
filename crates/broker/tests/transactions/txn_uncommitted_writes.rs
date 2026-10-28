@@ -295,19 +295,11 @@ async fn relayed_transaction_cluster(configure: impl Fn(&mut BrokerConfig)) -> R
     }
 }
 
-/// An `EndTxn` whose `PrepareCommit` cannot reach a follower gets no answer,
-/// and the transaction commits through the next coordinator when the
-/// producer retries.
-///
-/// The coordinator's relay is cut while it leads `__transaction_state-0`, so
-/// its followers stop fetching and stay in the ISR. The coordinator then dies
-/// with the `PrepareCommit` in its log only. A coordinator that answered at
-/// the local append told the producer the transaction committed, and the
-/// follower that leads the partition next still holds the transaction as
-/// `Ongoing` at the epoch before the commit's bump, which fences the producer's
-/// next transaction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn uncommitted writes: an end txn is answered only once its commit decision is replicated"
+)]
+async fn bdd_verify_an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
     let RelayedTransaction {
         mut cluster,
         admin,
@@ -401,22 +393,30 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
     cluster.shutdown().await;
 }
 
-/// A transaction completes only once its `COMMIT` marker is committed on the
-/// data partition, so a marker lost with its leader is written again.
+/// An `EndTxn` whose `PrepareCommit` cannot reach a follower gets no answer,
+/// and the transaction commits through the next coordinator when the
+/// producer retries.
 ///
-/// The coordinator leads `__transaction_state-0`, which has no other replica,
-/// and the data partition, which has one follower. The coordinator's relay is
-/// cut after the follower fetched the transaction's records. The follower
-/// stays in the ISR but fetches nothing more, so the marker reaches the
-/// coordinator's log only, and the `EndTxn` gets no answer. The coordinator
-/// then dies, and the follower leads the data partition without the marker.
-///
-/// A coordinator that counted the marker at the local append recorded
-/// `CompleteCommit` before it died. The transaction then stayed open on the
-/// follower permanently. Its last stable offset stopped at the first record of
-/// the transaction, and a `read_committed` consumer read nothing after it.
+/// The coordinator's relay is cut while it leads `__transaction_state-0`, so
+/// its followers stop fetching and stay in the ISR. The coordinator then dies
+/// with the `PrepareCommit` in its log only. A coordinator that answered at
+/// the local append told the producer the transaction committed, and the
+/// follower that leads the partition next still holds the transaction as
+/// `Ongoing` at the epoch before the commit's bump, which fences the producer's
+/// next transaction.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "an end txn is answered only once its commit decision is replicated"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_transaction_completes_only_once_its_markers_are_committed() {
+async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn uncommitted writes: a transaction completes only once its markers are committed"
+)]
+async fn bdd_verify_a_transaction_completes_only_once_its_markers_are_committed() {
     let RelayedTransaction {
         mut cluster,
         admin,
@@ -506,13 +506,33 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
     cluster.shutdown().await;
 }
 
-/// While a follower of `__consumer_offsets-0` is down but still in its ISR, no
-/// offsets record commits. The group coordinator then answers neither a
-/// `TxnOffsetCommit` nor an `OffsetDelete` with success: each write times out
-/// after Kafka's `offsets.commit.timeout.ms`, which
-/// `CoordinatorOperationExceptionHelper` answers `COORDINATOR_NOT_AVAILABLE`.
+/// A transaction completes only once its `COMMIT` marker is committed on the
+/// data partition, so a marker lost with its leader is written again.
+///
+/// The coordinator leads `__transaction_state-0`, which has no other replica,
+/// and the data partition, which has one follower. The coordinator's relay is
+/// cut after the follower fetched the transaction's records. The follower
+/// stays in the ISR but fetches nothing more, so the marker reaches the
+/// coordinator's log only, and the `EndTxn` gets no answer. The coordinator
+/// then dies, and the follower leads the data partition without the marker.
+///
+/// A coordinator that counted the marker at the local append recorded
+/// `CompleteCommit` before it died. The transaction then stayed open on the
+/// follower permanently. Its last stable offset stopped at the first record of
+/// the transaction, and a `read_committed` consumer read nothing after it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "a transaction completes only once its markers are committed"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn group_coordinator_writes_are_answered_only_once_committed() {
+async fn a_transaction_completes_only_once_its_markers_are_committed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn uncommitted writes: group coordinator writes are answered only once committed"
+)]
+async fn bdd_verify_group_coordinator_writes_are_answered_only_once_committed() {
     let mut cluster = registered_transaction_cluster(|_, config| {
         config.offsets_topic_num_partitions = 1;
         config.transaction_state_num_partitions = 1;
@@ -649,3 +669,16 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
+
+/// While a follower of `__consumer_offsets-0` is down but still in its ISR, no
+/// offsets record commits. The group coordinator then answers neither a
+/// `TxnOffsetCommit` nor an `OffsetDelete` with success: each write times out
+/// after Kafka's `offsets.commit.timeout.ms`, which
+/// `CoordinatorOperationExceptionHelper` answers `COORDINATOR_NOT_AVAILABLE`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_uncommitted_writes.feature",
+    name = "group coordinator writes are answered only once committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn group_coordinator_writes_are_answered_only_once_committed() {}

@@ -474,16 +474,26 @@ mod tests {
         }
     }
 
-    /// Kafka's `newConsumerGroupMemberSubscriptionRecord` sorts the topic
-    /// names and writes the empty string for a member without a pattern.
-    #[test]
-    fn the_member_subscription_record_is_kafkas() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor persistence tests: the member subscription record is kafkas"
+    )]
+    fn bdd_verify_the_member_subscription_record_is_kafkas() {
         let mut member = joined("m1");
         member.subscribed_topic_names = ["b".to_owned(), "a".to_owned(), "c".to_owned()].into();
         let value = member_metadata_value(&member);
         check!(value.subscribed_topic_names == vec!["a", "b", "c"]);
         check!(value.subscribed_topic_regex.as_deref() == Some(""));
     }
+
+    /// Kafka's `newConsumerGroupMemberSubscriptionRecord` sorts the topic
+    /// names and writes the empty string for a member without a pattern.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/persistence.feature",
+        name = "tests: the member subscription record is kafkas"
+    )]
+    fn the_member_subscription_record_is_kafkas() {}
 
     /// The group metadata record writes each member id with an `INT16` length.
     /// A group whose member id has 32768 bytes cannot write it: the flush is an

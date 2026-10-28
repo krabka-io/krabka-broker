@@ -136,23 +136,37 @@ mod tests {
         );
     }
 
-    /// Kafka `validateTransactionTimeoutMs`.
-    #[yare::parameterized(
-        one = { 1, Ok(1) },
-        ordinary = { 5_000, Ok(5_000) },
-        at_maximum = { 8_000, Ok(8_000) },
-        above_maximum = { 8_001, Err(INVALID_TRANSACTION_TIMEOUT) },
-        zero = { 0, Err(INVALID_TRANSACTION_TIMEOUT) },
-        negative = { -1, Err(INVALID_TRANSACTION_TIMEOUT) },
-        minimum = { i32::MIN, Err(INVALID_TRANSACTION_TIMEOUT) },
-        maximum_i32 = { i32::MAX, Err(INVALID_TRANSACTION_TIMEOUT) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn two pc tests: resolve timeout refuses what kafka refuses for {example}"
     )]
-    fn resolve_timeout_refuses_what_kafka_refuses(requested: i32, want: Result<i32, i16>) {
+    fn bdd_verify_resolve_timeout_refuses_what_kafka_refuses(example: String) {
+        type Example = (i32, Result<i32, i16>);
+        let (requested, want): Example = match example.as_str() {
+            "one" => (1, Ok(1)),
+            "ordinary" => (5_000, Ok(5_000)),
+            "at maximum" => (8_000, Ok(8_000)),
+            "above maximum" => (8_001, Err(INVALID_TRANSACTION_TIMEOUT)),
+            "zero" => (0, Err(INVALID_TRANSACTION_TIMEOUT)),
+            "negative" => (-1, Err(INVALID_TRANSACTION_TIMEOUT)),
+            "minimum" => (i32::MIN, Err(INVALID_TRANSACTION_TIMEOUT)),
+            "maximum i32" => (i32::MAX, Err(INVALID_TRANSACTION_TIMEOUT)),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(
             resolve_txn_timeout(false, requested, 8_000) == want,
             "{requested}"
         );
     }
+
+    /// Kafka `validateTransactionTimeoutMs`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/two_pc.feature",
+        name = "tests: resolve timeout refuses what kafka refuses"
+    )]
+    fn resolve_timeout_refuses_what_kafka_refuses(example: String) { let _ = example; }
 
     #[test]
     fn non_2pc_resolution_never_collides_with_the_sentinel() {

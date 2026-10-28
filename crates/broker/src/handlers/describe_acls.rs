@@ -459,10 +459,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// The table from issue #770: `MATCH` lists every binding that applies to
-    /// the named resource, and only a null name is a wildcard.
-    #[tokio::test]
-    async fn handle_matches_patterns_the_way_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe acls tests: handle matches patterns the way kafka does"
+    )]
+    async fn bdd_verify_handle_matches_patterns_the_way_kafka_does() {
         krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [acl_fixtures::start_configured_acls().entries(|| PATTERN_MATCHING_FIXTURE.iter().map(|seed| AclEntry { pattern_type: seed.pattern_type, ..acl().resource_name(seed.name).call() }).collect()).call()];
@@ -651,6 +652,16 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// The table from issue #770: `MATCH` lists every binding that applies to
+    /// the named resource, and only a null name is a wildcard.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_acls.feature",
+        name = "tests: handle matches patterns the way kafka does"
+    )]
+    #[tokio::test]
+    async fn handle_matches_patterns_the_way_kafka_does() {}
 
     /// Only a null principal or host is a wildcard. An empty string matches
     /// only an empty field.

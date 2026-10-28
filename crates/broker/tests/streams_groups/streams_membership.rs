@@ -13,10 +13,9 @@ use {
     assert2::{assert, check},
 };
 
-/// A lone stateless member joins a 2-partition topic and is assigned both tasks
-/// for the single subtopology.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stateless_single_member_converges() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("streams groups streams membership: stateless single member converges")]
+async fn bdd_verify_stateless_single_member_converges() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -51,10 +50,19 @@ async fn stateless_single_member_converges() {
     );
 }
 
-/// A member that has joined can leave with `member_epoch == -1`. The leave
-/// succeeds, and a later Describe shows the group without that member.
+/// A lone stateless member joins a 2-partition topic and is assigned both tasks
+/// for the single subtopology.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_membership.feature",
+    name = "stateless single member converges"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn leave_removes_member() {
+async fn stateless_single_member_converges() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("streams groups streams membership: leave removes member")]
+async fn bdd_verify_leave_removes_member() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -103,3 +111,13 @@ async fn leave_removes_member() {
         g.members.iter().map(|m| &m.member_id).collect::<Vec<_>>()
     );
 }
+
+/// A member that has joined can leave with `member_epoch == -1`. The leave
+/// succeeds, and a later Describe shows the group without that member.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_membership.feature",
+    name = "leave removes member"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leave_removes_member() {}

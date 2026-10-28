@@ -221,8 +221,11 @@ mod tests {
         assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn topology_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence topology tests: topology bytes match kafka schema"
+    )]
+    fn bdd_verify_topology_bytes_match_kafka_schema() {
         let v = StreamsGroupTopologyValue {
             epoch: 1,
             subtopologies: vec![StoredSubtopology {
@@ -260,6 +263,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/topology.feature",
+        name = "tests: topology bytes match kafka schema"
+    )]
+    fn topology_bytes_match_kafka_schema() {}
 
     #[test]
     fn topology_rejects_a_missing_tagged_trailer() {

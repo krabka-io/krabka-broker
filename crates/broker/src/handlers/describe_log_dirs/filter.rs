@@ -68,8 +68,11 @@ mod tests {
         krabka_protocol::owned::describe_log_dirs_request::DescribableLogDirTopic,
     };
 
-    #[test]
-    fn filter_matches_kafka_partition_set() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe log dirs filter tests: filter matches kafka partition set"
+    )]
+    fn bdd_verify_filter_matches_kafka_partition_set() {
         /// A requested topic and the partitions of it that the request lists.
         struct RequestedTopic {
             topic: &'static str,
@@ -150,4 +153,11 @@ mod tests {
             check!(filter.allows(topic, partition) == expected, "case {name}");
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_log_dirs/filter.feature",
+        name = "tests: filter matches kafka partition set"
+    )]
+    fn filter_matches_kafka_partition_set() {}
 }

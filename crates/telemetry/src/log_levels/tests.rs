@@ -46,26 +46,50 @@ fn drain(captured: &Captured) -> Vec<String> {
     mem::take(&mut *captured.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-#[yare::parameterized(
-    fatal = { LogLevel::Fatal },
-    error = { LogLevel::Error },
-    warn = { LogLevel::Warn },
-    info = { LogLevel::Info },
-    debug = { LogLevel::Debug },
-    trace = { LogLevel::Trace },
-)]
-fn kafka_level_names_round_trip(level: LogLevel) {
+#[cfg(test)]
+#[rstest_bdd_macros::then("log levels tests: kafka level names round trip for {example}")]
+fn bdd_verify_kafka_level_names_round_trip(example: String) {
+    type Example = (LogLevel,);
+    let (level,): Example = match example.as_str() {
+        "fatal" => (LogLevel::Fatal,),
+        "error" => (LogLevel::Error,),
+        "warn" => (LogLevel::Warn,),
+        "info" => (LogLevel::Info,),
+        "debug" => (LogLevel::Debug,),
+        "trace" => (LogLevel::Trace,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(LogLevel::from_kafka_name(level.kafka_name()) == Some(level));
 }
 
-#[yare::parameterized(
-    lowercase = { "info" },
-    off = { "OFF" },
-    empty = { "" },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/log_levels/tests.feature",
+    name = "kafka level names round trip"
 )]
-fn kafka_level_names_reject_non_levels(name: &str) {
+fn kafka_level_names_round_trip(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("log levels tests: kafka level names reject non levels for {example}")]
+fn bdd_verify_kafka_level_names_reject_non_levels(example: String) {
+    type Example<'a> = (&'a str,);
+    let (name,): Example<'_> = match example.as_str() {
+        "lowercase" => ("info",),
+        "off" => ("OFF",),
+        "empty" => ("",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(LogLevel::from_kafka_name(name) == None);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/log_levels/tests.feature",
+    name = "kafka level names reject non levels"
+)]
+fn kafka_level_names_reject_non_levels(example: String) { let _ = example; }
 
 #[test]
 fn directives_in_the_spec_seed_the_logger_list() {

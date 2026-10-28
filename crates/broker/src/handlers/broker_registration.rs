@@ -390,11 +390,11 @@ mod tests {
         );
     }
 
-    /// krabka-io/krabka-broker#822: the feature checks of
-    /// `ClusterControlManager.registerBroker`, in Kafka's order. The cluster
-    /// has finalized `metadata.version` 25 and `group.version` 1.
-    #[test]
-    fn features_are_checked_as_kafka_checks_them() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers broker registration tests: features are checked as kafka checks them"
+    )]
+    fn bdd_verify_features_are_checked_as_kafka_checks_them() {
         /// A supported version range the registering broker reports for a feature.
         struct FeatureRange {
             name: &'static str,
@@ -500,6 +500,16 @@ mod tests {
         }
     }
 
+    /// krabka-io/krabka-broker#822: the feature checks of
+    /// `ClusterControlManager.registerBroker`, in Kafka's order. The cluster
+    /// has finalized `metadata.version` 25 and `group.version` 1.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/broker_registration.feature",
+        name = "tests: features are checked as kafka checks them"
+    )]
+    fn features_are_checked_as_kafka_checks_them() {}
+
     /// A broker from the pre-reservation release advertises `krabka.version`
     /// only through level 1. After level 2 is finalized, registration rejects
     /// it, so it cannot rejoin and run the old object reclaimer.
@@ -537,11 +547,11 @@ mod tests {
         assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
     }
 
-    /// krabka-io/krabka-broker#822: the KIP-858 directory checks of
-    /// `ClusterControlManager.registerBroker`. Broker 1 already registered
-    /// directory 500, and broker 2 is registering.
-    #[test]
-    fn log_dirs_are_checked_as_kafka_checks_them() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers broker registration tests: log dirs are checked as kafka checks them"
+    )]
+    fn bdd_verify_log_dirs_are_checked_as_kafka_checks_them() {
         /// A case label, the directories the broker reports, and the registration outcome.
         struct DirCase {
             what: &'static str,
@@ -628,6 +638,16 @@ mod tests {
             );
         }
     }
+
+    /// krabka-io/krabka-broker#822: the KIP-858 directory checks of
+    /// `ClusterControlManager.registerBroker`. Broker 1 already registered
+    /// directory 500, and broker 2 is registering.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/broker_registration.feature",
+        name = "tests: log dirs are checked as kafka checks them"
+    )]
+    fn log_dirs_are_checked_as_kafka_checks_them() {}
 }
 
 /// KIP-966 on the wire: an external broker's registration carries the

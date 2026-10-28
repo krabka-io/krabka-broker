@@ -275,9 +275,11 @@ mod tests {
         short_name(&rules, principal, default_realm).ok()
     }
 
-    /// Kafka's `KerberosNameTest`, plus the rules the audit called out.
-    #[test]
-    fn rules_map_principals_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth kerberos name tests: rules map principals as kafka does"
+    )]
+    fn bdd_verify_rules_map_principals_as_kafka_does() {
         /// A principal mapped under some rules to a short name, or to none.
         struct Mapping<'a> {
             specs: &'a [&'a str],
@@ -420,6 +422,14 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `KerberosNameTest`, plus the rules the audit called out.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/kerberos_name.feature",
+        name = "tests: rules map principals as kafka does"
+    )]
+    fn rules_map_principals_as_kafka_does() {}
 
     /// Kafka does not know the default realm on a host with no krb5 config,
     /// and `DEFAULT` then maps nothing.

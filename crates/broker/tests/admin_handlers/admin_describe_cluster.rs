@@ -7,10 +7,9 @@ use {
     krabka_protocol::owned::describe_cluster_request::DescribeClusterRequest,
 };
 
-/// `DescribeCluster` on a 1-broker cluster returns `error_code == 0`, exactly
-/// one broker entry, and `controller_id == 1`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_cluster_lists_brokers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("admin handlers admin describe cluster: describe cluster lists brokers")]
+async fn bdd_verify_describe_cluster_lists_brokers() {
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
 
     let resp = client
@@ -22,10 +21,21 @@ async fn describe_cluster_lists_brokers() {
     check!(resp.controller_id == 1, "expected controller_id == 1");
 }
 
-/// KIP-919: a broker endpoint rejects a controller projection request. Clients
-/// must send `endpoint_type = 2` to a controller listener instead.
+/// `DescribeCluster` on a 1-broker cluster returns `error_code == 0`, exactly
+/// one broker entry, and `controller_id == 1`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_cluster.feature",
+    name = "describe cluster lists brokers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_cluster_endpoint_type_controllers_is_rejected() {
+async fn describe_cluster_lists_brokers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin describe cluster: describe cluster endpoint type controllers is rejected"
+)]
+async fn bdd_verify_describe_cluster_endpoint_type_controllers_is_rejected() {
     const ENDPOINT_TYPE_CONTROLLERS: i8 = 2;
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
 
@@ -50,3 +60,13 @@ async fn describe_cluster_endpoint_type_controllers_is_rejected() {
     );
     check!(resp.brokers.is_empty());
 }
+
+/// KIP-919: a broker endpoint rejects a controller projection request. Clients
+/// must send `endpoint_type = 2` to a controller listener instead.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_describe_cluster.feature",
+    name = "describe cluster endpoint type controllers is rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_cluster_endpoint_type_controllers_is_rejected() {}

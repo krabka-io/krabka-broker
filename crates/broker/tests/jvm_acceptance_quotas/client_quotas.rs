@@ -16,13 +16,11 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: `kafka-configs --entity-type users` client quota round-trip.
-///
-/// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
-/// describe, and delete on a user-scoped `producer_byte_rate`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas client quotas: jvm kafka configs alter client quota end to end"
+)]
+async fn bdd_verify_jvm_kafka_configs_alter_client_quota_end_to_end() {
     Box::pin(user_quota_round_trip(
         "producer_byte_rate",
         "1024",
@@ -31,16 +29,24 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
     .await;
 }
 
-/// JVM acceptance: `kafka-configs --entity-type ips` KIP-612 round-trip.
+/// JVM acceptance: `kafka-configs --entity-type users` client quota round-trip.
 ///
 /// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
-/// describe (stdout substring), and delete-config on the
-/// `connection_creation_rate` of `ip=127.0.0.1`. This test does not exercise
-/// wall-time enforcement, because a single connection does not trigger the
-/// rate limit. The Rust integration test in `tests/ip_quotas.rs` covers that.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// describe, and delete on a user-scoped `producer_byte_rate`.
 #[ignore = "requires Docker"]
-async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "jvm kafka configs alter client quota end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_client_quota_end_to_end() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas client quotas: jvm kafka configs alter ip quota end to end"
+)]
+async fn bdd_verify_jvm_kafka_configs_alter_ip_quota_end_to_end() {
     Box::pin(quota_round_trip(QuotaCase {
         entity: "ips",
         name: "127.0.0.1",
@@ -54,6 +60,35 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
     .await;
 }
 
+/// JVM acceptance: `kafka-configs --entity-type ips` KIP-612 round-trip.
+///
+/// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
+/// describe (stdout substring), and delete-config on the
+/// `connection_creation_rate` of `ip=127.0.0.1`. This test does not exercise
+/// wall-time enforcement, because a single connection does not trigger the
+/// rate limit. The Rust integration test in `tests/ip_quotas.rs` covers that.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "jvm kafka configs alter ip quota end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas client quotas: jvm kafka configs alter controller mutation rate end to end"
+)]
+async fn bdd_verify_jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
+    Box::pin(user_quota_round_trip(
+        "controller_mutation_rate",
+        "2.0",
+        "controller_mutation_rate=2",
+    ))
+    .await;
+}
+
 /// JVM acceptance: `kafka-configs --entity-type users controller_mutation_rate` round-trip.
 ///
 /// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
@@ -62,16 +97,14 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
 /// wall-time enforcement: a single `kafka-topics --create` is one request,
 /// with a maximum throttle of 1 s. The Rust integration test in
 /// `tests/controller_mutation_quota.rs` covers enforcement.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
-    Box::pin(user_quota_round_trip(
-        "controller_mutation_rate",
-        "2.0",
-        "controller_mutation_rate=2",
-    ))
-    .await;
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "jvm kafka configs alter controller mutation rate end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {}
 
 struct QuotaCase<'a> {
     entity: &'a str,

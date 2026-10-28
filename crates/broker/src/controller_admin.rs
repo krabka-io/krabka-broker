@@ -514,12 +514,11 @@ mod tests {
         tokio::task,
     };
 
-    /// The Kafka 4.x controller-listener set, as a live
-    /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
-    /// set the 4.0.0 request schemas tag `controller`), minus the keys the
-    /// controller listener answers without this router.
-    #[test]
-    fn supported_set_matches_the_kafka_controller_listener_surface() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "controller admin tests: supported set matches the kafka controller listener surface"
+    )]
+    fn bdd_verify_supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
 
         check!(keys.len() == SUPPORTED_APIS.len());
@@ -531,13 +530,22 @@ mod tests {
         );
     }
 
-    /// `Envelope` is advertised at the versions `kafka-clients-4.3.1.jar`
-    /// publishes: `ApiKeys.ENVELOPE` is `0..=0`, flexible from 0. The
-    /// controller listener merges this row into its `ApiVersions` table and
-    /// frames the request header from `flexible_min`, so a wrong minimum here
-    /// eats the first byte of the envelope body.
-    #[test]
-    fn envelope_is_advertised_at_the_versions_kafka_publishes() {
+    /// The Kafka 4.x controller-listener set, as a live
+    /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
+    /// set the 4.0.0 request schemas tag `controller`), minus the keys the
+    /// controller listener answers without this router.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/controller_admin.feature",
+        name = "tests: supported set matches the kafka controller listener surface"
+    )]
+    fn supported_set_matches_the_kafka_controller_listener_surface() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "controller admin tests: envelope is advertised at the versions kafka publishes"
+    )]
+    fn bdd_verify_envelope_is_advertised_at_the_versions_kafka_publishes() {
         let envelope = SUPPORTED_APIS
             .iter()
             .find(|api| api.api_key == ENVELOPE_API_KEY)
@@ -554,6 +562,18 @@ mod tests {
                 })
         );
     }
+
+    /// `Envelope` is advertised at the versions `kafka-clients-4.3.1.jar`
+    /// publishes: `ApiKeys.ENVELOPE` is `0..=0`, flexible from 0. The
+    /// controller listener merges this row into its `ApiVersions` table and
+    /// frames the request header from `flexible_min`, so a wrong minimum here
+    /// eats the first byte of the envelope body.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/controller_admin.feature",
+        name = "tests: envelope is advertised at the versions kafka publishes"
+    )]
+    fn envelope_is_advertised_at_the_versions_kafka_publishes() {}
     fn request(api_key: i16, api_version: i16) -> ControllerAdminRequest {
         ControllerAdminRequest {
             api_key,

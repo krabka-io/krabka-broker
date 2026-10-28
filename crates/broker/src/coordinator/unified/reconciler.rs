@@ -295,13 +295,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `updateSubscriptionMetadata`: (case, bump asked, the topic's
-    /// partitions when the group recorded its hash, the partitions now) to
-    /// (epoch bumped, group epoch after). A new hash bumps the epoch even when
-    /// the heartbeat did not ask for it, and an unchanged hash with no bump
-    /// asked keeps it.
-    #[test]
-    fn the_subscription_metadata_update_bumps_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified reconciler tests: the subscription metadata update bumps as kafka does"
+    )]
+    fn bdd_verify_the_subscription_metadata_update_bumps_as_kafka_does() {
         let rows = [
             ("nothing changed", false, 2, 2, (false, 1)),
             ("the subscription changed", true, 2, 2, (true, 2)),
@@ -319,6 +317,18 @@ mod tests {
             check!(!g.metadata_refresh_requested(), "{case}");
         }
     }
+
+    /// Kafka's `updateSubscriptionMetadata`: (case, bump asked, the topic's
+    /// partitions when the group recorded its hash, the partitions now) to
+    /// (epoch bumped, group epoch after). A new hash bumps the epoch even when
+    /// the heartbeat did not ask for it, and an unchanged hash with no bump
+    /// asked keeps it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/reconciler.feature",
+        name = "tests: the subscription metadata update bumps as kafka does"
+    )]
+    fn the_subscription_metadata_update_bumps_as_kafka_does() {}
 
     #[test]
     fn an_exhausted_epoch_bumps_nothing() {

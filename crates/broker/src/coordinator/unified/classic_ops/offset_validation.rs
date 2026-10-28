@@ -148,11 +148,11 @@ mod tests {
         want: Result<(), i16>,
     }
 
-    /// Kafka's `ClassicGroup.validateOffsetCommit` with
-    /// `isTransactional = false`, row by row. The group holds `m1` and `m2`,
-    /// and the static instance `i1` is pinned to `m1`.
-    #[test]
-    fn offset_commit_follows_kafka_classic_group_rule() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified classic ops offset validation tests: offset commit follows kafka classic group rule"
+    )]
+    fn bdd_verify_offset_commit_follows_kafka_classic_group_rule() {
         let cases: [OffsetCase; 16] = [
             // The admin client on an empty group commits.
             OffsetCase {
@@ -300,6 +300,16 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    /// Kafka's `ClassicGroup.validateOffsetCommit` with
+    /// `isTransactional = false`, row by row. The group holds `m1` and `m2`,
+    /// and the static instance `i1` is pinned to `m1`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature",
+        name = "tests: offset commit follows kafka classic group rule"
+    )]
+    fn offset_commit_follows_kafka_classic_group_rule() {}
 
     /// The commit refreshes the member's session only in `Stable` and
     /// `PreparingRebalance`.

@@ -276,71 +276,79 @@ pub enum KafkaUuidError {
 mod tests {
     use {super::*, assert2::check};
 
-    /// Every accepted input renders as the string that
-    /// `org.apache.kafka.common.Uuid` in `kafka-clients-4.3.1.jar` prints for
-    /// it, and every input Kafka refuses is refused.
-    #[yare::parameterized(
-        kafka_cluster = { "AQIDBAUGBwgJCgsMDQ4PEA", Ok("AQIDBAUGBwgJCgsMDQ4PEA") },
-        kafka_directory = { "U-hCdTzaSPyFB3swwc7Qdw", Ok("U-hCdTzaSPyFB3swwc7Qdw") },
-        reserved_zero = { "AAAAAAAAAAAAAAAAAAAAAA", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        reserved_one = { "AAAAAAAAAAAAAAAAAAAAAQ", Ok("AAAAAAAAAAAAAAAAAAAAAQ") },
-        ignored_low_bits = { "_____________________x", Ok("_____________________w") },
-        rounded_low_bits = { "AAAAAAAAAAAAAAAAAAAAAB", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        padded = { "AAAAAAAAAAAAAAAAAAAAAA==", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        hyphenated_is_too_long = {
-            "01020304-0506-0708-090a-0b0c0d0e0f10",
-            Err(
-                "Input string with prefix `01020304-0506-0708-090a-` is too long to be decoded as a base64 UUID",
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("ids tests: parse and render match kafka uuid for {example}")]
+    fn bdd_verify_parse_and_render_match_kafka_uuid(example: String) {
+        type Example<'a> = (&'a str, Result<&'a str, &'a str>);
+        let (input, want): Example<'_> = match example.as_str() {
+            "kafka cluster" => ("AQIDBAUGBwgJCgsMDQ4PEA", Ok("AQIDBAUGBwgJCgsMDQ4PEA")),
+            "kafka directory" => ("U-hCdTzaSPyFB3swwc7Qdw", Ok("U-hCdTzaSPyFB3swwc7Qdw")),
+            "reserved zero" => ("AAAAAAAAAAAAAAAAAAAAAA", Ok("AAAAAAAAAAAAAAAAAAAAAA")),
+            "reserved one" => ("AAAAAAAAAAAAAAAAAAAAAQ", Ok("AAAAAAAAAAAAAAAAAAAAAQ")),
+            "ignored low bits" => ("_____________________x", Ok("_____________________w")),
+            "rounded low bits" => ("AAAAAAAAAAAAAAAAAAAAAB", Ok("AAAAAAAAAAAAAAAAAAAAAA")),
+            "padded" => ("AAAAAAAAAAAAAAAAAAAAAA==", Ok("AAAAAAAAAAAAAAAAAAAAAA")),
+            "hyphenated is too long" => (
+                "01020304-0506-0708-090a-0b0c0d0e0f10",
+                Err(
+                    "Input string with prefix `01020304-0506-0708-090a-` is too long to be decoded as a base64 UUID",
+                ),
             ),
-        },
-        unicode_too_long = {
-            "AAAAAAAAAAAAAAAAAAAAAAA😀",
-            Err(
-                "Input string with prefix `AAAAAAAAAAAAAAAAAAAAAAA?` is too long to be decoded as a base64 UUID",
+            "unicode too long" => (
+                "AAAAAAAAAAAAAAAAAAAAAAA😀",
+                Err(
+                    "Input string with prefix `AAAAAAAAAAAAAAAAAAAAAAA?` is too long to be decoded as a base64 UUID",
+                ),
             ),
-        },
-        twenty_four_chars = {
-            "AAAAAAAAAAAAAAAAAAAAAAAA",
-            Err(
-                "Input string `AAAAAAAAAAAAAAAAAAAAAAAA` decoded as 18 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            "twenty four chars" => (
+                "AAAAAAAAAAAAAAAAAAAAAAAA",
+                Err(
+                    "Input string `AAAAAAAAAAAAAAAAAAAAAAAA` decoded as 18 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+                ),
             ),
-        },
-        empty = {
-            "",
-            Err(
-                "Input string `` decoded as 0 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            "empty" => (
+                "",
+                Err(
+                    "Input string `` decoded as 0 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+                ),
             ),
-        },
-        short = {
-            "AAAAAA",
-            Err(
-                "Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            "short" => (
+                "AAAAAA",
+                Err(
+                    "Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+                ),
             ),
-        },
-        bad_padding_length = {
-            "AAAAAAAAAAAAAAAAAAAA==",
-            Err(
-                "Input string `AAAAAAAAAAAAAAAAAAAA==` decoded as 15 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            "bad padding length" => (
+                "AAAAAAAAAAAAAAAAAAAA==",
+                Err(
+                    "Input string `AAAAAAAAAAAAAAAAAAAA==` decoded as 15 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+                ),
             ),
-        },
-        twenty_one_chars = {
-            "AAAAAAAAAAAAAAAAAAAAA",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAA` is not base64url: Invalid input length: 21"),
-        },
-        invalid_plus = {
-            "AAAAAAAAAAAAAAAAAAAA+A",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAA+A` is not base64url: Invalid symbol 43, offset 20."),
-        },
-        bad_padding = {
-            "AAAAAAAAAAAAAAAAAAAAAA=",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAAA=` is not base64url: Invalid padding"),
-        },
-        non_ascii = {
-            "AAAAAAAAAAAAAAAAAAAAAé",
-            Err("Input string `AAAAAAAAAAAAAAAAAAAAAé` is not base64url: Invalid symbol 195, offset 21."),
-        },
-    )]
-    fn parse_and_render_match_kafka_uuid(input: &str, want: Result<&str, &str>) {
+            "twenty one chars" => (
+                "AAAAAAAAAAAAAAAAAAAAA",
+                Err(
+                    "Input string `AAAAAAAAAAAAAAAAAAAAA` is not base64url: Invalid input length: 21",
+                ),
+            ),
+            "invalid plus" => (
+                "AAAAAAAAAAAAAAAAAAAA+A",
+                Err(
+                    "Input string `AAAAAAAAAAAAAAAAAAAA+A` is not base64url: Invalid symbol 43, offset 20.",
+                ),
+            ),
+            "bad padding" => (
+                "AAAAAAAAAAAAAAAAAAAAAA=",
+                Err("Input string `AAAAAAAAAAAAAAAAAAAAAA=` is not base64url: Invalid padding"),
+            ),
+            "non ascii" => (
+                "AAAAAAAAAAAAAAAAAAAAAé",
+                Err(
+                    "Input string `AAAAAAAAAAAAAAAAAAAAAé` is not base64url: Invalid symbol 195, offset 21.",
+                ),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let want = want.map(str::to_owned).map_err(str::to_owned);
         let as_cluster = input
             .parse::<ClusterId>()
@@ -353,6 +361,16 @@ mod tests {
             .map_err(|e| e.to_string());
         assert2::check!(as_directory == want, "{input:?} as a directory id");
     }
+
+    /// Every accepted input renders as the string that
+    /// `org.apache.kafka.common.Uuid` in `kafka-clients-4.3.1.jar` prints for
+    /// it, and every input Kafka refuses is refused.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/ids.feature",
+        name = "tests: parse and render match kafka uuid"
+    )]
+    fn parse_and_render_match_kafka_uuid(example: String) { let _ = example; }
 
     /// The command line also takes the hyphenated form, and only a string of
     /// exactly that shape is read as hex.
@@ -384,10 +402,9 @@ mod tests {
         ));
     }
 
-    /// Serde carries the `Display` string and refuses the hyphenated form, so
-    /// a file holds only the Kafka form.
-    #[test]
-    fn serde_uses_the_kafka_string() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("ids tests: serde uses the kafka string")]
+    fn bdd_verify_serde_uses_the_kafka_string() {
         let id = ClusterId(Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10));
         check!(serde_json::to_string(&id).unwrap() == r#""AQIDBAUGBwgJCgsMDQ4PEA""#);
         check!(serde_json::from_str::<ClusterId>(r#""AQIDBAUGBwgJCgsMDQ4PEA""#).unwrap() == id);
@@ -397,9 +414,18 @@ mod tests {
         );
     }
 
-    /// The generators skip what Kafka's generators skip.
-    #[test]
-    fn random_ids_obey_kafka_generation_rules() {
+    /// Serde carries the `Display` string and refuses the hyphenated form, so
+    /// a file holds only the Kafka form.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/ids.feature",
+        name = "tests: serde uses the kafka string"
+    )]
+    fn serde_uses_the_kafka_string() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("ids tests: random ids obey kafka generation rules")]
+    fn bdd_verify_random_ids_obey_kafka_generation_rules() {
         // One draw in 64 starts with a dash before the rule applies, so
         // 5000 draws would miss a missing rule with a chance of e^-78.
         for _ in 0..5000 {
@@ -417,28 +443,47 @@ mod tests {
         }
     }
 
-    /// The reservation and dash predicates agree with Kafka's definitions.
-    #[yare::parameterized(
-        zero = { Uuid::from_u64_pair(0, 0), true, true },
-        one = { Uuid::from_u64_pair(0, 1), true, true },
-        two = { Uuid::from_u64_pair(0, 2), false, true },
-        ninety_nine = { Uuid::from_u64_pair(0, 99), false, true },
-        one_hundred = { Uuid::from_u64_pair(0, 100), false, false },
-        low_bits_max = { Uuid::from_u64_pair(0, u64::MAX), false, true },
-        high_bits_one = { Uuid::from_u64_pair(1, 0), false, false },
-        high_and_low_one = { Uuid::from_u64_pair(1, 1), false, false },
+    /// The generators skip what Kafka's generators skip.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/ids.feature",
+        name = "tests: random ids obey kafka generation rules"
     )]
-    fn reservations_match_kafka(id: Uuid, reserved: bool, reserved_directory: bool) {
+    fn random_ids_obey_kafka_generation_rules() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("ids tests: reservations match kafka for {example}")]
+    fn bdd_verify_reservations_match_kafka(example: String) {
+        type Example = (Uuid, bool, bool);
+        let (id, reserved, reserved_directory): Example = match example.as_str() {
+            "zero" => (Uuid::from_u64_pair(0, 0), true, true),
+            "one" => (Uuid::from_u64_pair(0, 1), true, true),
+            "two" => (Uuid::from_u64_pair(0, 2), false, true),
+            "ninety nine" => (Uuid::from_u64_pair(0, 99), false, true),
+            "one hundred" => (Uuid::from_u64_pair(0, 100), false, false),
+            "low bits max" => (Uuid::from_u64_pair(0, u64::MAX), false, true),
+            "high bits one" => (Uuid::from_u64_pair(1, 0), false, false),
+            "high and low one" => (Uuid::from_u64_pair(1, 1), false, false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::check!(
             (is_reserved(id), is_reserved_directory_id(id)) == (reserved, reserved_directory),
             "{id}"
         );
     }
 
-    /// Exhaustively checks each possible leading byte; this is a property
-    /// sweep over the byte domain, rather than a finite set of independent ids.
-    #[test]
-    fn dash_check_matches_kafka_for_every_first_byte() {
+    /// The reservation and dash predicates agree with Kafka's definitions.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/ids.feature",
+        name = "tests: reservations match kafka"
+    )]
+    fn reservations_match_kafka(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("ids tests: dash check matches kafka for every first byte")]
+    fn bdd_verify_dash_check_matches_kafka_for_every_first_byte() {
         for first_byte in 0..=u8::MAX {
             let mut bytes = [0u8; 16];
             bytes[0] = first_byte;
@@ -449,4 +494,13 @@ mod tests {
             );
         }
     }
+
+    /// Exhaustively checks each possible leading byte; this is a property
+    /// sweep over the byte domain, rather than a finite set of independent ids.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/ids.feature",
+        name = "tests: dash check matches kafka for every first byte"
+    )]
+    fn dash_check_matches_kafka_for_every_first_byte() {}
 }

@@ -27,15 +27,9 @@ use {
     tokio::net::TcpStream,
 };
 
-/// Happy-path drive of a SASL/SCRAM-SHA-512 session.
-///
-/// The test provisions a credential for "alice" with the shared test
-/// password. It goes through the controller directly and not through the
-/// public `AlterUserScramCredentials` handler. It then runs the two-round
-/// RFC 5802 exchange end-to-end and asserts that the post-auth Metadata
-/// request succeeds.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha512_happy_path() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers scram: sasl scram sha512 happy path")]
+async fn bdd_verify_sasl_scram_sha512_happy_path() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -48,15 +42,26 @@ async fn sasl_scram_sha512_happy_path() {
     result.expect("SASL/SCRAM session must succeed end-to-end");
 }
 
-/// Negative path: with a wrong password, `SaslAuthenticate` round 2 responds
-/// with `error_code = 58`, which is `SASL_AUTHENTICATION_FAILED`, and the
-/// broker closes the connection.
+/// Happy-path drive of a SASL/SCRAM-SHA-512 session.
 ///
-/// `drive_sasl_scram_session` reports the failure as a non-zero error code on
-/// the auth response, or as an EOF when the Metadata read that follows
-/// returns no bytes.
+/// The test provisions a credential for "alice" with the shared test
+/// password. It goes through the controller directly and not through the
+/// public `AlterUserScramCredentials` handler. It then runs the two-round
+/// RFC 5802 exchange end-to-end and asserts that the post-auth Metadata
+/// request succeeds.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha512 happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha512_wrong_password_closes_connection() {
+async fn sasl_scram_sha512_happy_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: sasl scram sha512 wrong password closes connection"
+)]
+async fn bdd_verify_sasl_scram_sha512_wrong_password_closes_connection() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -76,14 +81,24 @@ async fn sasl_scram_sha512_wrong_password_closes_connection() {
     );
 }
 
-/// SASL/SCRAM-SHA-256 happy path.
+/// Negative path: with a wrong password, `SaslAuthenticate` round 2 responds
+/// with `error_code = 58`, which is `SASL_AUTHENTICATION_FAILED`, and the
+/// broker closes the connection.
 ///
-/// The test is a copy of the SHA-512 test, but it provisions a SHA-256
-/// credential and configures the listener to enable only SHA-256. This proves
-/// that the new mechanism is wired end-to-end, and that it does not use the
-/// SHA-512 code by accident.
+/// `drive_sasl_scram_session` reports the failure as a non-zero error code on
+/// the auth response, or as an EOF when the Metadata read that follows
+/// returns no bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha512 wrong password closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha256_happy_path() {
+async fn sasl_scram_sha512_wrong_password_closes_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers scram: sasl scram sha256 happy path")]
+async fn bdd_verify_sasl_scram_sha256_happy_path() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -96,10 +111,25 @@ async fn sasl_scram_sha256_happy_path() {
     result.expect("SASL/SCRAM-SHA-256 session must succeed end-to-end");
 }
 
-/// Negative path for SHA-256: a wrong password must close the connection,
-/// the same as in the SHA-512 variant.
+/// SASL/SCRAM-SHA-256 happy path.
+///
+/// The test is a copy of the SHA-512 test, but it provisions a SHA-256
+/// credential and configures the listener to enable only SHA-256. This proves
+/// that the new mechanism is wired end-to-end, and that it does not use the
+/// SHA-512 code by accident.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha256 happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_scram_sha256_wrong_password_closes_connection() {
+async fn sasl_scram_sha256_happy_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: sasl scram sha256 wrong password closes connection"
+)]
+async fn bdd_verify_sasl_scram_sha256_wrong_password_closes_connection() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -119,12 +149,21 @@ async fn sasl_scram_sha256_wrong_password_closes_connection() {
     );
 }
 
-/// Kafka's `ScramSaslServer` refuses a stored credential stretched fewer than
-/// 4096 times in round 1, with the generic invalid-credentials text, and
-/// accepts one at 4096. Such a credential reaches the image only through a
-/// bootstrap record, never through `AlterUserScramCredentials`.
+/// Negative path for SHA-256: a wrong password must close the connection,
+/// the same as in the SHA-512 variant.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "sasl scram sha256 wrong password closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {
+async fn sasl_scram_sha256_wrong_password_closes_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: scram credential below 4096 iterations is refused in round one"
+)]
+async fn bdd_verify_scram_credential_below_4096_iterations_is_refused_in_round_one() {
     for (mechanism, iterations, expected) in [
         (
             SaslMechanism::ScramSha256,
@@ -192,6 +231,18 @@ async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {
     }
 }
 
+/// Kafka's `ScramSaslServer` refuses a stored credential stretched fewer than
+/// 4096 times in round 1, with the generic invalid-credentials text, and
+/// accepts one at 4096. Such a credential reaches the image only through a
+/// bootstrap record, never through `AlterUserScramCredentials`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram credential below 4096 iterations is refused in round one"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {}
+
 /// Drive a complete SASL/SCRAM session against a `SASL_PLAINTEXT` listener.
 ///
 /// This helper works for both SHA-256 and SHA-512. It passes the mechanism
@@ -218,13 +269,11 @@ pub async fn drive_sasl_scram_session(
     metadata_probe(&mut stream, 5).await
 }
 
-/// Kafka's `ScramFormatter.xor` throws `IllegalArgumentException` on a
-/// client-final proof that does not decode to the hash length, and
-/// `Selector` then closes the connection with no `SaslAuthenticate`
-/// response. A proof of the right length and the wrong value still gets the
-/// usual error-58 answer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: a scram proof of the wrong length closes with no response"
+)]
+async fn bdd_verify_a_scram_proof_of_the_wrong_length_closes_with_no_response() {
     for (case, proof, answered) in [
         ("empty proof", String::new(), false),
         // Valid base64 of 30 bytes; 43 characters would fail the grammar,
@@ -281,6 +330,19 @@ async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {
     }
 }
 
+/// Kafka's `ScramFormatter.xor` throws `IllegalArgumentException` on a
+/// client-final proof that does not decode to the hash length, and
+/// `Selector` then closes the connection with no `SaslAuthenticate`
+/// response. A proof of the right length and the wrong value still gets the
+/// usual error-58 answer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "a scram proof of the wrong length closes with no response"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {}
+
 /// Runs the two RFC 5802 rounds on `stream` and returns the round-2
 /// response, whose `session_lifetime_ms` is the KIP-368 window.
 pub async fn scram_authenticate(
@@ -324,6 +386,14 @@ pub async fn scram_authenticate(
         .await
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: scram session capped by connections max reauth then closes"
+)]
+async fn bdd_verify_scram_session_capped_by_connections_max_reauth_then_closes() {
+    capped_session_closes(SaslMechanism::ScramSha512).await;
+}
+
 /// KIP-368: a SCRAM session under `connections.max.reauth.ms` reports the
 /// window as `session_lifetime_ms`, and a data-plane request that arrives after
 /// it elapses without an in-band re-authentication closes the connection.
@@ -331,23 +401,61 @@ pub async fn scram_authenticate(
 /// The close happens on that request and not on a timer, which is where Kafka
 /// puts it (`Processor.processCompletedReceives`): a connection that has fallen
 /// silent is reclaimed by `connections.max.idle.ms`, not by this window.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram session capped by connections max reauth then closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_session_capped_by_connections_max_reauth_then_closes() {
-    capped_session_closes(SaslMechanism::ScramSha512).await;
+async fn scram_session_capped_by_connections_max_reauth_then_closes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: scram in band reauth same principal reopens data plane"
+)]
+async fn bdd_verify_scram_in_band_reauth_same_principal_reopens_data_plane() {
+    same_principal_reopens(SaslMechanism::ScramSha512).await;
 }
 
 /// KIP-368: a SCRAM re-auth for the same principal runs both rounds in the
 /// `Reauthenticating` state and re-arms the window.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram in band reauth same principal reopens data plane"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_in_band_reauth_same_principal_reopens_data_plane() {
-    same_principal_reopens(SaslMechanism::ScramSha512).await;
+async fn scram_in_band_reauth_same_principal_reopens_data_plane() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: scram in band reauth with different principal closes"
+)]
+async fn bdd_verify_scram_in_band_reauth_with_different_principal_closes() {
+    different_principal_closes(SaslMechanism::ScramSha512).await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a SCRAM re-auth as a
 /// different user answers `SASL_AUTHENTICATION_FAILED` (58) and closes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram in band reauth with different principal closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_in_band_reauth_with_different_principal_closes() {
-    different_principal_closes(SaslMechanism::ScramSha512).await;
+async fn scram_in_band_reauth_with_different_principal_closes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers scram: scram reauth after the window elapsed keeps serving round after round"
+)]
+async fn bdd_verify_scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
+    repeated_expired_reauth(
+        SaslMechanism::ScramSha512,
+        krabka_units::secs(1),
+        900..=1_000,
+    )
+    .await;
 }
 
 /// KIP-368: a connection re-authenticates round after round for the whole life
@@ -364,15 +472,13 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
 /// The window here is short and the test sleeps past it before every round, so
 /// each of the three rounds starts expired. A broker that closed on the deadline
 /// itself fails on the first one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/scram.feature",
+    name = "scram reauth after the window elapsed keeps serving round after round"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    repeated_expired_reauth(
-        SaslMechanism::ScramSha512,
-        krabka_units::secs(1),
-        900..=1_000,
-    )
-    .await;
-}
+async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {}
 
 async fn scram_fixture(mechanism: SaslMechanism) -> RetainedBroker {
     let log_dir = tempfile::tempdir().unwrap();

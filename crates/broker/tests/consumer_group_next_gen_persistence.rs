@@ -56,8 +56,11 @@ fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     cfg
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replay_preserves_group_epoch_and_members() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen persistence: replay preserves group epoch and members"
+)]
+async fn bdd_verify_replay_preserves_group_epoch_and_members() {
     let dir = tempfile::TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
 
@@ -89,8 +92,19 @@ async fn replay_preserves_group_epoch_and_members() {
     assert!(resp.error_code == 0, "post-restart heartbeat must succeed");
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "replay preserves group epoch and members"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn next_gen_state_cleared_after_leave_then_restart() {
+async fn replay_preserves_group_epoch_and_members() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen persistence: next gen state cleared after leave then restart"
+)]
+async fn bdd_verify_next_gen_state_cleared_after_leave_then_restart() {
     let dir = tempfile::TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
 
@@ -133,14 +147,19 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
     assert!(resp.error_code == codes::UNKNOWN_MEMBER_ID);
 }
 
-/// Kafka persists the topics that a `SubscribedTopicRegex` resolved to
-/// (`ConsumerGroupRegularExpression`) and replays them, so a coordinator
-/// restart keeps the member's topics. The Java client sends its pattern only
-/// when it changes, so the heartbeats after the restart carry none, and the
-/// group resolves the pattern again by itself: a topic created after the
-/// restart reaches the member too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "next gen state cleared after leave then restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
+async fn next_gen_state_cleared_after_leave_then_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen persistence: replay keeps the topics a regex resolved to and finds new ones"
+)]
+async fn bdd_verify_replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
     let test_dir = tempfile::tempdir().expect("test tempdir");
     let log_dir = test_dir.path().to_path_buf();
 
@@ -210,6 +229,20 @@ async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
     );
     broker.shutdown().await;
 }
+
+/// Kafka persists the topics that a `SubscribedTopicRegex` resolved to
+/// (`ConsumerGroupRegularExpression`) and replays them, so a coordinator
+/// restart keeps the member's topics. The Java client sends its pattern only
+/// when it changes, so the heartbeats after the restart carry none, and the
+/// group resolves the pattern again by itself: a topic created after the
+/// restart reaches the member too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "replay keeps the topics a regex resolved to and finds new ones"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {}
 
 /// A running broker and a client connected to it.
 struct BrokerWithClient {

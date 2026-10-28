@@ -90,8 +90,11 @@ async fn start_three_partition_log() -> (BareBroker, Arc<KafkaMetadataEventLog>)
     (bare, log)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage metadata assign: subscribe subset from nonzero offset yields exact records"
+)]
+async fn bdd_verify_subscribe_subset_from_nonzero_offset_yields_exact_records() {
     let (
         BareBroker {
             broker,
@@ -172,11 +175,19 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
     broker.shutdown().await;
 }
 
-/// `publish_keyed_group` enqueues the whole group before it waits. Each
-/// partition still assigns offsets in the order the group lists its records,
-/// and every key, value and tombstone lands as given.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_metadata_assign.feature",
+    name = "subscribe subset from nonzero offset yields exact records"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keyed_group_lands_each_partition_in_order() {
+async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage metadata assign: keyed group lands each partition in order"
+)]
+async fn bdd_verify_keyed_group_lands_each_partition_in_order() {
     let (
         BareBroker {
             broker,
@@ -249,3 +260,14 @@ async fn keyed_group_lands_each_partition_in_order() {
     log.shutdown().await;
     broker.shutdown().await;
 }
+
+/// `publish_keyed_group` enqueues the whole group before it waits. Each
+/// partition still assigns offsets in the order the group lists its records,
+/// and every key, value and tombstone lands as given.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_metadata_assign.feature",
+    name = "keyed group lands each partition in order"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keyed_group_lands_each_partition_in_order() {}

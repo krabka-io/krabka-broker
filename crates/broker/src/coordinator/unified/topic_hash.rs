@@ -197,14 +197,9 @@ mod tests {
         kafka: i64,
     }
 
-    /// Golden values from hash4j 0.22.0, the version Kafka 4.3.1 pins in
-    /// `gradle/dependencies.gradle`. Each was computed by running a line by
-    /// line transcription of `Utils.computeTopicHash` and
-    /// `Utils.computeGroupHash` against the published jar (SHA-1
-    /// `2d61bfb5b38469cb76141b06dc68d36a9007e9ad`), with the metadata image
-    /// lookups replaced by the arguments below.
-    #[test]
-    fn topic_hashes_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("coordinator unified topic hash tests: topic hashes match kafka")]
+    fn bdd_verify_topic_hashes_match_kafka() {
         let mut ids = [0x11; 16];
         ids[8..].fill(0x22);
         let rows = [
@@ -260,8 +255,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn group_hashes_match_kafka() {
+    /// Golden values from hash4j 0.22.0, the version Kafka 4.3.1 pins in
+    /// `gradle/dependencies.gradle`. Each was computed by running a line by
+    /// line transcription of `Utils.computeTopicHash` and
+    /// `Utils.computeGroupHash` against the published jar (SHA-1
+    /// `2d61bfb5b38469cb76141b06dc68d36a9007e9ad`), with the metadata image
+    /// lookups replaced by the arguments below.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/topic_hash.feature",
+        name = "tests: topic hashes match kafka"
+    )]
+    fn topic_hashes_match_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("coordinator unified topic hash tests: group hashes match kafka")]
+    fn bdd_verify_group_hashes_match_kafka() {
         let foo = 4_231_092_367_357_902_416;
         let bar = 8_733_119_781_167_439_863;
         let rows = [
@@ -325,4 +334,11 @@ mod tests {
             check!(group_hash(row.topics) == row.kafka, "{}", row.case);
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/topic_hash.feature",
+        name = "tests: group hashes match kafka"
+    )]
+    fn group_hashes_match_kafka() {}
 }

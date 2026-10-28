@@ -53,12 +53,11 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
     consumer.close().await.unwrap();
 }
 
-/// Exercise the complete transactional cycle at both downgraded feature
-/// levels. `TV_1` writes flexible v1 log values and `TV_0` writes classic v0
-/// log values. In both cases a committed read proves that the selected encode
-/// path works end-to-end.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn versioned_full_cycles_commit_and_read() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver full cycle: versioned full cycles commit and read"
+)]
+async fn bdd_verify_versioned_full_cycles_commit_and_read() {
     struct Case {
         level: i16,
         topic: &'static str,
@@ -96,3 +95,15 @@ async fn versioned_full_cycles_commit_and_read() {
         broker.shutdown().await;
     }
 }
+
+/// Exercise the complete transactional cycle at both downgraded feature
+/// levels. `TV_1` writes flexible v1 log values and `TV_0` writes classic v0
+/// log values. In both cases a committed read proves that the selected encode
+/// path works end-to-end.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_full_cycle.feature",
+    name = "versioned full cycles commit and read"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn versioned_full_cycles_commit_and_read() {}

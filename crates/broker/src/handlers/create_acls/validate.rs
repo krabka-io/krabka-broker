@@ -264,8 +264,11 @@ mod tests {
         krabka_protocol::owned::create_acls_request::AclCreation,
     };
 
-    #[test]
-    fn validate_accepts_any_principal_type_and_the_kafka_cluster_name() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers create acls validate tests: validate accepts any principal type and the kafka cluster name"
+    )]
+    fn bdd_verify_validate_accepts_any_principal_type_and_the_kafka_cluster_name() {
         /// A mutation of the baseline creation, and the entry `validate` builds from it.
         struct ShapeCase {
             shape: fn(&mut AclCreation),
@@ -336,10 +339,18 @@ mod tests {
         }
     }
 
-    /// Every per-binding refusal, with Kafka's code and message from
-    /// `AclApis.handleCreateAcls` and `AclControlManager.validateNewAcl`.
-    #[test]
-    fn validate_refuses_with_kafka_messages() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/create_acls/validate.feature",
+        name = "tests: validate accepts any principal type and the kafka cluster name"
+    )]
+    fn validate_accepts_any_principal_type_and_the_kafka_cluster_name() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers create acls validate tests: validate refuses with kafka messages"
+    )]
+    fn bdd_verify_validate_refuses_with_kafka_messages() {
         /// A corruption of the baseline creation, and the message `validate` refuses it with.
         struct CorruptCase {
             corrupt: fn(&mut AclCreation),
@@ -405,6 +416,15 @@ mod tests {
         }
     }
 
+    /// Every per-binding refusal, with Kafka's code and message from
+    /// `AclApis.handleCreateAcls` and `AclControlManager.validateNewAcl`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/create_acls/validate.feature",
+        name = "tests: validate refuses with kafka messages"
+    )]
+    fn validate_refuses_with_kafka_messages() {}
+
     /// A resource name with a NUL byte is a valid Kafka resource name.
     #[test]
     fn validate_accepts_a_nul_in_the_resource_name() {
@@ -412,8 +432,11 @@ mod tests {
         assert!(validate(&c).map(|entry| entry.resource_name) == Ok("bad\0name".to_owned()));
     }
 
-    #[test]
-    fn whole_request_element_checks_match_kafka_parse_and_binding_construction() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers create acls validate tests: whole request element checks match kafka parse and binding construction"
+    )]
+    fn bdd_verify_whole_request_element_checks_match_kafka_parse_and_binding_construction() {
         /// A mutation of the baseline creation, whether it makes an UNKNOWN element, and
         /// whether it makes a filter-only element.
         struct ElementCase {
@@ -493,13 +516,18 @@ mod tests {
         }
     }
 
-    /// KIP-1276 host validation, table-driven against
-    /// `AclControlManager.validateHostPattern`'s four outcomes: the wildcard
-    /// and a plain address always pass; a CIDR host needs
-    /// `cidr_hosts_supported` and must parse; an empty host is always
-    /// rejected regardless of the gate.
-    #[test]
-    fn validate_host_matches_kafka_cidr_gating() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/create_acls/validate.feature",
+        name = "tests: whole request element checks match kafka parse and binding construction"
+    )]
+    fn whole_request_element_checks_match_kafka_parse_and_binding_construction() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers create acls validate tests: validate host matches kafka cidr gating"
+    )]
+    fn bdd_verify_validate_host_matches_kafka_cidr_gating() {
         /// The refusal expected for a host: Kafka's code and message.
         struct HostRefusal {
             code: i16,
@@ -599,6 +627,18 @@ mod tests {
             );
         }
     }
+
+    /// KIP-1276 host validation, table-driven against
+    /// `AclControlManager.validateHostPattern`'s four outcomes: the wildcard
+    /// and a plain address always pass; a CIDR host needs
+    /// `cidr_hosts_supported` and must parse; an empty host is always
+    /// rejected regardless of the gate.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/create_acls/validate.feature",
+        name = "tests: validate host matches kafka cidr gating"
+    )]
+    fn validate_host_matches_kafka_cidr_gating() {}
 
     /// Kafka 4.3.1 has no host check, so every host is stored as the text it
     /// arrived as: the wildcard, an address, a range, a malformed range and

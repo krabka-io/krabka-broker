@@ -56,8 +56,11 @@ pub(super) fn timestamp_kind(timestamp: i64, version: i16) -> krabka_verified::L
 mod tests {
     use {super::*, assert2::assert};
 
-    #[test]
-    fn sentinel_constants_match_kafka_wire_values() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers list offsets sentinels tests: sentinel constants match kafka wire values"
+    )]
+    fn bdd_verify_sentinel_constants_match_kafka_wire_values() {
         let cases = [
             ("EARLIEST_TIMESTAMP", EARLIEST_TIMESTAMP, -2),
             ("LATEST_TIMESTAMP", LATEST_TIMESTAMP, -1),
@@ -75,8 +78,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tiered_sentinels_require_their_kafka_versions() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_offsets/sentinels.feature",
+        name = "tests: sentinel constants match kafka wire values"
+    )]
+    fn sentinel_constants_match_kafka_wire_values() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers list offsets sentinels tests: tiered sentinels require their kafka versions"
+    )]
+    fn bdd_verify_tiered_sentinels_require_their_kafka_versions() {
         let cases = [
             (EARLIEST_TIMESTAMP, 0, true),
             (LATEST_TIMESTAMP, 0, true),
@@ -99,4 +112,11 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_offsets/sentinels.feature",
+        name = "tests: tiered sentinels require their kafka versions"
+    )]
+    fn tiered_sentinels_require_their_kafka_versions() {}
 }

@@ -986,12 +986,9 @@ async fn commit_source_group(bootstrap: &str) {
 
 // ------------------------------------------------------------------ the case
 
-/// MM2 migrates a stock Kafka cluster onto krabka: the records and their
-/// headers, the internal topics it needs, the consumer group's translated
-/// position, and a topic config changed after the fact.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("mirror maker2: mirror maker2 migrates a kafka cluster onto krabka")]
+async fn bdd_verify_mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {
     let gateway = docker_bridge_gateway();
     let target = format!("{gateway}:{}", host_port());
     let advertised = target.clone();
@@ -1042,6 +1039,18 @@ async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {
     drop(source);
     broker.shutdown().await;
 }
+
+/// MM2 migrates a stock Kafka cluster onto krabka: the records and their
+/// headers, the internal topics it needs, the consumer group's translated
+/// position, and a topic config changed after the fact.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/mirror_maker2.feature",
+    name = "mirror maker2 migrates a kafka cluster onto krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {}
 
 /// MM2's three internal topics exist on the target with the shape
 /// `MirrorUtils.createSinglePartitionCompactedTopic` asks for.
@@ -1215,22 +1224,45 @@ mod tests {
         assert2::assert,
     };
 
-    #[test]
-    fn a_produced_line_parses_back_into_the_same_record() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a produced line parses back into the same record"
+    )]
+    fn bdd_verify_a_produced_line_parses_back_into_the_same_record() {
         for record in seeded_records() {
             assert!(Record::parse(&record.line()) == Some(record));
         }
     }
 
-    #[test]
-    fn a_line_that_is_not_a_record_is_not_read_as_one() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a produced line parses back into the same record"
+    )]
+    fn a_produced_line_parses_back_into_the_same_record() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a line that is not a record is not read as one"
+    )]
+    fn bdd_verify_a_line_that_is_not_a_record_is_not_read_as_one() {
         for line in ["Processed a total of 10 messages", "", "a\tb\tc\td"] {
             assert!(Record::parse(line) == None);
         }
     }
 
-    #[test]
-    fn a_record_without_headers_parses_as_the_tools_render_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a line that is not a record is not read as one"
+    )]
+    fn a_line_that_is_not_a_record_is_not_read_as_one() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a record without headers parses as the tools render it"
+    )]
+    fn bdd_verify_a_record_without_headers_parses_as_the_tools_render_it() {
         assert!(
             Record::parse("NO_HEADERS\tkey-0\torder-0")
                 == Some(Record {
@@ -1241,8 +1273,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_mirror_maker_internal_topic_is_recognised_by_its_shape() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a record without headers parses as the tools render it"
+    )]
+    fn a_record_without_headers_parses_as_the_tools_render_it() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: each mirror maker internal topic is recognised by its shape"
+    )]
+    fn bdd_verify_each_mirror_maker_internal_topic_is_recognised_by_its_shape() {
         let cases = [
             ("heartbeats", Some(Role::Heartbeats)),
             ("source.checkpoints.internal", Some(Role::Checkpoints)),
@@ -1260,10 +1302,18 @@ mod tests {
         }
     }
 
-    /// `kafka-topics --describe` as Kafka 4.3 renders a compacted internal
-    /// topic, tabs and all.
-    #[test]
-    fn the_partition_count_is_read_out_of_a_topic_description() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: each mirror maker internal topic is recognised by its shape"
+    )]
+    fn each_mirror_maker_internal_topic_is_recognised_by_its_shape() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: the partition count is read out of a topic description"
+    )]
+    fn bdd_verify_the_partition_count_is_read_out_of_a_topic_description() {
         let text = "Topic: heartbeats\tTopicId: sVCK0oNBQtOb4tGXEmuJHw\tPartitionCount: 1\t\
                     ReplicationFactor: 1\tConfigs: cleanup.policy=compact\n\
                     \tTopic: heartbeats\tPartition: 0\tLeader: 1\tReplicas: 1\tIsr: 1\n";
@@ -1271,10 +1321,20 @@ mod tests {
         assert!(described_partitions("Topic: heartbeats\n") == None);
     }
 
-    /// `kafka-configs --describe` prints the value and then a `synonyms=`
-    /// field that repeats the key inside itself.
-    #[test]
-    fn a_config_value_is_not_taken_from_the_synonyms_field() {
+    /// `kafka-topics --describe` as Kafka 4.3 renders a compacted internal
+    /// topic, tabs and all.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: the partition count is read out of a topic description"
+    )]
+    fn the_partition_count_is_read_out_of_a_topic_description() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a config value is not taken from the synonyms field"
+    )]
+    fn bdd_verify_a_config_value_is_not_taken_from_the_synonyms_field() {
         let text = "Dynamic configs for topic heartbeats are:\n  \
                     cleanup.policy=compact sensitive=false \
                     synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=compact}\n";
@@ -1282,8 +1342,20 @@ mod tests {
         assert!(described_config(text, "retention.ms") == None);
     }
 
-    #[test]
-    fn a_groups_committed_offset_is_read_off_its_own_row() {
+    /// `kafka-configs --describe` prints the value and then a `synonyms=`
+    /// field that repeats the key inside itself.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a config value is not taken from the synonyms field"
+    )]
+    fn a_config_value_is_not_taken_from_the_synonyms_field() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a groups committed offset is read off its own row"
+    )]
+    fn bdd_verify_a_groups_committed_offset_is_read_off_its_own_row() {
         let text = "\nGROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG \
                     CONSUMER-ID HOST CLIENT-ID\n\
                     krabka-mm2-riders source.krabka-mm2-orders 0 4 10 6 - - -\n\
@@ -1292,19 +1364,36 @@ mod tests {
         assert!(described_offset(text, "krabka-mm2-riders", "source.absent") == None);
     }
 
-    /// A group that has joined but committed nothing prints a dash, which must
-    /// not be read as offset zero.
-    #[test]
-    fn an_uncommitted_group_reads_as_no_offset_rather_than_zero() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a groups committed offset is read off its own row"
+    )]
+    fn a_groups_committed_offset_is_read_off_its_own_row() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: an uncommitted group reads as no offset rather than zero"
+    )]
+    fn bdd_verify_an_uncommitted_group_reads_as_no_offset_rather_than_zero() {
         let text = "krabka-mm2-riders source.krabka-mm2-orders 0 - 10 - - - -\n";
         assert!(described_offset(text, "krabka-mm2-riders", "source.krabka-mm2-orders") == None);
     }
 
-    /// The shape of the failure this bound exists for: an MM2 that stopped on
-    /// purpose writes hundreds of INFO lines closing itself down after the
-    /// error that made it stop, so a tail alone loses the cause.
-    #[test]
-    fn a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {
+    /// A group that has joined but committed nothing prints a dash, which must
+    /// not be read as offset zero.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: an uncommitted group reads as no offset rather than zero"
+    )]
+    fn an_uncommitted_group_reads_as_no_offset_rather_than_zero() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a log excerpt keeps the cause a long shutdown pushed out of the tail"
+    )]
+    fn bdd_verify_a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {
         let mut log = vec![
             "[2026-09-08 03:39:20,001] ERROR Uncaught exception in herder work thread, exiting"
                 .to_owned(),
@@ -1323,10 +1412,21 @@ mod tests {
         assert!(excerpt.lines().count() <= LOG_PROBLEM_LINES + LOG_TAIL_LINES + 2);
     }
 
-    /// Neither half of the excerpt grows with the log, whichever half the log
-    /// is made of.
-    #[test]
-    fn a_log_excerpt_is_bounded_however_long_the_log_is() {
+    /// The shape of the failure this bound exists for: an MM2 that stopped on
+    /// purpose writes hundreds of INFO lines closing itself down after the
+    /// error that made it stop, so a tail alone loses the cause.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a log excerpt keeps the cause a long shutdown pushed out of the tail"
+    )]
+    fn a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a log excerpt is bounded however long the log is"
+    )]
+    fn bdd_verify_a_log_excerpt_is_bounded_however_long_the_log_is() {
         let problems: Vec<String> = (0..500)
             .map(|index| format!("[ts] WARN something went wrong: {index}"))
             .collect();
@@ -1338,9 +1438,18 @@ mod tests {
         assert!(!excerpt.contains("something went wrong: 0\n"));
     }
 
-    /// An empty log has no halves to take, and must still render.
-    #[test]
-    fn an_empty_log_excerpts_to_a_count_of_none() {
+    /// Neither half of the excerpt grows with the log, whichever half the log
+    /// is made of.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a log excerpt is bounded however long the log is"
+    )]
+    fn a_log_excerpt_is_bounded_however_long_the_log_is() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("mirror maker2 tests: an empty log excerpts to a count of none")]
+    fn bdd_verify_an_empty_log_excerpts_to_a_count_of_none() {
         let expected = [
             "0 lines, of which 0 reported a problem; the last 0 of those:",
             "",
@@ -1351,8 +1460,19 @@ mod tests {
         assert!(log_excerpt("") == expected);
     }
 
-    #[test]
-    fn a_container_state_is_read_out_of_the_inspect_rendering() {
+    /// An empty log has no halves to take, and must still render.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: an empty log excerpts to a count of none"
+    )]
+    fn an_empty_log_excerpts_to_a_count_of_none() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: a container state is read out of the inspect rendering"
+    )]
+    fn bdd_verify_a_container_state_is_read_out_of_the_inspect_rendering() {
         assert!(
             parse_container_state("true|0\n")
                 == Some(ContainerState {
@@ -1372,10 +1492,27 @@ mod tests {
         assert!(parse_container_state("") == None);
     }
 
-    #[test]
-    fn the_bridge_gateway_falls_back_to_the_subnets_first_address() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: a container state is read out of the inspect rendering"
+    )]
+    fn a_container_state_is_read_out_of_the_inspect_rendering() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "mirror maker2 tests: the bridge gateway falls back to the subnets first address"
+    )]
+    fn bdd_verify_the_bridge_gateway_falls_back_to_the_subnets_first_address() {
         assert!(bridge_gateway("172.17.0.1|172.17.0.0/16\n") == Some("172.17.0.1".to_owned()));
         assert!(bridge_gateway("|172.20.0.0/16\n") == Some("172.20.0.1".to_owned()));
         assert!(bridge_gateway("no separator here") == None);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/mirror_maker2.feature",
+        name = "tests: the bridge gateway falls back to the subnets first address"
+    )]
+    fn the_bridge_gateway_falls_back_to_the_subnets_first_address() {}
 }

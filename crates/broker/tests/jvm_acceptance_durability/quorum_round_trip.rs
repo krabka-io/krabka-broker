@@ -30,9 +30,9 @@ use {
 // inter-broker traffic — all three Krabka brokers live on the host's
 // loopback, so docker reachability is not required for the controller
 // listener.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn three_node_jvm_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance durability quorum round trip: three node jvm round trip")]
+async fn bdd_verify_three_node_jvm_round_trip() {
     const TOPIC: &str = "krabka-quorum-itest";
 
     let client_ports = [9192u16, 9292, 9392];
@@ -137,3 +137,12 @@ async fn three_node_jvm_round_trip() {
         h.shutdown().await;
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/quorum_round_trip.feature",
+    name = "three node jvm round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_node_jvm_round_trip() {}

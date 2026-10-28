@@ -423,31 +423,39 @@ const UNKNOWN_LEADER_EPOCH: i16 = 75;
 /// Kafka's `INVALID_REQUEST`.
 const INVALID_REQUEST: i16 = 42;
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests fetch: a refusal from the followed leader refetches as kafka does for {example}"
+)]
+fn bdd_verify_a_refusal_from_the_followed_leader_refetches_as_kafka_does(example: String) {
+    type Example = (Option<NodeId>, NodeId, Epoch, i16, bool);
+    let (following, from, answer_epoch, error_code, refetches): Example = match example.as_str() {
+        "not leader in its epoch" => (Some(NodeId(1)), NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, true),
+        "fenced in its epoch" => (Some(NodeId(1)), NodeId(1), 5, FENCED_LEADER_EPOCH, true),
+        "unknown leader epoch" => (Some(NodeId(1)), NodeId(1), 5, UNKNOWN_LEADER_EPOCH, true),
+        "older epoch" => (Some(NodeId(1)), NodeId(1), 4, 0, true),
+        "invalid request" => (Some(NodeId(1)), NodeId(1), 5, INVALID_REQUEST, false),
+        "from another node" => (Some(NodeId(1)), NodeId(3), 5, NOT_LEADER_OR_FOLLOWER, false),
+        "following no one" => (None, NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    assert2::assert!(
+        refetches_after_refusal(following, 5, from, answer_epoch, error_code) == refetches
+    );
+}
+
 /// A refused Fetch answer from the leader a replica follows sends it straight
 /// back to that leader exactly when Kafka's `maybeHandleCommonResponse`
 /// handles the answer: one from an older epoch, an `UNKNOWN_LEADER_EPOCH`, or
 /// a `FENCED_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER` in the replica's own
 /// epoch. Node 2 follows node 1 at epoch 5 in every case but the last.
-#[yare::parameterized(
-    not_leader_in_its_epoch = { Some(NodeId(1)), NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, true },
-    fenced_in_its_epoch = { Some(NodeId(1)), NodeId(1), 5, FENCED_LEADER_EPOCH, true },
-    unknown_leader_epoch = { Some(NodeId(1)), NodeId(1), 5, UNKNOWN_LEADER_EPOCH, true },
-    older_epoch = { Some(NodeId(1)), NodeId(1), 4, 0, true },
-    invalid_request = { Some(NodeId(1)), NodeId(1), 5, INVALID_REQUEST, false },
-    from_another_node = { Some(NodeId(1)), NodeId(3), 5, NOT_LEADER_OR_FOLLOWER, false },
-    following_no_one = { None, NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, false },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_fetch.feature",
+    name = "a refusal from the followed leader refetches as kafka does"
 )]
-fn a_refusal_from_the_followed_leader_refetches_as_kafka_does(
-    following: Option<NodeId>,
-    from: NodeId,
-    answer_epoch: Epoch,
-    error_code: i16,
-    refetches: bool,
-) {
-    assert2::assert!(
-        refetches_after_refusal(following, 5, from, answer_epoch, error_code) == refetches
-    );
-}
+fn a_refusal_from_the_followed_leader_refetches_as_kafka_does(example: String) { let _ = example; }
 
 /// A leader that has resigned in the follower's own epoch answers
 /// `NOT_LEADER_OR_FOLLOWER` and names no leader. The follower sends its next
@@ -1510,11 +1518,11 @@ fn leader_with_a_running_clock() -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
-/// Kafka's `LeaderState.observerStates` tracks a non-voter that fetches like a
-/// voter: the offset and time of each valid fetch, and the time it was last
-/// caught up, by the two-branch rule of `ReplicaState.updateFollowerState`.
-#[test]
-fn an_observer_is_tracked_with_kafkas_caught_up_rule() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft controller tests fetch: an observer is tracked with kafkas caught up rule"
+)]
+fn bdd_verify_an_observer_is_tracked_with_kafkas_caught_up_rule() {
     let EngineInDir {
         mut engine,
         dir: _dir,
@@ -1560,6 +1568,16 @@ fn an_observer_is_tracked_with_kafkas_caught_up_rule() {
     assert!(third_fetch > second_fetch);
     assert!(caught_up == third_fetch);
 }
+
+/// Kafka's `LeaderState.observerStates` tracks a non-voter that fetches like a
+/// voter: the offset and time of each valid fetch, and the time it was last
+/// caught up, by the two-branch rule of `ReplicaState.updateFollowerState`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/controller/tests_fetch.feature",
+    name = "an observer is tracked with kafkas caught up rule"
+)]
+fn an_observer_is_tracked_with_kafkas_caught_up_rule() {}
 
 /// `tryCompleteFetchRequest` moves replica state only for a fetch that
 /// validates against the log: one at an epoch the leader does not hold, or past

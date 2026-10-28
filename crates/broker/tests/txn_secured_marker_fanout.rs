@@ -401,8 +401,11 @@ async fn find_coordinator(client: &Client, transactional_id: &str) -> Coordinato
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn secured marker fanout: end txn marker fanout to remote leader over sasl"
+)]
+async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
     let cluster = start_two_sasl_with_retry(|_| {}).await;
     wait_both_registered(&cluster).await;
 
@@ -496,6 +499,14 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_secured_marker_fanout.feature",
+    name = "end txn marker fanout to remote leader over sasl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {}
+
 const ADMIN_USER: &str = "admin";
 const ADMIN_PASS: &str = "admin-secret";
 const CLIENT_USER: &str = "client";
@@ -556,18 +567,12 @@ async fn ready_leader_addr(
     cfg.listen_addr.to_string()
 }
 
-/// KIP-890 verification of a transactional `Produce` when the transaction
-/// coordinator is on another broker, in a cluster with ACLs.
-///
-/// The partition leader sends `AddPartitionsToTxn` v4 or later to the
-/// coordinator as the broker principal. Kafka's
-/// `KafkaApis.handleAddPartitionsToTxnRequest` authorizes that request with
-/// `ClusterAction` on the cluster alone, and checks no transactional id or
-/// topic ACL. The broker user here holds only `ClusterAction`, so the produce
-/// succeeds only if the coordinator follows Kafka. The commit then fans the
-/// marker out to the remote leader as the same broker principal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn secured marker fanout: a remote coordinator verifies a produce for a broker with only cluster action"
+)]
+async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action()
+{
     let cluster = start_two_sasl_with_retry(apply_acls).await;
     wait_both_registered(&cluster).await;
 
@@ -747,6 +752,24 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     shutdown_cluster(cluster).await;
     assert!(actual == expected);
 }
+
+/// KIP-890 verification of a transactional `Produce` when the transaction
+/// coordinator is on another broker, in a cluster with ACLs.
+///
+/// The partition leader sends `AddPartitionsToTxn` v4 or later to the
+/// coordinator as the broker principal. Kafka's
+/// `KafkaApis.handleAddPartitionsToTxnRequest` authorizes that request with
+/// `ClusterAction` on the cluster alone, and checks no transactional id or
+/// topic ACL. The broker user here holds only `ClusterAction`, so the produce
+/// succeeds only if the coordinator follows Kafka. The commit then fans the
+/// marker out to the remote leader as the same broker principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_secured_marker_fanout.feature",
+    name = "a remote coordinator verifies a produce for a broker with only cluster action"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action() {}
 
 /// `InitProducerId` for `transactional_id`, retried while the coordinator
 /// loads its partition.

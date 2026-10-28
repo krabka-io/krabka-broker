@@ -639,11 +639,11 @@ fn rows_for(rows: &[OffsetRow], group: &str) -> Vec<OffsetRow> {
 
 // --------------------------------------------------------------------- the suite
 
-/// One broker, two groups, and Kafka's two formatters over what they left in
-/// `__consumer_offsets`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn kafka_formatters_decode_krabka_consumer_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm consumer offsets formatter: kafka formatters decode krabka consumer offsets"
+)]
+async fn bdd_verify_kafka_formatters_decode_krabka_consumer_offsets() {
     let cluster = Cluster::start().await;
     cluster.produce();
 
@@ -760,3 +760,14 @@ async fn kafka_formatters_decode_krabka_consumer_offsets() {
 
     cluster.shutdown().await;
 }
+
+/// One broker, two groups, and Kafka's two formatters over what they left in
+/// `__consumer_offsets`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_offsets_formatter.feature",
+    name = "kafka formatters decode krabka consumer offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_formatters_decode_krabka_consumer_offsets() {}

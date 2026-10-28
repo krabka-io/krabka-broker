@@ -28,8 +28,11 @@ const GROUP: &str = "backlog-workers";
 
 krabka_macros::delete_topic_request!(delete_request);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn backlog_is_scraped_and_survives_scale_to_zero() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "sharegroup backlog single broker: backlog is scraped and survives scale to zero"
+)]
+async fn bdd_verify_backlog_is_scraped_and_survives_scale_to_zero() {
     let _guard = test_lock().lock().await;
     let dir = tempfile::tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -154,3 +157,11 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/sharegroup_backlog/single_broker.feature",
+    name = "backlog is scraped and survives scale to zero"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backlog_is_scraped_and_survives_scale_to_zero() {}

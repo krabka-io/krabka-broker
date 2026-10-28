@@ -762,12 +762,18 @@ mod tests {
 
     // `OpaAuthorizer::new` captures the current tokio runtime handle, so the
     // apply step runs inside one, as it does in the binary.
-    #[yare::parameterized(
-        first = { 1, 30001 },
-        third = { 3, 30003 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak cluster tests: a diskless quorum node dials its peers authenticated for {example}"
     )]
-    #[test_macro(tokio::test)]
-    async fn a_diskless_quorum_node_dials_its_peers_authenticated(node_id: u32, port: u16) {
+    async fn bdd_verify_a_diskless_quorum_node_dials_its_peers_authenticated(example: String) {
+        type Example = (u32, u16);
+        let (node_id, port): Example = match example.as_str() {
+            "first" => (1, 30001),
+            "third" => (3, 30003),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let config = applied(node_id, port);
         check!(config.inter_broker_listener_name == INTER_BROKER_LISTENER);
         check!(config.rack.as_deref() == Some(format!("rack-{node_id}").as_str()));
@@ -785,40 +791,83 @@ mod tests {
         ));
     }
 
-    #[yare::parameterized(
-        first = { 1, "broker-1" },
-        third = { 3, "broker-3" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/cluster.feature",
+        name = "tests: a diskless quorum node dials its peers authenticated"
     )]
-    fn the_token_names_the_principal_a_wal_leader_maps_to_the_node(node_id: u32, principal: &str) {
+    #[tokio::test]
+    async fn a_diskless_quorum_node_dials_its_peers_authenticated(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak cluster tests: the token names the principal a wal leader maps to the node for {example}"
+    )]
+    fn bdd_verify_the_token_names_the_principal_a_wal_leader_maps_to_the_node(example: String) {
+        type Example<'a> = (u32, &'a str);
+        let (node_id, principal): Example<'_> = match example.as_str() {
+            "first" => (1, "broker-1"),
+            "third" => (3, "broker-3"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let outcome = UnsecuredJwsValidator::default()
             .validate(&inter_broker_token(node_id), 1_800_000_000_000)
             .expect("the development validator accepts the token");
         check!(outcome.principal.name == principal);
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/cluster.feature",
+        name = "tests: the token names the principal a wal leader maps to the node"
+    )]
+    fn the_token_names_the_principal_a_wal_leader_maps_to_the_node(example: String) {
+        let _ = example;
+    }
+
     // A host without the `/etc/hosts` line is refused before any container
     // starts, with the fix in the message, rather than failing as a cluster
     // whose clients all see closed connections.
-    #[yare::parameterized(
-        loopback = { Ok(vec!["127.0.0.1:0".parse().unwrap()]), None },
-        loopback_among_others = {
-            Ok(vec!["10.0.0.5:0".parse().unwrap(), "[::1]:0".parse().unwrap()]),
-            None
-        },
-        unresolved = {
-            Err(Error::other("failed to lookup address information")),
-            Some("does not resolve on this host")
-        },
-        elsewhere = { Ok(vec!["10.0.0.5:0".parse().unwrap()]), Some("not to loopback") },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak cluster tests: the host gateway name must reach loopback for {example}"
     )]
-    fn the_host_gateway_name_must_reach_loopback(
-        resolved: io::Result<Vec<SocketAddr>>,
-        problem: Option<&str>,
-    ) {
+    fn bdd_verify_the_host_gateway_name_must_reach_loopback(example: String) {
+        type Example<'a> = (io::Result<Vec<SocketAddr>>, Option<&'a str>);
+        let (resolved, problem): Example<'_> = match example.as_str() {
+            "loopback" => (Ok(vec!["127.0.0.1:0".parse().unwrap()]), None),
+            "loopback among others" => (
+                Ok(vec![
+                    "10.0.0.5:0".parse().unwrap(),
+                    "[::1]:0".parse().unwrap(),
+                ]),
+                None,
+            ),
+            "unresolved" => (
+                Err(Error::other("failed to lookup address information")),
+                Some("does not resolve on this host"),
+            ),
+            "elsewhere" => (
+                Ok(vec!["10.0.0.5:0".parse().unwrap()]),
+                Some("not to loopback"),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let found = host_gateway_problem(resolved);
         check!(found.is_some() == problem.is_some(), "{found:?}");
         let message = found.unwrap_or_default();
         let fix = format!("127.0.0.1 {HOST_GATEWAY}");
         check!(problem.is_none_or(|reason| message.contains(reason) && message.contains(&fix)));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak/cluster.feature",
+        name = "tests: the host gateway name must reach loopback"
+    )]
+    fn the_host_gateway_name_must_reach_loopback(example: String) { let _ = example; }
 }

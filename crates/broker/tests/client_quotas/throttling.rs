@@ -69,18 +69,9 @@ async fn throttled_response<R>(
     }
 }
 
-/// Test 2: a low `(user=alice) producer_byte_rate` throttles a produce.
-///
-/// Set `(user=alice) producer_byte_rate=128`. alice produces about 8 KB. Assert
-/// `throttle_time_ms > 0`.
-///
-/// Rate = 128 bytes/sec, burst = 1 second at rate = 128 bytes free. A produce
-/// of 8 KB = 8192 bytes is about 7168 bytes over budget. At 128 bytes/sec that
-/// is about 56 seconds of debt, which Kafka reports whole: a byte-rate
-/// throttle has no cap. This test asserts only `throttle_time_ms` > 0. The
-/// exact value is not load-bearing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_byte_rate_throttles_produce() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas throttling: producer byte rate throttles produce")]
+async fn bdd_verify_producer_byte_rate_throttles_produce() {
     let ThrottledProducer {
         handle,
         dir: _dir,
@@ -97,21 +88,27 @@ async fn producer_byte_rate_throttles_produce() {
     handle.shutdown().await;
 }
 
-/// Test 6: a tiny `(user=alice) request_percentage` throttles a produce.
+/// Test 2: a low `(user=alice) producer_byte_rate` throttles a produce.
 ///
-/// Set a tiny `(user=alice) request_percentage` and NO byte-rate quota. alice
-/// produces a small payload. Assert `throttle_time_ms > 0`.
+/// Set `(user=alice) producer_byte_rate=128`. alice produces about 8 KB. Assert
+/// `throttle_time_ms > 0`.
 ///
-/// This quota is the KIP-124 request quota, a server-side CPU-time throttle.
-/// KIP-219 requires the broker to report it in `throttle_time_ms` and to mute
-/// the channel. The broker must *not* silently delay the request.
-/// `request_percentage=0.001` gives the bucket a budget of about 10µs/sec, far
-/// below the processing time of any real produce handler. Even one small
-/// produce thus trips the quota, and the response must carry a non-zero
-/// throttle time. No `producer_byte_rate` is set, so only the request quota can
-/// cause the throttle.
+/// Rate = 128 bytes/sec, burst = 1 second at rate = 128 bytes free. A produce
+/// of 8 KB = 8192 bytes is about 7168 bytes over budget. At 128 bytes/sec that
+/// is about 56 seconds of debt, which Kafka reports whole: a byte-rate
+/// throttle has no cap. This test asserts only `throttle_time_ms` > 0. The
+/// exact value is not load-bearing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "producer byte rate throttles produce"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttles_produce() {
+async fn producer_byte_rate_throttles_produce() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas throttling: request percentage throttles produce")]
+async fn bdd_verify_request_percentage_throttles_produce() {
     let QuotaFixture {
         handle,
         dir: _dir,
@@ -148,20 +145,34 @@ async fn request_percentage_throttles_produce() {
     handle.shutdown().await;
 }
 
+/// Test 6: a tiny `(user=alice) request_percentage` throttles a produce.
+///
+/// Set a tiny `(user=alice) request_percentage` and NO byte-rate quota. alice
+/// produces a small payload. Assert `throttle_time_ms > 0`.
+///
+/// This quota is the KIP-124 request quota, a server-side CPU-time throttle.
+/// KIP-219 requires the broker to report it in `throttle_time_ms` and to mute
+/// the channel. The broker must *not* silently delay the request.
+/// `request_percentage=0.001` gives the bucket a budget of about 10µs/sec, far
+/// below the processing time of any real produce handler. Even one small
+/// produce thus trips the quota, and the response must carry a non-zero
+/// throttle time. No `producer_byte_rate` is set, so only the request quota can
+/// cause the throttle.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttles produce"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttles_produce() {}
+
 use crate::support::client::metric_value;
 
-/// A throttled produce must move the throttle series, attributed to the quota
-/// that caused it.
-///
-/// The setup is Test 2's: `(user=alice) producer_byte_rate=128`, and alice
-/// produces 8 KB. That test asserts the client is *told* about the throttle;
-/// this one asserts the broker records what it applied, so an operator seeing
-/// produce latency rise can tell "the client is over its quota" from "the
-/// broker is broken". `quota_type="Produce"` is the byte-rate quota, and it
-/// must be the one credited: no `request_percentage` is set, so the KIP-124
-/// quota asks for nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client quotas throttling: producer byte rate throttle moves the throttle metrics"
+)]
+async fn bdd_verify_producer_byte_rate_throttle_moves_the_throttle_metrics() {
     let ThrottledProducer {
         handle,
         dir: _dir,
@@ -211,14 +222,27 @@ async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
     handle.shutdown().await;
 }
 
-/// Test 3: a low `(user=alice) consumer_byte_rate` throttles a fetch.
+/// A throttled produce must move the throttle series, attributed to the quota
+/// that caused it.
 ///
-/// Set `(user=alice) consumer_byte_rate=128`. Produce 8 KB as admin. alice
-/// fetches. Assert `throttle_time_ms > 0`.
-///
-/// The rate and burst reasoning is the same as Test 2.
+/// The setup is Test 2's: `(user=alice) producer_byte_rate=128`, and alice
+/// produces 8 KB. That test asserts the client is *told* about the throttle;
+/// this one asserts the broker records what it applied, so an operator seeing
+/// produce latency rise can tell "the client is over its quota" from "the
+/// broker is broken". `quota_type="Produce"` is the byte-rate quota, and it
+/// must be the one credited: no `request_percentage` is set, so the KIP-124
+/// quota asks for nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "producer byte rate throttle moves the throttle metrics"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_byte_rate_throttles_fetch() {
+async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas throttling: consumer byte rate throttles fetch")]
+async fn bdd_verify_consumer_byte_rate_throttles_fetch() {
     let QuotaFixture {
         handle,
         dir: _dir,
@@ -309,9 +333,23 @@ async fn consumer_byte_rate_throttles_fetch() {
     handle.shutdown().await;
 }
 
-/// Test 4: a `(user, client-id)` quota overrides a user-only quota.
+/// Test 3: a low `(user=alice) consumer_byte_rate` throttles a fetch.
+///
+/// Set `(user=alice) consumer_byte_rate=128`. Produce 8 KB as admin. alice
+/// fetches. Assert `throttle_time_ms > 0`.
+///
+/// The rate and burst reasoning is the same as Test 2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "consumer byte rate throttles fetch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_client_tuple_overrides_user_specific() {
+async fn consumer_byte_rate_throttles_fetch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client quotas throttling: user client tuple overrides user specific")]
+async fn bdd_verify_user_client_tuple_overrides_user_specific() {
     let QuotaFixture {
         handle,
         dir: _dir,
@@ -394,25 +432,20 @@ async fn user_client_tuple_overrides_user_specific() {
     handle.shutdown().await;
 }
 
-/// Test 7: the request quota is echoed on an API the dispatch loop patches.
-///
-/// `Produce` and `Fetch` fill `ThrottleTimeMs` in themselves, before encoding.
-/// Everywhere else `apply_request_quota` runs, the delay is written into
-/// the already-encoded body by patching its leading int32, which is only safe
-/// on the responses whose schema really does put `ThrottleTimeMs` first.
-/// `network::dispatch::throttle_audit` pins which those are against the
-/// generated encoders; this test proves the patch reaches the wire on one of
-/// them and corrupts nothing else.
-///
-/// `AddOffsetsToTxn` is the API driven here because its dispatch entry carries
-/// `RequestQuotaPolicy::ApplyFallbackAccounting`, so the quota path runs, and
-/// its response leads with `ThrottleTimeMs`, so the patch applies. alice drives
-/// it with no quota set, then again with a tiny `(user=alice)`
-/// `request_percentage`. The throttled response must report
-/// `throttle_time_ms > 0` and be equal to the unthrottled one in every other
-/// field, which is what a leading-int32 patch and nothing more looks like.
+/// Test 4: a `(user, client-id)` quota overrides a user-only quota.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "user client tuple overrides user specific"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
+async fn user_client_tuple_overrides_user_specific() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client quotas throttling: request percentage throttle is echoed on a patched api"
+)]
+async fn bdd_verify_request_percentage_throttle_is_echoed_on_a_patched_api() {
     let QuotaFixture {
         handle,
         dir: _dir,
@@ -455,6 +488,31 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
 
     handle.shutdown().await;
 }
+
+/// Test 7: the request quota is echoed on an API the dispatch loop patches.
+///
+/// `Produce` and `Fetch` fill `ThrottleTimeMs` in themselves, before encoding.
+/// Everywhere else `apply_request_quota` runs, the delay is written into
+/// the already-encoded body by patching its leading int32, which is only safe
+/// on the responses whose schema really does put `ThrottleTimeMs` first.
+/// `network::dispatch::throttle_audit` pins which those are against the
+/// generated encoders; this test proves the patch reaches the wire on one of
+/// them and corrupts nothing else.
+///
+/// `AddOffsetsToTxn` is the API driven here because its dispatch entry carries
+/// `RequestQuotaPolicy::ApplyFallbackAccounting`, so the quota path runs, and
+/// its response leads with `ThrottleTimeMs`, so the patch applies. alice drives
+/// it with no quota set, then again with a tiny `(user=alice)`
+/// `request_percentage`. The throttled response must report
+/// `throttle_time_ms > 0` and be equal to the unthrottled one in every other
+/// field, which is what a leading-int32 patch and nothing more looks like.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttle is echoed on a patched api"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_echoed_on_a_patched_api() {}
 
 /// `ApiVersions` v3 is the version driven below: v1 is the first with a
 /// `ThrottleTimeMs` at all, and v3 is the first flexible one, which is what a
@@ -502,21 +560,11 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
     ApiVersionsResponse::decode(&mut cur, API_VERSIONS_VERSION).expect("decode ApiVersionsResponse")
 }
 
-/// Test 9: `ApiVersions` reports the request-quota delay it was held for.
-///
-/// `ApiVersionsResponse` carries `ThrottleTimeMs` behind the `ApiKeys` array,
-/// so the dispatch loop's leading-int32 patch cannot reach it. Its dispatch
-/// entry is `RequestQuotaPolicy::SelfAccounted` for that reason: the handler
-/// charges the KIP-124 request quota and fills the field in on the typed
-/// response, the way Kafka's `handleApiVersionsRequest` answers through
-/// `requestHelper.sendResponseMaybeThrottle`. Without that, a client held by
-/// the quota reads `throttle_time_ms = 0` and never backs off.
-///
-/// One authenticated connection drives the handshake until the
-/// `(user=alice) request_percentage` bucket runs dry, which is what the
-/// `AddOffsetsToTxn` test above does on the patched path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_percentage_throttle_is_reported_on_api_versions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client quotas throttling: request percentage throttle is reported on api versions"
+)]
+async fn bdd_verify_request_percentage_throttle_is_reported_on_api_versions() {
     let QuotaFixture {
         handle,
         dir: _dir,
@@ -570,6 +618,27 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
 
     handle.shutdown().await;
 }
+
+/// Test 9: `ApiVersions` reports the request-quota delay it was held for.
+///
+/// `ApiVersionsResponse` carries `ThrottleTimeMs` behind the `ApiKeys` array,
+/// so the dispatch loop's leading-int32 patch cannot reach it. Its dispatch
+/// entry is `RequestQuotaPolicy::SelfAccounted` for that reason: the handler
+/// charges the KIP-124 request quota and fills the field in on the typed
+/// response, the way Kafka's `handleApiVersionsRequest` answers through
+/// `requestHelper.sendResponseMaybeThrottle`. Without that, a client held by
+/// the quota reads `throttle_time_ms = 0` and never backs off.
+///
+/// One authenticated connection drives the handshake until the
+/// `(user=alice) request_percentage` bucket runs dry, which is what the
+/// `AddOffsetsToTxn` test above does on the patched path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
+    name = "request percentage throttle is reported on api versions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_reported_on_api_versions() {}
 
 async fn produce_when_acl_applied(
     addr: SocketAddr,

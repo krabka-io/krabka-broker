@@ -77,6 +77,15 @@ async fn krabka_advertised_table() -> Vec<ApiVersion> {
     advertised(&rows)
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "api versions differential cases: krabka advertises exactly the api catalog"
+)]
+async fn bdd_verify_krabka_advertises_exactly_the_api_catalog() {
+    let table = krabka_advertised_table().await;
+    assert!(table == catalog_sorted_by_key());
+}
+
 /// The JVM tool's view of krabka's `ApiVersions` response is exactly the
 /// catalog the broker builds that response from.
 ///
@@ -86,23 +95,20 @@ async fn krabka_advertised_table() -> Vec<ApiVersion> {
 /// those comments to what a client sees. The whole parsed table is compared
 /// against the whole catalog, so an added, dropped, or re-ranged key fails here
 /// rather than only in the unit test that asserts the handler copied the list.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn krabka_advertises_exactly_the_api_catalog() {
-    let table = krabka_advertised_table().await;
-    assert!(table == catalog_sorted_by_key());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "krabka advertises exactly the api catalog"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn krabka_advertises_exactly_the_api_catalog() {}
 
-/// krabka's table beside a real Kafka broker's, compared against the
-/// checked-in expectation.
-///
-/// Every difference is legitimate until someone reviews it, so the suite does
-/// not judge them: it records the outer join and fails when the join moves.
-/// Regenerate with `KRABKA_UPDATE_API_VERSIONS_EXPECTATION=1` and the diff is
-/// the change under review.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn divergence_from_real_kafka_matches_the_expectation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "api versions differential cases: divergence from real kafka matches the expectation"
+)]
+async fn bdd_verify_divergence_from_real_kafka_matches_the_expectation() {
     let krabka = krabka_advertised_table().await;
 
     let OracleTable {
@@ -140,19 +146,27 @@ async fn divergence_from_real_kafka_matches_the_expectation() {
     );
 }
 
-/// The set of API keys the tool prints for krabka's client listener is the set
-/// it prints for a stock Kafka broker.
+/// krabka's table beside a real Kafka broker's, compared against the
+/// checked-in expectation.
 ///
-/// The divergence case above records the whole join, ranges included, so it
-/// moves whenever a range moves. This one asks the narrower question the issue
-/// behind the split is about: `kafka-broker-api-versions.sh` against krabka
-/// names neither more nor fewer APIs than the same command against Kafka, so a
-/// tool or an audit that reads the advertised set to infer a node's role reads
-/// krabka as the broker it is. Both tables are read with the tool from the same
-/// pinned image, so nothing about the reader differs between the two halves.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Every difference is legitimate until someone reviews it, so the suite does
+/// not judge them: it records the outer join and fails when the join moves.
+/// Regenerate with `KRABKA_UPDATE_API_VERSIONS_EXPECTATION=1` and the diff is
+/// the change under review.
 #[ignore = "requires Docker"]
-async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "divergence from real kafka matches the expectation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn divergence_from_real_kafka_matches_the_expectation() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "api versions differential cases: the client listener prints the same api key set as kafka"
+)]
+async fn bdd_verify_the_client_listener_prints_the_same_api_key_set_as_kafka() {
     let krabka = krabka_advertised_table().await;
 
     let OracleTable {
@@ -170,6 +184,25 @@ async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {
          {kafka_only:?} that it does"
     );
 }
+
+/// The set of API keys the tool prints for krabka's client listener is the set
+/// it prints for a stock Kafka broker.
+///
+/// The divergence case above records the whole join, ranges included, so it
+/// moves whenever a range moves. This one asks the narrower question the issue
+/// behind the split is about: `kafka-broker-api-versions.sh` against krabka
+/// names neither more nor fewer APIs than the same command against Kafka, so a
+/// tool or an audit that reads the advertised set to infer a node's role reads
+/// krabka as the broker it is. Both tables are read with the tool from the same
+/// pinned image, so nothing about the reader differs between the two halves.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "the client listener prints the same api key set as kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {}
 
 /// The API keys whose recorded row changed, for the failure message. The
 /// assertion above compares the reports whole, and whole is 75 rows: naming the

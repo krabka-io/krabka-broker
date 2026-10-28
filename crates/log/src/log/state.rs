@@ -1003,27 +1003,20 @@ mod tests {
         ThreeSegments { dir, log, config }
     }
 
-    /// A leader reports Kafka's `logStartOffset` to its followers, and they
-    /// raise their own start to it. A remote-storage-enabled log reopened over
-    /// the segments local retention left infers a start above the whole
-    /// archive, and Kafka's `LogLoader.load` never takes that one: it reports
-    /// the checkpointed start, 0 when nobody moved it. A start somebody moved
-    /// is reported as it is, and a log with no remote tier reports the start
-    /// its segments witness.
-    ///
-    /// Each case fills three segments (offsets 0, 3 and 6), optionally moves
-    /// the start, drops the two sealed segments from disk, and reopens.
-    #[yare::parameterized(
-        tiered_nobody_moved_it = { true, None, 6, 0 },
-        tiered_moved = { true, Some(4), 4, 4 },
-        local_only = { false, None, 6, 6 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "log state tests: a reopened log reports the start kafka reports for {example}"
     )]
-    fn a_reopened_log_reports_the_start_kafka_reports(
-        remote_storage_enable: bool,
-        moved_to: Option<i64>,
-        log_start: i64,
-        reported: i64,
-    ) {
+    fn bdd_verify_a_reopened_log_reports_the_start_kafka_reports(example: String) {
+        type Example = (bool, Option<i64>, i64, i64);
+        let (remote_storage_enable, moved_to, log_start, reported): Example = match example.as_str()
+        {
+            "tiered nobody moved it" => (true, None, 6, 0),
+            "tiered moved" => (true, Some(4), 4, 4),
+            "local only" => (false, None, 6, 6),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let ThreeSegments {
             dir,
             mut log,
@@ -1041,6 +1034,23 @@ mod tests {
                 == (Offset(log_start), Offset(reported))
         );
     }
+
+    /// A leader reports Kafka's `logStartOffset` to its followers, and they
+    /// raise their own start to it. A remote-storage-enabled log reopened over
+    /// the segments local retention left infers a start above the whole
+    /// archive, and Kafka's `LogLoader.load` never takes that one: it reports
+    /// the checkpointed start, 0 when nobody moved it. A start somebody moved
+    /// is reported as it is, and a log with no remote tier reports the start
+    /// its segments witness.
+    ///
+    /// Each case fills three segments (offsets 0, 3 and 6), optionally moves
+    /// the start, drops the two sealed segments from disk, and reopens.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/log/state.feature",
+        name = "tests: a reopened log reports the start kafka reports"
+    )]
+    fn a_reopened_log_reports_the_start_kafka_reports(example: String) { let _ = example; }
 
     /// How a follower's log came by its start before the leader reports one.
     #[derive(Clone, Copy, Debug)]

@@ -23,11 +23,11 @@ use {
     },
 };
 
-/// Super user `admin` mints two tokens owned by `alice`: one without
-/// renewers and one that lists `admin`. On the first, Renew and Expire from
-/// `admin` answer 63 and change nothing; on the second, both succeed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn super_user_renews_and_expires_only_as_a_listed_renewer() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation tokens renewer gate: super user renews and expires only as a listed renewer"
+)]
+async fn bdd_verify_super_user_renews_and_expires_only_as_a_listed_renewer() {
     let (handle, _dir, addr) = start_admin_alice().await;
 
     let result: Result<(), String> = async {
@@ -128,3 +128,14 @@ async fn super_user_renews_and_expires_only_as_a_listed_renewer() {
         panic!("renewer gate test failed: {msg}");
     }
 }
+
+/// Super user `admin` mints two tokens owned by `alice`: one without
+/// renewers and one that lists `admin`. On the first, Renew and Expire from
+/// `admin` answer 63 and change nothing; on the second, both succeed.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/renewer_gate.feature",
+    name = "super user renews and expires only as a listed renewer"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn super_user_renews_and_expires_only_as_a_listed_renewer() {}

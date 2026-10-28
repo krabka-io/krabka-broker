@@ -1,8 +1,12 @@
+#[cfg(test)]
+use std::vec;
 use {super::*, assert2::assert};
 
-/// Kafka `TransactionStateManager.timedOutTransactions`.
-#[test]
-fn idle_transaction_reaper_matches_kafka_timed_out_transactions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction tests idle transaction reaper matches kafka timed out transactions: idle transaction reaper matches kafka timed out transactions"
+)]
+fn bdd_verify_idle_transaction_reaper_matches_kafka_timed_out_transactions() {
     use IdleTransactionState::{Ongoing, Other};
 
     // (state, timeout, start, now, expected).
@@ -46,8 +50,19 @@ fn idle_transaction_reaper_matches_kafka_timed_out_transactions() {
     }
 }
 
-#[test]
-fn producer_identity_boundary_table() {
+/// Kafka `TransactionStateManager.timedOutTransactions`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
+    name = "idle transaction reaper matches kafka timed out transactions"
+)]
+fn idle_transaction_reaper_matches_kafka_timed_out_transactions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction tests idle transaction reaper matches kafka timed out transactions: producer identity boundary table"
+)]
+fn bdd_verify_producer_identity_boundary_table() {
     let cases = [
         (false, false, i16::MAX, None, Some((7, i16::MAX))),
         (false, true, i16::MAX, Some(11), Some((7, i16::MAX))),
@@ -66,9 +81,18 @@ fn producer_identity_boundary_table() {
     }
 }
 
-/// Kafka `isValidProducerId` and `prepareIncrementProducerEpoch`.
-#[test]
-fn init_producer_id_identity_bumps_retries_or_fences() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
+    name = "producer identity boundary table"
+)]
+fn producer_identity_boundary_table() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction tests idle transaction reaper matches kafka timed out transactions: init producer id identity bumps retries or fences"
+)]
+fn bdd_verify_init_producer_id_identity_bumps_retries_or_fences() {
     use InitProducerIdIdentityDecision::{Bump, BumpWithoutIdentity, Fenced, Retry};
 
     // (entry pid, entry epoch, last epoch, prev pid, request pid,
@@ -120,16 +144,31 @@ fn init_producer_id_identity_bumps_retries_or_fences() {
     }
 }
 
-#[yare::parameterized(
-    proceeds = { 3, PREPARE_COMMIT, TransactionCompletionDecision::Proceed },
-    stale_identity = { 4, PREPARE_COMMIT, TransactionCompletionDecision::RejectStaleIdentity },
-    wrong_state = { 3, ONGOING, TransactionCompletionDecision::RejectState },
+#[cfg(test)]
+/// Kafka `isValidProducerId` and `prepareIncrementProducerEpoch`.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
+    name = "init producer id identity bumps retries or fences"
 )]
-fn completion_requires_the_prepared_identity_and_state(
-    epoch: i16,
-    state: i8,
-    expected: TransactionCompletionDecision,
-) {
+fn init_producer_id_identity_bumps_retries_or_fences() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction tests idle transaction reaper matches kafka timed out transactions: completion requires the prepared identity and state for {example}"
+)]
+fn bdd_verify_completion_requires_the_prepared_identity_and_state(example: String) {
+    type Example = (i16, i8, TransactionCompletionDecision);
+    let (epoch, state, expected): Example = match example.as_str() {
+        "proceeds" => (3, PREPARE_COMMIT, TransactionCompletionDecision::Proceed),
+        "stale identity" => (
+            4,
+            PREPARE_COMMIT,
+            TransactionCompletionDecision::RejectStaleIdentity,
+        ),
+        "wrong state" => (3, ONGOING, TransactionCompletionDecision::RejectState),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     assert2::assert!(
         transaction_completion_decision(
             TransactionSnapshot {
@@ -145,8 +184,18 @@ fn completion_requires_the_prepared_identity_and_state(
     );
 }
 
-#[test]
-fn only_the_intended_completion_is_idempotent() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
+    name = "completion requires the prepared identity and state"
+)]
+fn completion_requires_the_prepared_identity_and_state(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction tests idle transaction reaper matches kafka timed out transactions: only the intended completion is idempotent"
+)]
+fn bdd_verify_only_the_intended_completion_is_idempotent() {
     use TransactionCompletionDecision::{AlreadyComplete, RejectState};
 
     assert!(
@@ -182,3 +231,10 @@ fn only_the_intended_completion_is_idempotent() {
         ) == RejectState
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
+    name = "only the intended completion is idempotent"
+)]
+fn only_the_intended_completion_is_idempotent() {}

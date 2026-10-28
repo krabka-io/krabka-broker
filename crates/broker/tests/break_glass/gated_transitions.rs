@@ -116,17 +116,11 @@ async fn run_gated_case(cluster: &Cluster, alice: &Client, case: &GatedCase, top
     );
 }
 
-/// Every gated transition refuses without an approved proposal and runs with
-/// one, and each refusal reaches the caller as `POLICY_VIOLATION` (44).
-///
-/// The five handlers each carry their own copy of the gate call, their own
-/// target spelling, and their own refusal row, so a gate that was dropped from
-/// one of them would leave the other four green. Code 44 is load-bearing too:
-/// the design chose an existing Kafka code precisely so a JVM client classifies
-/// the refusal as non-retriable, and an unassigned code would map to
-/// `UNKNOWN_SERVER_ERROR` and be retried.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_gated_transition_refuses_without_a_proposal_and_runs_with_one() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "break glass gated transitions: every gated transition refuses without a proposal and runs with one"
+)]
+async fn bdd_verify_every_gated_transition_refuses_without_a_proposal_and_runs_with_one() {
     let cluster = boot().await;
     let alice = cluster.client(ALICE).await;
 
@@ -138,3 +132,20 @@ async fn every_gated_transition_refuses_without_a_proposal_and_runs_with_one() {
 
     cluster.broker.shutdown().await;
 }
+
+/// Every gated transition refuses without an approved proposal and runs with
+/// one, and each refusal reaches the caller as `POLICY_VIOLATION` (44).
+///
+/// The five handlers each carry their own copy of the gate call, their own
+/// target spelling, and their own refusal row, so a gate that was dropped from
+/// one of them would leave the other four green. Code 44 is load-bearing too:
+/// the design chose an existing Kafka code precisely so a JVM client classifies
+/// the refusal as non-retriable, and an unassigned code would map to
+/// `UNKNOWN_SERVER_ERROR` and be retried.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/break_glass/gated_transitions.feature",
+    name = "every gated transition refuses without a proposal and runs with one"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_gated_transition_refuses_without_a_proposal_and_runs_with_one() {}

@@ -122,8 +122,11 @@ fn leader_count(observer: &BrokerHandle, topic: &str, partitions: i32, target: u
     count
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controlled_shutdown_drains_leadership_and_returns_ok() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controlled shutdown: controlled shutdown drains leadership and returns ok"
+)]
+async fn bdd_verify_controlled_shutdown_drains_leadership_and_returns_ok() {
     let _g = support::cluster_lock().lock().await;
 
     support::init_tracing();
@@ -243,13 +246,19 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
     shutdown_cluster(cluster).await;
 }
 
-/// A controller-only node has no partitions to drain and no heartbeat client
-/// to carry the request, so the drain must not wait for an answer that never
-/// comes. Before, it waited out the whole timeout and returned
-/// `ShutdownTimeout`, so every stop of an isolated controller took the full
-/// drain timeout.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controlled_shutdown.feature",
+    name = "controlled shutdown drains leadership and returns ok"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_shutdown_drains_leadership_and_returns_ok() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controlled shutdown: controlled shutdown of a controller only node stops at once"
+)]
+async fn bdd_verify_controlled_shutdown_of_a_controller_only_node_stops_at_once() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
     config.roles = vec![NodeRole::Controller];
@@ -267,3 +276,16 @@ async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {
 
     assert!(let Ok(()) = stopped);
 }
+
+/// A controller-only node has no partitions to drain and no heartbeat client
+/// to carry the request, so the drain must not wait for an answer that never
+/// comes. Before, it waited out the whole timeout and returned
+/// `ShutdownTimeout`, so every stop of an isolated controller took the full
+/// drain timeout.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controlled_shutdown.feature",
+    name = "controlled shutdown of a controller only node stops at once"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {}

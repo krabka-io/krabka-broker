@@ -234,11 +234,11 @@ mod tests {
         bytes: &'static [u8],
     }
 
-    /// Kafka 4.3.1's generated writer puts a tagged field only when it is not
-    /// its default, in tag order. Each row is the whole value: version, epoch,
-    /// hash, then the trailer.
-    #[test]
-    fn group_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence epochs tests: group metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_group_metadata_bytes_match_kafka_schema() {
         const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
         let value = |validated, configs: Option<&[ConfigText]>| StreamsGroupMetadataValue {
             description: DescriptionEpochs::default(),
@@ -299,13 +299,21 @@ mod tests {
         check_metadata_trailers(HEAD, rows);
     }
 
-    /// Kafka trunk's KIP-1331 tags 2 and 3 follow the 4.3.1 tags, each only
-    /// when it is not -1. A value that holds neither, which is what the
-    /// broker writes unless the topology description plugin is configured,
-    /// is byte for byte the 4.3.1 record; a record with them decodes whole
-    /// whatever the broker writes.
-    #[test]
-    fn group_metadata_trunk_tags_match_kafka_trunk() {
+    /// Kafka 4.3.1's generated writer puts a tagged field only when it is not
+    /// its default, in tag order. Each row is the whole value: version, epoch,
+    /// hash, then the trailer.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
+        name = "tests: group metadata bytes match kafka schema"
+    )]
+    fn group_metadata_bytes_match_kafka_schema() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence epochs tests: group metadata trunk tags match kafka trunk"
+    )]
+    fn bdd_verify_group_metadata_trunk_tags_match_kafka_trunk() {
         const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
         let value = |stored, failed| StreamsGroupMetadataValue {
             epoch: 7,
@@ -339,6 +347,18 @@ mod tests {
         ];
         check_metadata_trailers(HEAD, rows);
     }
+
+    /// Kafka trunk's KIP-1331 tags 2 and 3 follow the 4.3.1 tags, each only
+    /// when it is not -1. A value that holds neither, which is what the
+    /// broker writes unless the topology description plugin is configured,
+    /// is byte for byte the 4.3.1 record; a record with them decodes whole
+    /// whatever the broker writes.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
+        name = "tests: group metadata trunk tags match kafka trunk"
+    )]
+    fn group_metadata_trunk_tags_match_kafka_trunk() {}
 
     fn check_metadata_trailers(head: &[u8], rows: impl IntoIterator<Item = TrailerRow>) {
         for TrailerRow {
@@ -384,11 +404,11 @@ mod tests {
         assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
-    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
-    /// the default 0.
-    #[test]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence epochs tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_metadata_bytes_match_kafka_schema() {
         let rows: [GoldenRow; 2] = [
             GoldenRow {
                 case: "the time is unknown",
@@ -415,6 +435,16 @@ mod tests {
             );
         }
     }
+
+    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
+    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
+    /// the default 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
+        name = "tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn target_assignment_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_metadata_round_trip() {

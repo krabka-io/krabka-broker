@@ -321,8 +321,9 @@ async fn assert_disconnected_controllers(
 // `krabka_raft::controller::forward_submit_to`. T9b routes that helper
 // through the injected `OutboundDialer` so the SASL handshake runs before
 // `API_KEY_SUBMIT_CHANGE` hits the wire, and b1 accepts the registration.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_two_broker_quorum() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("raft sasl: controller listener sasl plaintext two broker quorum")]
+async fn bdd_verify_controller_listener_sasl_plaintext_two_broker_quorum() {
     let TwoBrokers {
         broker0: b1,
         broker1: b2,
@@ -343,8 +344,17 @@ async fn controller_listener_sasl_plaintext_two_broker_quorum() {
     b2.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext two broker quorum"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_oauthbearer_two_broker_quorum() {
+async fn controller_listener_sasl_plaintext_two_broker_quorum() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("raft sasl: controller listener oauthbearer two broker quorum")]
+async fn bdd_verify_controller_listener_oauthbearer_two_broker_quorum() {
     init_tracing();
     let ReservedControllers {
         addrs: controller_addrs,
@@ -414,8 +424,17 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
     broker1.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener oauthbearer two broker quorum"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
+async fn controller_listener_oauthbearer_two_broker_quorum() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("raft sasl: controller listener sasl plaintext rejects mismatched creds")]
+async fn bdd_verify_controller_listener_sasl_plaintext_rejects_mismatched_creds() {
     // Neither broker has the other's password, so authentication fails both ways.
     Box::pin(assert_disconnected_controllers(
         [
@@ -434,6 +453,14 @@ async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
     .await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext rejects mismatched creds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {}
+
 // H-1: authentication is not authorization. Here both brokers present
 // *valid, matching* SASL credentials (so the SASL handshake succeeds), but
 // the controller listener is gated by a `SimpleAclAuthorizer` with NO
@@ -442,8 +469,9 @@ async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
 // connection and refuses every raft and metadata RPC on it with
 // `CLUSTER_AUTHORIZATION_FAILED` (#684), so the two single-voter clusters can
 // never exchange controller RPCs to merge. b1 must still see only itself.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_denies_unauthorized_principal() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("raft sasl: controller listener sasl denies unauthorized principal")]
+async fn bdd_verify_controller_listener_sasl_denies_unauthorized_principal() {
     // Both credentials authenticate; the empty authorizers deny controller RPCs.
     Box::pin(assert_disconnected_controllers(
         [PlainCredentials {
@@ -456,8 +484,17 @@ async fn controller_listener_sasl_denies_unauthorized_principal() {
     .await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl denies unauthorized principal"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_plaintext_legacy_path_unchanged() {
+async fn controller_listener_sasl_denies_unauthorized_principal() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("raft sasl: controller listener plaintext legacy path unchanged")]
+async fn bdd_verify_controller_listener_plaintext_legacy_path_unchanged() {
     // Default `controller_listener_protocol = Plaintext` and the default
     // `AllowAllAuthorizer`: every peer is `ANONYMOUS` and every request is
     // allowed. Two brokers converge over the plaintext path.
@@ -508,3 +545,11 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
     b1.shutdown().await;
     b2.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener plaintext legacy path unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_plaintext_legacy_path_unchanged() {}

@@ -146,12 +146,11 @@ mod tests {
         ReadShareGroupStateSummaryResponse::error_row(partition, code, Some(message))
     }
 
-    /// The whole `ReadShareGroupStateSummaryResponse` for each request shape,
-    /// over topic T with two partitions and state for partition 0 only, as
-    /// Kafka's `ShareCoordinatorService.readStateSummary` and
-    /// `ShareCoordinatorShard.readStateSummary` answer.
-    #[tokio::test]
-    async fn read_summary_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator handlers read summary tests: read summary answers as kafka"
+    )]
+    async fn bdd_verify_read_summary_answers_as_kafka() {
         let stored = PartitionResult {
             partition: 0,
             error_code: codes::NONE,
@@ -231,4 +230,16 @@ mod tests {
         )
         .await;
     }
+
+    /// The whole `ReadShareGroupStateSummaryResponse` for each request shape,
+    /// over topic T with two partitions and state for partition 0 only, as
+    /// Kafka's `ShareCoordinatorService.readStateSummary` and
+    /// `ShareCoordinatorShard.readStateSummary` answer.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "tests: read summary answers as kafka"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka() {}
 }

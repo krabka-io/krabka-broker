@@ -718,10 +718,9 @@ mod tests {
         },
     ];
 
-    /// Every key is one Kafka defines, or a group synonym that names a default,
-    /// or the streams assignor list, which Kafka 4.3.1 has no default for.
-    #[test]
-    fn every_key_has_a_kafka_default() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config kafka static keys tests: every key has a kafka default")]
+    fn bdd_verify_every_key_has_a_kafka_default() {
         let without: Vec<&str> = KAFKA_STATIC_KEYS
             .iter()
             .filter(|key| key.kafka_default().is_none())
@@ -731,8 +730,18 @@ mod tests {
         check!(without == vec!["group.streams.assignors"]);
     }
 
-    #[test]
-    fn no_key_is_listed_twice() {
+    /// Every key is one Kafka defines, or a group synonym that names a default,
+    /// or the streams assignor list, which Kafka 4.3.1 has no default for.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: every key has a kafka default"
+    )]
+    fn every_key_has_a_kafka_default() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config kafka static keys tests: no key is listed twice")]
+    fn bdd_verify_no_key_is_listed_twice() {
         let mut names: Vec<&str> = KAFKA_STATIC_KEYS.iter().map(|key| key.name).collect();
         names.sort_unstable();
         let count = names.len();
@@ -741,10 +750,18 @@ mod tests {
         check!(names.len() == count);
     }
 
-    /// A `[runtime]` field named here has to exist, or a key the operator
-    /// names would never be recorded.
-    #[test]
-    fn every_runtime_field_is_one_the_table_has() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: no key is listed twice"
+    )]
+    fn no_key_is_listed_twice() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka static keys tests: every runtime field is one the table has"
+    )]
+    fn bdd_verify_every_runtime_field_is_one_the_table_has() {
         let serde_json::Value::Object(fields) = serde_json::to_value(RuntimeFileConfig::default())
             .expect("serialize the runtime table")
         else {
@@ -759,10 +776,20 @@ mod tests {
         check!(missing.is_empty(), "{missing:?}");
     }
 
-    /// A node that named nothing states a key only where krabka's own default
-    /// is not Kafka's, which is where it has to say what it runs.
-    #[test]
-    fn a_default_config_states_only_the_defaults_krabka_changed() {
+    #[cfg(test)]
+    /// A `[runtime]` field named here has to exist, or a key the operator
+    /// names would never be recorded.
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: every runtime field is one the table has"
+    )]
+    fn every_runtime_field_is_one_the_table_has() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka static keys tests: a default config states only the defaults krabka changed"
+    )]
+    fn bdd_verify_a_default_config_states_only_the_defaults_krabka_changed() {
         let config = BrokerConfig::default();
         let stated: Vec<Stated> = KAFKA_STATIC_KEYS
             .iter()
@@ -784,8 +811,20 @@ mod tests {
         check!(stated == expected);
     }
 
-    #[test]
-    fn streams_assignors_is_disclosed_only_with_unstable_api_versions() {
+    #[cfg(test)]
+    /// A node that named nothing states a key only where krabka's own default
+    /// is not Kafka's, which is where it has to say what it runs.
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: a default config states only the defaults krabka changed"
+    )]
+    fn a_default_config_states_only_the_defaults_krabka_changed() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka static keys tests: streams assignors is disclosed only with unstable api versions"
+    )]
+    fn bdd_verify_streams_assignors_is_disclosed_only_with_unstable_api_versions() {
         let mut config = BrokerConfig::default();
         let key = KAFKA_STATIC_KEYS
             .iter()
@@ -797,11 +836,18 @@ mod tests {
         check!(key.static_value(&config).as_deref() == Some("auto"));
     }
 
-    /// The five `MetadataLogConfig` keys state the value the metadata log
-    /// runs with, once it leaves Kafka's default. A retention limit that is
-    /// not set states Kafka's `-1`, which is how Kafka writes "no limit".
-    #[test]
-    fn the_metadata_log_keys_state_what_the_metadata_log_runs_with() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: streams assignors is disclosed only with unstable api versions"
+    )]
+    fn streams_assignors_is_disclosed_only_with_unstable_api_versions() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka static keys tests: the metadata log keys state what the metadata log runs with"
+    )]
+    fn bdd_verify_the_metadata_log_keys_state_what_the_metadata_log_runs_with() {
         use krabka_units::{bytes, hours, mebibytes, millis};
 
         const METADATA_LOG_KEYS: [&str; 5] = [
@@ -908,11 +954,21 @@ mod tests {
         }
     }
 
-    /// The follower fetch's two byte maximums state what the follower sends:
-    /// `replica.fetch.max.bytes` for each partition and
-    /// `replica.fetch.response.max.bytes` for the response.
-    #[test]
-    fn the_replica_fetch_keys_state_what_the_follower_requests() {
+    #[cfg(test)]
+    /// The five `MetadataLogConfig` keys state the value the metadata log
+    /// runs with, once it leaves Kafka's default. A retention limit that is
+    /// not set states Kafka's `-1`, which is how Kafka writes "no limit".
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: the metadata log keys state what the metadata log runs with"
+    )]
+    fn the_metadata_log_keys_state_what_the_metadata_log_runs_with() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config kafka static keys tests: the replica fetch keys state what the follower requests"
+    )]
+    fn bdd_verify_the_replica_fetch_keys_state_what_the_follower_requests() {
         use krabka_units::mebibytes;
 
         const REPLICA_FETCH_KEYS: [&str; 2] = [
@@ -954,4 +1010,14 @@ mod tests {
             "both changed"
         );
     }
+
+    #[cfg(test)]
+    /// The follower fetch's two byte maximums state what the follower sends:
+    /// `replica.fetch.max.bytes` for each partition and
+    /// `replica.fetch.response.max.bytes` for the response.
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/kafka_static_keys.feature",
+        name = "tests: the replica fetch keys state what the follower requests"
+    )]
+    fn the_replica_fetch_keys_state_what_the_follower_requests() {}
 }

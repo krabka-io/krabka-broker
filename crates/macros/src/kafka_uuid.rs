@@ -52,20 +52,37 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 mod tests {
     use {super::expand, crate::meta::compact, assert2::assert, moxy::ast::ItemStruct};
 
-    #[yare::parameterized(
-        unit_struct = { "struct Id;" },
-        empty_named_struct = { "struct Id {}" },
-        named_field = { "struct Id { value: Uuid }" },
-        multiple_tuple_fields = { "struct Id(Uuid, Uuid);" },
-        const_generic = { "struct Id<const DOMAIN: u8>(Uuid);" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka uuid tests: refuses non newtypes and generic wrappers for {example}"
     )]
-    fn refuses_non_newtypes_and_generic_wrappers(input: &str) {
+    fn bdd_verify_refuses_non_newtypes_and_generic_wrappers(example: String) {
+        type Example<'a> = (&'a str,);
+        let (input,): Example<'_> = match example.as_str() {
+            "unit struct" => ("struct Id;",),
+            "empty named struct" => ("struct Id {}",),
+            "named field" => ("struct Id { value: Uuid }",),
+            "multiple tuple fields" => ("struct Id(Uuid, Uuid);",),
+            "const generic" => ("struct Id<const DOMAIN: u8>(Uuid);",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let item: ItemStruct = moxy::parse!({ input }).unwrap();
         assert2::assert!(expand(item).is_err(), "{input}");
     }
 
-    #[test]
-    fn emits_the_four_trait_implementations_for_a_single_field_wrapper() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_uuid.feature",
+        name = "tests: refuses non newtypes and generic wrappers"
+    )]
+    fn refuses_non_newtypes_and_generic_wrappers(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kafka uuid tests: emits the four trait implementations for a single field wrapper"
+    )]
+    fn bdd_verify_emits_the_four_trait_implementations_for_a_single_field_wrapper() {
         let item: ItemStruct = moxy::parse!("pub struct Id(pub Uuid);").unwrap();
         let output = compact(&expand(item).unwrap());
         assert!(output.contains("DisplayforId"));
@@ -73,4 +90,11 @@ mod tests {
         assert!(output.contains("SerializeforId"));
         assert!(output.contains("Deserialize<'de>forId"));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kafka_uuid.feature",
+        name = "tests: emits the four trait implementations for a single field wrapper"
+    )]
+    fn emits_the_four_trait_implementations_for_a_single_field_wrapper() {}
 }

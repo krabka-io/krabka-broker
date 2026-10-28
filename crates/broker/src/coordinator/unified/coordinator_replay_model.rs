@@ -299,8 +299,11 @@ impl Model for ReplayModel {
     }
 }
 
-#[test]
-fn coordinator_replay_log_orders_follow_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified coordinator replay model: coordinator replay log orders follow kafka"
+)]
+fn bdd_verify_coordinator_replay_log_orders_follow_kafka() {
     let checker = run_bfs(ReplayModel, "coordinator_replay", MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
@@ -309,3 +312,10 @@ fn coordinator_replay_log_orders_follow_kafka() {
     );
     checker.assert_properties();
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/coordinator_replay_model.feature",
+    name = "coordinator replay log orders follow kafka"
+)]
+fn coordinator_replay_log_orders_follow_kafka() {}

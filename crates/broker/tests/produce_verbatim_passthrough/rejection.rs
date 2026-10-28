@@ -20,11 +20,11 @@ use {
     },
 };
 
-/// Control batches are broker-internal transaction markers. A client-authored
-/// control batch must be rejected before either the verbatim or owned append
-/// path can write it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_control_batch_is_rejected() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough rejection: client control batch is rejected"
+)]
+async fn bdd_verify_client_control_batch_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "ctrl").await;
 
@@ -53,8 +53,22 @@ async fn client_control_batch_is_rejected() {
     broker.shutdown().await;
 }
 
+/// Control batches are broker-internal transaction markers. A client-authored
+/// control batch must be rejected before either the verbatim or owned append
+/// path can write it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/rejection.feature",
+    name = "client control batch is rejected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn crc_valid_malformed_record_body_is_rejected() {
+async fn client_control_batch_is_rejected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough rejection: crc valid malformed record body is rejected"
+)]
+async fn bdd_verify_crc_valid_malformed_record_body_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "malformed-body").await;
 
@@ -78,3 +92,11 @@ async fn crc_valid_malformed_record_body_is_rejected() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/rejection.feature",
+    name = "crc valid malformed record body is rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn crc_valid_malformed_record_body_is_rejected() {}

@@ -420,8 +420,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn filter_groups_matches_kafka_filters() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers list groups tests: filter groups matches kafka filters")]
+    fn bdd_verify_filter_groups_matches_kafka_filters() {
         let groups = vec![
             group("classic-a", "", "Empty", "classic"),
             group("classic-b", "consumer", "PreparingRebalance", "classic"),
@@ -476,6 +477,13 @@ mod tests {
             assert!(listed == expected, "{req:?}");
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_groups.feature",
+        name = "tests: filter groups matches kafka filters"
+    )]
+    fn filter_groups_matches_kafka_filters() {}
 
     #[test]
     fn group_state_as_str_covers_all_classic_states() {

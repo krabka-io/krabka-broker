@@ -1079,11 +1079,9 @@ mod tests {
         ]
     }
 
-    /// Kafka's `ClientQuotaManager` ranks every `user=U` level above every
-    /// `user=<default>` level (#677). Each row sets two or more levels and
-    /// expects the higher one, with the bucket key Kafka's metric tags give.
-    #[test]
-    fn precedence_matches_kafkas_client_quota_manager() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("quota lookup tests: precedence matches kafkas client quota manager")]
+    fn bdd_verify_precedence_matches_kafkas_client_quota_manager() {
         type Level = Vec<QuotaEntityInput<'static>>;
         /// A level and the rate configured at it.
         struct ConfiguredLevel {
@@ -1156,6 +1154,16 @@ mod tests {
             assert2::check!(got == Some(expected), "{name}");
         }
     }
+
+    /// Kafka's `ClientQuotaManager` ranks every `user=U` level above every
+    /// `user=<default>` level (#677). Each row sets two or more levels and
+    /// expects the higher one, with the bucket key Kafka's metric tags give.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/quota/lookup.feature",
+        name = "tests: precedence matches kafkas client quota manager"
+    )]
+    fn precedence_matches_kafkas_client_quota_manager() {}
 
     /// Distinct per-candidate sentinel values, where the index is the priority.
     /// The value alone then identifies the matched candidate, with no int→float

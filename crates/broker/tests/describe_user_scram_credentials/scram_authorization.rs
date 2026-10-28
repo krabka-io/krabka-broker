@@ -17,8 +17,11 @@ use {
     uuid::Uuid,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_allows_cluster_describe_acl() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe user scram credentials scram authorization: describe allows cluster describe acl"
+)]
+async fn bdd_verify_describe_allows_cluster_describe_acl() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_acl_authorizer(&[], &[(
         "alice",
         &alice_test_password(),
@@ -35,8 +38,19 @@ async fn describe_allows_cluster_describe_acl() {
     assert!(per_user.is_empty());
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_user_scram_credentials/scram_authorization.feature",
+    name = "describe allows cluster describe acl"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_rejects_without_cluster_describe_acl() {
+async fn describe_allows_cluster_describe_acl() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe user scram credentials scram authorization: describe rejects without cluster describe acl"
+)]
+async fn bdd_verify_describe_rejects_without_cluster_describe_acl() {
     let alice_password = Uuid::new_v4().to_string();
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_acl_authorizer(&[], &[(
         "alice",
@@ -55,3 +69,11 @@ async fn describe_rejects_without_cluster_describe_acl() {
     );
     assert!(per_user.is_empty());
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_user_scram_credentials/scram_authorization.feature",
+    name = "describe rejects without cluster describe acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_rejects_without_cluster_describe_acl() {}

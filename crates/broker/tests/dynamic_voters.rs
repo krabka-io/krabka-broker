@@ -108,14 +108,9 @@ async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
     cluster
 }
 
-/// Auto-join must grow a fresh cluster from one voter to three. Broker 0
-/// bootstraps alone, and brokers 1 and 2 join over the wire.
-///
-/// `start_n_node` already waits for convergence. This test asserts again
-/// against the leader's committed image, so that a convergence regression
-/// fails here rather than through the harness's `Startup` error.
-#[tokio::test]
-async fn auto_join_grows_quorum_to_three() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic voters: auto join grows quorum to three")]
+async fn bdd_verify_auto_join_grows_quorum_to_three() {
     let cluster = start_dynamic_cluster(3).await;
 
     // The last join can start an election, so a node may not lead yet.
@@ -131,6 +126,20 @@ async fn auto_join_grows_quorum_to_three() {
             .await;
     }
 }
+
+/// Auto-join must grow a fresh cluster from one voter to three. Broker 0
+/// bootstraps alone, and brokers 1 and 2 join over the wire.
+///
+/// `start_n_node` already waits for convergence. This test asserts again
+/// against the leader's committed image, so that a convergence regression
+/// fails here rather than through the harness's `Startup` error.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_voters.feature",
+    name = "auto join grows quorum to three"
+)]
+#[tokio::test]
+async fn auto_join_grows_quorum_to_three() {}
 
 /// The voter that the shrink test removes.
 #[derive(Debug, Clone, Copy)]
@@ -251,15 +260,9 @@ async fn remove_through_leader(
     }
 }
 
-/// After the cluster grows to three, the removal of one voter through the
-/// controller leader must shrink the committed voter set to two on every node.
-///
-/// The test does not depend on a leader that stays still. The removal starts
-/// at a controller that does not lead, follows the leader through
-/// `NotLeader` answers, and survives a leadership change. The leader case
-/// moves the leadership on every run.
-#[tokio::test]
-async fn remove_voter_shrinks_quorum() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic voters: remove voter shrinks quorum")]
+async fn bdd_verify_remove_voter_shrinks_quorum() {
     for victim_kind in [Victim::Follower, Victim::Leader] {
         let cluster = start_dynamic_cluster(3).await;
         for node in &cluster {
@@ -325,3 +328,18 @@ async fn remove_voter_shrinks_quorum() {
         }
     }
 }
+
+/// After the cluster grows to three, the removal of one voter through the
+/// controller leader must shrink the committed voter set to two on every node.
+///
+/// The test does not depend on a leader that stays still. The removal starts
+/// at a controller that does not lead, follows the leader through
+/// `NotLeader` answers, and survives a leadership change. The leader case
+/// moves the leadership on every run.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_voters.feature",
+    name = "remove voter shrinks quorum"
+)]
+#[tokio::test]
+async fn remove_voter_shrinks_quorum() {}

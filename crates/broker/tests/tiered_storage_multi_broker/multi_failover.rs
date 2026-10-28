@@ -28,21 +28,11 @@ use {
     tokio::time,
 };
 
-/// In-process multi-broker tiered metadata-sharing proof.
-///
-/// Three brokers share a `Local` remote tier and a topic-backed RLMM with rf=3
-/// metadata replication. Broker 1 leads the rf=2 user partition and runs the
-/// RLM copy task. Broker 2 only consumes `__remote_log_metadata` to learn the
-/// segment locations, and uses that same metadata to evict its own local copy
-/// of every tiered segment while broker 1 still leads. After broker 1 shuts
-/// down, the surviving 2-out-of-3 quorum commits a new partition-leader
-/// record, and broker 2 serves all records from the remote tier. That proves
-/// the RLMM metadata-sharing claim.
-///
-/// The test runs under plain `cargo test`, with no Docker, no `MinIO`, and no
-/// host.docker.internal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tiered_storage_metadata_sharing_via_survivor() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi failover: tiered storage metadata sharing via survivor"
+)]
+async fn bdd_verify_tiered_storage_metadata_sharing_via_survivor() {
     let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers().await;
 
     // Wait for all brokers to see each other registered.
@@ -179,3 +169,24 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
         h.shutdown().await;
     }
 }
+
+/// In-process multi-broker tiered metadata-sharing proof.
+///
+/// Three brokers share a `Local` remote tier and a topic-backed RLMM with rf=3
+/// metadata replication. Broker 1 leads the rf=2 user partition and runs the
+/// RLM copy task. Broker 2 only consumes `__remote_log_metadata` to learn the
+/// segment locations, and uses that same metadata to evict its own local copy
+/// of every tiered segment while broker 1 still leads. After broker 1 shuts
+/// down, the surviving 2-out-of-3 quorum commits a new partition-leader
+/// record, and broker 2 serves all records from the remote tier. That proves
+/// the RLMM metadata-sharing claim.
+///
+/// The test runs under plain `cargo test`, with no Docker, no `MinIO`, and no
+/// host.docker.internal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_failover.feature",
+    name = "tiered storage metadata sharing via survivor"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tiered_storage_metadata_sharing_via_survivor() {}

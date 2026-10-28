@@ -157,8 +157,9 @@ fn without_partitions(row: &MetadataResponseTopic) -> MetadataResponseTopic {
     }
 }
 
-#[tokio::test]
-async fn metadata_marks_every_broker_owned_topic_internal() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("internal topics: metadata marks every broker owned topic internal")]
+async fn bdd_verify_metadata_marks_every_broker_owned_topic_internal() {
     let p = support::start().await;
     create_every_topic(&p).await;
 
@@ -199,8 +200,17 @@ async fn metadata_marks_every_broker_owned_topic_internal() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "metadata marks every broker owned topic internal"
+)]
 #[tokio::test]
-async fn describe_topic_partitions_agrees_with_metadata() {
+async fn metadata_marks_every_broker_owned_topic_internal() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("internal topics: describe topic partitions agrees with metadata")]
+async fn bdd_verify_describe_topic_partitions_agrees_with_metadata() {
     let p = support::start().await;
     create_every_topic(&p).await;
 
@@ -255,12 +265,17 @@ async fn describe_topic_partitions_agrees_with_metadata() {
     p.broker.shutdown().await;
 }
 
-/// The audit log is the one broker-owned topic an operator can rename, so the
-/// flag has to follow `krabka.audit.topic` rather than the default name.
-/// Renaming it and still having a `.*` subscription pick it up is the exact
-/// leak the flag exists to prevent.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "describe topic partitions agrees with metadata"
+)]
 #[tokio::test]
-async fn a_renamed_audit_topic_is_the_internal_one() {
+async fn describe_topic_partitions_agrees_with_metadata() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("internal topics: a renamed audit topic is the internal one")]
+async fn bdd_verify_a_renamed_audit_topic_is_the_internal_one() {
     const RENAMED: &str = "__house_audit";
 
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -295,11 +310,23 @@ async fn a_renamed_audit_topic_is_the_internal_one() {
     broker.shutdown().await;
 }
 
-/// An audit topic named outside the `__` convention would be internal to
-/// `Metadata` and freezable at the same time, so the broker refuses to start
-/// on one rather than carrying the inconsistency.
+/// The audit log is the one broker-owned topic an operator can rename, so the
+/// flag has to follow `krabka.audit.topic` rather than the default name.
+/// Renaming it and still having a `.*` subscription pick it up is the exact
+/// leak the flag exists to prevent.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "a renamed audit topic is the internal one"
+)]
 #[tokio::test]
-async fn a_broker_refuses_an_audit_topic_outside_the_convention() {
+async fn a_renamed_audit_topic_is_the_internal_one() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "internal topics: a broker refuses an audit topic outside the convention"
+)]
+async fn bdd_verify_a_broker_refuses_an_audit_topic_outside_the_convention() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     config.audit_topic = "house_audit".to_owned();
@@ -307,3 +334,14 @@ async fn a_broker_refuses_an_audit_topic_outside_the_convention() {
     assert!(let Some(error) = failure);
     check!(error.to_string().contains("audit_topic"), "{error}");
 }
+
+/// An audit topic named outside the `__` convention would be internal to
+/// `Metadata` and freezable at the same time, so the broker refuses to start
+/// on one rather than carrying the inconsistency.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "a broker refuses an audit topic outside the convention"
+)]
+#[tokio::test]
+async fn a_broker_refuses_an_audit_topic_outside_the_convention() {}

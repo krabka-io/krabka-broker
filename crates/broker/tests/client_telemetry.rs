@@ -243,8 +243,9 @@ fn telemetry_push_request(
 
 // ── Part 1: fixed legacy tests ────────────────────────────────────────────────
 
-#[tokio::test]
-async fn api_versions_advertises_telemetry_apis() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: api versions advertises telemetry apis")]
+async fn bdd_verify_api_versions_advertises_telemetry_apis() {
     let p = start_with_client_metrics().await;
     let advertised = advertised_apis(&p.client).await;
     assert!(
@@ -259,12 +260,19 @@ async fn api_versions_advertises_telemetry_apis() {
     p.broker.shutdown().await;
 }
 
-/// With no client-metrics receiver -- the default, and what a stock Kafka
-/// broker answers when `metric.reporters` holds no `ClientTelemetry`
-/// implementation -- neither KIP-714 key is advertised, so a modern Java or
-/// librdkafka client opens no telemetry handshake.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "api versions advertises telemetry apis"
+)]
 #[tokio::test]
-async fn api_versions_withholds_telemetry_apis_without_a_receiver() {
+async fn api_versions_advertises_telemetry_apis() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client telemetry: api versions withholds telemetry apis without a receiver"
+)]
+async fn bdd_verify_api_versions_withholds_telemetry_apis_without_a_receiver() {
     let p = support::start().await;
     let advertised = advertised_apis(&p.client).await;
     check!(
@@ -279,11 +287,24 @@ async fn api_versions_withholds_telemetry_apis_without_a_receiver() {
     p.broker.shutdown().await;
 }
 
-/// With no subscriptions configured, the broker assigns a fresh id, returns an
-/// empty `requested_metrics`, and advertises the standard compression types
-/// and limits.
+/// With no client-metrics receiver -- the default, and what a stock Kafka
+/// broker answers when `metric.reporters` holds no `ClientTelemetry`
+/// implementation -- neither KIP-714 key is advertised, so a modern Java or
+/// librdkafka client opens no telemetry handshake.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "api versions withholds telemetry apis without a receiver"
+)]
 #[tokio::test]
-async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription() {
+async fn api_versions_withholds_telemetry_apis_without_a_receiver() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client telemetry: get telemetry subscriptions with nil id returns assigned id and no subscription"
+)]
+async fn bdd_verify_get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription()
+ {
     let p = start_with_client_metrics().await;
 
     let resp = p
@@ -328,12 +349,20 @@ async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subs
     p.broker.shutdown().await;
 }
 
-/// Kafka's `ClientMetricsManager` answers with the id the client sent, and the
-/// Java client rejects a zero id in a successful response
-/// (`ClientTelemetryUtils.validateClientInstanceId`), whatever the schema
-/// text says.
+/// With no subscriptions configured, the broker assigns a fresh id, returns an
+/// empty `requested_metrics`, and advertises the standard compression types
+/// and limits.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "get telemetry subscriptions with nil id returns assigned id and no subscription"
+)]
 #[tokio::test]
-async fn get_telemetry_subscriptions_with_set_id_echoes_it() {
+async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: get telemetry subscriptions with set id echoes it")]
+async fn bdd_verify_get_telemetry_subscriptions_with_set_id_echoes_it() {
     let p = start_with_client_metrics().await;
 
     let prior_id = WireUuid([0x11; 16]);
@@ -352,12 +381,21 @@ async fn get_telemetry_subscriptions_with_set_id_echoes_it() {
     p.broker.shutdown().await;
 }
 
-/// Kafka answers `INVALID_REQUEST` (42) only for the ids in `Uuid.RESERVED`.
-/// For any other id it builds the instance from the current subscriptions, so
-/// a push that carries some other subscription id gets
-/// `UNKNOWN_SUBSCRIPTION_ID` (117) and the client fetches its subscription.
+/// Kafka's `ClientMetricsManager` answers with the id the client sent, and the
+/// Java client rejects a zero id in a successful response
+/// (`ClientTelemetryUtils.validateClientInstanceId`), whatever the schema
+/// text says.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "get telemetry subscriptions with set id echoes it"
+)]
 #[tokio::test]
-async fn push_telemetry_unknown_instance_rejected() {
+async fn get_telemetry_subscriptions_with_set_id_echoes_it() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: push telemetry unknown instance rejected")]
+async fn bdd_verify_push_telemetry_unknown_instance_rejected() {
     let p = start_with_client_metrics().await;
 
     let mut one = [0; 16];
@@ -390,12 +428,23 @@ async fn push_telemetry_unknown_instance_rejected() {
     p.broker.shutdown().await;
 }
 
+/// Kafka answers `INVALID_REQUEST` (42) only for the ids in `Uuid.RESERVED`.
+/// For any other id it builds the instance from the current subscriptions, so
+/// a push that carries some other subscription id gets
+/// `UNKNOWN_SUBSCRIPTION_ID` (117) and the client fetches its subscription.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "push telemetry unknown instance rejected"
+)]
+#[tokio::test]
+async fn push_telemetry_unknown_instance_rejected() {}
+
 // ── Part 2: e2e coverage (controller-backed) ─────────────────────────────────
 
-/// Happy path: configure a subscription, run a `GetTelemetrySubscriptions`
-/// handshake, then push a valid OTLP payload. All three must succeed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_happy_path_after_subscription() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: push telemetry happy path after subscription")]
+async fn bdd_verify_push_telemetry_happy_path_after_subscription() {
     let TelemetryCluster {
         cluster: _cluster,
         client,
@@ -467,10 +516,19 @@ async fn push_telemetry_happy_path_after_subscription() {
     );
 }
 
-/// The broker must reject a push from a registered instance that carries a
-/// stale `subscription_id`, with `UNKNOWN_SUBSCRIPTION_ID` (117).
+/// Happy path: configure a subscription, run a `GetTelemetrySubscriptions`
+/// handshake, then push a valid OTLP payload. All three must succeed.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "push telemetry happy path after subscription"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_stale_subscription_id_rejected() {
+async fn push_telemetry_happy_path_after_subscription() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: push telemetry stale subscription id rejected")]
+async fn bdd_verify_push_telemetry_stale_subscription_id_rejected() {
     let TelemetryCluster {
         cluster: _cluster,
         client,
@@ -500,12 +558,19 @@ async fn push_telemetry_stale_subscription_id_rejected() {
     );
 }
 
-/// An unsupported `compression_type` must give
-/// `UNSUPPORTED_COMPRESSION_TYPE` (76). The manager allows the first push
-/// after a `GetTelemetrySubscriptions`, the "`first_after_get`" window, so the
-/// request reaches the codec check.
+/// The broker must reject a push from a registered instance that carries a
+/// stale `subscription_id`, with `UNKNOWN_SUBSCRIPTION_ID` (117).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "push telemetry stale subscription id rejected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn push_telemetry_unsupported_compression_rejected() {
+async fn push_telemetry_stale_subscription_id_rejected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: push telemetry unsupported compression rejected")]
+async fn bdd_verify_push_telemetry_unsupported_compression_rejected() {
     let TelemetryCluster {
         cluster: _cluster,
         client,
@@ -535,6 +600,18 @@ async fn push_telemetry_unsupported_compression_rejected() {
     );
 }
 
+/// An unsupported `compression_type` must give
+/// `UNSUPPORTED_COMPRESSION_TYPE` (76). The manager allows the first push
+/// after a `GetTelemetrySubscriptions`, the "`first_after_get`" window, so the
+/// request reaches the codec check.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "push telemetry unsupported compression rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn push_telemetry_unsupported_compression_rejected() {}
+
 /// Sends `GetTelemetrySubscriptions` for `id` and returns the error code.
 async fn get_error_code(client: &krabka_client_core::Client, id: WireUuid) -> i16 {
     let resp: GetTelemetrySubscriptionsResponse = client
@@ -547,13 +624,9 @@ async fn get_error_code(client: &krabka_client_core::Client, id: WireUuid) -> i1
     resp.error_code
 }
 
-/// Kafka registers `ClientMetricsManager.connectionDisconnectListener` with the
-/// socket server, so closing the connection that carried a client's telemetry
-/// request drops its instance (#1246). A client that reconnects and asks again
-/// inside its push interval gets an assignment, where the instance it left
-/// behind would answer `THROTTLING_QUOTA_EXCEEDED` (89).
-#[tokio::test]
-async fn closing_the_connection_drops_the_client_instance() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("client telemetry: closing the connection drops the client instance")]
+async fn bdd_verify_closing_the_connection_drops_the_client_instance() {
     const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
     let p = start_with_client_metrics().await;
     let addr = p.broker.listen_addr();
@@ -586,6 +659,19 @@ async fn closing_the_connection_drops_the_client_instance() {
 
     p.broker.shutdown().await;
 }
+
+/// Kafka registers `ClientMetricsManager.connectionDisconnectListener` with the
+/// socket server, so closing the connection that carried a client's telemetry
+/// request drops its instance (#1246). A client that reconnects and asks again
+/// inside its push interval gets an assignment, where the instance it left
+/// behind would answer `THROTTLING_QUOTA_EXCEEDED` (89).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_telemetry.feature",
+    name = "closing the connection drops the client instance"
+)]
+#[tokio::test]
+async fn closing_the_connection_drops_the_client_instance() {}
 
 async fn enroll_telemetry(
     client: &krabka_client_core::Client,

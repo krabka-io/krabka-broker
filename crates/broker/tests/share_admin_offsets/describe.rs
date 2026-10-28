@@ -114,12 +114,9 @@ pub async fn describe_until(
     last
 }
 
-/// Describe reflects the SPSO after a consume that Accepts all records.
-///
-/// The SPSO advances to 3, and the lag, from the end offset the leader
-/// reports to `ListOffsets`, is 0.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_reflects_spso_after_consume() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share admin offsets describe: describe reflects spso after consume")]
+async fn bdd_verify_describe_reflects_spso_after_consume() {
     // Acquire 0..2, Accept all → SPSO advances to 3.
     let (_permit, _broker, client, _dir, tid, member, row) = acquired_topic().await;
     assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
@@ -156,11 +153,21 @@ async fn describe_reflects_spso_after_consume() {
     );
 }
 
-/// Describe of an unknown topic reports no data, not an error: start offset
-/// and lag -1, leader epoch 0 and error 0 per partition, the all-zero topic
-/// id, as Kafka's `GroupCoordinatorService.describeShareGroupOffsets`.
+/// Describe reflects the SPSO after a consume that Accepts all records.
+///
+/// The SPSO advances to 3, and the lag, from the end offset the leader
+/// reports to `ListOffsets`, is 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
+    name = "describe reflects spso after consume"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_unknown_topic() {
+async fn describe_reflects_spso_after_consume() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("share admin offsets describe: describe unknown topic")]
+async fn bdd_verify_describe_unknown_topic() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(broker_config(dir.path().to_path_buf()))
@@ -193,12 +200,22 @@ async fn describe_unknown_topic() {
     assert!(group.topics == expected);
 }
 
-/// With `share.version` finalized at 0, as `kafka-features downgrade
-/// --feature share.version=0` leaves it, the admin offset RPCs are
-/// unavailable: `DescribeShareGroupOffsets` marks each requested group
-/// `UNSUPPORTED_VERSION`, as Kafka's `isShareGroupProtocolEnabled` gate does.
+/// Describe of an unknown topic reports no data, not an error: start offset
+/// and lag -1, leader epoch 0 and error 0 per partition, the all-zero topic
+/// id, as Kafka's `GroupCoordinatorService.describeShareGroupOffsets`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
+    name = "describe unknown topic"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admin_offsets_rejected_when_share_disabled() {
+async fn describe_unknown_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share admin offsets describe: admin offsets rejected when share disabled"
+)]
+async fn bdd_verify_admin_offsets_rejected_when_share_disabled() {
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = broker_config(dir.path().to_path_buf());
@@ -228,6 +245,18 @@ async fn admin_offsets_rejected_when_share_disabled() {
         group.error_code
     );
 }
+
+/// With `share.version` finalized at 0, as `kafka-features downgrade
+/// --feature share.version=0` leaves it, the admin offset RPCs are
+/// unavailable: `DescribeShareGroupOffsets` marks each requested group
+/// `UNSUPPORTED_VERSION`, as Kafka's `isShareGroupProtocolEnabled` gate does.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
+    name = "admin offsets rejected when share disabled"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_offsets_rejected_when_share_disabled() {}
 
 /// The initialized partition indexes for a topic; missing topics have no indexes.
 pub fn initialized_partitions(

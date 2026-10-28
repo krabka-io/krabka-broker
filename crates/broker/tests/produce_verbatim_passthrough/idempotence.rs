@@ -13,14 +13,11 @@ use {
     assert2::{assert, check},
 };
 
-/// Idempotent-producer dedup runs on the HEADER fields that the verbatim path
-/// exposes: pid, epoch, `base_sequence`, and `last_offset_delta`. Two appends
-/// with increasing sequences both succeed. A retry of the latest sequence is a
-/// duplicate and returns the SAME base offset. An out-of-order sequence is
-/// rejected. Structural validation may transiently decompress the lz4 body,
-/// but the append retains the producer's original compressed bytes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idempotent_dedup_over_verbatim_path() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough idempotence: idempotent dedup over verbatim path"
+)]
+async fn bdd_verify_idempotent_dedup_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem").await;
 
@@ -65,8 +62,25 @@ async fn idempotent_dedup_over_verbatim_path() {
     broker.shutdown().await;
 }
 
+/// Idempotent-producer dedup runs on the HEADER fields that the verbatim path
+/// exposes: pid, epoch, `base_sequence`, and `last_offset_delta`. Two appends
+/// with increasing sequences both succeed. A retry of the latest sequence is a
+/// duplicate and returns the SAME base offset. An out-of-order sequence is
+/// rejected. Structural validation may transiently decompress the lz4 body,
+/// but the append retains the producer's original compressed bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/idempotence.feature",
+    name = "idempotent dedup over verbatim path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idempotent_sequence_rollover_over_verbatim_path() {
+async fn idempotent_dedup_over_verbatim_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough idempotence: idempotent sequence rollover over verbatim path"
+)]
+async fn bdd_verify_idempotent_sequence_rollover_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem-rollover").await;
 
@@ -126,3 +140,11 @@ async fn idempotent_sequence_rollover_over_verbatim_path() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/idempotence.feature",
+    name = "idempotent sequence rollover over verbatim path"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idempotent_sequence_rollover_over_verbatim_path() {}

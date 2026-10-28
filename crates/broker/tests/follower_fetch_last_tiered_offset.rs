@@ -329,11 +329,11 @@ async fn await_caught_up(b3: &BrokerHandle, topic: &str, leader_end: i64) {
     }
 }
 
-/// A new replica of a tiered partition skips the leader's tiered local
-/// segments exactly when `follower.fetch.last.tiered.offset.enable` is set for
-/// it, at the cluster default or for that broker alone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "follower fetch last tiered offset: a new replica starts at the last tiered offset only with the flag"
+)]
+async fn bdd_verify_a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
     let TieredCluster {
         brokers: [b1, b2, b3],
         log_dirs,
@@ -446,3 +446,14 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
     b2.shutdown().await;
     b3.shutdown().await;
 }
+
+/// A new replica of a tiered partition skips the leader's tiered local
+/// segments exactly when `follower.fetch.last.tiered.offset.enable` is set for
+/// it, at the cluster default or for that broker alone.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/follower_fetch_last_tiered_offset.feature",
+    name = "a new replica starts at the last tiered offset only with the flag"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {}

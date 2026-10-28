@@ -19,8 +19,11 @@ use {
     krabka_broker::NodeId,
 };
 
-#[tokio::test]
-async fn the_delivery_watermark_survives_a_broker_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "deliver at time dat restart: the delivery watermark survives a broker restart"
+)]
+async fn bdd_verify_the_delivery_watermark_survives_a_broker_restart() {
     struct Case {
         mode: Mode,
         expected: Visible,
@@ -89,3 +92,11 @@ async fn the_delivery_watermark_survives_a_broker_restart() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_restart.feature",
+    name = "the delivery watermark survives a broker restart"
+)]
+#[tokio::test]
+async fn the_delivery_watermark_survives_a_broker_restart() {}

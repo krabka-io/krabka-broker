@@ -65,6 +65,10 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 # Formats a real log directory, so the format-time checkpoint a test captures
 # is the one a node holds.
 krabka-format = { path = "../format" }

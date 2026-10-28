@@ -120,8 +120,9 @@ async fn metrics_cluster(topic: &str) -> MetricsCluster {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn replication_factor_three_propagates_to_all_followers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("replication: replication factor three propagates to all followers")]
+async fn bdd_verify_replication_factor_three_propagates_to_all_followers() {
     let _g = cluster_lock().lock().await;
     let (
         cluster,
@@ -142,6 +143,14 @@ async fn replication_factor_three_propagates_to_all_followers() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "replication factor three propagates to all followers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replication_factor_three_propagates_to_all_followers() {}
 
 /// What a follower holds once it has recovered from `OFFSET_OUT_OF_RANGE`.
 #[derive(Debug, PartialEq, Eq)]
@@ -210,14 +219,37 @@ async fn recover_from_out_of_range(topic: &str, records_per_batch: i32) -> Recov
     recovered
 }
 
-/// A leader log start on a batch boundary: the follower restarts there and
-/// takes every batch from it on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication: out of range at a batch boundary restarts at the leader log start"
+)]
+async fn bdd_verify_out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {
     assert!(
         recover_from_out_of_range("oor", 1).await
             == RecoveredFollower {
                 batch_bases: Some((25..50).collect()),
+                log_start: Some(25),
+            }
+    );
+}
+
+/// A leader log start on a batch boundary: the follower restarts there and
+/// takes every batch from it on.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "out of range at a batch boundary restarts at the leader log start"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("replication: out of range inside a batch restarts at the batch base")]
+async fn bdd_verify_out_of_range_inside_a_batch_restarts_at_the_batch_base() {
+    assert!(
+        recover_from_out_of_range("oor-mid-batch", 10).await
+            == RecoveredFollower {
+                batch_bases: Some(vec![20, 30, 40]),
                 log_start: Some(25),
             }
     );
@@ -228,28 +260,19 @@ async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {
 /// follower restarts at that batch's base and takes it, as Kafka's
 /// `Partition.appendRecordsToFollowerOrFutureReplica` does, and then raises
 /// its log start to the leader's from the next Fetch response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "out of range inside a batch restarts at the batch base"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn out_of_range_inside_a_batch_restarts_at_the_batch_base() {
-    assert!(
-        recover_from_out_of_range("oor-mid-batch", 10).await
-            == RecoveredFollower {
-                batch_bases: Some(vec![20, 30, 40]),
-                log_start: Some(25),
-            }
-    );
-}
+async fn out_of_range_inside_a_batch_restarts_at_the_batch_base() {}
 
-/// A follower that catches up across sealed segments copies every batch of the
-/// leader, in order, with no gap.
-///
-/// Each segment holds three batches of about 300 KB. A follower fetch of 1 MiB
-/// reads to the end of one segment, goes on into the next, and stops inside it
-/// with budget left. The leader once read on from that point into the segment
-/// after, and served the first batch of that segment. The follower then
-/// skipped every offset between the two. The throttled-reassignment system
-/// test found that gap: one new replica held 43 of the 666 big batches.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication: a follower that catches up across segments copies every batch"
+)]
+async fn bdd_verify_a_follower_that_catches_up_across_segments_copies_every_batch() {
     const BATCHES: i64 = 12;
     let _lock_guard = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
@@ -301,14 +324,28 @@ async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
     shutdown_cluster(cluster).await;
 }
 
-/// KIP-107 (#746): `DeleteRecords` moves the log start offset on every
-/// replica, and answers only when every live follower has it. A follower reads
-/// the leader's `log_start_offset` from each Fetch response and raises its own,
-/// as Kafka's `ReplicaFetcherThread` does, and the leader's purgatory waits for
-/// the followers to report it. So when the response arrives, no replica still
-/// serves a deleted record, and a leader change cannot bring one back.
+/// A follower that catches up across sealed segments copies every batch of the
+/// leader, in order, with no gap.
+///
+/// Each segment holds three batches of about 300 KB. A follower fetch of 1 MiB
+/// reads to the end of one segment, goes on into the next, and stops inside it
+/// with budget left. The leader once read on from that point into the segment
+/// after, and served the first batch of that segment. The follower then
+/// skipped every offset between the two. The throttled-reassignment system
+/// test found that gap: one new replica held 43 of the 666 big batches.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a follower that catches up across segments copies every batch"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delete_records_moves_every_replica_log_start_before_it_answers() {
+async fn a_follower_that_catches_up_across_segments_copies_every_batch() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication: delete records moves every replica log start before it answers"
+)]
+async fn bdd_verify_delete_records_moves_every_replica_log_start_before_it_answers() {
     use krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResult;
 
     let _g = cluster_lock().lock().await;
@@ -363,23 +400,25 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
     shutdown_cluster(cluster).await;
 }
 
-/// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
-/// follows from one leader into one connection and one in-flight `Fetch`.
-///
-/// Before this, the follower spawned one task, one connection and one
-/// single-partition sessionless `Fetch` per (topic, partition). A follower of
-/// twelve partitions therefore held twelve connections to the leader and
-/// parked twelve requests in its purgatory every round, which is the
-/// reconnect storm and the request amplification #415 describes.
-///
-/// The leader's own KIP-227 session cache is what makes this observable: a
-/// sessionless follower fetch caches nothing, so
-/// `krabka_broker_incremental_fetch_sessions` counted zero however many
-/// partitions were replicating. One session per *follower* -- not per
-/// partition -- is exactly the shape being asserted, and it stays at two while
-/// the partition count grows.
+/// KIP-107 (#746): `DeleteRecords` moves the log start offset on every
+/// replica, and answers only when every live follower has it. A follower reads
+/// the leader's `log_start_offset` from each Fetch response and raises its own,
+/// as Kafka's `ReplicaFetcherThread` does, and the leader's purgatory waits for
+/// the followers to report it. So when the response arrives, no replica still
+/// serves a deleted record, and a leader change cannot bring one back.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "delete records moves every replica log start before it answers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
+async fn delete_records_moves_every_replica_log_start_before_it_answers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication: a follower batches every partition of one leader into one session"
+)]
+async fn bdd_verify_a_follower_batches_every_partition_of_one_leader_into_one_session() {
     let _g = cluster_lock().lock().await;
     let MetricsCluster {
         cluster,
@@ -403,18 +442,34 @@ async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
     shutdown_cluster(cluster).await;
 }
 
-/// The batching's other half: a caught-up follower's request *rate* is bounded
-/// by how many fetchers it runs, not by how many partitions it follows.
+/// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
+/// follows from one leader into one connection and one in-flight `Fetch`.
 ///
-/// One task per partition meant at least `2P` Fetch requests per second per
-/// follower on an idle cluster, each parked in the leader's purgatory and
-/// decoded on its own. With one fetcher per leader it is a couple per second
-/// however many partitions there are. A regression that makes the fetcher spin
-/// -- a round that returns immediately and is re-sent at once -- shows up here
-/// as a rate in the thousands, and nowhere else until a profiler is pointed at
-/// it.
+/// Before this, the follower spawned one task, one connection and one
+/// single-partition sessionless `Fetch` per (topic, partition). A follower of
+/// twelve partitions therefore held twelve connections to the leader and
+/// parked twelve requests in its purgatory every round, which is the
+/// reconnect storm and the request amplification #415 describes.
+///
+/// The leader's own KIP-227 session cache is what makes this observable: a
+/// sessionless follower fetch caches nothing, so
+/// `krabka_broker_incremental_fetch_sessions` counted zero however many
+/// partitions were replicating. One session per *follower* -- not per
+/// partition -- is exactly the shape being asserted, and it stays at two while
+/// the partition count grows.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a follower batches every partition of one leader into one session"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows() {
+async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication: a caught up follower fetches a few times a second whatever it follows"
+)]
+async fn bdd_verify_a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows() {
     let _g = cluster_lock().lock().await;
     let MetricsCluster {
         cluster,
@@ -443,6 +498,24 @@ async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows()
 
     shutdown_cluster(cluster).await;
 }
+
+/// The batching's other half: a caught-up follower's request *rate* is bounded
+/// by how many fetchers it runs, not by how many partitions it follows.
+///
+/// One task per partition meant at least `2P` Fetch requests per second per
+/// follower on an idle cluster, each parked in the leader's purgatory and
+/// decoded on its own. With one fetcher per leader it is a couple per second
+/// however many partitions there are. A regression that makes the fetcher spin
+/// -- a round that returns immediately and is re-sent at once -- shows up here
+/// as a rate in the thousands, and nowhere else until a profiler is pointed at
+/// it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication.feature",
+    name = "a caught up follower fetches a few times a second whatever it follows"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows() {}
 
 /// Reads one labelled counter out of a broker's `/metrics` body, summed over
 /// every series whose label set contains `label_value`.

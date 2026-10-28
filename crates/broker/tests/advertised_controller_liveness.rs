@@ -49,8 +49,11 @@ const REQUESTS: usize = 6;
 /// for a loaded runner. Only a stuck cluster reaches it.
 const FENCING_DEADLINE: Duration = Duration::from_secs(30);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "advertised controller liveness: a non controller node stops advertising a broker that died"
+)]
+async fn bdd_verify_a_non_controller_node_stops_advertising_a_broker_that_died() {
     support::init_tracing();
 
     let mut cluster = registered_cluster(3).await;
@@ -135,6 +138,14 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/advertised_controller_liveness.feature",
+    name = "a non controller node stops advertising a broker that died"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_controller_node_stops_advertising_a_broker_that_died() {}
 
 fn node_id_of(handle: &BrokerHandle) -> i32 {
     i32::try_from(handle.node_id()).expect("node id fits an i32")
@@ -232,22 +243,11 @@ async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) 
     }
 }
 
-/// A broker booted from `BrokerConfig::for_tests` must keep its heartbeat
-/// session, as a Kafka broker does, and so must the same broker restarted on
-/// its log directory.
-///
-/// `for_tests` asks for port 0 on the controller listener and names that same
-/// `127.0.0.1:0` as its own voter endpoint. The heartbeat client dials the
-/// controller leader through the voter endpoint, so if the broker does not
-/// publish the port it bound, no heartbeat ever arrives. The controller then
-/// fences the broker and expires its session one `heartbeat_timeout` after
-/// start, and every single-broker test runs against a fenced broker.
-///
-/// The restart holds the first controller port, so the second start must bind
-/// another one. The port the first start published must not survive in the
-/// recovered metadata.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_for_tests_broker_keeps_its_heartbeat_session() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "advertised controller liveness: a for tests broker keeps its heartbeat session"
+)]
+async fn bdd_verify_a_for_tests_broker_keeps_its_heartbeat_session() {
     support::init_tracing();
 
     let dir = tempfile::tempdir().expect("log dir");
@@ -274,6 +274,28 @@ async fn a_for_tests_broker_keeps_its_heartbeat_session() {
     };
     assert!([started, restarted] == [healthy.clone(), healthy]);
 }
+
+/// A broker booted from `BrokerConfig::for_tests` must keep its heartbeat
+/// session, as a Kafka broker does, and so must the same broker restarted on
+/// its log directory.
+///
+/// `for_tests` asks for port 0 on the controller listener and names that same
+/// `127.0.0.1:0` as its own voter endpoint. The heartbeat client dials the
+/// controller leader through the voter endpoint, so if the broker does not
+/// publish the port it bound, no heartbeat ever arrives. The controller then
+/// fences the broker and expires its session one `heartbeat_timeout` after
+/// start, and every single-broker test runs against a fenced broker.
+///
+/// The restart holds the first controller port, so the second start must bind
+/// another one. The port the first start published must not survive in the
+/// recovered metadata.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/advertised_controller_liveness.feature",
+    name = "a for tests broker keeps its heartbeat session"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_for_tests_broker_keeps_its_heartbeat_session() {}
 
 /// Whether the controller holds a broker alive, and the brokers its image
 /// marks fenced.

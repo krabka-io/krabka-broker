@@ -32,12 +32,11 @@ const CONFIG_TYPE_BOOLEAN: i8 = 1;
 /// `stretch.preferred.leader.site`.
 const CONFIG_TYPE_STRING: i8 = 2;
 
-/// `broker.witness` is controller-managed: it is published for the witness
-/// node, `DescribeConfigs` reports it read-only next to the cluster-default
-/// `stretch.preferred.leader.site`, and `IncrementalAlterConfigs` refuses to
-/// change it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_role_is_a_read_only_broker_config() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "witness role witness config surface: witness role is a read only broker config"
+)]
+async fn bdd_verify_witness_role_is_a_read_only_broker_config() {
     let _guard = cluster_lock().lock().await;
     let cluster = start_stretch_cluster().await;
 
@@ -123,3 +122,15 @@ async fn witness_role_is_a_read_only_broker_config() {
 
     shutdown(cluster).await;
 }
+
+/// `broker.witness` is controller-managed: it is published for the witness
+/// node, `DescribeConfigs` reports it read-only next to the cluster-default
+/// `stretch.preferred.leader.site`, and `IncrementalAlterConfigs` refuses to
+/// change it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/witness_role/witness_config_surface.feature",
+    name = "witness role is a read only broker config"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn witness_role_is_a_read_only_broker_config() {}

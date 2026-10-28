@@ -70,10 +70,11 @@ krabka_macros::unix_millis_fixture!(
     "a millisecond clock reading fits in i64"
 );
 
-/// A `LogAppendTime` topic answers the clock reading it stamped, and stores
-/// that same reading rather than the producer's timestamp.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_append_time_topic_reports_the_stamp_it_wrote() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce log append time: a log append time topic reports the stamp it wrote"
+)]
+async fn bdd_verify_a_log_append_time_topic_reports_the_stamp_it_wrote() {
     let p = support::start().await;
     let topic_id = ready_topic(&p.broker, &p.client, "audit", &[ConfigOverride {
         key: "message.timestamp.type",
@@ -108,10 +109,19 @@ async fn a_log_append_time_topic_reports_the_stamp_it_wrote() {
     p.broker.shutdown().await;
 }
 
-/// The default topic stamps nothing: the row carries `-1` and the records keep
-/// the producer's own timestamp.
+/// A `LogAppendTime` topic answers the clock reading it stamped, and stores
+/// that same reading rather than the producer's timestamp.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "a log append time topic reports the stamp it wrote"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_create_time_topic_reports_no_stamp() {
+async fn a_log_append_time_topic_reports_the_stamp_it_wrote() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("produce log append time: a create time topic reports no stamp")]
+async fn bdd_verify_a_create_time_topic_reports_no_stamp() {
     let p = support::start().await;
     let topic_id = ready_topic(&p.broker, &p.client, "orders", &[]).await;
 
@@ -133,11 +143,19 @@ async fn a_create_time_topic_reports_no_stamp() {
     p.broker.shutdown().await;
 }
 
-/// `message.timestamp.before.max.ms` refuses a record older than the window
-/// and admits one inside it, which is Kafka's `INVALID_TIMESTAMP` (32) over
-/// the whole batch.
+/// The default topic stamps nothing: the row carries `-1` and the records keep
+/// the producer's own timestamp.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "a create time topic reports no stamp"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_timestamp_older_than_the_window_is_refused() {
+async fn a_create_time_topic_reports_no_stamp() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("produce log append time: a timestamp older than the window is refused")]
+async fn bdd_verify_a_timestamp_older_than_the_window_is_refused() {
     let p = support::start().await;
     let topic_id = ready_topic(&p.broker, &p.client, "metrics", &[ConfigOverride {
         key: "message.timestamp.before.max.ms",
@@ -159,10 +177,20 @@ async fn a_timestamp_older_than_the_window_is_refused() {
     p.broker.shutdown().await;
 }
 
-/// `message.timestamp.after.max.ms` refuses a record further ahead of the
-/// broker's clock than the window allows.
+/// `message.timestamp.before.max.ms` refuses a record older than the window
+/// and admits one inside it, which is Kafka's `INVALID_TIMESTAMP` (32) over
+/// the whole batch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "a timestamp older than the window is refused"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_timestamp_newer_than_the_window_is_refused() {
+async fn a_timestamp_older_than_the_window_is_refused() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("produce log append time: a timestamp newer than the window is refused")]
+async fn bdd_verify_a_timestamp_newer_than_the_window_is_refused() {
     let p = support::start().await;
     let topic_id = ready_topic(&p.broker, &p.client, "forecasts", &[ConfigOverride {
         key: "message.timestamp.after.max.ms",
@@ -180,11 +208,19 @@ async fn a_timestamp_newer_than_the_window_is_refused() {
     p.broker.shutdown().await;
 }
 
-/// A `LogAppendTime` topic ignores the windows, as Kafka's `validateTimestamp`
-/// does: it tests a record's timestamp only under `CreateTime`, because the
-/// stamp overwrites every producer timestamp anyway.
+/// `message.timestamp.after.max.ms` refuses a record further ahead of the
+/// broker's clock than the window allows.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "a timestamp newer than the window is refused"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn log_append_time_ignores_the_timestamp_windows() {
+async fn a_timestamp_newer_than_the_window_is_refused() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("produce log append time: log append time ignores the timestamp windows")]
+async fn bdd_verify_log_append_time_ignores_the_timestamp_windows() {
     let p = support::start().await;
     let topic_id = ready_topic(&p.broker, &p.client, "traces", &[
         ConfigOverride {
@@ -208,6 +244,17 @@ async fn log_append_time_ignores_the_timestamp_windows() {
 
     p.broker.shutdown().await;
 }
+
+/// A `LogAppendTime` topic ignores the windows, as Kafka's `validateTimestamp`
+/// does: it tests a record's timestamp only under `CreateTime`, because the
+/// stamp overwrites every producer timestamp anyway.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_log_append_time.feature",
+    name = "log append time ignores the timestamp windows"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn log_append_time_ignores_the_timestamp_windows() {}
 
 /// The partition row an accepted produce answers with.
 fn accepted(base_offset: i64, log_append_time_ms: i64) -> PartitionProduceResponse {

@@ -19,8 +19,9 @@ use {
 mod repository;
 use repository::{checked_in_schema, repo_root};
 
-#[test]
-fn checked_in_schema_matches_file_config() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("config reference: checked in schema matches file config")]
+fn bdd_verify_checked_in_schema_matches_file_config() {
     let generated = file_config::config_schema();
     let checked_in = checked_in_schema();
     assert!(
@@ -29,6 +30,13 @@ fn checked_in_schema_matches_file_config() {
          docs/config-schema.json` and then `aspect generate-config-reference`"
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/config_reference.feature",
+    name = "checked in schema matches file config"
+)]
+fn checked_in_schema_matches_file_config() {}
 
 /// Every key the schema knows, as the bare key name a reference row carries.
 fn schema_keys(schema: &Value) -> Vec<String> {
@@ -66,8 +74,9 @@ fn schema_keys(schema: &Value) -> Vec<String> {
     keys
 }
 
-#[test]
-fn reference_page_carries_every_schema_key() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("config reference: reference page carries every schema key")]
+fn bdd_verify_reference_page_carries_every_schema_key() {
     let path = repo_root().join("docs/config-reference.md");
     let page = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -86,11 +95,16 @@ fn reference_page_carries_every_schema_key() {
     );
 }
 
-/// The binary prints the same document the library generates, so the
-/// regeneration command in this suite's failure message produces what the
-/// test compares against.
-#[test]
-fn print_config_schema_flag_prints_the_schema() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/config_reference.feature",
+    name = "reference page carries every schema key"
+)]
+fn reference_page_carries_every_schema_key() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config reference: print config schema flag prints the schema")]
+fn bdd_verify_print_config_schema_flag_prints_the_schema() {
     let exe = env::var_os("CARGO_BIN_EXE_krabka-broker")
         .expect("cargo and the Bazel target both export CARGO_BIN_EXE_krabka-broker");
     let output = Command::new(exe)
@@ -107,8 +121,19 @@ fn print_config_schema_flag_prints_the_schema() {
     assert!(printed == file_config::config_schema());
 }
 
-#[test]
-fn schema_names_the_top_level_sections() {
+/// The binary prints the same document the library generates, so the
+/// regeneration command in this suite's failure message produces what the
+/// test compares against.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/config_reference.feature",
+    name = "print config schema flag prints the schema"
+)]
+fn print_config_schema_flag_prints_the_schema() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config reference: schema names the top level sections")]
+fn bdd_verify_schema_names_the_top_level_sections() {
     let schema = file_config::config_schema();
     let properties = schema["properties"]
         .as_object()
@@ -132,8 +157,16 @@ fn schema_names_the_top_level_sections() {
     }
 }
 
-#[test]
-fn unit_bearing_fields_carry_their_format() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/config_reference.feature",
+    name = "schema names the top level sections"
+)]
+fn schema_names_the_top_level_sections() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config reference: unit bearing fields carry their format")]
+fn bdd_verify_unit_bearing_fields_carry_their_format() {
     let schema = file_config::config_schema();
     let runtime = &schema["$defs"]["RuntimeFileConfig"]["properties"];
     let expected = [
@@ -149,3 +182,10 @@ fn unit_bearing_fields_carry_their_format() {
     }
     assert!(schema["properties"]["heartbeat_interval"]["format"] == "duration");
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/config_reference.feature",
+    name = "unit bearing fields carry their format"
+)]
+fn unit_bearing_fields_carry_their_format() {}

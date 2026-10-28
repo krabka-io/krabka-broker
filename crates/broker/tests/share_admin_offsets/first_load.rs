@@ -149,26 +149,11 @@ async fn join_and_load(
     member
 }
 
-/// `latest`, loaded on one leader and never acknowledged there, is resolved
-/// again by the next leader against the high watermark it finds, and the
-/// first acknowledgement persists that second resolution.
-///
-/// 1. Three records, then a first load: the start resolves to 3 in memory,
-///    and the persisted start stays `-1`. Describe reports start and lag
-///    `-1`, as Kafka's `shouldComputeSharePartitionLag` is false.
-/// 2. Two more records, then a restart: the next load resolves `latest` to 5,
-///    not the 3 that the first leader resolved, and the next fetch acquires
-///    the records produced after it, 5 and 6, only.
-/// 3. Accepting 6 alone leaves the SPSO at 5, so the persisted state is start
-///    5 with one delivered record, and the lag is `7 - 5 - 1`. The restart
-///    re-elected the broker at a higher leader epoch, and the second load
-///    stored it.
-///
-/// Each load stores the epoch of the leader that ran it, and Describe reports
-/// the stored epoch. The test reads the epochs instead of assuming 0 and 1,
-/// because a fence and re-election on a loaded host raises them too.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share admin offsets first load: an unwritten start is resolved again and the first ack persists it"
+)]
+async fn bdd_verify_an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
     // The permit and the directory stay bound to the end of the test: the
     // permit holds this test's broker slot and the directory backs both boots.
     let RestartDirectory {
@@ -277,3 +262,29 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
     assert!(durable == ((5, 1), described(tid, (5, second_epoch, 1))));
     broker.shutdown().await;
 }
+
+/// `latest`, loaded on one leader and never acknowledged there, is resolved
+/// again by the next leader against the high watermark it finds, and the
+/// first acknowledgement persists that second resolution.
+///
+/// 1. Three records, then a first load: the start resolves to 3 in memory,
+///    and the persisted start stays `-1`. Describe reports start and lag
+///    `-1`, as Kafka's `shouldComputeSharePartitionLag` is false.
+/// 2. Two more records, then a restart: the next load resolves `latest` to 5,
+///    not the 3 that the first leader resolved, and the next fetch acquires
+///    the records produced after it, 5 and 6, only.
+/// 3. Accepting 6 alone leaves the SPSO at 5, so the persisted state is start
+///    5 with one delivered record, and the lag is `7 - 5 - 1`. The restart
+///    re-elected the broker at a higher leader epoch, and the second load
+///    stored it.
+///
+/// Each load stores the epoch of the leader that ran it, and Describe reports
+/// the stored epoch. The test reads the epochs instead of assuming 0 and 1,
+/// because a fence and re-election on a loaded host raises them too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/first_load.feature",
+    name = "an unwritten start is resolved again and the first ack persists it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {}

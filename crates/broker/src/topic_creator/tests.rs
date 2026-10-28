@@ -779,8 +779,9 @@ fn the_create_topics_version_is_the_highest_that_both_sides_support() {
     }
 }
 
-#[test]
-fn each_error_reads_as_kafka_reports_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("topic creator tests: each error reads as kafka reports it")]
+fn bdd_verify_each_error_reads_as_kafka_reports_it() {
     let cases = [
         (
             TopicCreatorError::Timeout,
@@ -804,6 +805,13 @@ fn each_error_reads_as_kafka_reports_it() {
         check!(error.to_string() == want);
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/topic_creator/tests.feature",
+    name = "each error reads as kafka reports it"
+)]
+fn each_error_reads_as_kafka_reports_it() {}
 
 /// `ForwardedIdentity::of` takes the principal name, the client address and
 /// the client id and the correlation id of the request.

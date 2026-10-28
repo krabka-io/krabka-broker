@@ -6,6 +6,8 @@
 //! pair that an `OffsetForLeaderEpoch` row carries and that a `Fetch` row's
 //! `diverging_epoch` is built from.
 
+#[cfg(test)]
+use std::vec;
 use {
     creusot_std::prelude::*,
     krabka_ids::{LeaderEpoch, Offset},
@@ -193,86 +195,100 @@ mod tests {
         }
     }
 
-    /// One row per `endOffsetFor` branch, plus the gap-epoch variants.
-    #[yare::parameterized(
-        empty_cache = { "empty cache", &[][..], 0, 9, (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET) },
-        undefined_requested_empty = {
-            "undefined requested epoch, empty cache",
-            &[][..],
-            -1,
-            9,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        undefined_requested = {
-            "undefined requested epoch",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            -1,
-            200,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        latest_epoch = {
-            "latest epoch answers the log end offset",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            5,
-            200,
-            (LeaderEpoch(5), Offset(200)),
-        },
-        above_latest = {
-            "requested epoch above the latest",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            7,
-            200,
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
-        },
-        below_first = {
-            "below the first epoch: requested epoch, first start",
-            &[entry(3, 30), entry(4, 40)][..],
-            1,
-            200,
-            (LeaderEpoch(1), Offset(30)),
-        },
-        exact_older = {
-            "exact older epoch: that epoch, next start",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            2,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_epoch = {
-            "gap epoch: floor epoch, next start",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            3,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_below_latest = {
-            "gap epoch below the latest: floor epoch 2, start of 5",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            4,
-            200,
-            (LeaderEpoch(2), Offset(100)),
-        },
-        gap_above_first = {
-            "gap epoch just above the first: floor epoch 0, start of 2",
-            &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
-            1,
-            200,
-            (LeaderEpoch(0), Offset(50)),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "leader epoch tests: lookup matches kafka end offset for rows for {example}"
     )]
-    fn lookup_matches_kafka_end_offset_for_rows(
-        name: &str,
-        entries: &[EpochEntry],
-        requested: i32,
-        log_end: i64,
-        expected: (LeaderEpoch, Offset),
-    ) {
+    fn bdd_verify_lookup_matches_kafka_end_offset_for_rows(example: String) {
+        type Example<'a> = (&'a str, &'a [EpochEntry], i32, i64, (LeaderEpoch, Offset));
+        let (name, entries, requested, log_end, expected): Example<'_> = match example.as_str() {
+            "empty cache" => (
+                "empty cache",
+                &[][..],
+                0,
+                9,
+                (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
+            ),
+            "undefined requested empty" => (
+                "undefined requested epoch, empty cache",
+                &[][..],
+                -1,
+                9,
+                (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
+            ),
+            "undefined requested" => (
+                "undefined requested epoch",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                -1,
+                200,
+                (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
+            ),
+            "latest epoch" => (
+                "latest epoch answers the log end offset",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                5,
+                200,
+                (LeaderEpoch(5), Offset(200)),
+            ),
+            "above latest" => (
+                "requested epoch above the latest",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                7,
+                200,
+                (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET),
+            ),
+            "below first" => (
+                "below the first epoch: requested epoch, first start",
+                &[entry(3, 30), entry(4, 40)][..],
+                1,
+                200,
+                (LeaderEpoch(1), Offset(30)),
+            ),
+            "exact older" => (
+                "exact older epoch: that epoch, next start",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                2,
+                200,
+                (LeaderEpoch(2), Offset(100)),
+            ),
+            "gap epoch" => (
+                "gap epoch: floor epoch, next start",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                3,
+                200,
+                (LeaderEpoch(2), Offset(100)),
+            ),
+            "gap below latest" => (
+                "gap epoch below the latest: floor epoch 2, start of 5",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                4,
+                200,
+                (LeaderEpoch(2), Offset(100)),
+            ),
+            "gap above first" => (
+                "gap epoch just above the first: floor epoch 0, start of 2",
+                &[entry(0, 0), entry(2, 50), entry(5, 100)][..],
+                1,
+                200,
+                (LeaderEpoch(0), Offset(50)),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::check!(
             epoch_and_offset_for_entries(entries, LeaderEpoch(requested), Offset(log_end))
                 == expected,
             "case {name}"
         );
     }
+
+    /// One row per `endOffsetFor` branch, plus the gap-epoch variants.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/leader_epoch.feature",
+        name = "tests: lookup matches kafka end offset for rows"
+    )]
+    fn lookup_matches_kafka_end_offset_for_rows(example: String) { let _ = example; }
 
     proptest! {
         #[test]

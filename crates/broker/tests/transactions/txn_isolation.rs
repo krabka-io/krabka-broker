@@ -25,10 +25,9 @@ use {
     tokio::time,
 };
 
-/// Commits a transaction, after which a `read_committed` consumer sees all 3
-/// records.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn commit_then_read_committed_sees_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions txn isolation: commit then read committed sees records")]
+async fn bdd_verify_commit_then_read_committed_sees_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "t").await;
 
@@ -48,14 +47,23 @@ async fn commit_then_read_committed_sees_records() {
     broker.shutdown().await;
 }
 
+/// Commits a transaction, after which a `read_committed` consumer sees all 3
+/// records.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
+    name = "commit then read committed sees records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn commit_then_read_committed_sees_records() {}
+
 // ── test 2 ────────────────────────────────────────────────────────────────────
 
 const SEGMENT_BYTES: u64 = 128;
 
-/// Aborts a transaction. `read_committed` then sees 0 records, and
-/// `read_uncommitted` sees 3.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn abort_then_read_committed_skips_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions txn isolation: abort then read committed skips records")]
+async fn bdd_verify_abort_then_read_committed_skips_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
     // Every batch is about 75 bytes, so 128 seals a segment behind each one, and
     // a smaller value would refuse the batch itself with RECORD_LIST_TOO_LARGE, as
@@ -153,20 +161,21 @@ async fn abort_then_read_committed_skips_records() {
     broker.shutdown().await;
 }
 
+/// Aborts a transaction. `read_committed` then sees 0 records, and
+/// `read_uncommitted` sees 3.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
+    name = "abort then read committed skips records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_then_read_committed_skips_records() {}
+
 // ── test 3 ────────────────────────────────────────────────────────────────────
 
-/// commit("a","b","c"), abort("X","Y"), commit("d","e","f","g"):
-/// `read_committed` sees exactly \["a","b","c","d","e","f","g"\].
-///
-/// Exercises rapid reuse of one `transactional_id` across three back-to-back
-/// transactions. This used to flake with `Server(48)` (`INVALID_TXN_STATE`)
-/// because `flush` returned before an in-flight Produce had transitioned the
-/// coordinator to `Ongoing`, so the following `EndTxn` arrived while the entry
-/// was still `CompleteCommit`/`CompleteAbort`. `Producer::flush` now waits for
-/// in-flight batches, so the partition-register Produce is always acked before
-/// `EndTxn` is sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn interleaved_commit_and_abort() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions txn isolation: interleaved commit and abort")]
+async fn bdd_verify_interleaved_commit_and_abort() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "ti").await;
 
@@ -201,3 +210,21 @@ async fn interleaved_commit_and_abort() {
     consumer.close().await.unwrap();
     broker.shutdown().await;
 }
+
+/// commit("a","b","c"), abort("X","Y"), commit("d","e","f","g"):
+/// `read_committed` sees exactly \["a","b","c","d","e","f","g"\].
+///
+/// Exercises rapid reuse of one `transactional_id` across three back-to-back
+/// transactions. This used to flake with `Server(48)` (`INVALID_TXN_STATE`)
+/// because `flush` returned before an in-flight Produce had transitioned the
+/// coordinator to `Ongoing`, so the following `EndTxn` arrived while the entry
+/// was still `CompleteCommit`/`CompleteAbort`. `Producer::flush` now waits for
+/// in-flight batches, so the partition-register Produce is always acked before
+/// `EndTxn` is sent.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
+    name = "interleaved commit and abort"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interleaved_commit_and_abort() {}

@@ -714,9 +714,11 @@ mod tests {
         }
     }
 
-    /// The exception message names the api as Kafka's `ApiKeys` enum does.
-    #[test]
-    fn kafka_api_name_is_the_api_keys_constant() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network dispatch sasl tests: kafka api name is the api keys constant"
+    )]
+    fn bdd_verify_kafka_api_name_is_the_api_keys_constant() {
         let cases = [
             (ApiKey::Produce, "PRODUCE"),
             (ApiKey::ListOffsets, "LIST_OFFSETS"),
@@ -730,6 +732,14 @@ mod tests {
             assert!(kafka_api_name(api) == name);
         }
     }
+
+    /// The exception message names the api as Kafka's `ApiKeys` enum does.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/dispatch/sasl.feature",
+        name = "tests: kafka api name is the api keys constant"
+    )]
+    fn kafka_api_name_is_the_api_keys_constant() {}
 
     /// A failed exchange resolved no principal, so the audit row can only name
     /// what the peer claimed. PLAIN is the one mechanism that says it in the
@@ -795,12 +805,11 @@ mod tests {
         }
     }
 
-    /// An auditor joins an authentication row to the privileged-action rows
-    /// the same session went on to write, by the principal string. That join
-    /// only holds while this renders the `User:<name>` Kafka form that
-    /// `break_glass::handlers::principal_name` puts on the other side.
-    #[test]
-    fn a_resolved_principal_is_audited_in_the_kafka_user_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network dispatch sasl tests: a resolved principal is audited in the kafka user form"
+    )]
+    fn bdd_verify_a_resolved_principal_is_audited_in_the_kafka_user_form() {
         let principal = krabka_security::Principal {
             name: "alice".to_owned(),
             auth_method: krabka_security::AuthMethod::SaslScramSha512,
@@ -814,6 +823,17 @@ mod tests {
                 }
         );
     }
+
+    /// An auditor joins an authentication row to the privileged-action rows
+    /// the same session went on to write, by the principal string. That join
+    /// only holds while this renders the `User:<name>` Kafka form that
+    /// `break_glass::handlers::principal_name` puts on the other side.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/dispatch/sasl.feature",
+        name = "tests: a resolved principal is audited in the kafka user form"
+    )]
+    fn a_resolved_principal_is_audited_in_the_kafka_user_form() {}
 
     /// The refusal an operator has to be able to see after the fact: one
     /// `Authentication` row, `Failure`, naming the mechanism, the user the

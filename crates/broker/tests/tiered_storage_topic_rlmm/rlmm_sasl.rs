@@ -15,16 +15,26 @@ use {
     krabka_security::ListenerProtocol,
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm sasl: topic rlmm sasl loopback copy then fetch round trip"
+)]
+fn bdd_verify_topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {
+    run_broker_test(topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case());
+}
+
 /// The full copy→metadata→read round-trip, but the broker's only listener
 /// is `SASL_PLAINTEXT/PLAIN`. The RLMM's internal metadata client must
 /// authenticate as the inter-broker PLAIN principal to bootstrap the
 /// topic, publish/consume `CopySegment` events, and serve the read-back. This
 /// proves the secured metadata client works end-to-end. The test's own
 /// client authenticates with the same credentials.
-#[test]
-fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {
-    run_broker_test(topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_sasl.feature",
+    name = "topic rlmm sasl loopback copy then fetch round trip"
+)]
+fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {}
 
 async fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case() {
     const TOPIC: &str = "tiered-topic-rlmm-sasl-itest";

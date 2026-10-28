@@ -8,10 +8,11 @@ fn dynamic_names(dynamic: Dynamic) -> Vec<&'static str> {
         .collect()
 }
 
-/// `lookup` is a binary search, so the table has to stay sorted, and a name
-/// may appear once.
-#[test]
-fn the_roster_is_sorted_by_name_without_repeats() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: the roster is sorted by name without repeats"
+)]
+fn bdd_verify_the_roster_is_sorted_by_name_without_repeats() {
     let names: Vec<&str> = KAFKA_BROKER_CONFIGS.iter().map(|row| row.name).collect();
     let mut sorted = names.clone();
     sorted.sort_unstable();
@@ -19,12 +20,20 @@ fn the_roster_is_sorted_by_name_without_repeats() {
     check!(names == sorted);
 }
 
-/// The shape of Kafka 4.3.1's `AbstractKafkaConfig.CONFIG_DEF`: 360 keys, 20
-/// of them internal, and 99 in `DynamicBrokerConfig.ALL_DYNAMIC_CONFIGS` (the
-/// other three of its 102 are the `QuotaConfig` keys, which `CONFIG_DEF` does
-/// not hold).
-#[test]
-fn the_roster_has_the_shape_of_kafka_4_3_1s_config_def() {
+#[cfg(test)]
+/// `lookup` is a binary search, so the table has to stay sorted, and a name
+/// may appear once.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "the roster is sorted by name without repeats"
+)]
+fn the_roster_is_sorted_by_name_without_repeats() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: the roster has the shape of kafka 4 3 1s config def"
+)]
+fn bdd_verify_the_roster_has_the_shape_of_kafka_4_3_1s_config_def() {
     check!(KAFKA_BROKER_CONFIGS.len() == 360);
     check!(
         KAFKA_BROKER_CONFIGS
@@ -36,10 +45,20 @@ fn the_roster_has_the_shape_of_kafka_4_3_1s_config_def() {
     check!(dynamic_names(Dynamic::Cluster).len() + dynamic_names(Dynamic::PerBroker).len() == 99);
 }
 
-/// `DynamicBrokerConfig.PER_BROKER_CONFIGS`: the SSL keys, `DynamicListenerConfig`
-/// and `cordoned.log.dirs`, less the three cluster-level listener keys.
-#[test]
-fn the_per_broker_keys_are_kafkas() {
+/// The shape of Kafka 4.3.1's `AbstractKafkaConfig.CONFIG_DEF`: 360 keys, 20
+/// of them internal, and 99 in `DynamicBrokerConfig.ALL_DYNAMIC_CONFIGS` (the
+/// other three of its 102 are the `QuotaConfig` keys, which `CONFIG_DEF` does
+/// not hold).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "the roster has the shape of kafka 4 3 1s config def"
+)]
+fn the_roster_has_the_shape_of_kafka_4_3_1s_config_def() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config keys kafka broker tests: the per broker keys are kafkas")]
+fn bdd_verify_the_per_broker_keys_are_kafkas() {
     let mut want = vec![
         "cordoned.log.dirs",
         "listener.security.protocol.map",
@@ -83,30 +102,53 @@ fn the_per_broker_keys_are_kafkas() {
     check!(dynamic_names(Dynamic::PerBroker) == want);
 }
 
-/// The keys the issue names, which a Kafka broker refuses to alter, are in
-/// the roster and not dynamic.
-#[yare::parameterized(
-    auto_leader_rebalance_enable = { "auto.leader.rebalance.enable" },
-    queued_max_requests = { "queued.max.requests" },
-    log_cleaner_enable = { "log.cleaner.enable" },
-    authorizer_class_name = { "authorizer.class.name" },
-    offsets_topic_replication_factor = { "offsets.topic.replication.factor" },
-    log_dirs = { "log.dirs" },
-    node_id = { "node.id" },
-    unstable_api_versions_enable = { "unstable.api.versions.enable" },
+/// `DynamicBrokerConfig.PER_BROKER_CONFIGS`: the SSL keys, `DynamicListenerConfig`
+/// and `cordoned.log.dirs`, less the three cluster-level listener keys.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "the per broker keys are kafkas"
 )]
-fn keys_kafka_refuses_to_alter_are_read_only(name: &str) {
+fn the_per_broker_keys_are_kafkas() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: keys kafka refuses to alter are read only for {example}"
+)]
+fn bdd_verify_keys_kafka_refuses_to_alter_are_read_only(example: String) {
+    type Example<'a> = (&'a str,);
+    let (name,): Example<'_> = match example.as_str() {
+        "auto leader rebalance enable" => ("auto.leader.rebalance.enable",),
+        "queued max requests" => ("queued.max.requests",),
+        "log cleaner enable" => ("log.cleaner.enable",),
+        "authorizer class name" => ("authorizer.class.name",),
+        "offsets topic replication factor" => ("offsets.topic.replication.factor",),
+        "log dirs" => ("log.dirs",),
+        "node id" => ("node.id",),
+        "unstable api versions enable" => ("unstable.api.versions.enable",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         lookup(name).map(|row| row.dynamic) == Some(Dynamic::ReadOnly),
         "{name}"
     );
 }
 
-/// `DynamicConfig.Broker.validate` parses each value against the key's
-/// `ConfigDef` type and runs its validator. Each row is a key, a value and
-/// the value Kafka reports, or its `ConfigException` text.
-#[test]
-fn dynamic_keys_are_parsed_and_range_checked_the_way_config_def_does() {
+/// The keys the issue names, which a Kafka broker refuses to alter, are in
+/// the roster and not dynamic.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "keys kafka refuses to alter are read only"
+)]
+fn keys_kafka_refuses_to_alter_are_read_only(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: dynamic keys are parsed and range checked the way config def does"
+)]
+fn bdd_verify_dynamic_keys_are_parsed_and_range_checked_the_way_config_def_does() {
     struct Case {
         key: &'static str,
         value: &'static str,
@@ -267,39 +309,61 @@ fn dynamic_keys_are_parsed_and_range_checked_the_way_config_def_does() {
     }
 }
 
-/// `KafkaConfig.configType` types a `listener.name.<listener>.` override as
-/// the key it overrides, and a mechanism override as the key it ends in.
-#[yare::parameterized(
-    broker_config_key = { "num.io.threads", Some(("num.io.threads", ConfigType::Int)) },
-    ssl_keystore_location = {
-        "listener.name.external.ssl.keystore.location",
-        Some(("ssl.keystore.location", ConfigType::String)),
-    },
-    ssl_keystore_password = {
-        "listener.name.external.ssl.keystore.password",
-        Some(("ssl.keystore.password", ConfigType::Password)),
-    },
-    sasl_jaas_config = {
-        "listener.name.external.plain.sasl.jaas.config",
-        Some(("sasl.jaas.config", ConfigType::Password)),
-    },
-    listener_missing_key = { "listener.name.external.no.such.key", None },
-    missing_key = { "no.such.key", None },
+#[cfg(test)]
+/// `DynamicConfig.Broker.validate` parses each value against the key's
+/// `ConfigDef` type and runs its validator. Each row is a key, a value and
+/// the value Kafka reports, or its `ConfigException` text.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "dynamic keys are parsed and range checked the way config def does"
 )]
-fn a_listener_override_resolves_to_the_key_it_overrides(
-    name: &str,
-    want: Option<(&str, ConfigType)>,
-) {
+fn dynamic_keys_are_parsed_and_range_checked_the_way_config_def_does() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: a listener override resolves to the key it overrides for {example}"
+)]
+fn bdd_verify_a_listener_override_resolves_to_the_key_it_overrides(example: String) {
+    type Example<'a> = (&'a str, Option<(&'a str, ConfigType)>);
+    let (name, want): Example<'_> = match example.as_str() {
+        "broker config key" => ("num.io.threads", Some(("num.io.threads", ConfigType::Int))),
+        "ssl keystore location" => (
+            "listener.name.external.ssl.keystore.location",
+            Some(("ssl.keystore.location", ConfigType::String)),
+        ),
+        "ssl keystore password" => (
+            "listener.name.external.ssl.keystore.password",
+            Some(("ssl.keystore.password", ConfigType::Password)),
+        ),
+        "sasl jaas config" => (
+            "listener.name.external.plain.sasl.jaas.config",
+            Some(("sasl.jaas.config", ConfigType::Password)),
+        ),
+        "listener missing key" => ("listener.name.external.no.such.key", None),
+        "missing key" => ("no.such.key", None),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         resolve(name).map(|row| (row.name, row.config_type)) == want,
         "{name}"
     );
 }
 
-/// A password key is sensitive, and a key the roster row types is read-only
-/// exactly when it is not dynamic.
-#[test]
-fn the_row_of_a_key_states_its_sensitivity_and_mode() {
+#[cfg(test)]
+/// `KafkaConfig.configType` types a `listener.name.<listener>.` override as
+/// the key it overrides, and a mechanism override as the key it ends in.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "a listener override resolves to the key it overrides"
+)]
+fn a_listener_override_resolves_to_the_key_it_overrides(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka broker tests: the row of a key states its sensitivity and mode"
+)]
+fn bdd_verify_the_row_of_a_key_states_its_sensitivity_and_mode() {
     let sensitive = lookup("ssl.keystore.password").expect("a key").row();
     check!(sensitive.sensitive);
     check!(!sensitive.read_only);
@@ -310,3 +374,12 @@ fn the_row_of_a_key_states_its_sensitivity_and_mode() {
     check!(read_only.read_only);
     check!(read_only.config_type.wire() == 7);
 }
+
+#[cfg(test)]
+/// A password key is sensitive, and a key the roster row types is read-only
+/// exactly when it is not dynamic.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_broker/tests.feature",
+    name = "the row of a key states its sensitivity and mode"
+)]
+fn the_row_of_a_key_states_its_sensitivity_and_mode() {}

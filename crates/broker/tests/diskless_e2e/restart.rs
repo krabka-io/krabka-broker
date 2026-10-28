@@ -37,8 +37,11 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless e2e restart: a broker crashed mid flush loses no acknowledged offset"
+)]
+async fn bdd_verify_a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
     // Flush on a tight cadence so the crash below lands inside a flush cycle
     // rather than between two idle ticks.
     let (mut cluster, admin, topic_id, leader, _values, producer) =
@@ -158,3 +161,11 @@ async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
 
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/restart.feature",
+    name = "a broker crashed mid flush loses no acknowledged offset"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {}

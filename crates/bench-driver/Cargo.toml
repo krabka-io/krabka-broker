@@ -85,6 +85,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
 krabka-client-core = { version = "0.7.1", features = ["mock"] }
 # Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
 # stops parsing names itself.
@@ -92,10 +96,6 @@ libtest-mimic = "0.8"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 yare = { workspace = true }
-
-[[test]]
-name = "scenario_files"
-harness = false
 
 [[test]]
 name = "contract_files"

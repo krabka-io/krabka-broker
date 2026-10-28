@@ -449,16 +449,20 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        follower_moved_in_place = { state(0, 1, &[1, 4, 3]), Some(vec![1, 2, 3]) },
-        leader_moved_in_place = { state(0, 4, &[4, 2, 3]), Some(vec![1, 2, 3]) },
-        not_held = { state(0, 1, &[1, 2, 3]), None },
-        nowhere_to_go = { state(0, 1, &[1, 2, 3, 4]), None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract transitions tests: a reassignment drains the target onto the spare node for {example}"
     )]
-    fn a_reassignment_drains_the_target_onto_the_spare_node(
-        before: PartitionState,
-        after: Option<Vec<i32>>,
-    ) {
+    fn bdd_verify_a_reassignment_drains_the_target_onto_the_spare_node(example: String) {
+        type Example = (PartitionState, Option<Vec<i32>>);
+        let (before, after): Example = match example.as_str() {
+            "follower moved in place" => (state(0, 1, &[1, 4, 3]), Some(vec![1, 2, 3])),
+            "leader moved in place" => (state(0, 4, &[4, 2, 3]), Some(vec![1, 2, 3])),
+            "not held" => (state(0, 1, &[1, 2, 3]), None),
+            "nowhere to go" => (state(0, 1, &[1, 2, 3, 4]), None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let plan = reassignment_plan(&[before], "t", 4, &[1, 2, 3, 4]);
         check!(
             plan == after
@@ -468,18 +472,42 @@ mod tests {
         );
     }
 
-    #[yare::parameterized(
-        same_order = { &[1, 2, 4], true },
-        another_order = { &[4, 1, 2], false },
-        not_yet = { &[1, 2, 3], false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/transitions.feature",
+        name = "tests: a reassignment drains the target onto the spare node"
     )]
-    fn a_partition_is_on_its_plan_in_the_planned_order(replicas: &[i32], done: bool) {
+    fn a_reassignment_drains_the_target_onto_the_spare_node(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract transitions tests: a partition is on its plan in the planned order for {example}"
+    )]
+    fn bdd_verify_a_partition_is_on_its_plan_in_the_planned_order(example: String) {
+        type Example<'a> = (&'a [i32], bool);
+        let (replicas, done): Example<'_> = match example.as_str() {
+            "same order" => (&[1, 2, 4], true),
+            "another order" => (&[4, 1, 2], false),
+            "not yet" => (&[1, 2, 3], false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let plan = BTreeMap::from([(0, vec![1, 2, 4])]);
         check!(on_planned_replicas(&[state(0, 1, replicas)], "t", &plan).is_ok() == done);
     }
 
-    #[test]
-    fn each_issue_comes_from_a_new_ca_and_trusts_every_earlier_one() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/transitions.feature",
+        name = "tests: a partition is on its plan in the planned order"
+    )]
+    fn a_partition_is_on_its_plan_in_the_planned_order(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract transitions tests: each issue comes from a new ca and trusts every earlier one"
+    )]
+    fn bdd_verify_each_issue_comes_from_a_new_ca_and_trusts_every_earlier_one() {
         let mut authority = CertAuthority::default();
         let first = authority.issue().unwrap();
         let second = authority.issue().unwrap();
@@ -493,4 +521,11 @@ mod tests {
                 .is_some_and(|ca| second.truststore.ends_with(&ca))
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/transitions.feature",
+        name = "tests: each issue comes from a new ca and trusts every earlier one"
+    )]
+    fn each_issue_comes_from_a_new_ca_and_trusts_every_earlier_one() {}
 }

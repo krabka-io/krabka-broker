@@ -296,25 +296,42 @@ mod tests {
         assert2::check!(got == want, "{argv:?}");
     }
 
-    /// A node id is Kafka's `int` without a sign: 0 through 2147483647.
-    /// Everything else is an error rather than a silent zero.
-    #[yare::parameterized(
-        ordinary = { "7", Ok(7) },
-        trims_spaces = { "  7  ", Ok(7) },
-        zero = { "0", Ok(0) },
-        max_i32 = { "2147483647", Ok(2_147_483_647) },
-        overflow = { "2147483648", Err("node id: number too large to fit in target type") },
-        negative = { "-1", Err("You must specify a valid non-negative node ID.") },
-        empty = { "", Err("node id: cannot parse integer from empty string") },
-        decimal = { "1.0", Err("node id: invalid digit found in string") },
-        hex = { "0x7", Err("node id: invalid digit found in string") },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "format args tests: parse node id takes kafkas node id range for {example}"
     )]
-    fn parse_node_id_takes_kafkas_node_id_range(input: &str, want: Result<u64, &str>) {
+    fn bdd_verify_parse_node_id_takes_kafkas_node_id_range(example: String) {
+        type Example<'a> = (&'a str, Result<u64, &'a str>);
+        let (input, want): Example<'_> = match example.as_str() {
+            "ordinary" => ("7", Ok(7)),
+            "trims spaces" => ("  7  ", Ok(7)),
+            "zero" => ("0", Ok(0)),
+            "max i32" => ("2147483647", Ok(2_147_483_647)),
+            "overflow" => (
+                "2147483648",
+                Err("node id: number too large to fit in target type"),
+            ),
+            "negative" => ("-1", Err("You must specify a valid non-negative node ID.")),
+            "empty" => ("", Err("node id: cannot parse integer from empty string")),
+            "decimal" => ("1.0", Err("node id: invalid digit found in string")),
+            "hex" => ("0x7", Err("node id: invalid digit found in string")),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::check!(
             parse_node_id(input).map(|n| n.0) == want.map_err(str::to_owned),
             "{input:?}"
         );
     }
+
+    /// A node id is Kafka's `int` without a sign: 0 through 2147483647.
+    /// Everything else is an error rather than a silent zero.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/format/args.feature",
+        name = "tests: parse node id takes kafkas node id range"
+    )]
+    fn parse_node_id_takes_kafkas_node_id_range(example: String) { let _ = example; }
 
     /// `--directory-id` takes either id form and refuses the ids that Kafka
     /// reserves, which the broker would refuse at startup.

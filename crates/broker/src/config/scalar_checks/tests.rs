@@ -514,18 +514,11 @@ fn metadata_snapshot_fetch_max_cannot_raise_the_core_security_ceiling() {
     assert!(error.to_string().contains("metadata_snapshot_fetch_max"));
 }
 
-/// The whole-config check `Broker::start` runs states the same bounds on the
-/// two KIP-98 expiry knobs that the file-config validator does, because an
-/// embedding caller that builds a `BrokerConfig` in process never passes
-/// through that validator.
-///
-/// Both keys are `ConfigDef.Type::INT` in Kafka, so the value the sweep runs
-/// on has to be a whole number of milliseconds an `i32` holds -- otherwise
-/// `DescribeConfigs` saturates and reports an expiry the broker is not using.
-/// The expiry itself must run (Kafka's `atLeast(1)`); zero on the cadence
-/// disables the sweep and is accepted.
-#[test]
-fn rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config scalar checks tests: rejects expiry settings outside the kafka int millisecond range"
+)]
+fn bdd_verify_rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {
     let cases: [RuntimeInvalidator; 6] = [
         RuntimeInvalidator {
             expected: "txn_id_expiration must be within 1ms..=2147483647ms",
@@ -568,6 +561,23 @@ fn rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {
 
     assert_invalid_runtime_cases(cases.iter().copied());
 }
+
+/// The whole-config check `Broker::start` runs states the same bounds on the
+/// two KIP-98 expiry knobs that the file-config validator does, because an
+/// embedding caller that builds a `BrokerConfig` in process never passes
+/// through that validator.
+///
+/// Both keys are `ConfigDef.Type::INT` in Kafka, so the value the sweep runs
+/// on has to be a whole number of milliseconds an `i32` holds -- otherwise
+/// `DescribeConfigs` saturates and reports an expiry the broker is not using.
+/// The expiry itself must run (Kafka's `atLeast(1)`); zero on the cadence
+/// disables the sweep and is accepted.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config/scalar_checks/tests.feature",
+    name = "rejects expiry settings outside the kafka int millisecond range"
+)]
+fn rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {}
 
 #[derive(Clone, Copy)]
 enum AcceptedZeroScalar {

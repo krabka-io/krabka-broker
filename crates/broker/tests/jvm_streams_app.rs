@@ -332,18 +332,9 @@ fn assert_streams_run(bootstrap: &str, application_id: &str, output_topic: &str)
     }
 }
 
-/// A real `KafkaStreams` topology, on the classic rebalance protocol, with
-/// `processing.guarantee=exactly_once_v2`, against krabka.
-///
-/// This is `StreamsPartitionAssignor` end to end: the members' subscription
-/// and assignment userdata, `InternalTopicManager` creating the repartition
-/// and changelog topics, the transactional producer the stream thread runs,
-/// and the offsets it commits inside those transactions. The suite reads the
-/// result back at `read_committed`, so an output record that was never
-/// committed is not counted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn compiled_streams_app_runs_on_the_classic_protocol() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm streams app: compiled streams app runs on the classic protocol")]
+async fn bdd_verify_compiled_streams_app_runs_on_the_classic_protocol() {
     const INPUT: &str = "krabka-streams-classic-in";
     const OUTPUT: &str = "krabka-streams-classic-out";
     const APPLICATION_ID: &str = "krabka-streams-classic";
@@ -373,20 +364,27 @@ async fn compiled_streams_app_runs_on_the_classic_protocol() {
     broker.shutdown().await;
 }
 
-/// The same topology under KIP-1071: `group.protocol=streams`, so the app
-/// sends its topology in `StreamsGroupHeartbeat` instead of in an assignor's
-/// userdata, and the broker -- not the client's assignor -- resolves the
-/// tasks.
+/// A real `KafkaStreams` topology, on the classic rebalance protocol, with
+/// `processing.guarantee=exactly_once_v2`, against krabka.
 ///
-/// The class is compiled against Kafka 3.5 and run against Kafka 4.3, because
-/// no pinned image has both `javac` and KIP-1071. If that does not load, the
-/// case says so and stops rather than reporting a krabka failure: a linkage
-/// error is a statement about the two Kafka releases, not about the broker.
-/// The classic case above still covers the compiled-topology half in that
-/// event.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// This is `StreamsPartitionAssignor` end to end: the members' subscription
+/// and assignment userdata, `InternalTopicManager` creating the repartition
+/// and changelog topics, the transactional producer the stream thread runs,
+/// and the offsets it commits inside those transactions. The suite reads the
+/// result back at `read_committed`, so an output record that was never
+/// committed is not counted.
 #[ignore = "requires Docker"]
-async fn compiled_streams_app_runs_on_the_streams_protocol() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_streams_app.feature",
+    name = "compiled streams app runs on the classic protocol"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compiled_streams_app_runs_on_the_classic_protocol() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm streams app: compiled streams app runs on the streams protocol")]
+async fn bdd_verify_compiled_streams_app_runs_on_the_streams_protocol() {
     const INPUT: &str = "krabka-streams-kip1071-in";
     const OUTPUT: &str = "krabka-streams-kip1071-out";
     const APPLICATION_ID: &str = "krabka-streams-kip1071";
@@ -434,3 +432,23 @@ async fn compiled_streams_app_runs_on_the_streams_protocol() {
     assert_streams_run(bootstrap, APPLICATION_ID, OUTPUT);
     broker.shutdown().await;
 }
+
+/// The same topology under KIP-1071: `group.protocol=streams`, so the app
+/// sends its topology in `StreamsGroupHeartbeat` instead of in an assignor's
+/// userdata, and the broker -- not the client's assignor -- resolves the
+/// tasks.
+///
+/// The class is compiled against Kafka 3.5 and run against Kafka 4.3, because
+/// no pinned image has both `javac` and KIP-1071. If that does not load, the
+/// case says so and stops rather than reporting a krabka failure: a linkage
+/// error is a statement about the two Kafka releases, not about the broker.
+/// The classic case above still covers the compiled-topology half in that
+/// event.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_streams_app.feature",
+    name = "compiled streams app runs on the streams protocol"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compiled_streams_app_runs_on_the_streams_protocol() {}

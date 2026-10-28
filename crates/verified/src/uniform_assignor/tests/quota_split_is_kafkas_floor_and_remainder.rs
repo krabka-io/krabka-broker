@@ -1,134 +1,146 @@
-use {super::*, assert2::assert};
+use {
+    super::{
+        HomogeneousMemberQuota, SubscriberLoad, UniformQuotaSplit, homogeneous_member_quotas,
+        select_least_loaded, uniform_quota_split,
+    },
+    assert2::assert,
+    rstest::fixture,
+    rstest_bdd::{Slot, datatable::Rows},
+    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+};
 
-#[test]
-fn quota_split_is_kafkas_floor_and_remainder() {
-    // Kafka's own example: 11 partitions over 3 members.
-    let rows = [
-        (11, 3, UniformQuotaSplit {
-            minimum_quota: 3,
-            extra_quotas: 2,
-        }),
-        (5, 2, UniformQuotaSplit {
-            minimum_quota: 2,
-            extra_quotas: 1,
-        }),
-        (2, 3, UniformQuotaSplit {
-            minimum_quota: 0,
-            extra_quotas: 2,
-        }),
-        (6, 3, UniformQuotaSplit {
-            minimum_quota: 2,
-            extra_quotas: 0,
-        }),
-        (0, 4, UniformQuotaSplit {
-            minimum_quota: 0,
-            extra_quotas: 0,
-        }),
-    ];
-    for (total, members, expected) in rows {
-        assert!(
-            uniform_quota_split(total, members) == expected,
-            "{total} over {members}"
-        );
+#[derive(DataTableRow)]
+struct QuotaRow {
+    takes_extra: bool,
+    retain: usize,
+    fill: usize,
+}
+
+#[derive(DataTableRow)]
+struct LoadRow {
+    assigned: String,
+    assigned_at_topic_start: usize,
+}
+
+struct AssignmentScenario {
+    partition_total: usize,
+    members: usize,
+    minimum: usize,
+    extras: usize,
+    owned: Vec<usize>,
+    loads: Vec<SubscriberLoad>,
+    split: Option<UniformQuotaSplit>,
+    quotas: Option<Vec<HomogeneousMemberQuota>>,
+    selected: Slot<Option<usize>>,
+}
+
+#[fixture]
+fn assignment() -> AssignmentScenario {
+    AssignmentScenario {
+        partition_total: 0,
+        members: 0,
+        minimum: 0,
+        extras: 0,
+        owned: Vec::new(),
+        loads: Vec::new(),
+        split: None,
+        quotas: None,
+        selected: Slot::default(),
     }
 }
 
-#[test]
-fn homogeneous_quotas_follow_kafka_scenarios() {
-    // Rows are `UniformHomogeneousAssignmentBuilderTest` scenarios, with
-    // the members in ascending member-ID order.
-    let rows = [
-        // testFirstAssignmentTwoMembersTwoTopicsNoMemberRacks: 5
-        // partitions, nothing owned. A gives the extra slot up for B.
-        QuotaRow {
-            name: "first assignment, 5 over 2",
-            minimum: 2,
-            extras: 1,
-            owned: &[0, 0],
-            expected: vec![quota(false, 0, 2), quota(true, 0, 3)],
-        },
-        // testFirstAssignmentNumMembersGreaterThanTotalNumPartitions.
-        QuotaRow {
-            name: "first assignment, 2 over 3",
-            minimum: 0,
-            extras: 2,
-            owned: &[0, 0, 0],
-            expected: vec![quota(false, 0, 0), quota(true, 0, 1), quota(true, 0, 1)],
-        },
-        // testReassignmentForTwoMembersTwoTopicsGivenUnbalancedPrevAssignment:
-        // A owns 4 of 6 and gives one back.
-        QuotaRow {
-            name: "unbalanced previous assignment",
-            minimum: 3,
-            extras: 0,
-            owned: &[4, 2],
-            expected: vec![quota(false, 3, 0), quota(false, 2, 1)],
-        },
-        // testReassignmentWhenPartitionsAreAddedForTwoMembersTwoTopics:
-        // 11 partitions, each member owns 3.
-        QuotaRow {
-            name: "partitions added",
-            minimum: 5,
-            extras: 1,
-            owned: &[3, 3],
-            expected: vec![quota(false, 3, 2), quota(true, 3, 3)],
-        },
-        // testReassignmentWhenOneMemberAddedAfterInitialAssignmentWithTwoMembersTwoTopics.
-        QuotaRow {
-            name: "member added",
-            minimum: 2,
-            extras: 0,
-            owned: &[3, 3, 0],
-            expected: vec![quota(false, 2, 0), quota(false, 2, 0), quota(false, 0, 2)],
-        },
-        // A member already above the minimum keeps the extra slot even
-        // when later members could take it.
-        QuotaRow {
-            name: "owner above minimum keeps the extra slot",
-            minimum: 2,
-            extras: 1,
-            owned: &[3, 0, 0],
-            expected: vec![quota(true, 3, 0), quota(false, 0, 2), quota(false, 0, 2)],
-        },
-    ];
-    for row in rows {
-        assert!(
-            homogeneous_member_quotas(row.minimum, row.extras, row.owned) == row.expected,
-            "{}",
-            row.name
-        );
-    }
+#[given("{total} partitions and {members} members")]
+fn partition_counts(assignment: &mut AssignmentScenario, total: usize, members: usize) {
+    assignment.partition_total = total;
+    assignment.members = members;
 }
 
-#[test]
-fn least_loaded_selection_orders_by_load_then_start_then_position() {
-    let rows: [(&str, &[SubscriberLoad], Option<usize>); 6] = [
-        ("no subscribers", &[], None),
-        (
-            "smallest current load",
-            &[load(4, 4), load(1, 1), load(1, 1)],
-            Some(1),
-        ),
-        ("first of equal loads", &[load(2, 2), load(2, 2)], Some(0)),
-        // A member that started the topic lighter goes first at a level,
-        // even behind a lower member index.
-        (
-            "starting load breaks a level tie",
-            &[load(1, 1), load(1, 0)],
-            Some(1),
-        ),
-        (
-            "current load outranks starting load",
-            &[load(2, 0), load(1, 1)],
-            Some(1),
-        ),
-        (
-            "maximum loads",
-            &[load(usize::MAX, 0), load(usize::MAX, 0)],
-            Some(0),
-        ),
-    ];
-    for (name, candidates, expected) in rows {
-        assert!(select_least_loaded(candidates) == expected, "{name}");
-    }
+#[when("the uniform quota is split")]
+fn split_quota(assignment: &mut AssignmentScenario) {
+    assignment.split = Some(uniform_quota_split(
+        assignment.partition_total,
+        assignment.members,
+    ));
 }
+
+#[then(
+    "every member has minimum quota {minimum_quota} and {extra_quotas} members receive an extra partition"
+)]
+fn quota_split(assignment: &AssignmentScenario, minimum_quota: usize, extra_quotas: usize) {
+    assert!(
+        assignment.split
+            == Some(UniformQuotaSplit {
+                minimum_quota,
+                extra_quotas
+            })
+    );
+}
+
+#[given("minimum quota {minimum} with {extras} extra partitions")]
+fn quota_counts(assignment: &mut AssignmentScenario, minimum: usize, extras: usize) {
+    assignment.minimum = minimum;
+    assignment.extras = extras;
+}
+
+#[given("members own partitions {owned}")]
+fn owned_partitions(assignment: &mut AssignmentScenario, owned: String) {
+    assignment.owned = owned
+        .split(',')
+        .map(|value| value.parse().expect("owned count is an integer"))
+        .collect();
+}
+
+#[when("homogeneous member quotas are assigned")]
+fn assign_member_quotas(assignment: &mut AssignmentScenario) {
+    assignment.quotas = Some(homogeneous_member_quotas(
+        assignment.minimum,
+        assignment.extras,
+        &assignment.owned,
+    ));
+}
+
+#[then("the member quotas are:")]
+fn member_quotas(assignment: &AssignmentScenario, #[datatable] rows: Rows<QuotaRow>) {
+    let expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| HomogeneousMemberQuota {
+            takes_extra: row.takes_extra,
+            retain: row.retain,
+            fill: row.fill,
+        })
+        .collect();
+    assert!(assignment.quotas.as_ref() == Some(&expected));
+}
+
+#[given("subscriber loads:")]
+fn subscriber_loads(assignment: &mut AssignmentScenario, #[datatable] rows: Rows<LoadRow>) {
+    assignment.loads = rows
+        .into_iter()
+        .map(|row| SubscriberLoad {
+            assigned: if row.assigned == "maximum" {
+                usize::MAX
+            } else {
+                row.assigned.parse().expect("subscriber load is an integer")
+            },
+            assigned_at_topic_start: row.assigned_at_topic_start,
+        })
+        .collect();
+}
+
+#[when("the least loaded subscriber is selected")]
+fn select_subscriber(assignment: &mut AssignmentScenario) {
+    assignment
+        .selected
+        .set(select_least_loaded(&assignment.loads));
+}
+
+#[then("no subscriber is selected")]
+fn no_subscriber(assignment: &AssignmentScenario) {
+    assert!(assignment.selected.get() == Some(None));
+}
+
+#[then("subscriber {index} is selected")]
+fn selected_subscriber(assignment: &AssignmentScenario, index: usize) {
+    assert!(assignment.selected.get() == Some(Some(index)));
+}
+scenarios!("tests/features/uniform_quotas", fixtures = [assignment: AssignmentScenario]);

@@ -17,8 +17,9 @@ use {
     std::fs,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn epoch_checkpoint_byte_compat() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader epoch epoch checkpoint: epoch checkpoint byte compat")]
+async fn bdd_verify_epoch_checkpoint_byte_compat() {
     let (broker, bootstrap, dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "ckpt").await;
 
@@ -56,3 +57,11 @@ async fn epoch_checkpoint_byte_compat() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_epoch/epoch_checkpoint.feature",
+    name = "epoch checkpoint byte compat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn epoch_checkpoint_byte_compat() {}

@@ -333,10 +333,11 @@ async fn decision_ttl_reports_the_configured_cache_expiry() {
     assert!(auth.decision_ttl() == Some(Duration::from_secs(60)));
 }
 
-/// A policy matching the published plugin's action and principal paths must
-/// receive those fields, rather than an undefined custom `input.request`.
-#[tokio::test(flavor = "multi_thread")]
-async fn published_kafka_plugin_policy_receives_action_and_context() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorizer opa tests: published kafka plugin policy receives action and context"
+)]
+async fn bdd_verify_published_kafka_plugin_policy_receives_action_and_context() {
     let mock = MockServer::start().await;
     let expected = serde_json::json!({"input": {
         "action": { "operation": "READ", "resourcePattern": {
@@ -363,3 +364,13 @@ async fn published_kafka_plugin_policy_receives_action_and_context() {
         auth.authorize(&image, &req(&principal, &host, "orders")) == AuthorizationResult::Allow
     );
 }
+
+/// A policy matching the published plugin's action and principal paths must
+/// receive those fields, rather than an undefined custom `input.request`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/authorizer/opa/tests.feature",
+    name = "published kafka plugin policy receives action and context"
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn published_kafka_plugin_policy_receives_action_and_context() {}

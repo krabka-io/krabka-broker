@@ -50,8 +50,11 @@ async fn run_krabka_format_with_features(
     assert!(code == 0, "krabka-format exited {code}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn standalone_format_feature_overrides_surface_in_api_versions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "format features: standalone format feature overrides surface in api versions"
+)]
+async fn bdd_verify_standalone_format_feature_overrides_surface_in_api_versions() {
     support::init_tracing();
 
     // Pre-bind a concrete controller port so it can be baked into the
@@ -124,3 +127,11 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
 
     handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/format_features.feature",
+    name = "standalone format feature overrides surface in api versions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_format_feature_overrides_surface_in_api_versions() {}

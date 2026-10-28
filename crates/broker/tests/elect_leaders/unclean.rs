@@ -23,23 +23,9 @@ use {
     krabka_metadata::{MetadataRecord, PartitionRecord},
 };
 
-/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
-///
-/// The scenario injects metadata to simulate a dead ISR. It does not break the
-/// raft quorum.
-///
-/// 1. Submit a `PartitionRecord` with `isr=[99]` directly. Broker 99 does not
-///    exist, so liveness reports it as dead.
-/// 2. Broker 1 is in the replicas but not in the ISR. It is alive, and the
-///    controller knows its heartbeat.
-/// 3. Send `ElectLeaders Unclean` with `election_type=1` over the wire.
-/// 4. The handler checks whether any ISR member is alive. Member 99 is not
-///    alive, so the partition is eligible for an unclean election. The first
-///    alive replica in [1, 2] is broker 1, so the handler elects broker 1 as
-///    leader and sets ISR=[1].
-/// 5. Assert per-partition `error_code` = 0 and poll until leader == 1.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_election_via_wire_picks_alive_replica() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("elect leaders unclean: unclean election via wire picks alive replica")]
+async fn bdd_verify_unclean_election_via_wire_picks_alive_replica() {
     let _g = cluster_lock().lock().await;
 
     let cluster = registered_cluster(3).await;
@@ -139,3 +125,26 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Clean up.
     shutdown_cluster(cluster).await;
 }
+
+/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
+///
+/// The scenario injects metadata to simulate a dead ISR. It does not break the
+/// raft quorum.
+///
+/// 1. Submit a `PartitionRecord` with `isr=[99]` directly. Broker 99 does not
+///    exist, so liveness reports it as dead.
+/// 2. Broker 1 is in the replicas but not in the ISR. It is alive, and the
+///    controller knows its heartbeat.
+/// 3. Send `ElectLeaders Unclean` with `election_type=1` over the wire.
+/// 4. The handler checks whether any ISR member is alive. Member 99 is not
+///    alive, so the partition is eligible for an unclean election. The first
+///    alive replica in [1, 2] is broker 1, so the handler elects broker 1 as
+///    leader and sets ISR=[1].
+/// 5. Assert per-partition `error_code` = 0 and poll until leader == 1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/elect_leaders/unclean.feature",
+    name = "unclean election via wire picks alive replica"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_election_via_wire_picks_alive_replica() {}

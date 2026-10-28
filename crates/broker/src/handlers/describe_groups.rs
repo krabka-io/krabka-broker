@@ -673,10 +673,11 @@ mod tests {
         }
     }
 
-    /// The `GroupState` -> Kafka string projection is exhaustive; every state a
-    /// classic group can report has its own name on the wire.
-    #[test]
-    fn every_group_state_has_its_kafka_name() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe groups tests: every group state has its kafka name"
+    )]
+    fn bdd_verify_every_group_state_has_its_kafka_name() {
         assert!(
             [
                 GroupState::Empty,
@@ -693,4 +694,13 @@ mod tests {
                 ]
         );
     }
+
+    /// The `GroupState` -> Kafka string projection is exhaustive; every state a
+    /// classic group can report has its own name on the wire.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_groups.feature",
+        name = "tests: every group state has its kafka name"
+    )]
+    fn every_group_state_has_its_kafka_name() {}
 }

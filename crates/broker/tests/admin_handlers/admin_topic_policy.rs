@@ -40,12 +40,11 @@ fn create_request(name: &str, replication_factor: i16) -> CreateTopicsRequest {
     )
 }
 
-/// A replication factor under the policy floor is refused with 44 and a
-/// message naming the floor, and no topic is created. A validate-only request
-/// for the same topic is refused the same way — Kafka runs the policy on
-/// `--dry-run` too.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_topics_below_the_replication_floor_is_a_policy_violation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin topic policy: create topics below the replication floor is a policy violation"
+)]
+async fn bdd_verify_create_topics_below_the_replication_floor_is_a_policy_violation() {
     let policy = TopicPolicy {
         min_replication_factor: Some(3),
         ..Default::default()
@@ -86,10 +85,23 @@ async fn create_topics_below_the_replication_floor_is_a_policy_violation() {
     );
 }
 
-/// A topic that satisfies the policy is still created, and a validate-only
-/// request for it commits nothing.
+/// A replication factor under the policy floor is refused with 44 and a
+/// message naming the floor, and no topic is created. A validate-only request
+/// for the same topic is refused the same way — Kafka runs the policy on
+/// `--dry-run` too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature",
+    name = "create topics below the replication floor is a policy violation"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_the_policy_allows_is_created_and_validate_only_commits_nothing() {
+async fn create_topics_below_the_replication_floor_is_a_policy_violation() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin topic policy: a topic the policy allows is created and validate only commits nothing"
+)]
+async fn bdd_verify_a_topic_the_policy_allows_is_created_and_validate_only_commits_nothing() {
     let cluster = start_n_node_with(1, |_, cfg| {
         cfg.topic_policy = TopicPolicy {
             min_replication_factor: Some(1),
@@ -136,11 +148,21 @@ async fn a_topic_the_policy_allows_is_created_and_validate_only_commits_nothing(
     );
 }
 
-/// A config the policy forbids is refused with 44 on the alter path, which is
-/// what `kafka-configs --alter --add-config
-/// unclean.leader.election.enable=true` sends.
+/// A topic that satisfies the policy is still created, and a validate-only
+/// request for it commits nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature",
+    name = "a topic the policy allows is created and validate only commits nothing"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
+async fn a_topic_the_policy_allows_is_created_and_validate_only_commits_nothing() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin topic policy: altering a topic to a forbidden config is a policy violation"
+)]
+async fn bdd_verify_altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
     let cluster = start_n_node_with(1, |_, cfg| {
         cfg.topic_policy = TopicPolicy {
             forbidden: iter::once((
@@ -189,6 +211,17 @@ async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
         accepted.responses[0].error_message
     );
 }
+
+/// A config the policy forbids is refused with 44 on the alter path, which is
+/// what `kafka-configs --alter --add-config
+/// unclean.leader.election.enable=true` sends.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature",
+    name = "altering a topic to a forbidden config is a policy violation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {}
 
 fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
     incremental_request()

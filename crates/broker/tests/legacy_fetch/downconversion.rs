@@ -30,8 +30,11 @@ fn decode_legacy_records(legacy_bytes: &[u8]) -> Vec<ParsedRecord> {
     decode_message_set(&mut cursor, legacy_bytes.len()).expect("decode_message_set")
 }
 
-#[tokio::test]
-async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "legacy fetch downconversion: fetch v3 downconverts v2 batch to v0 messageset"
+)]
+async fn bdd_verify_fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     let p = support::start_legacy().await;
 
     // 1. Create topic.
@@ -102,15 +105,19 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     p.broker.shutdown().await;
 }
 
-/// Fetch v0 maps to `Magic::V0`, which has no per-message timestamp.
-///
-/// The test produces a batch with timestamps through the modern path, then
-/// fetches at v0 and confirms that the down-converted `MessageSet` strips
-/// them. This drives the `request_version < 2` branch of
-/// `down_convert_for_fetch` through the full Fetch handler, not through the
-/// unit helper.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
+    name = "fetch v3 downconverts v2 batch to v0 messageset"
+)]
 #[tokio::test]
-async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {
+async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "legacy fetch downconversion: fetch v0 downconverts to magic v0 without timestamps"
+)]
+async fn bdd_verify_fetch_v0_downconverts_to_magic_v0_without_timestamps() {
     let p = support::start_legacy().await;
     create_topic(&p.client, "legacy_fetch_v0").await;
 
@@ -167,17 +174,26 @@ async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {
     p.broker.shutdown().await;
 }
 
-/// A legacy Fetch that reads several partitions of one topic converts, and
-/// meters, every one of them.
+/// Fetch v0 maps to `Magic::V0`, which has no per-message timestamp.
 ///
-/// `downconvert_legacy_responses` resolves the topic name once per topic entry
-/// and then walks that entry's partitions, recording one
-/// `fetch_message_conversions` observation per converted partition under a
-/// single `topic` label. Every other case in this suite fetches one partition,
-/// so none of them can tell a per-topic resolution from a per-partition one,
-/// nor catch a loop that meters only the first row.
+/// The test produces a batch with timestamps through the modern path, then
+/// fetches at v0 and confirms that the down-converted `MessageSet` strips
+/// them. This drives the `request_version < 2` branch of
+/// `down_convert_for_fetch` through the full Fetch handler, not through the
+/// unit helper.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
+    name = "fetch v0 downconverts to magic v0 without timestamps"
+)]
 #[tokio::test]
-async fn fetch_v3_meters_every_converted_partition_of_a_topic() {
+async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "legacy fetch downconversion: fetch v3 meters every converted partition of a topic"
+)]
+async fn bdd_verify_fetch_v3_meters_every_converted_partition_of_a_topic() {
     const TOPIC: &str = "legacy_fetch_multi";
     const PARTITIONS: [i32; 3] = [0, 1, 2];
 
@@ -272,3 +288,20 @@ async fn fetch_v3_meters_every_converted_partition_of_a_topic() {
 
     p.broker.shutdown().await;
 }
+
+/// A legacy Fetch that reads several partitions of one topic converts, and
+/// meters, every one of them.
+///
+/// `downconvert_legacy_responses` resolves the topic name once per topic entry
+/// and then walks that entry's partitions, recording one
+/// `fetch_message_conversions` observation per converted partition under a
+/// single `topic` label. Every other case in this suite fetches one partition,
+/// so none of them can tell a per-topic resolution from a per-partition one,
+/// nor catch a loop that meters only the first row.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
+    name = "fetch v3 meters every converted partition of a topic"
+)]
+#[tokio::test]
+async fn fetch_v3_meters_every_converted_partition_of_a_topic() {}

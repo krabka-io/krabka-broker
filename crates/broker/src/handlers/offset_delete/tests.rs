@@ -108,8 +108,11 @@ struct Case<'a> {
     want: OffsetDeleteResponse,
 }
 
-#[tokio::test]
-async fn offset_delete_matches_kafka_whole_responses() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers offset delete tests: offset delete matches kafka whole responses"
+)]
+async fn bdd_verify_offset_delete_matches_kafka_whole_responses() {
     let HandlerStartedBroker {
         broker: allowed,
         dir: _allowed_dir,
@@ -295,6 +298,14 @@ async fn offset_delete_matches_kafka_whole_responses() {
     allowed.shutdown().await;
     denied.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/offset_delete/tests.feature",
+    name = "offset delete matches kafka whole responses"
+)]
+#[tokio::test]
+async fn offset_delete_matches_kafka_whole_responses() {}
 
 /// The group that a [`StreamsDeleteRow`] deletes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

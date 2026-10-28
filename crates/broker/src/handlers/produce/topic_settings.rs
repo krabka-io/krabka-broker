@@ -665,12 +665,11 @@ mod tests {
         assert!(resolve_topic_compression(&img, "t", None) == None);
     }
 
-    /// Kafka's `LogValidator.recordHasInvalidTimestamp`, which is
-    /// `now - timestamp > before.max.ms || timestamp - now > after.max.ms`,
-    /// applied only under `CreateTime` and only to a record that carries a
-    /// timestamp at all.
-    #[test]
-    fn the_window_is_kafkas_record_timestamp_test() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers produce topic settings tests: the window is kafkas record timestamp test"
+    )]
+    fn bdd_verify_the_window_is_kafkas_record_timestamp_test() {
         const NOW: i64 = 1_000_000;
         let policy = |timestamp_type, before, after| TimestampPolicy {
             timestamp_type,
@@ -762,11 +761,22 @@ mod tests {
         }
     }
 
-    /// The `[low, high]` Kafka's `validateTimestamp` message prints:
-    /// `now - timestampBeforeMaxMs` and `now + timestampAfterMaxMs` in Java's
-    /// wrapping `long` arithmetic, with an unbounded side at `Long.MAX_VALUE`.
-    #[test]
-    fn the_reported_window_is_kafkas_wrapping_arithmetic() {
+    /// Kafka's `LogValidator.recordHasInvalidTimestamp`, which is
+    /// `now - timestamp > before.max.ms || timestamp - now > after.max.ms`,
+    /// applied only under `CreateTime` and only to a record that carries a
+    /// timestamp at all.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/produce/topic_settings.feature",
+        name = "tests: the window is kafkas record timestamp test"
+    )]
+    fn the_window_is_kafkas_record_timestamp_test() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers produce topic settings tests: the reported window is kafkas wrapping arithmetic"
+    )]
+    fn bdd_verify_the_reported_window_is_kafkas_wrapping_arithmetic() {
         const NOW: i64 = 1_000_000;
         let policy = |before, after| TimestampPolicy {
             before_max_ms: before,
@@ -803,6 +813,16 @@ mod tests {
             check!(policy.window(NOW) == want, "{label}");
         }
     }
+
+    /// The `[low, high]` Kafka's `validateTimestamp` message prints:
+    /// `now - timestampBeforeMaxMs` and `now + timestampAfterMaxMs` in Java's
+    /// wrapping `long` arithmetic, with an unbounded side at `Long.MAX_VALUE`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/produce/topic_settings.feature",
+        name = "tests: the reported window is kafkas wrapping arithmetic"
+    )]
+    fn the_reported_window_is_kafkas_wrapping_arithmetic() {}
 
     /// Kafka's own default policy: `CreateTime`, no bound on how old a record
     /// may be, and one hour of tolerance on how far ahead of the broker's

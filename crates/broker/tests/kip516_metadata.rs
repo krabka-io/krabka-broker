@@ -47,8 +47,9 @@ async fn topic_rows(
         .topics
 }
 
-#[tokio::test]
-async fn metadata_unknown_topic_id_returns_unknown_topic_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kip516 metadata: metadata unknown topic id returns unknown topic id")]
+async fn bdd_verify_metadata_unknown_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     let bogus = WireUuid(uuid::Uuid::from_u128(0xfeed_face).into_bytes());
 
@@ -68,8 +69,19 @@ async fn metadata_unknown_topic_id_returns_unknown_topic_id() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_metadata.feature",
+    name = "metadata unknown topic id returns unknown topic id"
+)]
 #[tokio::test]
-async fn metadata_name_and_id_of_different_topics_describes_the_id() {
+async fn metadata_unknown_topic_id_returns_unknown_topic_id() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip516 metadata: metadata name and id of different topics describes the id"
+)]
+async fn bdd_verify_metadata_name_and_id_of_different_topics_describes_the_id() {
     let p = support::start().await;
     for n in ["m_a", "m_b"] {
         p.client
@@ -95,3 +107,11 @@ async fn metadata_name_and_id_of_different_topics_describes_the_id() {
 
     assert!(by_id == by_name);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_metadata.feature",
+    name = "metadata name and id of different topics describes the id"
+)]
+#[tokio::test]
+async fn metadata_name_and_id_of_different_topics_describes_the_id() {}

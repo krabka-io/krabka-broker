@@ -102,9 +102,9 @@ fn persist_and_assert_next_gen(response: &DescribeGroupsResponse) {
     assert!(next_gen.members.is_empty());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker; captures classic and next-generation real-Kafka DescribeGroups metadata"]
-async fn capture_real_kafka_describe_groups() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("describe groups jvm groups capture: capture real kafka describe groups")]
+async fn bdd_verify_capture_real_kafka_describe_groups() {
     docker_pull(CLASSIC_IMAGE);
     {
         docker_run_kafka(CLASSIC_IMAGE, false);
@@ -123,3 +123,12 @@ async fn capture_real_kafka_describe_groups() {
     let response = describe_real_groups(&[NEXT_GEN_GROUP]).await;
     persist_and_assert_next_gen(&response);
 }
+
+#[ignore = "requires Docker; captures classic and next-generation real-Kafka DescribeGroups metadata"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_groups_jvm/groups_capture.feature",
+    name = "capture real kafka describe groups"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn capture_real_kafka_describe_groups() {}

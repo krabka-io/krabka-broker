@@ -419,8 +419,11 @@ mod tests {
             .expect("share persister")
     }
 
-    #[tokio::test]
-    async fn handle_error_scenarios_preserve_expected_rows() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers delete share group offsets tests: handle error scenarios preserve expected rows"
+    )]
+    async fn bdd_verify_handle_error_scenarios_preserve_expected_rows() {
         let version = delete_share_group_offsets_response::MAX_VERSION;
         let cases: Vec<ShareRefusalCase<Vec<&str>, DeleteShareGroupOffsetsResponse>> = vec![
             ShareRefusalPolicy::unsupported(
@@ -453,14 +456,19 @@ mod tests {
         };
     }
 
-    /// Kafka's `deleteShareGroupOffsets` and `initiateDeleteShareGroupOffsets`:
-    /// an empty id is invalid, a missing group or one of another type is not
-    /// found (and no share group is created), a group with no share-state
-    /// partition metadata answers no row at all, and in a group with some, a
-    /// topic the image lacks or the group holds no state for answers
-    /// `UNKNOWN_TOPIC_OR_PARTITION` with Kafka's message, in request order.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/delete_share_group_offsets.feature",
+        name = "tests: handle error scenarios preserve expected rows"
+    )]
     #[tokio::test]
-    async fn handle_refuses_what_kafka_refuses() {
+    async fn handle_error_scenarios_preserve_expected_rows() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers delete share group offsets tests: handle refuses what kafka refuses"
+    )]
+    async fn bdd_verify_handle_refuses_what_kafka_refuses() {
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [handler_fixture_support::start_share_allow_all()];
@@ -562,6 +570,20 @@ mod tests {
         assert!(share_groups == vec!["share-empty".to_owned(), "share-held".to_owned()]);
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `deleteShareGroupOffsets` and `initiateDeleteShareGroupOffsets`:
+    /// an empty id is invalid, a missing group or one of another type is not
+    /// found (and no share group is created), a group with no share-state
+    /// partition metadata answers no row at all, and in a group with some, a
+    /// topic the image lacks or the group holds no state for answers
+    /// `UNKNOWN_TOPIC_OR_PARTITION` with Kafka's message, in request order.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/delete_share_group_offsets.feature",
+        name = "tests: handle refuses what kafka refuses"
+    )]
+    #[tokio::test]
+    async fn handle_refuses_what_kafka_refuses() {}
 
     #[tokio::test]
     async fn delete_removes_only_requested_state_and_a_retry_finds_none() {

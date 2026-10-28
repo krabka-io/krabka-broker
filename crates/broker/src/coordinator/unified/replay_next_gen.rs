@@ -497,12 +497,11 @@ mod tests {
         .collect()
     }
 
-    /// Kafka's `GroupMetadataManager.replay` of the consumer group records,
-    /// one log per row: the whole group that replay holds afterwards, or the
-    /// `IllegalStateException` or `IllegalArgumentException` that fails the
-    /// load.
-    #[test]
-    fn consumer_records_replay_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified replay next gen tests: consumer records replay as kafka"
+    )]
+    fn bdd_verify_consumer_records_replay_as_kafka() {
         let group = |update: &dyn Fn(&mut GroupSeed)| {
             let mut seed = GroupSeed::new_group();
             update(&mut seed);
@@ -650,4 +649,15 @@ mod tests {
             |coord| coord.cached_seed("g"),
         );
     }
+
+    /// Kafka's `GroupMetadataManager.replay` of the consumer group records,
+    /// one log per row: the whole group that replay holds afterwards, or the
+    /// `IllegalStateException` or `IllegalArgumentException` that fails the
+    /// load.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/replay_next_gen.feature",
+        name = "tests: consumer records replay as kafka"
+    )]
+    fn consumer_records_replay_as_kafka() {}
 }

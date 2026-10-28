@@ -41,8 +41,11 @@ const LONG_POLL_MS: i32 = 20_000;
 /// declared clock bound, so the two outcomes are seconds apart.
 const LONG_POLL_WOKE_MS: u128 = 10_000;
 
-#[tokio::test]
-async fn a_record_stamped_in_the_future_waits_for_its_delivery_time() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "deliver at time dat activation: a record stamped in the future waits for its delivery time"
+)]
+async fn bdd_verify_a_record_stamped_in_the_future_waits_for_its_delivery_time() {
     struct Case {
         mode: Mode,
         /// What a read taken before the record's delivery time serves.
@@ -95,8 +98,19 @@ async fn a_record_stamped_in_the_future_waits_for_its_delivery_time() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_activation.feature",
+    name = "a record stamped in the future waits for its delivery time"
+)]
 #[tokio::test]
-async fn a_parked_long_poll_wakes_when_the_record_comes_due() {
+async fn a_record_stamped_in_the_future_waits_for_its_delivery_time() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "deliver at time dat activation: a parked long poll wakes when the record comes due"
+)]
+async fn bdd_verify_a_parked_long_poll_wakes_when_the_record_comes_due() {
     struct Case {
         mode: Mode,
         /// Whether the poll returned at or after the record's delivery time.
@@ -145,3 +159,11 @@ async fn a_parked_long_poll_wakes_when_the_record_comes_due() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_activation.feature",
+    name = "a parked long poll wakes when the record comes due"
+)]
+#[tokio::test]
+async fn a_parked_long_poll_wakes_when_the_record_comes_due() {}

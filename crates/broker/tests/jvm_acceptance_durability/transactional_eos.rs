@@ -114,9 +114,11 @@ public final class ZombieProducer {
 // loopback, so local Linux runs do not need an /etc/hosts entry.
 //
 // Same multi-thread runtime caveat as the other multi-broker tests.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn transactional_console_producer_eos() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance durability transactional eos: transactional console producer eos"
+)]
+async fn bdd_verify_transactional_console_producer_eos() {
     const TOPIC: &str = "krabka-txn-itest";
     const ZOMBIE_TOPIC: &str = "krabka-txn-zombie";
     /// Segment size every broker in this cluster boots with, so that each
@@ -421,3 +423,12 @@ async fn transactional_console_producer_eos() {
         h.shutdown().await;
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_eos.feature",
+    name = "transactional console producer eos"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transactional_console_producer_eos() {}

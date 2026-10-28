@@ -802,8 +802,11 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn acknowledgements_apply_as_kafka_applies_them() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers share fetch acknowledge tests: acknowledgements apply as kafka applies them"
+    )]
+    fn bdd_verify_acknowledgements_apply_as_kafka_applies_them() {
         let application = AckApplication {
             member: "member",
             now: Instant::now(),
@@ -830,6 +833,13 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/share_fetch/acknowledge.feature",
+        name = "tests: acknowledgements apply as kafka applies them"
+    )]
+    fn acknowledgements_apply_as_kafka_applies_them() {}
 
     /// One row of the lock-deadline table: the setup, the seconds after the
     /// acquisition, whether the request renews, the acknowledge type, and the

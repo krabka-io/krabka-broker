@@ -223,11 +223,9 @@ impl ListenerBroker {
     }
 }
 
-/// A listener the dynamic `listeners` adds serves the next connection; when
-/// the config drops it again, its open connection closes and its port
-/// refuses a new one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_added_listener_serves_until_it_is_removed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic listeners: an added listener serves until it is removed")]
+async fn bdd_verify_an_added_listener_serves_until_it_is_removed() {
     let dir = TempDir::new().expect("tempdir");
     let broker = ListenerBroker::start(dir.path()).await;
     let extra = free_addr().await;
@@ -244,10 +242,20 @@ async fn an_added_listener_serves_until_it_is_removed() {
     assert!(connect_served(broker.admin).await.is_some());
 }
 
-/// A SASL listener the dynamic `listeners` adds offers the mechanisms of its
-/// own `listener.name.<listener>.sasl.enabled.mechanisms`.
+/// A listener the dynamic `listeners` adds serves the next connection; when
+/// the config drops it again, its open connection closes and its port
+/// refuses a new one.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "an added listener serves until it is removed"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_added_sasl_listener_offers_its_own_mechanisms() {
+async fn an_added_listener_serves_until_it_is_removed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic listeners: an added sasl listener offers its own mechanisms")]
+async fn bdd_verify_an_added_sasl_listener_offers_its_own_mechanisms() {
     let dir = TempDir::new().expect("tempdir");
     let broker = ListenerBroker::start(dir.path()).await;
     let sasl = free_addr().await;
@@ -283,10 +291,19 @@ async fn an_added_sasl_listener_offers_its_own_mechanisms() {
     );
 }
 
-/// A dynamic `listeners` stored before a restart opens its listener when the
-/// broker starts again.
+/// A SASL listener the dynamic `listeners` adds offers the mechanisms of its
+/// own `listener.name.<listener>.sasl.enabled.mechanisms`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "an added sasl listener offers its own mechanisms"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stored_listener_opens_after_a_restart() {
+async fn an_added_sasl_listener_offers_its_own_mechanisms() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic listeners: a stored listener opens after a restart")]
+async fn bdd_verify_a_stored_listener_opens_after_a_restart() {
     let dir = TempDir::new().expect("tempdir");
     let broker = ListenerBroker::start(dir.path()).await;
     let extra = free_addr().await;
@@ -305,13 +322,19 @@ async fn a_stored_listener_opens_after_a_restart() {
     restarted.shutdown().await;
 }
 
-/// The broker an alter is addressed to refuses a listener change that Kafka
-/// 4.3.1 refuses, with Kafka's message, and applies none of it: one that
-/// drops an advertised listener (`KafkaConfig.validateValues`) and one that
-/// changes the protocol of a listener it keeps
-/// (`DynamicListenerConfig.validateReconfiguration`).
+/// A dynamic `listeners` stored before a restart opens its listener when the
+/// broker starts again.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "a stored listener opens after a restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_listener_change_kafka_refuses_is_refused() {
+async fn a_stored_listener_opens_after_a_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic listeners: a listener change kafka refuses is refused")]
+async fn bdd_verify_a_listener_change_kafka_refuses_is_refused() {
     let dir = TempDir::new().expect("tempdir");
     let broker = ListenerBroker::start(dir.path()).await;
     let kept: Vec<&str> = broker
@@ -367,3 +390,16 @@ async fn a_listener_change_kafka_refuses_is_refused() {
     assert!(broker.describe(LISTENERS).await == broker.static_listeners);
     assert!(broker.describe(PROTOCOL_MAP).await == broker.static_protocols);
 }
+
+/// The broker an alter is addressed to refuses a listener change that Kafka
+/// 4.3.1 refuses, with Kafka's message, and applies none of it: one that
+/// drops an advertised listener (`KafkaConfig.validateValues`) and one that
+/// changes the protocol of a listener it keeps
+/// (`DynamicListenerConfig.validateReconfiguration`).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "a listener change kafka refuses is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_listener_change_kafka_refuses_is_refused() {}

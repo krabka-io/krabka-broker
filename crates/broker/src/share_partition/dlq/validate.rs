@@ -226,10 +226,11 @@ mod tests {
         Err(DlqError::Config(message.to_owned()))
     }
 
-    /// Each rule of `validateDlqTopic`, with Kafka's message, and the order in
-    /// which they apply.
-    #[test]
-    fn a_topic_is_checked_against_the_rules_in_kafkas_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share partition dlq validate tests: a topic is checked against the rules in kafkas order"
+    )]
+    fn bdd_verify_a_topic_is_checked_against_the_rules_in_kafkas_order() {
         let named = |topic: &'static str| [entry(KEY_DLQ_TOPIC_NAME, topic)];
         let enabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")];
         let disabled = [entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "false")];
@@ -300,6 +301,15 @@ mod tests {
                 ]
         );
     }
+
+    /// Each rule of `validateDlqTopic`, with Kafka's message, and the order in
+    /// which they apply.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_partition/dlq/validate.feature",
+        name = "tests: a topic is checked against the rules in kafkas order"
+    )]
+    fn a_topic_is_checked_against_the_rules_in_kafkas_order() {}
 
     /// The prefix is a dynamic cluster config: an empty one lifts the rule, and
     /// a broker's own value beats the cluster default.

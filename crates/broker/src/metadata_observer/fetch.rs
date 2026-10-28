@@ -892,19 +892,11 @@ mod tests {
         batch
     }
 
-    /// One row per way a fetched batch can be malformed, each in a response
-    /// that carries batches `a` at 0, `b` at 1 and `c` at 2, with `b` the
-    /// malformed one.
-    ///
-    /// Kafka's raft layer refuses a response with a corrupt batch whole: the
-    /// append takes none of it, and the fetch offset stays. A batch the
-    /// response holds only part of is dropped with what follows it, and the
-    /// whole batches before it apply. A batch whose framing and CRC are sound
-    /// but whose records do not parse is the `MetadataLoader`'s load error:
-    /// counted, with the rest of the response skipped and the offset moved
-    /// past it.
-    #[test]
-    fn a_malformed_batch_is_refused_trimmed_or_counted_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "metadata observer fetch tests: a malformed batch is refused trimmed or counted as kafka does"
+    )]
+    fn bdd_verify_a_malformed_batch_is_refused_trimmed_or_counted_as_kafka_does() {
         let a = topic_batch_bytes(0, "a", 1);
         let b = topic_batch_bytes(1, "b", 2);
         let c = topic_batch_bytes(2, "c", 3);
@@ -1011,8 +1003,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hex_matches_kafkas_lowercase_header_dump() {
+    /// One row per way a fetched batch can be malformed, each in a response
+    /// that carries batches `a` at 0, `b` at 1 and `c` at 2, with `b` the
+    /// malformed one.
+    ///
+    /// Kafka's raft layer refuses a response with a corrupt batch whole: the
+    /// append takes none of it, and the fetch offset stays. A batch the
+    /// response holds only part of is dropped with what follows it, and the
+    /// whole batches before it apply. A batch whose framing and CRC are sound
+    /// but whose records do not parse is the `MetadataLoader`'s load error:
+    /// counted, with the rest of the response skipped and the offset moved
+    /// past it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/metadata_observer/fetch.feature",
+        name = "tests: a malformed batch is refused trimmed or counted as kafka does"
+    )]
+    fn a_malformed_batch_is_refused_trimmed_or_counted_as_kafka_does() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "metadata observer fetch tests: hex matches kafkas lowercase header dump"
+    )]
+    fn bdd_verify_hex_matches_kafkas_lowercase_header_dump() {
         assert!(hex(&[0x00, 0x0a, 0xff]) == "000aff");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/metadata_observer/fetch.feature",
+        name = "tests: hex matches kafkas lowercase header dump"
+    )]
+    fn hex_matches_kafkas_lowercase_header_dump() {}
 }

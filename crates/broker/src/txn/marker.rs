@@ -190,10 +190,11 @@ pub fn build_marker_batch(
 mod tests {
     use {super::*, assert2::assert};
 
-    /// One row per branch of Kafka's
-    /// `TransactionMarkerRequestCompletionHandler.onComplete` error match.
-    #[test]
-    fn classifies_every_write_txn_markers_code_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn marker tests: classifies every write txn markers code as kafka does"
+    )]
+    fn bdd_verify_classifies_every_write_txn_markers_code_as_kafka_does() {
         let cases = [
             (codes::NONE, MarkerCodeClass::Written),
             (UNSUPPORTED_FOR_MESSAGE_FORMAT, MarkerCodeClass::Dropped),
@@ -239,6 +240,15 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    /// One row per branch of Kafka's
+    /// `TransactionMarkerRequestCompletionHandler.onComplete` error match.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/marker.feature",
+        name = "tests: classifies every write txn markers code as kafka does"
+    )]
+    fn classifies_every_write_txn_markers_code_as_kafka_does() {}
 
     #[test]
     fn classifies_marker_failures_by_the_code_they_carry() {

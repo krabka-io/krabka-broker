@@ -31,8 +31,9 @@ mod tests {
         uuid::Uuid,
     };
 
-    #[test]
-    fn encodes_kafkas_base64_uuid_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("cluster id tests: encodes kafkas base64 uuid form")]
+    fn bdd_verify_encodes_kafkas_base64_uuid_form() {
         let id = Uuid::from_bytes([
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
             0x0f, 0x10,
@@ -40,11 +41,28 @@ mod tests {
         assert!(encode(id) == "AQIDBAUGBwgJCgsMDQ4PEA");
     }
 
-    #[test]
-    fn matches_accepts_both_kafka_base64_and_hyphenated_forms() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/cluster_id.feature",
+        name = "tests: encodes kafkas base64 uuid form"
+    )]
+    fn encodes_kafkas_base64_uuid_form() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "cluster id tests: matches accepts both kafka base64 and hyphenated forms"
+    )]
+    fn bdd_verify_matches_accepts_both_kafka_base64_and_hyphenated_forms() {
         let id = Uuid::from_u128(0x00000000_0000_0000_0000_0000000000ff);
         assert!(matches(&encode(id), id));
         assert!(matches(&id.to_string(), id));
         assert!(!matches("different", id));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/cluster_id.feature",
+        name = "tests: matches accepts both kafka base64 and hyphenated forms"
+    )]
+    fn matches_accepts_both_kafka_base64_and_hyphenated_forms() {}
 }

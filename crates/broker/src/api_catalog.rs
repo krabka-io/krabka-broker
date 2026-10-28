@@ -903,13 +903,9 @@ mod tests {
         }
     }
 
-    /// #784: with both switches at their defaults every listener advertises
-    /// exactly Kafka 4.3.1's table -- each key's range is the release's
-    /// `validVersions`, `Produce` advertised from v0 (KAFKA-18659) -- and no
-    /// key that release lacks except krabka-private `GetReplicaLogInfo` on
-    /// the inter-broker listener.
-    #[test]
-    fn the_default_table_is_kafka_4_3_1s() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("api catalog tests: the default table is kafka 4 3 1s")]
+    fn bdd_verify_the_default_table_is_kafka_4_3_1s() {
         let released: BTreeMap<i16, VersionRange> = krabka_raft::KAFKA_4_3_1_APIS
             .iter()
             .map(|api| (api.api_key, range(api.min_version, api.max_version)))
@@ -933,6 +929,18 @@ mod tests {
             }
         }
     }
+
+    /// #784: with both switches at their defaults every listener advertises
+    /// exactly Kafka 4.3.1's table -- each key's range is the release's
+    /// `validVersions`, `Produce` advertised from v0 (KAFKA-18659) -- and no
+    /// key that release lacks except krabka-private `GetReplicaLogInfo` on
+    /// the inter-broker listener.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/api_catalog.feature",
+        name = "tests: the default table is kafka 4 3 1s"
+    )]
+    fn the_default_table_is_kafka_4_3_1s() {}
 
     /// #784: what each switch moves, in the whole table. Table-driven over
     /// every combination: each row names the keys whose advertised range

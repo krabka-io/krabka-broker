@@ -108,8 +108,9 @@ async fn bootstrap_static_member(
     }
 }
 
-#[tokio::test]
-async fn static_rejoin_preserves_assignment_and_generation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("static membership: static rejoin preserves assignment and generation")]
+async fn bdd_verify_static_rejoin_preserves_assignment_and_generation() {
     let p = start().await;
 
     let StaticMember {
@@ -204,8 +205,17 @@ async fn static_rejoin_preserves_assignment_and_generation() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/static_membership.feature",
+    name = "static rejoin preserves assignment and generation"
+)]
 #[tokio::test]
-async fn second_client_with_same_instance_id_is_fenced() {
+async fn static_rejoin_preserves_assignment_and_generation() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("static membership: second client with same instance id is fenced")]
+async fn bdd_verify_second_client_with_same_instance_id_is_fenced() {
     let p = start().await;
 
     let StaticMember {
@@ -267,8 +277,17 @@ async fn second_client_with_same_instance_id_is_fenced() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/static_membership.feature",
+    name = "second client with same instance id is fenced"
+)]
 #[tokio::test]
-async fn leave_group_resolves_static_member_by_instance_id() {
+async fn second_client_with_same_instance_id_is_fenced() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("static membership: leave group resolves static member by instance id")]
+async fn bdd_verify_leave_group_resolves_static_member_by_instance_id() {
     let p = start().await;
 
     let StaticMember { member_id: mid, .. } = bootstrap_static_member(
@@ -317,3 +336,11 @@ async fn leave_group_resolves_static_member_by_instance_id() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/static_membership.feature",
+    name = "leave group resolves static member by instance id"
+)]
+#[tokio::test]
+async fn leave_group_resolves_static_member_by_instance_id() {}

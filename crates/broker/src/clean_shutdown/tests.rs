@@ -66,8 +66,9 @@ fn a_proof_is_spent_by_the_start_that_reads_it() {
 /// on-disk format: a change to it is a change to the 1.x contract.
 const GOLDEN: &str = r#"{"version":0,"brokerEpoch":42}"#;
 
-#[test]
-fn the_proof_holds_kafkas_bytes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("clean shutdown tests: the proof holds kafkas bytes")]
+fn bdd_verify_the_proof_holds_kafkas_bytes() {
     let dir = tempfile::tempdir().expect("temp dir");
     write(dir.path(), 42);
 
@@ -78,6 +79,13 @@ fn the_proof_holds_kafkas_bytes() {
             == (".kafka_cleanshutdown", GOLDEN.to_owned(), GOLDEN.to_owned())
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/clean_shutdown/tests.feature",
+    name = "the proof holds kafkas bytes"
+)]
+fn the_proof_holds_kafkas_bytes() {}
 
 /// Every document the reader meets, and what it makes of it. Kafka's reader
 /// ignores unknown fields, so krabka's does too.
@@ -103,22 +111,36 @@ fn the_format_version_is_zero() {
     assert!(FORMAT_VERSION == 0);
 }
 
-/// Text that is not the document is malformed: the 0.x layout (a bare
-/// decimal epoch), a document with no version, one with no epoch, and junk.
-#[yare::parameterized(
-    bare_epoch = { "42" },
-    missing_version = { r#"{"brokerEpoch":42}"# },
-    missing_epoch = { r#"{"version":0}"# },
-    null_epoch = { r#"{"version":0,"brokerEpoch":null}"# },
-    junk = { "not-an-epoch" },
-    empty = { "" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "clean shutdown tests: decode refuses documents that are not kafkas for {example}"
 )]
-fn decode_refuses_documents_that_are_not_kafkas(text: &str) {
+fn bdd_verify_decode_refuses_documents_that_are_not_kafkas(example: String) {
+    type Example<'a> = (&'a str,);
+    let (text,): Example<'_> = match example.as_str() {
+        "bare epoch" => ("42",),
+        "missing version" => (r#"{"brokerEpoch":42}"#,),
+        "missing epoch" => (r#"{"version":0}"#,),
+        "null epoch" => (r#"{"version":0,"brokerEpoch":null}"#,),
+        "junk" => ("not-an-epoch",),
+        "empty" => ("",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     assert2::assert!(
         let Err(ProofError::Malformed(_)) = decode(text),
         "decode({text:?})"
     );
 }
+
+/// Text that is not the document is malformed: the 0.x layout (a bare
+/// decimal epoch), a document with no version, one with no epoch, and junk.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/clean_shutdown/tests.feature",
+    name = "decode refuses documents that are not kafkas"
+)]
+fn decode_refuses_documents_that_are_not_kafkas(example: String) { let _ = example; }
 
 /// A file that is not a proof -- of an unknown version, in the 0.x layout,
 /// or junk -- makes the restart unclean, and does not stay behind for a later

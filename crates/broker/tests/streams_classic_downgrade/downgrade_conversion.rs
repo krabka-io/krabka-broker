@@ -23,10 +23,11 @@ use {
     tokio::time,
 };
 
-/// A drained streams group with a committed offset converts to classic on a
-/// classic `JoinGroup`. The committed offset survives the flip.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_streams_group_downgrades_and_preserves_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic downgrade downgrade conversion: drained streams group downgrades and preserves offsets"
+)]
+async fn bdd_verify_drained_streams_group_downgrades_and_preserves_offsets() {
     let (broker, bootstrap, _dir) = boot().await;
     let (streams_client, classic_client) = (connect(&bootstrap).await, connect(&bootstrap).await);
 
@@ -102,10 +103,21 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
     );
 }
 
-/// A downgrade from streams to classic survives a broker restart. After
-/// replay the group is Classic and its committed offset is intact.
+/// A drained streams group with a committed offset converts to classic on a
+/// classic `JoinGroup`. The committed offset survives the flip.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_conversion.feature",
+    name = "drained streams group downgrades and preserves offsets"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn downgrade_survives_restart() {
+async fn drained_streams_group_downgrades_and_preserves_offsets() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic downgrade downgrade conversion: downgrade survives restart"
+)]
+async fn bdd_verify_downgrade_survives_restart() {
     let dir = tempfile::TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
     let topic_id;
@@ -167,3 +179,13 @@ async fn downgrade_survives_restart() {
         );
     }
 }
+
+/// A downgrade from streams to classic survives a broker restart. After
+/// replay the group is Classic and its committed offset is intact.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_conversion.feature",
+    name = "downgrade survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn downgrade_survives_restart() {}

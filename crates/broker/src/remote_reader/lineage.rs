@@ -251,9 +251,11 @@ mod tests {
         check!(actual == expected);
     }
 
-    /// Kafka's `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochs`.
-    #[test]
-    fn a_segment_is_within_the_lineage_as_kafka_decides() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "remote reader lineage tests: a segment is within the lineage as kafka decides"
+    )]
+    fn bdd_verify_a_segment_is_within_the_lineage_as_kafka_decides() {
         const LEADER: &[(i32, LogOffset)] =
             &[(0, 0), (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (7, 70)];
         run(LEADER, &[
@@ -336,6 +338,14 @@ mod tests {
             },
         ]);
     }
+
+    /// Kafka's `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochs`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/remote_reader/lineage.feature",
+        name = "tests: a segment is within the lineage as kafka decides"
+    )]
+    fn a_segment_is_within_the_lineage_as_kafka_decides() {}
 
     /// Kafka's
     /// `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochsForOverlappingSegments`.

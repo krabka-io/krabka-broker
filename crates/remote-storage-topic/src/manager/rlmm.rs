@@ -281,19 +281,22 @@ mod tests {
         on_blocking(move || m.caught_up(&tp())).await.into()
     }
 
-    #[yare::parameterized(
-        seeded = { Scenario::Seeded, |_| CaughtUp::Answer(true) },
-        behind = { Scenario::Behind, |_| CaughtUp::Answer(false) },
-        unassigned = { Scenario::Unassigned, |_| CaughtUp::Answer(false) },
-        not_ready = { Scenario::NotReady, CaughtUp::NotReady },
-        hwm_failure = { Scenario::HwmFailure, |_| CaughtUp::Io },
-        shutdown = { Scenario::Shutdown, |_| CaughtUp::Io },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "manager rlmm tests: caught up answers from the current high water mark for {example}"
     )]
-    #[test_macro(tokio::test(flavor = "multi_thread"))]
-    async fn caught_up_answers_from_the_current_high_water_mark(
-        scenario: Scenario,
-        expected: fn(i32) -> CaughtUp,
-    ) {
+    async fn bdd_verify_caught_up_answers_from_the_current_high_water_mark(example: String) {
+        type Example = (Scenario, fn(i32) -> CaughtUp);
+        let (scenario, expected): Example = match example.as_str() {
+            "seeded" => (Scenario::Seeded, |_| CaughtUp::Answer(true)),
+            "behind" => (Scenario::Behind, |_| CaughtUp::Answer(false)),
+            "unassigned" => (Scenario::Unassigned, |_| CaughtUp::Answer(false)),
+            "not ready" => (Scenario::NotReady, CaughtUp::NotReady),
+            "hwm failure" => (Scenario::HwmFailure, |_| CaughtUp::Io),
+            "shutdown" => (Scenario::Shutdown, |_| CaughtUp::Io),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let log = HwmFlakyLog::new(4);
         let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
         // The expectation takes the metadata partition, which a NotReady
@@ -347,6 +350,16 @@ mod tests {
         };
         check!(got == expected);
         m.shutdown();
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/manager/rlmm.feature",
+        name = "tests: caught up answers from the current high water mark"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn caught_up_answers_from_the_current_high_water_mark(example: String) {
+        let _ = example;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -244,11 +244,11 @@ mod tests {
         want: i16,
     }
 
-    /// Each rejected field carries the code that
-    /// `KafkaRaftClient.handleUpdateVoterRequest` carries for it. None of
-    /// them is voter-specific: KIP-853 adds no "invalid voter update" code.
-    #[tokio::test]
-    async fn handle_reports_the_kafka_code_for_each_rejected_field() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers update raft voter tests: handle reports the kafka code for each rejected field"
+    )]
+    async fn bdd_verify_handle_reports_the_kafka_code_for_each_rejected_field() {
         let version = 0;
         allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
@@ -317,6 +317,17 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// Each rejected field carries the code that
+    /// `KafkaRaftClient.handleUpdateVoterRequest` carries for it. None of
+    /// them is voter-specific: KIP-853 adds no "invalid voter update" code.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/update_raft_voter.feature",
+        name = "tests: handle reports the kafka code for each rejected field"
+    )]
+    #[tokio::test]
+    async fn handle_reports_the_kafka_code_for_each_rejected_field() {}
 
     /// `KafkaRaftClient.hasValidClusterId` answers true for a request that
     /// carries no cluster id, so an absent one is not an inconsistent one: the

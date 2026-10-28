@@ -15,11 +15,9 @@ use {
     krabka_protocol::owned::list_groups_request::ListGroupsRequest,
 };
 
-/// After a member joins, `StreamsGroupDescribe` reports exactly one group row
-/// for the group id with a clean error code, the member present, and a sane
-/// group-state string.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_returns_the_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("streams groups streams admin: describe returns the group")]
+async fn bdd_verify_describe_returns_the_group() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -65,13 +63,20 @@ async fn describe_returns_the_group() {
     );
 }
 
-/// `ListGroups` surfaces a live streams group with `group_type = "streams"`
-/// and honors `types_filter = ["streams"]`. That is the exact path the JVM
-/// `kafka-streams-groups.sh` `AdminClient` uses with
-/// `listGroups(typesFilter=[Streams])` before it issues
-/// `StreamsGroupDescribe`.
+/// After a member joins, `StreamsGroupDescribe` reports exactly one group row
+/// for the group id with a clean error code, the member present, and a sane
+/// group-state string.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_admin.feature",
+    name = "describe returns the group"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_surfaces_streams_group() {
+async fn describe_returns_the_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("streams groups streams admin: list groups surfaces streams group")]
+async fn bdd_verify_list_groups_surfaces_streams_group() {
     let (_b, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -123,3 +128,16 @@ async fn list_groups_surfaces_streams_group() {
         "streams group must not appear under a consumer type filter"
     );
 }
+
+/// `ListGroups` surfaces a live streams group with `group_type = "streams"`
+/// and honors `types_filter = ["streams"]`. That is the exact path the JVM
+/// `kafka-streams-groups.sh` `AdminClient` uses with
+/// `listGroups(typesFilter=[Streams])` before it issues
+/// `StreamsGroupDescribe`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_admin.feature",
+    name = "list groups surfaces streams group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_groups_surfaces_streams_group() {}

@@ -117,11 +117,9 @@ mod tests {
         ReadShareGroupStateResponse::error_row(partition, code, Some(message))
     }
 
-    /// The whole `ReadShareGroupStateResponse` for each request shape, over
-    /// one stored key: partition 4 at state epoch 17, start offset 101, one
-    /// batch, and leader epoch 3.
-    #[tokio::test]
-    async fn read_state_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("share coordinator handlers read tests: read state answers as kafka")]
+    async fn bdd_verify_read_state_answers_as_kafka() {
         let stored = PartitionResult {
             partition: 4,
             error_code: codes::NONE,
@@ -206,4 +204,15 @@ mod tests {
         )
         .await;
     }
+
+    /// The whole `ReadShareGroupStateResponse` for each request shape, over
+    /// one stored key: partition 4 at state epoch 17, start offset 101, one
+    /// batch, and leader epoch 3.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read.feature",
+        name = "tests: read state answers as kafka"
+    )]
+    #[tokio::test]
+    async fn read_state_answers_as_kafka() {}
 }

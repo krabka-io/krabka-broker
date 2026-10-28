@@ -23,15 +23,11 @@ use {
     std::{io, net::SocketAddr},
 };
 
-/// Start a broker with a `SASL_PLAINTEXT` listener and one PLAIN credential,
-/// then dial it with the public `InterBrokerClient` API.
-///
-/// The client must run `SaslHandshake` and `SaslAuthenticate` on its own, and
-/// it must return a stream that the caller can keep using for normal RPCs.
-/// The test proves this: it sends an `ApiVersions` request over the returned
-/// stream and decodes the response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inter_broker_client_authenticates_via_plain() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers inter broker: inter broker client authenticates via plain"
+)]
+async fn bdd_verify_inter_broker_client_authenticates_via_plain() {
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("broker".to_owned(), admin_plain_password());
@@ -43,6 +39,21 @@ async fn inter_broker_client_authenticates_via_plain() {
     .await
     .expect("InterBrokerClient PLAIN auth + ApiVersions round-trip must succeed");
 }
+
+/// Start a broker with a `SASL_PLAINTEXT` listener and one PLAIN credential,
+/// then dial it with the public `InterBrokerClient` API.
+///
+/// The client must run `SaslHandshake` and `SaslAuthenticate` on its own, and
+/// it must return a stream that the caller can keep using for normal RPCs.
+/// The test proves this: it sends an `ApiVersions` request over the returned
+/// stream and decodes the response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/inter_broker.feature",
+    name = "inter broker client authenticates via plain"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inter_broker_client_authenticates_via_plain() {}
 
 pub async fn run_inter_broker_auth_test(
     cfg: krabka_broker::BrokerConfig,

@@ -455,8 +455,11 @@ mod tests {
         member_epoch: i32,
     }
 
-    #[test]
-    fn state_name_follows_kafka_consumer_group_state() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified consumer state group tests: state name follows kafka consumer group state"
+    )]
+    fn bdd_verify_state_name_follows_kafka_consumer_group_state() {
         let at = |epoch, assignment_state| {
             let mut m = member("m1");
             m.member_epoch = epoch;
@@ -497,6 +500,13 @@ mod tests {
             assert!(g.state_name() == expected);
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/consumer_state/group.feature",
+        name = "tests: state name follows kafka consumer group state"
+    )]
+    fn state_name_follows_kafka_consumer_group_state() {}
 
     const T: Uuid = Uuid([1; 16]);
 
@@ -733,10 +743,11 @@ mod tests {
         ]
     }
 
-    /// Kafka 4.3.1's `ConsumerGroup.validateOffsetCommit` and
-    /// `createAssignmentEpochValidator`, row by row.
-    #[test]
-    fn offset_commit_follows_kafka_consumer_group_rule() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified consumer state group tests: offset commit follows kafka consumer group rule"
+    )]
+    fn bdd_verify_offset_commit_follows_kafka_consumer_group_rule() {
         let rows = commit_rows();
         let g = commit_group(false);
         let mut actual = Vec::new();
@@ -750,6 +761,15 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    /// Kafka 4.3.1's `ConsumerGroup.validateOffsetCommit` and
+    /// `createAssignmentEpochValidator`, row by row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/consumer_state/group.feature",
+        name = "tests: offset commit follows kafka consumer group rule"
+    )]
+    fn offset_commit_follows_kafka_consumer_group_rule() {}
 
     /// A group with no members takes a commit with a negative epoch from
     /// anyone, at any version, and refuses any other.
@@ -781,12 +801,11 @@ mod tests {
         assert!(actual == rows);
     }
 
-    /// Reconciliation stamps a partition with the epoch at which the member
-    /// is granted it, keeps the epoch of a partition it keeps or moves to
-    /// pending revocation, and drops the epoch of a partition it gives up.
-    /// A static member that leaves for a while keeps its partitions at epoch 0.
-    #[test]
-    fn assignment_epochs_follow_kafka_current_assignment_builder() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified consumer state group tests: assignment epochs follow kafka current assignment builder"
+    )]
+    fn bdd_verify_assignment_epochs_follow_kafka_current_assignment_builder() {
         struct ReconciliationStep {
             epoch: i32,
             target: Vec<i32>,
@@ -847,6 +866,17 @@ mod tests {
                 ]
         );
     }
+
+    /// Reconciliation stamps a partition with the epoch at which the member
+    /// is granted it, keeps the epoch of a partition it keeps or moves to
+    /// pending revocation, and drops the epoch of a partition it gives up.
+    /// A static member that leaves for a while keeps its partitions at epoch 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/consumer_state/group.feature",
+        name = "tests: assignment epochs follow kafka current assignment builder"
+    )]
+    fn assignment_epochs_follow_kafka_current_assignment_builder() {}
 
     #[test]
     fn the_assignment_interval_holds_the_next_assignment_back() {

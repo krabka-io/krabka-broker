@@ -212,13 +212,9 @@ async fn prepare_share_topic(broker: &BrokerHandle, topic: &str, group: &str) ->
     ShareTopic { client, tid }
 }
 
-/// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
-/// Krabka share group, reads every produced record, and acknowledges
-/// implicitly on poll. The test asserts that each produced value appears in
-/// its stdout.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_share_consumer_reads_krabka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm share groups: jvm share consumer reads krabka")]
+async fn bdd_verify_jvm_share_consumer_reads_krabka() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm";
@@ -246,14 +242,22 @@ async fn jvm_share_consumer_reads_krabka() {
     }
 }
 
-/// `kafka-share-groups.sh --describe --state` reports the share group after
-/// the JVM consumer joined. That proves Krabka serves the share-group admin
-/// path (`ShareGroupDescribe`, `api_key` 77) to the real JVM tooling. The tool
-/// resolves the share coordinator, sends `ShareGroupDescribe`, and prints the
-/// group's coordinator and state.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
+/// Krabka share group, reads every produced record, and acknowledges
+/// implicitly on poll. The test asserts that each produced value appears in
+/// its stdout.
 #[ignore = "requires Docker"]
-async fn jvm_share_groups_describe_state() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "jvm share consumer reads krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_consumer_reads_krabka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm share groups: jvm share groups describe state")]
+async fn bdd_verify_jvm_share_groups_describe_state() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-d";
@@ -281,17 +285,23 @@ async fn jvm_share_groups_describe_state() {
     );
 }
 
-/// `kafka-share-groups.sh --list` drives `ListGroups` (`api_key` 16) with
-/// `types_filter = ["share"]`. After a real JVM `KafkaShareConsumer` joins a
-/// share group on the Krabka broker, the share group id must appear in the
-/// tool's `--list` stdout.
-///
-/// Before the `ListGroups` share pass, the JVM tool's `types_filter=["share"]`
-/// matched nothing and `--list` was EMPTY. This test asserts that the
-/// regression is closed against the real Apache Kafka 4.1.0 tool.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// `kafka-share-groups.sh --describe --state` reports the share group after
+/// the JVM consumer joined. That proves Krabka serves the share-group admin
+/// path (`ShareGroupDescribe`, `api_key` 77) to the real JVM tooling. The tool
+/// resolves the share coordinator, sends `ShareGroupDescribe`, and prints the
+/// group's coordinator and state.
 #[ignore = "requires Docker"]
-async fn jvm_share_groups_list() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "jvm share groups describe state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_groups_describe_state() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm share groups: jvm share groups list")]
+async fn bdd_verify_jvm_share_groups_list() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-l";
@@ -316,13 +326,28 @@ async fn jvm_share_groups_list() {
     );
 }
 
-/// `share.auto.offset.reset=by_duration:PT1H` starts the share partition at
-/// the first record inside the window. The test produces one batch stamped two
-/// hours ago and one stamped now, then asserts that the real JVM
-/// `KafkaShareConsumer` reads only the recent batch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// `kafka-share-groups.sh --list` drives `ListGroups` (`api_key` 16) with
+/// `types_filter = ["share"]`. After a real JVM `KafkaShareConsumer` joins a
+/// share group on the Krabka broker, the share group id must appear in the
+/// tool's `--list` stdout.
+///
+/// Before the `ListGroups` share pass, the JVM tool's `types_filter=["share"]`
+/// matched nothing and `--list` was EMPTY. This test asserts that the
+/// regression is closed against the real Apache Kafka 4.1.0 tool.
 #[ignore = "requires Docker"]
-async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "jvm share groups list"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_groups_list() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm share groups: jvm share consumer by duration skips records outside the window"
+)]
+async fn bdd_verify_jvm_share_consumer_by_duration_skips_records_outside_the_window() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-dur";
@@ -354,16 +379,22 @@ async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
     }
 }
 
-/// The default strategy is `latest`: a fresh share group never sees the
-/// records produced before its first fetch.
-///
-/// The group config is left untouched, so the broker's own default decides.
-/// After the consumer's idle-timeout exit, `kafka-share-groups.sh --describe
-/// --state` must still report the group, which is what proves the consumer
-/// joined and fetched rather than failing to connect.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// `share.auto.offset.reset=by_duration:PT1H` starts the share partition at
+/// the first record inside the window. The test produces one batch stamped two
+/// hours ago and one stamped now, then asserts that the real JVM
+/// `KafkaShareConsumer` reads only the recent batch.
 #[ignore = "requires Docker"]
-async fn jvm_share_consumer_defaults_to_latest() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "jvm share consumer by duration skips records outside the window"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm share groups: jvm share consumer defaults to latest")]
+async fn bdd_verify_jvm_share_consumer_defaults_to_latest() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-latest";
@@ -409,6 +440,22 @@ async fn jvm_share_consumer_defaults_to_latest() {
         String::from_utf8_lossy(&state.stderr),
     );
 }
+
+/// The default strategy is `latest`: a fresh share group never sees the
+/// records produced before its first fetch.
+///
+/// The group config is left untouched, so the broker's own default decides.
+/// After the consumer's idle-timeout exit, `kafka-share-groups.sh --describe
+/// --state` must still report the group, which is what proves the consumer
+/// joined and fetched rather than failing to connect.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "jvm share consumer defaults to latest"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_consumer_defaults_to_latest() {}
 
 async fn register_jvm_share_group(
     broker: &BrokerHandle,

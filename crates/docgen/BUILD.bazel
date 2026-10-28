@@ -14,4 +14,7 @@ crate_binary(
     lib = ":docgen",
 )
 
-crate_tests(lib = "docgen")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "docgen",
+)

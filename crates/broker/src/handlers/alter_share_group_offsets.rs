@@ -436,8 +436,11 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
-    async fn handle_error_scenarios_preserve_expected_rows() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter share group offsets tests: handle error scenarios preserve expected rows"
+    )]
+    async fn bdd_verify_handle_error_scenarios_preserve_expected_rows() {
         struct AlterOffsetsInput {
             topic_name: &'static str,
             partitions: Vec<i32>,
@@ -519,15 +522,19 @@ mod tests {
         };
     }
 
-    /// Issue #727: krabka checked `Alter` on the group and never checked
-    /// topic `Read`. Kafka checks `Read` on the group and `Read` on each
-    /// topic, the topic check running BEFORE the unknown-topic lookup. Every
-    /// row uses a fresh broker and group id.
-    ///
-    /// `(group Read granted, group Alter granted, topic name is denied,
-    /// topic exists, expected top-level code, expected partition code)`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_share_group_offsets.feature",
+        name = "tests: handle error scenarios preserve expected rows"
+    )]
     #[tokio::test]
-    async fn acl_scenarios_match_kafka_semantics() {
+    async fn handle_error_scenarios_preserve_expected_rows() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter share group offsets tests: acl scenarios match kafka semantics"
+    )]
+    async fn bdd_verify_acl_scenarios_match_kafka_semantics() {
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum GroupGrant {
             ReadOnly,
@@ -671,6 +678,21 @@ mod tests {
             broker_handle.shutdown().await;
         }
     }
+
+    /// Issue #727: krabka checked `Alter` on the group and never checked
+    /// topic `Read`. Kafka checks `Read` on the group and `Read` on each
+    /// topic, the topic check running BEFORE the unknown-topic lookup. Every
+    /// row uses a fresh broker and group id.
+    ///
+    /// `(group Read granted, group Alter granted, topic name is denied,
+    /// topic exists, expected top-level code, expected partition code)`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_share_group_offsets.feature",
+        name = "tests: acl scenarios match kafka semantics"
+    )]
+    #[tokio::test]
+    async fn acl_scenarios_match_kafka_semantics() {}
 
     /// Issue #944: an empty `group_id` is refused with `INVALID_GROUP_ID`
     /// (24), and a `group_id` already locked to another protocol type is

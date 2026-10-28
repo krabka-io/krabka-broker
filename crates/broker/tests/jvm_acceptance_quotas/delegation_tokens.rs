@@ -15,30 +15,11 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: KIP-48 delegation-token round-trip through the official
-/// `kafka-delegation-tokens` admin CLI.
-///
-/// 3-broker `SASL_PLAINTEXT` cluster with both `PLAIN` (admin auth) and
-/// `SCRAM-SHA-256` (token auth) mechanisms enabled, plus a master
-/// delegation-token HMAC key. The flow:
-///
-/// 1. Admin (PLAIN) calls `kafka-delegation-tokens --create`. The broker
-///    mints a token, replicates `V1DelegationToken` through raft, and
-///    returns `(TokenID, HMAC, …)`.
-/// 2. Build a `token.properties` that references those credentials with
-///    `sasl.mechanism=SCRAM-SHA-256`.
-/// 3. `kafka-console-producer --producer.config token.properties` produces
-///    one record. It authenticates against the token-fallback path of the
-///    SCRAM handler.
-/// 4. `kafka-delegation-tokens --describe --owner-principal User:admin`
-///    lists the token. The test matches a substring on `TokenID`.
-/// 5. `kafka-delegation-tokens --expire --expiry-time-period -1 --hmac
-///    <hmac>` deletes the token.
-///
-/// `#[ignore = "requires Docker"]`, so run with `--ignored`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_delegation_tokens_end_to_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance quotas delegation tokens: jvm kafka delegation tokens end to end"
+)]
+async fn bdd_verify_jvm_kafka_delegation_tokens_end_to_end() {
     const TOPIC: &str = "krabka-deleg-token-itest";
     const SECRET: &[u8] = b"jvm-master-key";
 
@@ -146,3 +127,33 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
     h2.shutdown().await;
     h3.shutdown().await;
 }
+
+/// JVM acceptance: KIP-48 delegation-token round-trip through the official
+/// `kafka-delegation-tokens` admin CLI.
+///
+/// 3-broker `SASL_PLAINTEXT` cluster with both `PLAIN` (admin auth) and
+/// `SCRAM-SHA-256` (token auth) mechanisms enabled, plus a master
+/// delegation-token HMAC key. The flow:
+///
+/// 1. Admin (PLAIN) calls `kafka-delegation-tokens --create`. The broker
+///    mints a token, replicates `V1DelegationToken` through raft, and
+///    returns `(TokenID, HMAC, …)`.
+/// 2. Build a `token.properties` that references those credentials with
+///    `sasl.mechanism=SCRAM-SHA-256`.
+/// 3. `kafka-console-producer --producer.config token.properties` produces
+///    one record. It authenticates against the token-fallback path of the
+///    SCRAM handler.
+/// 4. `kafka-delegation-tokens --describe --owner-principal User:admin`
+///    lists the token. The test matches a substring on `TokenID`.
+/// 5. `kafka-delegation-tokens --expire --expiry-time-period -1 --hmac
+///    <hmac>` deletes the token.
+///
+/// `#[ignore = "requires Docker"]`, so run with `--ignored`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/delegation_tokens.feature",
+    name = "jvm kafka delegation tokens end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_delegation_tokens_end_to_end() {}

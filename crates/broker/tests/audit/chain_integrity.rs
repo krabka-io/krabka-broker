@@ -17,12 +17,9 @@ use {
     std::{fs, path::Path},
 };
 
-/// Verifies the checkpoint path. The broker is configured with an audit
-/// signing key and a checkpoint cadence of `every_n = 1`. A `CreateTopics`
-/// request must then put a `checkpoint` record on the audit topic with the
-/// expected `key_id`.
-#[tokio::test]
-async fn signed_checkpoints_appear_on_audit_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit chain integrity: signed checkpoints appear on audit topic")]
+async fn bdd_verify_signed_checkpoints_appear_on_audit_topic() {
     use ring::signature::Ed25519KeyPair;
 
     // Generate a key, write it to a temp file, start a broker configured to use it.
@@ -66,11 +63,21 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     p.broker.shutdown().await;
 }
 
-/// Verifies that the audit hash-chain sequence numbers are contiguous, and
-/// that none repeats, across a broker restart. That shows that chain recovery
-/// worked, and that the second boot did NOT reset the chain to seq 0.
+/// Verifies the checkpoint path. The broker is configured with an audit
+/// signing key and a checkpoint cadence of `every_n = 1`. A `CreateTopics`
+/// request must then put a `checkpoint` record on the audit topic with the
+/// expected `key_id`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/chain_integrity.feature",
+    name = "signed checkpoints appear on audit topic"
+)]
 #[tokio::test]
-async fn audit_chain_continues_across_restart() {
+async fn signed_checkpoints_appear_on_audit_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit chain integrity: audit chain continues across restart")]
+async fn bdd_verify_audit_chain_continues_across_restart() {
     let dir = tempfile::tempdir().unwrap();
 
     // First boot: generate some audit events, then shut down cleanly.
@@ -99,6 +106,17 @@ async fn audit_chain_continues_across_restart() {
 
     broker.shutdown().await;
 }
+
+/// Verifies that the audit hash-chain sequence numbers are contiguous, and
+/// that none repeats, across a broker restart. That shows that chain recovery
+/// worked, and that the second boot did NOT reset the chain to seq 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/chain_integrity.feature",
+    name = "audit chain continues across restart"
+)]
+#[tokio::test]
+async fn audit_chain_continues_across_restart() {}
 
 /// A broker booted on a data directory, with a client connected to it.
 struct AuditedBoot {

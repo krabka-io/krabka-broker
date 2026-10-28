@@ -91,9 +91,19 @@ pub fn grep_base_offsets(dump: &str) -> String {
         .join("\n")
 }
 
-#[test]
-fn kafka_dump_offset_parser_accepts_spaced_values() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence dump log: kafka dump offset parser accepts spaced values"
+)]
+fn bdd_verify_kafka_dump_offset_parser_accepts_spaced_values() {
     let dump = "baseOffset: 0 lastOffset: 9 count: 10\n\
                 offset: 10 position: 211 payload: value";
     assert2::assert!(max_offset_in_dump(dump) == Some(10));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/dump_log.feature",
+    name = "kafka dump offset parser accepts spaced values"
+)]
+fn kafka_dump_offset_parser_accepts_spaced_values() {}

@@ -212,33 +212,40 @@ mod tests {
         stable
     }
 
-    #[yare::parameterized(
-        empty_empty_type = { "empty, empty type", false, "", &["range"][..], false },
-        empty_no_protocols = { "empty, no protocols", false, "consumer", &[][..], false },
-        empty_other_type = { "empty, anything else", false, "connect", &["x"][..], true },
-        stable_other_type = { "stable, other type", true, "connect", &["sticky"][..], false },
-        stable_missing_protocol = {
-            "stable, protocol one member lacks",
-            true,
-            "consumer",
-            &["range"][..],
-            false,
-        },
-        stable_shared_protocol = {
-            "stable, shared protocol",
-            true,
-            "consumer",
-            &["x", "sticky"][..],
-            true,
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified classic state protocol tests: supports protocols matches kafka for {example}"
     )]
-    fn supports_protocols_matches_kafka(
-        name: &str,
-        stable: bool,
-        protocol_type: &str,
-        names: &[&str],
-        want: bool,
-    ) {
+    fn bdd_verify_supports_protocols_matches_kafka(example: String) {
+        type Example<'a> = (&'a str, bool, &'a str, &'a [&'a str], bool);
+        let (name, stable, protocol_type, names, want): Example<'_> = match example.as_str() {
+            "empty empty type" => ("empty, empty type", false, "", &["range"][..], false),
+            "empty no protocols" => ("empty, no protocols", false, "consumer", &[][..], false),
+            "empty other type" => ("empty, anything else", false, "connect", &["x"][..], true),
+            "stable other type" => (
+                "stable, other type",
+                true,
+                "connect",
+                &["sticky"][..],
+                false,
+            ),
+            "stable missing protocol" => (
+                "stable, protocol one member lacks",
+                true,
+                "consumer",
+                &["range"][..],
+                false,
+            ),
+            "stable shared protocol" => (
+                "stable, shared protocol",
+                true,
+                "consumer",
+                &["x", "sticky"][..],
+                true,
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let group = if stable {
             stable_protocol_group()
         } else {
@@ -249,4 +256,11 @@ mod tests {
             "{name}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",
+        name = "tests: supports protocols matches kafka"
+    )]
+    fn supports_protocols_matches_kafka(example: String) { let _ = example; }
 }

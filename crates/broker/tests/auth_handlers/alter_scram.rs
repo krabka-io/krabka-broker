@@ -47,14 +47,9 @@ pub const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
 pub const KAFKA_UNACCEPTABLE_CREDENTIAL: i16 = 93;
 pub const KAFKA_MAX_SCRAM_ITERATIONS: i32 = 16_384;
 
-/// Happy path: a super-user authenticates over PLAIN, sends an
-/// `AlterUserScramCredentials` upsertion for `alice`, and the broker stores
-/// the credential.
-///
-/// The test then authenticates as `alice` over SCRAM-SHA-512. This proves
-/// that the upsertion wrote a valid credential to the metadata image.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_super_user_can_provision() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers alter scram: alter scram creds super user can provision")]
+async fn bdd_verify_alter_scram_creds_super_user_can_provision() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -73,6 +68,20 @@ async fn alter_scram_creds_super_user_can_provision() {
     result.expect("post-upsertion SCRAM auth must succeed");
 }
 
+/// Happy path: a super-user authenticates over PLAIN, sends an
+/// `AlterUserScramCredentials` upsertion for `alice`, and the broker stores
+/// the credential.
+///
+/// The test then authenticates as `alice` over SCRAM-SHA-512. This proves
+/// that the upsertion wrote a valid credential to the metadata image.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram.feature",
+    name = "alter scram creds super user can provision"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_scram_creds_super_user_can_provision() {}
+
 fn check_single_successful_user(resp: &AlterUserScramCredentialsResponse, expected_user: &str) {
     assert!(resp.results.len() == 1);
     check!(
@@ -83,14 +92,11 @@ fn check_single_successful_user(resp: &AlterUserScramCredentialsResponse, expect
     check!(resp.results[0].user == expected_user);
 }
 
-/// Wire-mapping proof: `AlterUserScramCredentials` accepts `mechanism=1`,
-/// which is SCRAM-SHA-256, and stores a credential.
-///
-/// The broker can later authenticate against that credential over SHA-256.
-/// The test is a copy of `alter_scram_creds_super_user_can_provision`, but it
-/// uses the SHA-256 wire byte and a 32-byte `salted_password` payload.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_super_user_can_provision_sha256() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram: alter scram creds super user can provision sha256"
+)]
+async fn bdd_verify_alter_scram_creds_super_user_can_provision_sha256() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -110,13 +116,23 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
     result.expect("post-upsertion SHA-256 SCRAM auth must succeed");
 }
 
-/// A non-super-user authenticates and tries to upsert.
+/// Wire-mapping proof: `AlterUserScramCredentials` accepts `mechanism=1`,
+/// which is SCRAM-SHA-256, and stores a credential.
 ///
-/// The broker accepts the request, because it is a valid SASL listener API.
-/// But every per-user row reports `CLUSTER_AUTHORIZATION_FAILED` (31). The
-/// broker makes no metadata change.
+/// The broker can later authenticate against that credential over SHA-256.
+/// The test is a copy of `alter_scram_creds_super_user_can_provision`, but it
+/// uses the SHA-256 wire byte and a 32-byte `salted_password` payload.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram.feature",
+    name = "alter scram creds super user can provision sha256"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_non_super_user_rejected() {
+async fn alter_scram_creds_super_user_can_provision_sha256() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers alter scram: alter scram creds non super user rejected")]
+async fn bdd_verify_alter_scram_creds_non_super_user_rejected() {
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("bob".to_owned(), wrong_scram_password());
@@ -146,6 +162,19 @@ async fn alter_scram_creds_non_super_user_rejected() {
         resp.results[0]
     );
 }
+
+/// A non-super-user authenticates and tries to upsert.
+///
+/// The broker accepts the request, because it is a valid SASL listener API.
+/// But every per-user row reports `CLUSTER_AUTHORIZATION_FAILED` (31). The
+/// broker makes no metadata change.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram.feature",
+    name = "alter scram creds non super user rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_scram_creds_non_super_user_rejected() {}
 
 /// Authenticate over SASL/PLAIN against `addr` as `user`/`password`, send one
 /// `AlterUserScramCredentials v0` request, and decode the response.

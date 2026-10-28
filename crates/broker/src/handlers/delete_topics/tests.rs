@@ -543,13 +543,11 @@ fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -
         .call()
 }
 
-/// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`
-/// separately. An id row the principal may not delete carries its id, and
-/// the name only when the principal may describe the topic. A name row the
-/// principal may describe but not delete answers `UNKNOWN_TOPIC_OR_PARTITION`
-/// when the topic does not exist. A deleted topic's row carries its id.
-#[tokio::test]
-async fn rows_follow_kafkas_describe_and_delete_decisions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers delete topics tests: rows follow kafkas describe and delete decisions"
+)]
+async fn bdd_verify_rows_follow_kafkas_describe_and_delete_decisions() {
     const TOPIC: &str = "t";
     const MISSING: &str = "missing";
 
@@ -716,6 +714,19 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
     })
     .await;
 }
+
+/// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`
+/// separately. An id row the principal may not delete carries its id, and
+/// the name only when the principal may describe the topic. A name row the
+/// principal may describe but not delete answers `UNKNOWN_TOPIC_OR_PARTITION`
+/// when the topic does not exist. A deleted topic's row carries its id.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/delete_topics/tests.feature",
+    name = "rows follow kafkas describe and delete decisions"
+)]
+#[tokio::test]
+async fn rows_follow_kafkas_describe_and_delete_decisions() {}
 
 // ── #743: delete.topic.enable ───────────────────────────────────────
 

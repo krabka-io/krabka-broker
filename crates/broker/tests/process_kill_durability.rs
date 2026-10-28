@@ -499,6 +499,12 @@ async fn read_all(bootstrap: &str, topic: &str, group: &str, want: usize) -> BTr
     keys
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then("process kill durability: flush on append stays off by default")]
+fn bdd_verify_flush_on_append_stays_off_by_default() {
+    check!(!krabka_log::LogConfig::default().flush_on_append);
+}
+
 /// The premise every claim in this file rests on.
 ///
 /// `flush_on_append` is off, so nothing below is a statement about a machine
@@ -507,19 +513,16 @@ async fn read_all(bootstrap: &str, topic: &str, group: &str, want: usize) -> BTr
 /// the guarantee, and a change that made the broker set it per partition would
 /// mean this suite is describing a configuration nobody runs -- either way, the
 /// text above needs rewriting, so it fails here first.
-#[test]
-fn flush_on_append_stays_off_by_default() {
-    check!(!krabka_log::LogConfig::default().flush_on_append);
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/process_kill_durability.feature",
+    name = "flush on append stays off by default"
+)]
+fn flush_on_append_stays_off_by_default() {}
 
-/// A torn tail is a partial trailing batch, and the walk says so.
-///
-/// [`tear_tail`] is what makes the container cycles deterministic, so what it
-/// produces is worth checking without a daemon in the way: a whole file walks
-/// to a boundary, and the same file with half a batch appended walks to the
-/// same batches and reports exactly those extra bytes as partial.
-#[test]
-fn torn_tail_is_a_partial_trailing_batch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("process kill durability: torn tail is a partial trailing batch")]
+fn bdd_verify_torn_tail_is_a_partial_trailing_batch() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let segment = dir.path().join("00000000000000000000.log");
     let whole = batch_bytes(0, 3);
@@ -552,6 +555,19 @@ fn torn_tail_is_a_partial_trailing_batch() {
             }
     );
 }
+
+/// A torn tail is a partial trailing batch, and the walk says so.
+///
+/// [`tear_tail`] is what makes the container cycles deterministic, so what it
+/// produces is worth checking without a daemon in the way: a whole file walks
+/// to a boundary, and the same file with half a batch appended walks to the
+/// same batches and reports exactly those extra bytes as partial.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/process_kill_durability.feature",
+    name = "torn tail is a partial trailing batch"
+)]
+fn torn_tail_is_a_partial_trailing_batch() {}
 
 /// One well-formed empty v2 batch, for [`torn_tail_is_a_partial_trailing_batch`].
 ///
@@ -701,13 +717,11 @@ async fn kill_cycle(broker: &BrokerProcess, topic: &str, cycle: usize, tear: boo
     acked
 }
 
-/// `SIGKILL` the broker mid-produce, over and over, and prove every ack held.
-///
-/// See the module documentation for the guarantee, the fsync policy it is
-/// stated under, and why the torn tail is made rather than waited for.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker and //packaging:image"]
-async fn acks_all_survives_a_sigkill_of_the_broker_process() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "process kill durability: acks all survives a sigkill of the broker process"
+)]
+async fn bdd_verify_acks_all_survives_a_sigkill_of_the_broker_process() {
     const TOPIC: &str = "kill-durability";
 
     let broker = BrokerProcess::start();
@@ -745,3 +759,16 @@ async fn acks_all_survives_a_sigkill_of_the_broker_process() {
         CYCLES / 2
     );
 }
+
+/// `SIGKILL` the broker mid-produce, over and over, and prove every ack held.
+///
+/// See the module documentation for the guarantee, the fsync policy it is
+/// stated under, and why the torn tail is made rather than waited for.
+#[ignore = "requires Docker and //packaging:image"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/process_kill_durability.feature",
+    name = "acks all survives a sigkill of the broker process"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_survives_a_sigkill_of_the_broker_process() {}

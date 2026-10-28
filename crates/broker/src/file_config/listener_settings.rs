@@ -787,10 +787,11 @@ connections_max_idle = "5s"
         check_config_case(label, &result, &expected);
     }
 
-    /// Omitted everywhere, the broker keeps Kafka's 600000 default and no
-    /// listener carries an override.
-    #[test]
-    fn apply_to_omitted_idle_window_keeps_kafkas_default() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config listener settings tests: apply to omitted idle window keeps kafkas default"
+    )]
+    fn bdd_verify_apply_to_omitted_idle_window_keeps_kafkas_default() {
         use crate::config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE};
 
         let file: FileConfig = toml::from_str("broker_id = 0").unwrap();
@@ -804,6 +805,15 @@ connections_max_idle = "5s"
         assert!(cfg.effective_connections_max_idle() == DEFAULT_CONNECTIONS_MAX_IDLE);
         assert!(cfg.connections_max_idle_overrides.is_empty());
     }
+
+    /// Omitted everywhere, the broker keeps Kafka's 600000 default and no
+    /// listener carries an override.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/listener_settings.feature",
+        name = "tests: apply to omitted idle window keeps kafkas default"
+    )]
+    fn apply_to_omitted_idle_window_keeps_kafkas_default() {}
 
     #[test]
     fn apply_to_reads_two_phase_commit_enable_from_server_properties() {

@@ -16,23 +16,11 @@ use {
     krabka_security::ListenerProtocol,
 };
 
-/// Two-broker `SASL_SSL` cluster with `controller_listener_protocol =
-/// SaslSsl`. The test provisions a SCRAM user, produces rf=2 through the JVM
-/// client, and asserts that both brokers replicate the records. It exercises
-/// the full production-shape stack: TLS-terminated controller raft RPC,
-/// TLS-terminated data-plane SASL, and rf=2 follower replication. The
-/// earlier simplified inter-broker test only proved metadata convergence.
-///
-/// Networking: like the `SASL_PLAINTEXT` inter-broker test, this test
-/// advertises `host.docker.internal:<port>` so the JVM containers can reach
-/// the brokers. Under WSL2 the broker→broker `InterBrokerClient` hop can
-/// fail, because `host.docker.internal` resolves to the Windows host IP and
-/// not to the WSL VM where the peers live. The CI runner's `/etc/hosts`
-/// setup makes that hop work end-to-end. On WSL the test can time out at
-/// the rf=2 offset check even when `SASL_SSL` itself is correctly wired.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_inter_broker_sasl_ssl_raft_replication() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance tls inter broker sasl ssl: jvm inter broker sasl ssl raft replication"
+)]
+async fn bdd_verify_jvm_inter_broker_sasl_ssl_raft_replication() {
     const TOPIC: &str = "krabka-sasl-ssl-raft-rf2";
 
     let (broker0, broker1, _dir0, _dir1) = start_two_sasl_ssl_brokers_with_controller_protocol(
@@ -88,3 +76,26 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
     broker0.shutdown().await;
     broker1.shutdown().await;
 }
+
+/// Two-broker `SASL_SSL` cluster with `controller_listener_protocol =
+/// SaslSsl`. The test provisions a SCRAM user, produces rf=2 through the JVM
+/// client, and asserts that both brokers replicate the records. It exercises
+/// the full production-shape stack: TLS-terminated controller raft RPC,
+/// TLS-terminated data-plane SASL, and rf=2 follower replication. The
+/// earlier simplified inter-broker test only proved metadata convergence.
+///
+/// Networking: like the `SASL_PLAINTEXT` inter-broker test, this test
+/// advertises `host.docker.internal:<port>` so the JVM containers can reach
+/// the brokers. Under WSL2 the broker→broker `InterBrokerClient` hop can
+/// fail, because `host.docker.internal` resolves to the Windows host IP and
+/// not to the WSL VM where the peers live. The CI runner's `/etc/hosts`
+/// setup makes that hop work end-to-end. On WSL the test can time out at
+/// the rf=2 offset check even when `SASL_SSL` itself is correctly wired.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tls/inter_broker_sasl_ssl.feature",
+    name = "jvm inter broker sasl ssl raft replication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_inter_broker_sasl_ssl_raft_replication() {}

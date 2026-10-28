@@ -319,8 +319,11 @@ async fn end_txn_cut_by_shutdown(case: &CutCase) -> CutOutcome {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver prepare recovery: end txn cut between prepare and complete completes after restart"
+)]
+async fn bdd_verify_end_txn_cut_between_prepare_and_complete_completes_after_restart() {
     let cases = [
         CutCase {
             name: "cut-commit",
@@ -362,6 +365,14 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
+    name = "end txn cut between prepare and complete completes after restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {}
+
 async fn assert_visible_suffix_and_shutdown(started: Started, topic: &str, expected: &[&str]) {
     produce(&started.client, topic, None, &["z"]).await;
     let seen = read_committed_through(&started.bootstrap, topic, "z").await;
@@ -369,8 +380,11 @@ async fn assert_visible_suffix_and_shutdown(started: Started, topic: &str, expec
     started.broker.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver prepare recovery: init producer id during prepare commit is concurrent transactions"
+)]
+async fn bdd_verify_init_producer_id_during_prepare_commit_is_concurrent_transactions() {
     let transactional_id = "init-during-prepare";
     let topic = "init-during-prepare";
     let directory = TempDir::new().expect("tempdir");
@@ -434,8 +448,19 @@ async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {
     assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
+    name = "init producer id during prepare commit is concurrent transactions"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() {
+async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver prepare recovery: end txn with a failed marker fanout answers none and completes later"
+)]
+async fn bdd_verify_end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() {
     let transactional_id = "failed-fanout";
     let topic = "failed-fanout";
     let directory = TempDir::new().expect("tempdir");
@@ -474,3 +499,11 @@ async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() 
     assert!(retried == completed(producer, 1), "retried EndTxn");
     assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
+    name = "end txn with a failed marker fanout answers none and completes later"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() {}

@@ -137,28 +137,48 @@ mod tests {
             .collect()
     }
 
-    #[yare::parameterized(
-        no_override_map = { None, false },
-        missing_key = { Some(map(&[])), false },
-        false_value = {
-            Some(map(&[ConfigPair { key: DISKLESS, value: "false" }])),
-            false,
-        },
-        uppercase_true = {
-            Some(map(&[ConfigPair { key: DISKLESS, value: " TRUE " }])),
-            true,
-        },
-        true_value = {
-            Some(map(&[ConfigPair { key: DISKLESS, value: "true" }])),
-            true,
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys diskless tests: resolve diskless reads a kafka boolean for {example}"
     )]
-    fn resolve_diskless_reads_a_kafka_boolean(
-        config: Option<BTreeMap<String, String>>,
-        expected: bool,
-    ) {
+    fn bdd_verify_resolve_diskless_reads_a_kafka_boolean(example: String) {
+        type Example = (Option<BTreeMap<String, String>>, bool);
+        let (config, expected): Example = match example.as_str() {
+            "no override map" => (None, false),
+            "missing key" => (Some(map(&[])), false),
+            "false value" => (
+                Some(map(&[ConfigPair {
+                    key: DISKLESS,
+                    value: "false",
+                }])),
+                false,
+            ),
+            "uppercase true" => (
+                Some(map(&[ConfigPair {
+                    key: DISKLESS,
+                    value: " TRUE ",
+                }])),
+                true,
+            ),
+            "true value" => (
+                Some(map(&[ConfigPair {
+                    key: DISKLESS,
+                    value: "true",
+                }])),
+                true,
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(resolve_diskless(config.as_ref()) == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/diskless.feature",
+        name = "tests: resolve diskless reads a kafka boolean"
+    )]
+    fn resolve_diskless_reads_a_kafka_boolean(example: String) { let _ = example; }
 
     #[test]
     fn the_key_is_whitelisted_and_takes_only_booleans() {

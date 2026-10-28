@@ -698,16 +698,11 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
     }
 }
 
-/// krabka-io/krabka-broker#1009: the records each heartbeat transition
-/// writes, as `ReplicationControlManager.processBrokerHeartbeat` writes them.
-/// `handleBrokerFenced` (for `FENCED` and `SHUTDOWN_NOW`) puts the partition
-/// changes before a `BrokerRegistrationChangeRecord` with `Fenced = 1`;
-/// `handleBrokerUnfenced` writes `Fenced = -1`, and
-/// `handleBrokerInControlledShutdown` writes `InControlledShutdown = 1` ahead
-/// of the partition changes, and not at all when the registration already
-/// holds it. Every change names the broker's registered epoch.
-#[test]
-fn each_transition_writes_kafkas_registration_change() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers broker heartbeat tests: each transition writes kafkas registration change"
+)]
+fn bdd_verify_each_transition_writes_kafkas_registration_change() {
     use {
         BrokerControlState::{ControlledShutdown, Fenced, ShutdownNow, Unfenced},
         krabka_metadata::{
@@ -839,3 +834,18 @@ fn each_transition_writes_kafkas_registration_change() {
         );
     }
 }
+
+/// krabka-io/krabka-broker#1009: the records each heartbeat transition
+/// writes, as `ReplicationControlManager.processBrokerHeartbeat` writes them.
+/// `handleBrokerFenced` (for `FENCED` and `SHUTDOWN_NOW`) puts the partition
+/// changes before a `BrokerRegistrationChangeRecord` with `Fenced = 1`;
+/// `handleBrokerUnfenced` writes `Fenced = -1`, and
+/// `handleBrokerInControlledShutdown` writes `InControlledShutdown = 1` ahead
+/// of the partition changes, and not at all when the registration already
+/// holds it. Every change names the broker's registered epoch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/broker_heartbeat/tests.feature",
+    name = "each transition writes kafkas registration change"
+)]
+fn each_transition_writes_kafkas_registration_change() {}

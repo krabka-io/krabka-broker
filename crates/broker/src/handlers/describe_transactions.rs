@@ -232,13 +232,9 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
-    /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's
-    /// partition, `TRANSACTIONAL_ID_NOT_FOUND` for an id this broker
-    /// coordinates but holds nothing for, or holds a `Dead` entry for, and the
-    /// row otherwise.
-    #[tokio::test]
-    async fn each_row_carries_kafkas_code() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers describe transactions tests: each row carries kafkas code")]
+    async fn bdd_verify_each_row_carries_kafkas_code() {
         use krabka_log::ProducerId;
 
         let version = describe_transactions_response::MAX_VERSION;
@@ -336,6 +332,19 @@ mod tests {
         );
         broker_handle.shutdown().await;
     }
+
+    /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
+    /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's
+    /// partition, `TRANSACTIONAL_ID_NOT_FOUND` for an id this broker
+    /// coordinates but holds nothing for, or holds a `Dead` entry for, and the
+    /// row otherwise.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_transactions.feature",
+        name = "tests: each row carries kafkas code"
+    )]
+    #[tokio::test]
+    async fn each_row_carries_kafkas_code() {}
 
     /// A topic ACL: the topic it names and the operation it grants.
     struct TopicGrant {

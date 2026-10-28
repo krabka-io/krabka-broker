@@ -215,11 +215,11 @@ mod tests {
         Result<Vec<MetadataRecord>, (i16, &'a str)>,
     );
 
-    /// Kafka's `ConfigAdminManager` and `DynamicBrokerConfig` rules for a
-    /// `BROKER` resource, served by node 1 with node 2 also registered. Each
-    /// row is the resource name, the configs, and the whole expected outcome.
-    #[test]
-    fn broker_resources_follow_kafkas_name_and_dynamic_config_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter configs broker configs tests: broker resources follow kafkas name and dynamic config rules"
+    )]
+    fn bdd_verify_broker_resources_follow_kafkas_name_and_dynamic_config_rules() {
         let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
@@ -346,6 +346,16 @@ mod tests {
             check!(got == want, "{name:?} {configs:?}");
         }
     }
+
+    /// Kafka's `ConfigAdminManager` and `DynamicBrokerConfig` rules for a
+    /// `BROKER` resource, served by node 1 with node 2 also registered. Each
+    /// row is the resource name, the configs, and the whole expected outcome.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_configs/broker_configs.feature",
+        name = "tests: broker resources follow kafkas name and dynamic config rules"
+    )]
+    fn broker_resources_follow_kafkas_name_and_dynamic_config_rules() {}
 
     #[test]
     fn broker_full_replacement_rejects_controller_managed_configs() {

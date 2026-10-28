@@ -81,23 +81,11 @@ async fn wait_for_stable_offset(client: &Client, topic: &str, want: i64) {
     }
 }
 
-/// A transaction that enlisted the partition before the freeze still commits,
-/// and the `read_committed` last stable offset advances past its marker.
-///
-/// This is the sharp edge of the rule, and the one place where a freeze
-/// deliberately lets an append through. The commit decision is already durable
-/// in `__transaction_state` by the time the marker is written, so refusing the
-/// marker would not undo the transaction -- it would leave it permanently open,
-/// which pins the last stable offset and stops every `read_committed` consumer
-/// of the partition. A freeze exists to keep a topic readable while it is not
-/// writable, so a freeze that pinned the LSO forever would break the half of
-/// the feature it was meant to keep.
-///
-/// The case asserts the LSO on both sides of the commit rather than only after
-/// it. A broker that had never pinned the LSO at all would pass a
-/// one-sided assertion while proving nothing about the marker.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze in flight transaction: a transaction that enlisted before the freeze still commits"
+)]
+async fn bdd_verify_a_transaction_that_enlisted_before_the_freeze_still_commits() {
     let p = support::start().await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
     // FindCoordinator. Bring the transaction coordinator up first.
@@ -164,3 +152,26 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
     .expect("producer close");
     p.broker.shutdown().await;
 }
+
+/// A transaction that enlisted the partition before the freeze still commits,
+/// and the `read_committed` last stable offset advances past its marker.
+///
+/// This is the sharp edge of the rule, and the one place where a freeze
+/// deliberately lets an append through. The commit decision is already durable
+/// in `__transaction_state` by the time the marker is written, so refusing the
+/// marker would not undo the transaction -- it would leave it permanently open,
+/// which pins the last stable offset and stops every `read_committed` consumer
+/// of the partition. A freeze exists to keep a topic readable while it is not
+/// writable, so a freeze that pinned the LSO forever would break the half of
+/// the feature it was meant to keep.
+///
+/// The case asserts the LSO on both sides of the commit rather than only after
+/// it. A broker that had never pinned the LSO at all would pass a
+/// one-sided assertion while proving nothing about the marker.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/in_flight_transaction.feature",
+    name = "a transaction that enlisted before the freeze still commits"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {}

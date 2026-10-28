@@ -137,8 +137,9 @@ mod tests {
         check!(md.contains("split-brain") || md.contains("Split-brain"));
     }
 
-    #[test]
-    fn renders_all_three_scenarios() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenarios tests: renders all three scenarios")]
+    fn bdd_verify_renders_all_three_scenarios() {
         let md = failure_scenarios_md();
         for needle in [
             "Reordered message delivery",
@@ -150,8 +151,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn emits_a_generated_diagram_per_scenario() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenarios.feature",
+        name = "tests: renders all three scenarios"
+    )]
+    fn renders_all_three_scenarios() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenarios tests: emits a generated diagram per scenario")]
+    fn bdd_verify_emits_a_generated_diagram_per_scenario() {
         // Each of the three scenarios renders one generated `{% mermaid() %}`
         // sequence diagram, plus the split-brain scenario leads with one
         // hand-authored contrast diagram — four mermaid blocks in total. This
@@ -169,4 +178,11 @@ mod tests {
         check!(md.matches("participant N").count() >= 6);
         check!(md.contains("->>"));
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenarios.feature",
+        name = "tests: emits a generated diagram per scenario"
+    )]
+    fn emits_a_generated_diagram_per_scenario() {}
 }

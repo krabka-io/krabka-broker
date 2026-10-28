@@ -43,8 +43,12 @@ async fn shutdown_three(h1: BrokerHandle, h2: BrokerHandle, h3: BrokerHandle) {
 }
 
 // Each scenario retains its own static mutex while its broker cluster is alive.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "partition reassignment reassign lifecycle: preplacement log dir preference survives until reassignment materializes the replica"
+)]
+async fn bdd_verify_preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica()
+ {
     let extras = [
         tempfile::tempdir().unwrap(),
         tempfile::tempdir().unwrap(),
@@ -125,12 +129,19 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     shutdown_three(h1, h2, h3).await;
 }
 
-/// Test 1: send `AlterPartitionReassignments`, then inject an ISR that
-/// includes the new replica. The background task sees that the adding set is
-/// inside the ISR, completes the reassignment, and clears `adding_replicas`
-/// and `removing_replicas`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "preplacement log dir preference survives until reassignment materializes the replica"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn alter_then_complete_via_isr_catchup() {
+async fn preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "partition reassignment reassign lifecycle: alter then complete via isr catchup"
+)]
+async fn bdd_verify_alter_then_complete_via_isr_catchup() {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let CaseCluster { guard: _g, cluster } = case_cluster(&LOCK).await;
 
@@ -212,10 +223,23 @@ async fn alter_then_complete_via_isr_catchup() {
     shutdown_three(h1, h2, h3).await;
 }
 
-/// Test 2: after `AlterPartitionReassignments` starts a reassignment, the
-/// `ListPartitionReassignments` handler must return the in-flight rows.
+/// Test 1: send `AlterPartitionReassignments`, then inject an ISR that
+/// includes the new replica. The background task sees that the adding set is
+/// inside the ISR, completes the reassignment, and clears `adding_replicas`
+/// and `removing_replicas`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "alter then complete via isr catchup"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn list_in_flight_returns_pending_rows() {
+async fn alter_then_complete_via_isr_catchup() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "partition reassignment reassign lifecycle: list in flight returns pending rows"
+)]
+async fn bdd_verify_list_in_flight_returns_pending_rows() {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let CaseCluster { guard: _g, cluster } = case_cluster(&LOCK).await;
 
@@ -263,11 +287,21 @@ async fn list_in_flight_returns_pending_rows() {
     shutdown_three(h1, h2, h3).await;
 }
 
-/// Test 3: cancel an in-flight reassignment with `target=None`, that is null
-/// replicas. The partition record must return to the original replica set,
-/// with empty `adding_replicas` and `removing_replicas`.
+/// Test 2: after `AlterPartitionReassignments` starts a reassignment, the
+/// `ListPartitionReassignments` handler must return the in-flight rows.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "list in flight returns pending rows"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancel_via_null_replicas_reverts() {
+async fn list_in_flight_returns_pending_rows() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "partition reassignment reassign lifecycle: cancel via null replicas reverts"
+)]
+async fn bdd_verify_cancel_via_null_replicas_reverts() {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let CaseCluster {
         guard: _lock,
@@ -372,6 +406,17 @@ async fn cancel_via_null_replicas_reverts() {
         handle.shutdown().await;
     }
 }
+
+/// Test 3: cancel an in-flight reassignment with `target=None`, that is null
+/// replicas. The partition record must return to the original replica set,
+/// with empty `adding_replicas` and `removing_replicas`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "cancel via null replicas reverts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_via_null_replicas_reverts() {}
 
 async fn foo_cluster() -> ThreeBrokerCluster {
     let cluster = start_three_broker_plaintext_cluster().await;

@@ -12,16 +12,9 @@ use {
     assert2::assert,
 };
 
-/// Test 1: pure-legacy round-trip.
-///
-/// A Kafka 0.10.1 console-producer (cp-kafka:3.1.2) sends 3 records
-/// with Produce v0–2 and v1 `MessageSet` records. A Kafka 0.10.1
-/// console-consumer reads them back with Fetch v0–3. The test exercises
-/// both up-conversion in the Produce handler and down-conversion in the
-/// Fetch handler, end-to-end.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_legacy_010_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance legacy legacy round trip: jvm legacy 010 round trip")]
+async fn bdd_verify_jvm_legacy_010_round_trip() {
     run_round_trip(
         "legacy-010-round-trip",
         KAFKA_IMAGE_LEGACY,
@@ -29,6 +22,22 @@ async fn jvm_legacy_010_round_trip() {
     )
     .await;
 }
+
+/// Test 1: pure-legacy round-trip.
+///
+/// A Kafka 0.10.1 console-producer (cp-kafka:3.1.2) sends 3 records
+/// with Produce v0–2 and v1 `MessageSet` records. A Kafka 0.10.1
+/// console-consumer reads them back with Fetch v0–3. The test exercises
+/// both up-conversion in the Produce handler and down-conversion in the
+/// Fetch handler, end-to-end.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_legacy/legacy_round_trip.feature",
+    name = "jvm legacy 010 round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_legacy_010_round_trip() {}
 
 pub async fn run_round_trip(topic: &str, producer_image: &str, consumer_image: &str) {
     let (broker, _dir) = start_legacy_console_broker(topic).await;

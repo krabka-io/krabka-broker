@@ -325,51 +325,65 @@ mod tests {
 
     fn dirs() -> Vec<PathBuf> { vec![PathBuf::from("/d1"), PathBuf::from("/d2")] }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "cordoned log dirs tests: values resolve as kafka validates them for {example}"
+    )]
+    fn bdd_verify_values_resolve_as_kafka_validates_them(example: String) {
+        type Example<'a> = (&'a str, Result<Vec<PathBuf>, String>);
+        let (value, want): Example<'_> = match example.as_str() {
+            "empty" => ("", Ok(vec![])),
+            "whitespace" => ("  ", Ok(vec![])),
+            "one directory" => ("/d1", Ok(vec![PathBuf::from("/d1")])),
+            "trimmed ordered directories" => (
+                "/d2 , /d1",
+                Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]),
+            ),
+            "duplicate directory" => ("/d1,/d1", Ok(vec![PathBuf::from("/d1")])),
+            "wildcard" => ("*", Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")])),
+            "trailing empty entry" => (
+                "/d1,",
+                Err("Configuration 'cordoned.log.dirs' values must not be empty.".to_owned()),
+            ),
+            "wildcard with directory" => (
+                "*,/d1",
+                Err(
+                    "requirement failed: When cordoned.log.dirs is set to *, it must not \
+                         contain other values"
+                        .to_owned(),
+                ),
+            ),
+            "missing directory" => (
+                "/nope",
+                Err(
+                    "requirement failed: All entries in cordoned.log.dirs must be present in \
+                         log.dirs or log.dir. Missing entries : /nope"
+                        .to_owned(),
+                ),
+            ),
+            "multiple missing directories" => (
+                "/x,/d1,/y",
+                Err(
+                    "requirement failed: All entries in cordoned.log.dirs must be present in \
+                         log.dirs or log.dir. Missing entries : /x, /y"
+                        .to_owned(),
+                ),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        check!(resolve(value, &dirs()) == want, "{value:?}");
+    }
+
     /// Each message is the one `kafka-configs --alter --entity-name 1
     /// --add-config cordoned.log.dirs=...` printed against `apache/kafka:4.3.1`
     /// with `log.dirs=/tmp/d1,/tmp/d2`.
-    #[yare::parameterized(
-        empty = { "", Ok(vec![]) },
-        whitespace = { "  ", Ok(vec![]) },
-        one_directory = { "/d1", Ok(vec![PathBuf::from("/d1")]) },
-        trimmed_ordered_directories = {
-            "/d2 , /d1",
-            Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]),
-        },
-        duplicate_directory = { "/d1,/d1", Ok(vec![PathBuf::from("/d1")]) },
-        wildcard = { "*", Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]) },
-        trailing_empty_entry = {
-            "/d1,",
-            Err("Configuration 'cordoned.log.dirs' values must not be empty.".to_owned()),
-        },
-        wildcard_with_directory = {
-            "*,/d1",
-            Err(
-                "requirement failed: When cordoned.log.dirs is set to *, it must not \
-                         contain other values"
-                    .to_owned(),
-            ),
-        },
-        missing_directory = {
-            "/nope",
-            Err(
-                "requirement failed: All entries in cordoned.log.dirs must be present in \
-                         log.dirs or log.dir. Missing entries : /nope"
-                    .to_owned(),
-            ),
-        },
-        multiple_missing_directories = {
-            "/x,/d1,/y",
-            Err(
-                "requirement failed: All entries in cordoned.log.dirs must be present in \
-                         log.dirs or log.dir. Missing entries : /x, /y"
-                    .to_owned(),
-            ),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/cordoned_log_dirs.feature",
+        name = "tests: values resolve as kafka validates them"
     )]
-    fn values_resolve_as_kafka_validates_them(value: &str, want: Result<Vec<PathBuf>, String>) {
-        check!(resolve(value, &dirs()) == want, "{value:?}");
-    }
+    fn values_resolve_as_kafka_validates_them(example: String) { let _ = example; }
 
     fn registration(
         log_dirs: &[u128],

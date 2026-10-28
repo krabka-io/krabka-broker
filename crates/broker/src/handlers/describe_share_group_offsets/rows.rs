@@ -512,12 +512,11 @@ mod tests {
         part(partition_index, -1, 0, -1)
     }
 
-    /// Kafka's `describeShareGroupOffsets` and
-    /// `computeShareGroupLagAndBuildResponse`, one row per case: the group,
-    /// the request topics, the stored summaries, the end offsets, and the
-    /// whole answer.
-    #[tokio::test]
-    async fn rows_follow_kafkas_share_group_offsets_description() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe share group offsets rows tests: rows follow kafkas share group offsets description"
+    )]
+    async fn bdd_verify_rows_follow_kafkas_share_group_offsets_description() {
         let orders = |p: i32| TopicPartition {
             topic: "orders".to_owned(),
             partition: p,
@@ -679,6 +678,18 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    /// Kafka's `describeShareGroupOffsets` and
+    /// `computeShareGroupLagAndBuildResponse`, one row per case: the group,
+    /// the request topics, the stored summaries, the end offsets, and the
+    /// whole answer.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_share_group_offsets/rows.feature",
+        name = "tests: rows follow kafkas share group offsets description"
+    )]
+    #[tokio::test]
+    async fn rows_follow_kafkas_share_group_offsets_description() {}
 
     #[test]
     fn an_unauthorized_topic_answers_each_partition_it_named() {

@@ -158,11 +158,11 @@ async fn describe_group(
 
 // ── Metadata ────────────────────────────────────────────────────────────────
 
-/// Without `include_topic_authorized_operations`, the per-topic field
-/// must stay at the `i32::MIN` "not present" sentinel even when the
-/// authorizer would otherwise grant operations on the topic.
-#[tokio::test]
-async fn metadata_topic_authorized_operations_default_is_not_present() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: metadata topic authorized operations default is not present"
+)]
+async fn bdd_verify_metadata_topic_authorized_operations_default_is_not_present() {
     let h = boot_with_super_user("ANONYMOUS").await;
     create_topic(&h.client, "foo", 1).await;
 
@@ -186,14 +186,22 @@ async fn metadata_topic_authorized_operations_default_is_not_present() {
     h.shutdown().await;
 }
 
-/// With `include_topic_authorized_operations = true`, a super-user sees the
-/// full topic mask.
-///
-/// A topic with no matching ACL for a non-super principal would show zero. Both
-/// rows appear in the same response. The super-user drives the request, but the
-/// broker computes the bitfield against the request's principal.
+/// Without `include_topic_authorized_operations`, the per-topic field
+/// must stay at the `i32::MIN` "not present" sentinel even when the
+/// authorizer would otherwise grant operations on the topic.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "metadata topic authorized operations default is not present"
+)]
 #[tokio::test]
-async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {
+async fn metadata_topic_authorized_operations_default_is_not_present() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: metadata topic authorized operations super user gets full mask"
+)]
+async fn bdd_verify_metadata_topic_authorized_operations_super_user_gets_full_mask() {
     let h = boot_with_super_user("ANONYMOUS").await;
     create_topic(&h.client, "foo", 1).await;
 
@@ -219,12 +227,27 @@ async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {
     h.shutdown().await;
 }
 
+/// With `include_topic_authorized_operations = true`, a super-user sees the
+/// full topic mask.
+///
+/// A topic with no matching ACL for a non-super principal would show zero. Both
+/// rows appear in the same response. The super-user drives the request, but the
+/// broker computes the bitfield against the request's principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "metadata topic authorized operations super user gets full mask"
+)]
+#[tokio::test]
+async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {}
+
 // ── DescribeCluster ─────────────────────────────────────────────────────────
 
-/// `DescribeCluster` without the include flag leaves the
-/// `cluster_authorized_operations` sentinel in place.
-#[tokio::test]
-async fn describe_cluster_authorized_operations_default_is_not_present() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: describe cluster authorized operations default is not present"
+)]
+async fn bdd_verify_describe_cluster_authorized_operations_default_is_not_present() {
     let h = boot_with_super_user("ANONYMOUS").await;
 
     let resp = h
@@ -240,9 +263,21 @@ async fn describe_cluster_authorized_operations_default_is_not_present() {
     h.shutdown().await;
 }
 
-/// With the include flag set, the super-user sees the full cluster mask.
+/// `DescribeCluster` without the include flag leaves the
+/// `cluster_authorized_operations` sentinel in place.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "describe cluster authorized operations default is not present"
+)]
 #[tokio::test]
-async fn describe_cluster_authorized_operations_super_user_gets_full_mask() {
+async fn describe_cluster_authorized_operations_default_is_not_present() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: describe cluster authorized operations super user gets full mask"
+)]
+async fn bdd_verify_describe_cluster_authorized_operations_super_user_gets_full_mask() {
     let h = boot_with_super_user("ANONYMOUS").await;
 
     let resp = h
@@ -262,13 +297,22 @@ async fn describe_cluster_authorized_operations_super_user_gets_full_mask() {
     h.shutdown().await;
 }
 
+/// With the include flag set, the super-user sees the full cluster mask.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "describe cluster authorized operations super user gets full mask"
+)]
+#[tokio::test]
+async fn describe_cluster_authorized_operations_super_user_gets_full_mask() {}
+
 // ── DescribeGroups ──────────────────────────────────────────────────────────
 
-/// Without `include_authorized_operations`, each `DescribedGroup` row
-/// keeps the `i32::MIN` sentinel even when the authorizer would grant
-/// the full mask.
-#[tokio::test]
-async fn describe_groups_authorized_operations_default_is_not_present() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: describe groups authorized operations default is not present"
+)]
+async fn bdd_verify_describe_groups_authorized_operations_default_is_not_present() {
     let h = seeded_group().await;
 
     let resp = describe_group(&h.client, false).await;
@@ -280,10 +324,22 @@ async fn describe_groups_authorized_operations_default_is_not_present() {
     h.shutdown().await;
 }
 
-/// With the include flag set, a super-user driving the request sees the
-/// full group mask on a seeded group.
+/// Without `include_authorized_operations`, each `DescribedGroup` row
+/// keeps the `i32::MIN` sentinel even when the authorizer would grant
+/// the full mask.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "describe groups authorized operations default is not present"
+)]
 #[tokio::test]
-async fn describe_groups_authorized_operations_super_user_gets_full_mask() {
+async fn describe_groups_authorized_operations_default_is_not_present() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: describe groups authorized operations super user gets full mask"
+)]
+async fn bdd_verify_describe_groups_authorized_operations_super_user_gets_full_mask() {
     let h = seeded_group().await;
 
     let resp = describe_group(&h.client, true).await;
@@ -296,15 +352,21 @@ async fn describe_groups_authorized_operations_super_user_gets_full_mask() {
     h.shutdown().await;
 }
 
-/// The cluster-level field also travels on the v8-10 Metadata response window.
-///
-/// The request's `include_cluster_authorized_operations` bit is the opt-in. The
-/// default, false, must leave the wire-default sentinel even on those versions.
-/// The wire codec gates the field on the encoded response version anyway, so
-/// this test exercises the populate path on the in-window v9 codec with
-/// `MetadataRequest.include_cluster_authorized_operations`.
+/// With the include flag set, a super-user driving the request sees the
+/// full group mask on a seeded group.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "describe groups authorized operations super user gets full mask"
+)]
 #[tokio::test]
-async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
+async fn describe_groups_authorized_operations_super_user_gets_full_mask() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "authorized operations: metadata cluster authorized operations super user gets full mask v9"
+)]
+async fn bdd_verify_metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
     let h = boot_with_super_user("ANONYMOUS").await;
 
     // Pin v9 so the cluster-level field is in the on-wire version range
@@ -361,3 +423,18 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
     );
     h.shutdown().await;
 }
+
+/// The cluster-level field also travels on the v8-10 Metadata response window.
+///
+/// The request's `include_cluster_authorized_operations` bit is the opt-in. The
+/// default, false, must leave the wire-default sentinel even on those versions.
+/// The wire codec gates the field on the encoded response version anyway, so
+/// this test exercises the populate path on the in-window v9 codec with
+/// `MetadataRequest.include_cluster_authorized_operations`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/authorized_operations.feature",
+    name = "metadata cluster authorized operations super user gets full mask v9"
+)]
+#[tokio::test]
+async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {}

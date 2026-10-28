@@ -33,12 +33,9 @@ fn delete_topic_request() -> DeleteShareGroupOffsetsRequest {
     }
 }
 
-/// Delete removes the durable share-state for a topic of an empty group.
-///
-/// A later Describe reads the partition as missing and reports
-/// `start_offset` -1.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_removes_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share admin offsets delete: delete removes topic")]
+async fn bdd_verify_delete_removes_topic() {
     let (_permit, _broker, client, _dir, _tid, member, _) = acquired_topic().await;
     leave(&client, "g1", &member).await;
 
@@ -77,19 +74,23 @@ async fn delete_removes_topic() {
     );
 }
 
-/// F6, delete-metadata rewrite: `DeleteShareGroupOffsets` rewrites the v14
-/// state-partition-metadata record.
+/// Delete removes the durable share-state for a topic of an empty group.
 ///
-/// The deleted topic is then gone from the initialized set of the group, and it
-/// STAYS gone after a restart, because the seed no longer lists it again.
-///
-/// A describe with no topic list enumerates the *initialized* partitions of
-/// the group, read from the v14 metadata cache. Before the delete, that
-/// returns partition [0] of "t". After the delete rewrite, "t" has no
-/// initialized partitions, so it has no row. This holds before AND after a
-/// restart.
+/// A later Describe reads the partition as missing and reports
+/// `start_offset` -1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/delete.feature",
+    name = "delete removes topic"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_rewrites_metadata_topic_absent_after_restart() {
+async fn delete_removes_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share admin offsets delete: delete rewrites metadata topic absent after restart"
+)]
+async fn bdd_verify_delete_rewrites_metadata_topic_absent_after_restart() {
     let InitializedRestartFixture {
         _permit,
         _dir,
@@ -179,3 +180,22 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         }
     }
 }
+
+/// F6, delete-metadata rewrite: `DeleteShareGroupOffsets` rewrites the v14
+/// state-partition-metadata record.
+///
+/// The deleted topic is then gone from the initialized set of the group, and it
+/// STAYS gone after a restart, because the seed no longer lists it again.
+///
+/// A describe with no topic list enumerates the *initialized* partitions of
+/// the group, read from the v14 metadata cache. Before the delete, that
+/// returns partition [0] of "t". After the delete rewrite, "t" has no
+/// initialized partitions, so it has no row. This holds before AND after a
+/// restart.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/delete.feature",
+    name = "delete rewrites metadata topic absent after restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_rewrites_metadata_topic_absent_after_restart() {}

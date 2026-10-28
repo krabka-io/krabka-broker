@@ -193,17 +193,18 @@ async fn assert_connection_closed(stream: &mut TcpStream) {
     assert!(is_closed(stream).await);
 }
 
-/// A connection that sends nothing closes once either the broker-wide window
-/// or the named listener override passes, and the close is counted as idle.
-#[yare::parameterized(
-    broker_wide = { 60, false },
-    listener_override = { 20, true },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "connections max idle: silent plaintext connection closes past its idle window for {example}"
 )]
-#[test_macro(tokio::test(flavor = "current_thread"))]
-async fn silent_plaintext_connection_closes_past_its_idle_window(
-    window_secs: u32,
-    per_listener: bool,
-) {
+async fn bdd_verify_silent_plaintext_connection_closes_past_its_idle_window(example: String) {
+    type Example = (u32, bool);
+    let (window_secs, per_listener): Example = match example.as_str() {
+        "broker wide" => (60, false),
+        "listener override" => (20, true),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let IdleWindowConfig { mut cfg, log_dir } = if per_listener {
         let log_dir = tempfile::tempdir().expect("tempdir");
         IdleWindowConfig {
@@ -235,11 +236,23 @@ async fn silent_plaintext_connection_closes_past_its_idle_window(
     fixture.handle.shutdown().await;
 }
 
-/// Scenario 2: a connection that speaks every half-window is never closed.
-/// Four half-windows put twice the idle window behind the connection, so a
-/// deadline that did not reset on each frame read would have fired.
+/// A connection that sends nothing closes once either the broker-wide window
+/// or the named listener override passes, and the close is counted as idle.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "silent plaintext connection closes past its idle window"
+)]
 #[tokio::test(flavor = "current_thread")]
-async fn a_connection_speaking_each_half_window_is_never_closed() {
+async fn silent_plaintext_connection_closes_past_its_idle_window(example: String) {
+    let _ = example;
+}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "connections max idle: a connection speaking each half window is never closed"
+)]
+async fn bdd_verify_a_connection_speaking_each_half_window_is_never_closed() {
     let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
     let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
 
@@ -256,13 +269,20 @@ async fn a_connection_speaking_each_half_window_is_never_closed() {
     fixture.handle.shutdown().await;
 }
 
-/// Scenario 5: the window measures silence, not how long a frame takes.
-///
-/// Kafka's `Selector` refreshes a channel's idle clock on every read it
-/// serves, so a peer that trickles one request across two idle windows, a
-/// chunk each half-window, is served rather than closed part-way through.
+/// Scenario 2: a connection that speaks every half-window is never closed.
+/// Four half-windows put twice the idle window behind the connection, so a
+/// deadline that did not reset on each frame read would have fired.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a connection speaking each half window is never closed"
+)]
 #[tokio::test(flavor = "current_thread")]
-async fn a_request_trickled_across_two_windows_is_served() {
+async fn a_connection_speaking_each_half_window_is_never_closed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("connections max idle: a request trickled across two windows is served")]
+async fn bdd_verify_a_request_trickled_across_two_windows_is_served() {
     let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
     let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
 
@@ -310,16 +330,24 @@ async fn a_request_trickled_across_two_windows_is_served() {
     fixture.handle.shutdown().await;
 }
 
-/// Scenario 4: a TLS listener holds the handshake to the same window.
+/// Scenario 5: the window measures silence, not how long a frame takes.
 ///
-/// `apache/kafka:4.3.1` run with `connections.max.idle.ms=20000` and an SSL
-/// listener closes a socket that sends no `ClientHello` after 20 seconds:
-/// Kafka registers the channel with its `Selector` at accept time, so idle
-/// expiry covers a connection that has not finished, or even begun,
-/// negotiating. Without the same bound the broker would park a task and an fd
-/// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
+/// Kafka's `Selector` refreshes a channel's idle clock on every read it
+/// serves, so a peer that trickles one request across two idle windows, a
+/// chunk each half-window, is served rather than closed part-way through.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a request trickled across two windows is served"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_trickled_across_two_windows_is_served() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "connections max idle: a tls listener closes a socket that never starts its handshake"
+)]
+async fn bdd_verify_a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let log_dir = tempfile::tempdir().expect("tempdir");
@@ -359,3 +387,19 @@ async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
 
     handle.shutdown().await;
 }
+
+/// Scenario 4: a TLS listener holds the handshake to the same window.
+///
+/// `apache/kafka:4.3.1` run with `connections.max.idle.ms=20000` and an SSL
+/// listener closes a socket that sends no `ClientHello` after 20 seconds:
+/// Kafka registers the channel with its `Selector` at accept time, so idle
+/// expiry covers a connection that has not finished, or even begun,
+/// negotiating. Without the same bound the broker would park a task and an fd
+/// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/connections_max_idle.feature",
+    name = "a tls listener closes a socket that never starts its handshake"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {}

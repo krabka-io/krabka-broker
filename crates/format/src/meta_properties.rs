@@ -575,27 +575,41 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "meta properties tests: the file is the one kafka writes for {example}"
+    )]
+    fn bdd_verify_the_file_is_the_one_kafka_writes(example: String) {
+        type Example<'a> = (&'a str, MetaProperties, &'a str);
+        let (what, meta, want): Example<'_> = match example.as_str() {
+            "with directory id" => (
+                "a formatted directory",
+                meta(1, Some(DIRECTORY)),
+                "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
+             directory.id=U-hCdTzaSPyFB3swwc7Qdw\nnode.id=1\nversion=1\n",
+            ),
+            "without directory id" => (
+                "no directory id",
+                meta(2_147_483_647, None),
+                "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
+             node.id=2147483647\nversion=1\n",
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        assert2::check!(meta.to_file_text(at(1_709_210_096)) == want, "{what}");
+    }
+
     /// The bytes are the bytes Kafka's `PropertiesUtils.writePropertiesFile`
     /// writes for the same ids at the same time on a UTC host:
     /// `Properties.store(writer, "")` puts the empty comment, the date
     /// comment, and the entries in key order, each line ended by `\n`.
-    #[yare::parameterized(
-        with_directory_id = {
-            "a formatted directory",
-            meta(1, Some(DIRECTORY)),
-            "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
-             directory.id=U-hCdTzaSPyFB3swwc7Qdw\nnode.id=1\nversion=1\n"
-        },
-        without_directory_id = {
-            "no directory id",
-            meta(2_147_483_647, None),
-            "#\n#Thu Feb 29 12:34:56 UTC 2024\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
-             node.id=2147483647\nversion=1\n"
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/meta_properties.feature",
+        name = "tests: the file is the one kafka writes"
     )]
-    fn the_file_is_the_one_kafka_writes(what: &str, meta: MetaProperties, want: &str) {
-        assert2::check!(meta.to_file_text(at(1_709_210_096)) == want, "{what}");
-    }
+    fn the_file_is_the_one_kafka_writes(example: String) { let _ = example; }
 
     /// Every file krabka writes reads back as the same ids.
     #[yare::parameterized(
@@ -654,50 +668,58 @@ mod tests {
         );
     }
 
-    /// A file that does not read gets the message of the exception Kafka
-    /// throws for it, and the first fault in Kafka's order wins.
-    #[yare::parameterized(
-        bad_version = { "version=one\n", "Invalid meta.properties version string 'one'" },
-        unknown_version = {
-            "version=2\nnode.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unknown meta.properties version number 2",
-        },
-        unsupported_zero = {
-            "version=0\nbroker.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        missing_version = {
-            "node.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        old_json = {
-            "{\n  \"cluster_id\": \"AQIDBAUGBwgJCgsMDQ4PEA\",\n  \"version\": 3\n}\n",
-            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
-        },
-        no_node_or_cluster = { "version=1\n", "Failed to find node.id" },
-        node_trailing_space = {
-            "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unable to read node.id as a base-10 number.",
-        },
-        node_overflow = {
-            "version=1\nnode.id=2147483648\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            "Unable to read node.id as a base-10 number.",
-        },
-        bad_directory_precedes_cluster_missing = {
-            "version=1\nnode.id=1\ndirectory.id=nope\n",
-            "Unable to read directory.id as a Uuid: Input string `nope` decoded as 3 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-        },
-        no_cluster = { "version=1\nnode.id=1\n", "cluster.id was not found." },
-        invalid_cluster = {
-            "version=1\nnode.id=1\ncluster.id=AAAAAA\n",
-            "Unable to read cluster.id as a Uuid: Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
-        },
-        malformed_escape = {
-            "version=1\nnode.id=1\ncluster.id=\\u00zz\n",
-            "Malformed \\uxxxx encoding.",
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "meta properties tests: a bad file gets kafkas message for {example}"
     )]
-    fn a_bad_file_gets_kafkas_message(text: &str, want: &str) {
+    fn bdd_verify_a_bad_file_gets_kafkas_message(example: String) {
+        type Example<'a> = (&'a str, &'a str);
+        let (text, want): Example<'_> = match example.as_str() {
+            "bad version" => (
+                "version=one\n",
+                "Invalid meta.properties version string 'one'",
+            ),
+            "unknown version" => (
+                "version=2\nnode.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+                "Unknown meta.properties version number 2",
+            ),
+            "unsupported zero" => (
+                "version=0\nbroker.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+                "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+            ),
+            "missing version" => (
+                "node.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+                "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+            ),
+            "old json" => (
+                "{\n  \"cluster_id\": \"AQIDBAUGBwgJCgsMDQ4PEA\",\n  \"version\": 3\n}\n",
+                "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+            ),
+            "no node or cluster" => ("version=1\n", "Failed to find node.id"),
+            "node trailing space" => (
+                "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+                "Unable to read node.id as a base-10 number.",
+            ),
+            "node overflow" => (
+                "version=1\nnode.id=2147483648\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+                "Unable to read node.id as a base-10 number.",
+            ),
+            "bad directory precedes cluster missing" => (
+                "version=1\nnode.id=1\ndirectory.id=nope\n",
+                "Unable to read directory.id as a Uuid: Input string `nope` decoded as 3 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+            "no cluster" => ("version=1\nnode.id=1\n", "cluster.id was not found."),
+            "invalid cluster" => (
+                "version=1\nnode.id=1\ncluster.id=AAAAAA\n",
+                "Unable to read cluster.id as a Uuid: Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+            "malformed escape" => (
+                "version=1\nnode.id=1\ncluster.id=\\u00zz\n",
+                "Malformed \\uxxxx encoding.",
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::check!(
             MetaProperties::parse(text.as_bytes()).map_err(|e| e.to_string())
                 == Err(want.to_owned()),
@@ -705,20 +727,32 @@ mod tests {
         );
     }
 
-    /// `verify_ensemble` agrees with Kafka's `MetaPropertiesEnsemble.verify`
-    /// for each way a set can disagree.
-    #[yare::parameterized(
-        nothing_formatted = { "nothing formatted" },
-        one_cluster_and_node = { "one cluster, one node" },
-        set_supplies_node_id = { "the set supplies the node id" },
-        cluster_id_disagrees = { "the given cluster id disagrees" },
-        node_id_disagrees = { "the configured node id disagrees" },
-        directory_node_ids_disagree = { "two directories disagree on the node id" },
-        reserved_directory_id = { "a reserved directory id" },
-        shared_directory_id = { "a shared directory id" },
-        missing_directory_ids = { "no directory id is no conflict" },
+    /// A file that does not read gets the message of the exception Kafka
+    /// throws for it, and the first fault in Kafka's order wins.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/meta_properties.feature",
+        name = "tests: a bad file gets kafkas message"
     )]
-    fn verify_ensemble_matches_kafka(scenario: &str) {
+    fn a_bad_file_gets_kafkas_message(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("meta properties tests: verify ensemble matches kafka for {example}")]
+    fn bdd_verify_verify_ensemble_matches_kafka(example: String) {
+        type Example<'a> = (&'a str,);
+        let (scenario,): Example<'_> = match example.as_str() {
+            "nothing formatted" => ("nothing formatted",),
+            "one cluster and node" => ("one cluster, one node",),
+            "set supplies node id" => ("the set supplies the node id",),
+            "cluster id disagrees" => ("the given cluster id disagrees",),
+            "node id disagrees" => ("the configured node id disagrees",),
+            "directory node ids disagree" => ("two directories disagree on the node id",),
+            "reserved directory id" => ("a reserved directory id",),
+            "shared directory id" => ("a shared directory id",),
+            "missing directory ids" => ("no directory id is no conflict",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let c1 = ClusterId(Uuid::from_u128(0xc1));
         let c2 = ClusterId(Uuid::from_u128(0xc2));
         let file = |cluster_id, node_id, directory: u128| MetaProperties {
@@ -847,4 +881,13 @@ mod tests {
         );
         assert2::check!(got == want, "{what}");
     }
+
+    /// `verify_ensemble` agrees with Kafka's `MetaPropertiesEnsemble.verify`
+    /// for each way a set can disagree.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/meta_properties.feature",
+        name = "tests: verify ensemble matches kafka"
+    )]
+    fn verify_ensemble_matches_kafka(example: String) { let _ = example; }
 }

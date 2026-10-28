@@ -740,9 +740,11 @@ mod tests {
         std::{cell::RefCell, future, net::TcpListener},
     };
 
-    /// One row per branch of `getOffsetTruncationState`.
-    #[test]
-    fn diverging_truncation_offset_follows_kafka_get_offset_truncation_state() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "replicator truncation tests: diverging truncation offset follows kafka get offset truncation state"
+    )]
+    fn bdd_verify_diverging_truncation_offset_follows_kafka_get_offset_truncation_state() {
         let unplaced = EpochEnd {
             epoch: LeaderEpoch(-1),
             end_offset: Offset(-1),
@@ -844,6 +846,14 @@ mod tests {
             );
         }
     }
+
+    /// One row per branch of `getOffsetTruncationState`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/replicator/truncation.feature",
+        name = "tests: diverging truncation offset follows kafka get offset truncation state"
+    )]
+    fn diverging_truncation_offset_follows_kafka_get_offset_truncation_state() {}
 
     #[test]
     fn offset_epoch_request_and_connection_options_preserve_identity_fields() {
@@ -1056,10 +1066,11 @@ mod tests {
         log_end: i64,
     }
 
-    /// Kafka's `AbstractFetcherThread.fetchOffsetAndTruncate`, over a
-    /// replica holding offsets 0..6 and a leader scripted per sentinel.
-    #[tokio::test]
-    async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "replicator truncation tests: out of range recovery follows kafka fetch offset and truncate"
+    )]
+    async fn bdd_verify_out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {
         let backoff =
             RowAction::Backoff(ReplicationRuntimeConfig::default().unexpected_error_backoff);
         let lookup_failed = || Err::<i64, _>("scripted lookup failure".to_owned());
@@ -1151,6 +1162,16 @@ mod tests {
             assert!(got == expected, "{name}");
         }
     }
+
+    /// Kafka's `AbstractFetcherThread.fetchOffsetAndTruncate`, over a
+    /// replica holding offsets 0..6 and a leader scripted per sentinel.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/replicator/truncation.feature",
+        name = "tests: out of range recovery follows kafka fetch offset and truncate"
+    )]
+    #[tokio::test]
+    async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {}
 
     /// The replica a KIP-1023 recovery row starts from: the flag as the
     /// metadata image publishes it, this replica's topic config, and how many

@@ -116,10 +116,11 @@ async fn tls_connect_without_client_cert(addr: SocketAddr) -> TlsStream<TcpStrea
         .expect("TLS handshake must succeed without a client certificate")
 }
 
-/// The token-request refusal holds on both unauthenticated listener shapes,
-/// with and without a (non-ANONYMOUS) super-user configured.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unauthenticated_create_delegation_token_is_refused() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation tokens unauthenticated: unauthenticated create delegation token is refused"
+)]
+async fn bdd_verify_unauthenticated_create_delegation_token_is_refused() {
     // The broker installs the rustls crypto provider in `Broker::start`, but
     // the client side below needs one too, and it builds its config first.
     // `.ok()` swallows `AlreadySet`.
@@ -159,3 +160,13 @@ async fn unauthenticated_create_delegation_token_is_refused() {
         }
     }
 }
+
+/// The token-request refusal holds on both unauthenticated listener shapes,
+/// with and without a (non-ANONYMOUS) super-user configured.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/unauthenticated.feature",
+    name = "unauthenticated create delegation token is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unauthenticated_create_delegation_token_is_refused() {}

@@ -33,14 +33,11 @@ async fn assert_share_summary(
     assert!(summary == Some((0, expected_dcc)));
 }
 
-/// Lag restore: `delivery_complete_count` survives a broker restart.
-///
-/// Produce N. Acquire all of them and Accept `1..N-1`, so offset 0 still holds
-/// the SPSO at 0 and the window holds N-1 terminal records. Wait for the
-/// persist. Restart on the same dir with Rejoin. Then read the share-state
-/// summary: the SPSO is 0 and the count is the restored N-1, not 0.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delivery_complete_count_restored_across_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share admin offsets state restore: delivery complete count restored across restart"
+)]
+async fn bdd_verify_delivery_complete_count_restored_across_restart() {
     const N: i64 = 4;
     const COMPLETE: i32 = 3; // N - 1
     let InitializedRestartFixture {
@@ -86,6 +83,20 @@ async fn delivery_complete_count_restored_across_restart() {
     }
 }
 
+/// Lag restore: `delivery_complete_count` survives a broker restart.
+///
+/// Produce N. Acquire all of them and Accept `1..N-1`, so offset 0 still holds
+/// the SPSO at 0 and the window holds N-1 terminal records. Wait for the
+/// persist. Restart on the same dir with Rejoin. Then read the share-state
+/// summary: the SPSO is 0 and the count is the restored N-1, not 0.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/state_restore.feature",
+    name = "delivery complete count restored across restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_complete_count_restored_across_restart() {}
+
 /// What a member holding records leaves behind when the leader crashes.
 #[derive(Clone, Copy, Debug)]
 enum BeforeTheCrash {
@@ -95,17 +106,11 @@ enum BeforeTheCrash {
     Released,
 }
 
-/// An acquisition alone is not written, as in Kafka 4.3.1, where
-/// `SharePartition.acquire` changes memory and schedules the lock timer only.
-/// A release is written, with the delivery count the acquisition raised.
-///
-/// Produce 3 and acquire them (delivery count 1). Then either do nothing or
-/// release them, and crash the broker, so no session close releases them on
-/// the way down. After the restart the records are acquired again. With no
-/// write since the load, the delivery count starts over at 1. The release
-/// wrote count 1, so the next acquisition is the second delivery.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_acquisition_is_durable_only_once_a_release_writes_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share admin offsets state restore: an acquisition is durable only once a release writes it"
+)]
+async fn bdd_verify_an_acquisition_is_durable_only_once_a_release_writes_it() {
     let mut actual = Vec::new();
     for before in [BeforeTheCrash::Acquired, BeforeTheCrash::Released] {
         let InitializedRestartFixture {
@@ -149,3 +154,20 @@ async fn an_acquisition_is_durable_only_once_a_release_writes_it() {
             ]
     );
 }
+
+/// An acquisition alone is not written, as in Kafka 4.3.1, where
+/// `SharePartition.acquire` changes memory and schedules the lock timer only.
+/// A release is written, with the delivery count the acquisition raised.
+///
+/// Produce 3 and acquire them (delivery count 1). Then either do nothing or
+/// release them, and crash the broker, so no session close releases them on
+/// the way down. After the restart the records are acquired again. With no
+/// write since the load, the delivery count starts over at 1. The release
+/// wrote count 1, so the next acquisition is the second delivery.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_admin_offsets/state_restore.feature",
+    name = "an acquisition is durable only once a release writes it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_acquisition_is_durable_only_once_a_release_writes_it() {}

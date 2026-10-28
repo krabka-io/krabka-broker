@@ -20,11 +20,11 @@ use {
     std::collections::BTreeMap,
 };
 
-/// The witness registers like any other broker — rack included — and it takes
-/// a replica and an ISR seat of an rf=3 partition. A consumer that names the
-/// witness site is not redirected to it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_is_a_visible_isr_member_that_serves_no_reads() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "witness role witness isr membership: witness is a visible isr member that serves no reads"
+)]
+async fn bdd_verify_witness_is_a_visible_isr_member_that_serves_no_reads() {
     let _guard = cluster_lock().lock().await;
     let cluster = start_stretch_cluster().await;
 
@@ -81,3 +81,14 @@ async fn witness_is_a_visible_isr_member_that_serves_no_reads() {
 
     shutdown(cluster).await;
 }
+
+/// The witness registers like any other broker — rack included — and it takes
+/// a replica and an ISR seat of an rf=3 partition. A consumer that names the
+/// witness site is not redirected to it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/witness_role/witness_isr_membership.feature",
+    name = "witness is a visible isr member that serves no reads"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn witness_is_a_visible_isr_member_that_serves_no_reads() {}

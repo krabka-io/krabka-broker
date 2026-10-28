@@ -222,10 +222,11 @@ mod tests {
         g
     }
 
-    /// Kafka's `classicGroupSyncToClassicGroup` and `validateSyncGroup`, row by
-    /// row: the whole action and the group state after it.
-    #[test]
-    fn sync_follows_kafka_state_and_validation_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified classic ops sync tests: sync follows kafka state and validation rules"
+    )]
+    fn bdd_verify_sync_follows_kafka_state_and_validation_rules() {
         struct Row {
             name: &'static str,
             start: Start,
@@ -387,6 +388,15 @@ mod tests {
             }
         }
     }
+
+    /// Kafka's `classicGroupSyncToClassicGroup` and `validateSyncGroup`, row by
+    /// row: the whole action and the group state after it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/classic_ops/sync.feature",
+        name = "tests: sync follows kafka state and validation rules"
+    )]
+    fn sync_follows_kafka_state_and_validation_rules() {}
 
     #[test]
     fn sync_unknown_member_and_wrong_generation() {

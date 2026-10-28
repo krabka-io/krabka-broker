@@ -92,12 +92,22 @@ pub async fn create_mixed_topic(bootstrap: &str, topic: &str) {
     }
 }
 
-#[test]
-fn topic_description_isr_parser_ignores_ids_outside_isr_field() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm kip320 divergence topic admin: topic description isr parser ignores ids outside isr field"
+)]
+fn bdd_verify_topic_description_isr_parser_ignores_ids_outside_isr_field() {
     let description =
         "Topic: krabka-kip320-3 Partition: 0 Leader: 1 Replicas: 1,2,3 Isr: 1,2 Elr: 3";
     assert2::assert!(described_isr(description) == vec![1, 2]);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_kip320_divergence/topic_admin.feature",
+    name = "topic description isr parser ignores ids outside isr field"
+)]
+fn topic_description_isr_parser_ignores_ids_outside_isr_field() {}
 
 /// Create the mixed topic and wait for the scenario's required JVM-visible ISR.
 pub async fn create_and_wait_for_isr(

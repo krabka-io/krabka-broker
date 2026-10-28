@@ -101,8 +101,9 @@ async fn join_group_on_topic(
     client.send(request).await.unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_member_full_lifecycle() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: single member full lifecycle")]
+async fn bdd_verify_single_member_full_lifecycle() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -135,8 +136,17 @@ async fn single_member_full_lifecycle() {
     assert!(resp3.error_code == 0);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "single member full lifecycle"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_members_split_partitions() {
+async fn single_member_full_lifecycle() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: two members split partitions")]
+async fn bdd_verify_two_members_split_partitions() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -205,8 +215,17 @@ async fn two_members_split_partitions() {
     assert!(parts_a + parts_b == 4);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "two members split partitions"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classic_group_locked_against_next_gen() {
+async fn two_members_split_partitions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: classic group locked against next gen")]
+async fn bdd_verify_classic_group_locked_against_next_gen() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -250,8 +269,17 @@ async fn classic_group_locked_against_next_gen() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "classic group locked against next gen"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kill_switch_returns_unsupported_version() {
+async fn classic_group_locked_against_next_gen() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: kill switch returns unsupported version")]
+async fn bdd_verify_kill_switch_returns_unsupported_version() {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.next_gen_consumer_group.rebalance_protocols = vec![RebalanceProtocol::Classic];
@@ -265,8 +293,17 @@ async fn kill_switch_returns_unsupported_version() {
     assert!(resp.error_code == codes::UNSUPPORTED_VERSION);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "kill switch returns unsupported version"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_after_join() {
+async fn kill_switch_returns_unsupported_version() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: describe after join")]
+async fn bdd_verify_describe_after_join() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -290,8 +327,17 @@ async fn describe_after_join() {
     check!(desc.groups[0].group_state == "Stable");
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "describe after join"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_old_epoch_is_fenced() {
+async fn describe_after_join() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: an old epoch is fenced")]
+async fn bdd_verify_an_old_epoch_is_fenced() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -340,8 +386,19 @@ async fn an_old_epoch_is_fenced() {
     assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "an old epoch is fenced"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_join_with_client_member_id_echoes_and_assigns() {
+async fn an_old_epoch_is_fenced() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen: first join with client member id echoes and assigns"
+)]
+async fn bdd_verify_first_join_with_client_member_id_echoes_and_assigns() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -369,13 +426,17 @@ async fn first_join_with_client_member_id_echoes_and_assigns() {
     );
 }
 
-/// `kafka-consumer-groups.sh --list` sends `ListGroups` (`api_key` 16) with
-/// `types_filter = ["consumer"]`. A live next-gen consumer group must appear in
-/// that response with `group_type == "consumer"`. It must NOT appear when the
-/// request filters on `["share"]`, and it must appear exactly once with no
-/// filter.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "first join with client member id echoes and assigns"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_includes_next_gen_consumer_group() {
+async fn first_join_with_client_member_id_echoes_and_assigns() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer group next gen: list groups includes next gen consumer group")]
+async fn bdd_verify_list_groups_includes_next_gen_consumer_group() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -434,26 +495,24 @@ async fn list_groups_includes_next_gen_consumer_group() {
     );
 }
 
-/// KIP-848: a `SubscribedTopicRegex` that does not compile fails the
-/// heartbeat with `INVALID_REGULAR_EXPRESSION` (128) and admits no member.
-///
-/// Kafka's `GroupMetadataManager.throwIfRegularExpressionIsInvalid` compiles
-/// the pattern before it writes any member record. The failure mode this pins
-/// is the opposite one: admitting the member with `NONE` and never assigning
-/// it a partition, which leaves a consumer sitting on an empty assignment
-/// with no diagnostic.
-///
-/// This is the wire test rather than a JVM-lane one because no stock JVM
-/// client can reach the broker check. `KafkaConsumer.subscribe(Pattern)` and
-/// `kafka-console-consumer --include` both compile the pattern locally with
-/// `java.util.regex`, so an invalid pattern dies in the client with
-/// `PatternSyntaxException` (observed against `apache/kafka:4.3.1`:
-/// `ConsoleConsumer$ConsumerWrapper` compiles at construction, before any
-/// request is sent). Only a compiled 4.x application using the
-/// `SubscriptionPattern` overload sends the string through, and this
-/// repository has no image carrying both a JDK and the 4.x client jars.
+/// `kafka-consumer-groups.sh --list` sends `ListGroups` (`api_key` 16) with
+/// `types_filter = ["consumer"]`. A live next-gen consumer group must appear in
+/// that response with `group_type == "consumer"`. It must NOT appear when the
+/// request filters on `["share"]`, and it must appear exactly once with no
+/// filter.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "list groups includes next gen consumer group"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
+async fn list_groups_includes_next_gen_consumer_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen: an invalid subscribed topic regex fails the heartbeat"
+)]
+async fn bdd_verify_an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
     let ConsumerCase {
         broker: _b,
         dir: _d,
@@ -493,12 +552,37 @@ async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
     assert!(resp.member_epoch == 1);
 }
 
-/// Kafka's `GroupMetadataManager.onMetadataUpdate`: a member that subscribed
-/// to a topic before the topic existed gets its partitions, with a new member
-/// epoch, at its first heartbeat after the broker applies the topic. It waits
-/// neither for a periodic refresh nor for a session to time out.
+/// KIP-848: a `SubscribedTopicRegex` that does not compile fails the
+/// heartbeat with `INVALID_REGULAR_EXPRESSION` (128) and admits no member.
+///
+/// Kafka's `GroupMetadataManager.throwIfRegularExpressionIsInvalid` compiles
+/// the pattern before it writes any member record. The failure mode this pins
+/// is the opposite one: admitting the member with `NONE` and never assigning
+/// it a partition, which leaves a consumer sitting on an empty assignment
+/// with no diagnostic.
+///
+/// This is the wire test rather than a JVM-lane one because no stock JVM
+/// client can reach the broker check. `KafkaConsumer.subscribe(Pattern)` and
+/// `kafka-console-consumer --include` both compile the pattern locally with
+/// `java.util.regex`, so an invalid pattern dies in the client with
+/// `PatternSyntaxException` (observed against `apache/kafka:4.3.1`:
+/// `ConsoleConsumer$ConsumerWrapper` compiles at construction, before any
+/// request is sent). Only a compiled 4.x application using the
+/// `SubscriptionPattern` overload sends the string through, and this
+/// repository has no image carrying both a JDK and the 4.x client jars.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "an invalid subscribed topic regex fails the heartbeat"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
+async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen: a topic created after the member joined reaches its next heartbeat"
+)]
+async fn bdd_verify_a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
     let BootedBroker {
         broker: _b,
         bootstrap,
@@ -555,12 +639,23 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
     );
 }
 
-/// Kafka's `consumerGroupHeartbeatIntervalMs`: a group's
-/// `consumer.heartbeat.interval.ms` replaces the broker's
-/// `group.consumer.heartbeat.interval.ms` in the heartbeat response of that
-/// group only.
+/// Kafka's `GroupMetadataManager.onMetadataUpdate`: a member that subscribed
+/// to a topic before the topic existed gets its partitions, with a new member
+/// epoch, at its first heartbeat after the broker applies the topic. It waits
+/// neither for a periodic refresh nor for a session to time out.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "a topic created after the member joined reaches its next heartbeat"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
+async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer group next gen: a group config overrides the heartbeat interval of its group"
+)]
+async fn bdd_verify_a_group_config_overrides_the_heartbeat_interval_of_its_group() {
     let BootedBroker {
         broker,
         bootstrap,
@@ -595,6 +690,18 @@ async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
 
     check!(intervals == [("g-tuned", 7_000), ("g-plain", 5_000)]);
 }
+
+/// Kafka's `consumerGroupHeartbeatIntervalMs`: a group's
+/// `consumer.heartbeat.interval.ms` replaces the broker's
+/// `group.consumer.heartbeat.interval.ms` in the heartbeat response of that
+/// group only.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen.feature",
+    name = "a group config overrides the heartbeat interval of its group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {}
 
 /// A running broker, the directory that backs it and a client connected to it.
 struct ConsumerCase {

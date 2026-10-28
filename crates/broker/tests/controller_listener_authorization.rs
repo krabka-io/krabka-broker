@@ -258,15 +258,11 @@ fn describe_quorum() -> Bytes {
     )
 }
 
-/// A `PLAINTEXT` controller listener authorizes every request for
-/// `ANONYMOUS`.
-///
-/// Without a grant, `Vote`, the private `SubmitChange` and `BrokerHeartbeat`
-/// get `CLUSTER_AUTHORIZATION_FAILED`, and no record is committed. The
-/// connection stays open. After an ACL grants `ClusterAction` to
-/// `User:ANONYMOUS`, the next `SubmitChange` on the same connection commits.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener authorization: a plaintext controller listener authorizes every request for anonymous"
+)]
+async fn bdd_verify_a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {
     let RunningBroker { broker, dir: _dir } = start(ListenerProtocol::Plaintext, &[]).await;
     let mut stream = TcpStream::connect(broker.controller_addr())
         .await
@@ -353,17 +349,26 @@ async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous(
     broker.shutdown().await;
 }
 
-/// A `SASL_PLAINTEXT` controller listener keeps a connection whose principal
-/// lacks `ClusterAction`, and it authorizes each request for that principal.
+/// A `PLAINTEXT` controller listener authorizes every request for
+/// `ANONYMOUS`.
 ///
-/// - `creator` holds `Create` on the cluster: `CreateTopics` creates the
-///   topic. Before #684 the handshake dropped the connection.
-/// - `replicator` holds `ClusterAction`: `MetadataFetch` is served, and
-///   `DescribeQuorum`, which needs `Describe`, is refused.
-/// - `reader` holds `Describe`: `DescribeQuorum` is served, and
-///   `DescribeCluster`, which needs `Alter` on a controller, is refused.
+/// Without a grant, `Vote`, the private `SubmitChange` and `BrokerHeartbeat`
+/// get `CLUSTER_AUTHORIZATION_FAILED`, and no record is committed. The
+/// connection stays open. After an ACL grants `ClusterAction` to
+/// `User:ANONYMOUS`, the next `SubmitChange` on the same connection commits.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
+    name = "a plaintext controller listener authorizes every request for anonymous"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() {
+async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener authorization: a sasl controller listener authorizes each request for its principal"
+)]
+async fn bdd_verify_a_sasl_controller_listener_authorizes_each_request_for_its_principal() {
     const CREATOR: Credential = Credential {
         user: "creator",
         password: "creator-secret",
@@ -478,19 +483,33 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
     broker.shutdown().await;
 }
 
+/// A `SASL_PLAINTEXT` controller listener keeps a connection whose principal
+/// lacks `ClusterAction`, and it authorizes each request for that principal.
+///
+/// - `creator` holds `Create` on the cluster: `CreateTopics` creates the
+///   topic. Before #684 the handshake dropped the connection.
+/// - `replicator` holds `ClusterAction`: `MetadataFetch` is served, and
+///   `DescribeQuorum`, which needs `Describe`, is refused.
+/// - `reader` holds `Describe`: `DescribeQuorum` is served, and
+///   `DescribeCluster`, which needs `Alter` on a controller, is refused.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
+    name = "a sasl controller listener authorizes each request for its principal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() {}
+
 use crate::support::tls::{
     CLIENT_PRINCIPAL, DEV_CERT, DEV_CLIENT_CA, DEV_CLIENT_CERT, DEV_CLIENT_KEY, DEV_KEY,
 };
 
-/// An `SSL` controller listener authorizes each request for the principal of
-/// the client certificate.
-///
-/// Before #684 the controller listener took no principal from a certificate
-/// and checked nothing on `SSL`. Now `DescribeQuorum` from the certificate
-/// principal is refused until an ACL grants `Describe` to that principal, and
-/// then it is served on the same connection.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller listener authorization: an ssl controller listener authorizes each request for the certificate principal"
+)]
+async fn bdd_verify_an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal()
+ {
     let _ = aws_lc_rs::default_provider().install_default();
     let pem_dir = tempfile::TempDir::new().expect("tempdir");
     let write = |name: &str, contents: &str| {
@@ -561,3 +580,18 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
 
     broker.shutdown().await;
 }
+
+/// An `SSL` controller listener authorizes each request for the principal of
+/// the client certificate.
+///
+/// Before #684 the controller listener took no principal from a certificate
+/// and checked nothing on `SSL`. Now `DescribeQuorum` from the certificate
+/// principal is refused until an ACL grants `Describe` to that principal, and
+/// then it is served on the same connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
+    name = "an ssl controller listener authorizes each request for the certificate principal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {}

@@ -9,15 +9,9 @@ use {
     assert2::assert,
 };
 
-/// `kafka-cluster cluster-id` exercises `DescribeCluster` (`api_key` 60).
-///
-/// Uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]) because:
-/// - `cp-kafka:6.1.1` does not ship the `kafka-cluster` binary at all.
-/// - `cp-kafka:7.5.0` ships it but the subcommand is `cluster-id`
-///   (not `describe`; that alias does not exist in this version).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_cluster_describe() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli cluster: kafka cluster describe")]
+async fn bdd_verify_kafka_cluster_describe() {
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
@@ -35,3 +29,18 @@ async fn kafka_cluster_describe() {
         "cluster-id output missing cluster id: {s}"
     );
 }
+
+/// `kafka-cluster cluster-id` exercises `DescribeCluster` (`api_key` 60).
+///
+/// Uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]) because:
+/// - `cp-kafka:6.1.1` does not ship the `kafka-cluster` binary at all.
+/// - `cp-kafka:7.5.0` ships it but the subcommand is `cluster-id`
+///   (not `describe`; that alias does not exist in this version).
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/cluster.feature",
+    name = "kafka cluster describe"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_cluster_describe() {}

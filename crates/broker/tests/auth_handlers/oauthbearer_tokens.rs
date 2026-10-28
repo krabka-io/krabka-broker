@@ -23,12 +23,9 @@ use {
     tokio::net::TcpStream,
 };
 
-/// Happy path: a valid unsecured token authenticates in a single round.
-///
-/// A post-auth Metadata round-trip proves that the connection survived and
-/// that the broker accepted the principal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_happy_path() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers oauthbearer tokens: sasl oauthbearer happy path")]
+async fn bdd_verify_sasl_oauthbearer_happy_path() {
     let (_log_dir, handle, addr) =
         oauthbearer_fixture(krabka_security::OAuthBearerValidator::default(), None).await;
 
@@ -52,14 +49,23 @@ async fn sasl_oauthbearer_happy_path() {
     result.expect("OAUTHBEARER session must succeed end-to-end");
 }
 
-/// Failure path: an expired token triggers the RFC 7628 two-round failure
-/// handshake.
+/// Happy path: a valid unsecured token authenticates in a single round.
 ///
-/// Round 1 returns the `invalid_token` JSON with `error_code = 0` and keeps
-/// the connection open. Round 2, the client's `\x01` dummy, returns
-/// `SASL_AUTHENTICATION_FAILED` (58).
+/// A post-auth Metadata round-trip proves that the connection survived and
+/// that the broker accepted the principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_invalid_token_two_round_failure() {
+async fn sasl_oauthbearer_happy_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer tokens: sasl oauthbearer invalid token two round failure"
+)]
+async fn bdd_verify_sasl_oauthbearer_invalid_token_two_round_failure() {
     let log_dir = tempfile::tempdir().unwrap();
     let validator =
         krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
@@ -76,6 +82,20 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
     handle.shutdown().await;
     result.expect("OAUTHBEARER failure handshake must complete");
 }
+
+/// Failure path: an expired token triggers the RFC 7628 two-round failure
+/// handshake.
+///
+/// Round 1 returns the `invalid_token` JSON with `error_code = 0` and keeps
+/// the connection open. Round 2, the client's `\x01` dummy, returns
+/// `SASL_AUTHENTICATION_FAILED` (58).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer invalid token two round failure"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_oauthbearer_invalid_token_two_round_failure() {}
 
 /// A signing key pair and the JWKS document that advertises its public key.
 struct Es256Key {
@@ -121,13 +141,11 @@ fn signed_validator(jwks_json: &str) -> krabka_security::OAuthBearerValidator {
     krabka_security::OAuthBearerValidator::Signed(krabka_security::SignedJwsValidator::new(handle))
 }
 
-/// Happy path: a real signed ES256 token, verified against an in-memory JWKS,
-/// authenticates in a single round.
-///
-/// This proves that the `Signed` validator is wired through the live
-/// `SaslAuthenticate` path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_signed_token_happy_path() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer tokens: sasl oauthbearer signed token happy path"
+)]
+async fn bdd_verify_sasl_oauthbearer_signed_token_happy_path() {
     let Es256Key { key_pair: kp, jwks } = es256_key("k1");
     let (_log_dir, handle, addr) = oauthbearer_fixture(signed_validator(&jwks), None).await;
 
@@ -156,13 +174,24 @@ async fn sasl_oauthbearer_signed_token_happy_path() {
     result.expect("signed OAUTHBEARER session must succeed end-to-end");
 }
 
-/// Failure path: a token signed by a *different* key than the JWKS advertises
-/// triggers the RFC 7628 two-round failure handshake.
+/// Happy path: a real signed ES256 token, verified against an in-memory JWKS,
+/// authenticates in a single round.
 ///
-/// Round 1 carries the `invalid_token` JSON. Round 2, the `\x01` dummy,
-/// returns 58.
+/// This proves that the `Signed` validator is wired through the live
+/// `SaslAuthenticate` path.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer signed token happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
+async fn sasl_oauthbearer_signed_token_happy_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer tokens: sasl oauthbearer signed token wrong key two round failure"
+)]
+async fn bdd_verify_sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
     // JWKS advertises key A's public key; the token is signed by key B.
     let Es256Key {
         key_pair: _kp_a,
@@ -181,6 +210,19 @@ async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
     handle.shutdown().await;
     result.expect("signed OAUTHBEARER failure handshake must complete");
 }
+
+/// Failure path: a token signed by a *different* key than the JWKS advertises
+/// triggers the RFC 7628 two-round failure handshake.
+///
+/// Round 1 carries the `invalid_token` JSON. Round 2, the `\x01` dummy,
+/// returns 58.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_tokens.feature",
+    name = "sasl oauthbearer signed token wrong key two round failure"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {}
 
 async fn expect_invalid_token(
     stream: &mut TcpStream,

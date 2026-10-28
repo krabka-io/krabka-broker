@@ -28,8 +28,11 @@ const TOPIC: &str = "tiered-soak-shape";
 const PARTITIONS: i32 = 3;
 const RECORDS_PER_PARTITION: usize = 60;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi soak shape: every rlmm catches up on the soak contracts cluster"
+)]
+async fn bdd_verify_every_rlmm_catches_up_on_the_soak_contracts_cluster() {
     let TieredCluster {
         brokers,
         log_dirs: _log_dirs,
@@ -137,3 +140,11 @@ async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
         broker.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_soak_shape.feature",
+    name = "every rlmm catches up on the soak contracts cluster"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {}

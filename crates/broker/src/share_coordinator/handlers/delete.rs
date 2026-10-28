@@ -100,11 +100,11 @@ mod tests {
 
     fn response(setup: StateResponseSetup<'_>) -> DeleteShareGroupStateResponse { setup.response() }
 
-    /// The whole response and the appended records for each request, over a
-    /// state for partition 0 only of a two-partition topic, as Kafka's
-    /// `ShareCoordinatorShard.deleteState` answers it.
-    #[tokio::test]
-    async fn delete_state_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator handlers delete tests: delete state answers as kafka"
+    )]
+    async fn bdd_verify_delete_state_answers_as_kafka() {
         let unknown = Some("This server does not host this topic-partition.");
         // (name, led, request, expected response, appended records, partition
         //  0 still has state)
@@ -233,4 +233,15 @@ mod tests {
             );
         }
     }
+
+    /// The whole response and the appended records for each request, over a
+    /// state for partition 0 only of a two-partition topic, as Kafka's
+    /// `ShareCoordinatorShard.deleteState` answers it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/delete.feature",
+        name = "tests: delete state answers as kafka"
+    )]
+    #[tokio::test]
+    async fn delete_state_answers_as_kafka() {}
 }

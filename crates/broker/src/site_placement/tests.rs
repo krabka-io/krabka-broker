@@ -221,8 +221,11 @@ fn a_fenced_broker_is_a_last_resort_and_never_the_leader() {
     }
 }
 
-#[test]
-fn fenced_brokers_are_counted_and_refused_as_kafkas_placer_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "site placement tests: fenced brokers are counted and refused as kafkas placer does"
+)]
+fn bdd_verify_fenced_brokers_are_counted_and_refused_as_kafkas_placer_does() {
     let three = vec![
         broker(1, None, false),
         fenced(broker(2, None, false)),
@@ -288,6 +291,13 @@ fn fenced_brokers_are_counted_and_refused_as_kafkas_placer_does() {
         }
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/site_placement/tests.feature",
+    name = "fenced brokers are counted and refused as kafkas placer does"
+)]
+fn fenced_brokers_are_counted_and_refused_as_kafkas_placer_does() {}
 
 #[test]
 fn one_broker_per_site_rotates_the_replica_list_from_a_random_site() {

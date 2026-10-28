@@ -49,12 +49,11 @@ mod tests {
         assert2::{assert, check},
     };
 
-    /// `ConsumerGroupMetadataValue` as Kafka 4.3.1's generated writer lays it
-    /// out: i16 version 0, i32 `Epoch`, then the tagged-field trailer, which
-    /// holds `MetadataHash` as tag 0 with an eight-byte payload unless it is
-    /// the default 0.
-    #[test]
-    fn group_metadata_value_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen epochs tests: group metadata value bytes match kafka schema"
+    )]
+    fn bdd_verify_group_metadata_value_bytes_match_kafka_schema() {
         struct GoldenRow {
             case: &'static str,
             value: GroupMetadataValue,
@@ -97,6 +96,17 @@ mod tests {
         }
     }
 
+    /// `ConsumerGroupMetadataValue` as Kafka 4.3.1's generated writer lays it
+    /// out: i16 version 0, i32 `Epoch`, then the tagged-field trailer, which
+    /// holds `MetadataHash` as tag 0 with an eight-byte payload unless it is
+    /// the default 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/epochs.feature",
+        name = "tests: group metadata value bytes match kafka schema"
+    )]
+    fn group_metadata_value_bytes_match_kafka_schema() {}
+
     #[test]
     fn group_metadata_value_rejects_a_missing_tagged_trailer() {
         // This is the byte whose absence made Kafka's generated reader throw
@@ -110,12 +120,11 @@ mod tests {
         assert!(GroupMetadataValue::decode(truncated).is_err());
     }
 
-    /// `ConsumerGroupTargetAssignmentMetadataValue` as Kafka 4.3.1's
-    /// generated writer lays it out: i16 version 0, i32 `AssignmentEpoch`,
-    /// then the tagged-field trailer, which holds `AssignmentTimestamp` as tag
-    /// 0 with an eight-byte payload unless it is the default 0.
-    #[test]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen epochs tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_metadata_bytes_match_kafka_schema() {
         let rows = assignment_metadata_golden_cases()
             .unknown_time_description("a converted classic group: the time is unknown")
             .call();
@@ -133,4 +142,15 @@ mod tests {
             );
         }
     }
+
+    /// `ConsumerGroupTargetAssignmentMetadataValue` as Kafka 4.3.1's
+    /// generated writer lays it out: i16 version 0, i32 `AssignmentEpoch`,
+    /// then the tagged-field trailer, which holds `AssignmentTimestamp` as tag
+    /// 0 with an eight-byte payload unless it is the default 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/epochs.feature",
+        name = "tests: target assignment metadata bytes match kafka schema"
+    )]
+    fn target_assignment_metadata_bytes_match_kafka_schema() {}
 }

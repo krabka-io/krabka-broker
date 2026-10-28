@@ -22,6 +22,20 @@ cargo nextest run --workspace
 cargo test --workspace --doc
 ```
 
+Behavior scenarios use `rstest-bdd`: keep the specification in the crate's
+`tests/features/` directory and implement Given, When, and Then steps with
+`rstest-bdd-macros`. Use fresh `rstest` fixtures for state shared between steps
+and keep assertions in Then steps. A standalone acceptance check can retain
+its setup and assertions in a Then helper bound by `#[scenario]`. Use
+`Examples` for named variants and data tables for structured expectations.
+`scenarios!` binds every scenario in a feature directory to the ordinary test
+harness, including nextest.
+
+Add feature files and the crate's `Cargo.toml` to Bazel `compile_data`. The
+macros read these files at compile time; Bazel supplies the manifest directory.
+Preserve existing Tokio runtime settings and external-service requirements
+when migrating async scenarios.
+
 Add or update the smallest test that proves the change. Run the Docker suites
 only when the change affects a container boundary:
 

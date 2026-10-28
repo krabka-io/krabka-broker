@@ -11,14 +11,9 @@ use crate::jvm_acceptance::{
     start_oauthbearer_broker,
 };
 
-/// End-to-end `SASL_PLAINTEXT` + OAUTHBEARER drive of the JVM
-/// `kafka-topics` / `kafka-console-producer` / `kafka-console-consumer`
-/// tools. The JVM client uses the built-in unsecured login module to mint an
-/// `alg:none` JWS for `sub=admin`. Krabka parses the RFC 7628 client initial
-/// response, validates the token, and derives `User:admin`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_sasl_oauthbearer_produce_consume() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl oauthbearer: jvm sasl oauthbearer produce consume")]
+async fn bdd_verify_jvm_sasl_oauthbearer_produce_consume() {
     const TOPIC: &str = "krabka-sasl-oauthbearer-itest";
     const USER: &str = "admin";
 
@@ -38,3 +33,17 @@ async fn jvm_sasl_oauthbearer_produce_consume() {
 
     broker.shutdown().await;
 }
+
+/// End-to-end `SASL_PLAINTEXT` + OAUTHBEARER drive of the JVM
+/// `kafka-topics` / `kafka-console-producer` / `kafka-console-consumer`
+/// tools. The JVM client uses the built-in unsecured login module to mint an
+/// `alg:none` JWS for `sub=admin`. Krabka parses the RFC 7628 client initial
+/// response, validates the token, and derives `User:admin`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/oauthbearer.feature",
+    name = "jvm sasl oauthbearer produce consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_oauthbearer_produce_consume() {}

@@ -25,6 +25,15 @@ use {
     std::{io, net::SocketAddr},
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers plain: sasl plain happy path")]
+async fn bdd_verify_sasl_plain_happy_path() {
+    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
+    let result = drive_sasl_plain_session(addr, "alice", alice_password().as_bytes()).await;
+    handle.shutdown().await;
+    result.expect("SASL/PLAIN session must succeed end-to-end");
+}
+
 /// Happy-path drive of a SASL/PLAIN session: `ApiVersions` → `SaslHandshake`
 /// → `SaslAuthenticate` → Metadata.
 ///
@@ -32,23 +41,19 @@ use {
 /// final Metadata response carries this broker. The dial side sends raw
 /// bytes over `TcpStream` and not `Client`, because `Client` does not speak
 /// SASL yet.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "sasl plain happy path"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_happy_path() {
-    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
-    let result = drive_sasl_plain_session(addr, "alice", alice_password().as_bytes()).await;
-    handle.shutdown().await;
-    result.expect("SASL/PLAIN session must succeed end-to-end");
-}
+async fn sasl_plain_happy_path() {}
 
-/// SASL PLAIN metrics: one happy-path session and one wrong-password session
-/// tick both the `successful_authentication_total` and the
-/// `failed_authentication_total` per-mechanism counters on the `/metrics`
-/// scrape.
-///
-/// The test checks the end-to-end wire path from the `SaslAuthenticate`
-/// dispatch site to the rendered Prometheus text.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: sasl plain authentication metrics tick for success and failure"
+)]
+async fn bdd_verify_sasl_plain_authentication_metrics_tick_for_success_and_failure() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = alice_plain_config(log_dir.path().to_path_buf(), alice_password());
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
@@ -82,10 +87,37 @@ async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
     );
 }
 
+/// SASL PLAIN metrics: one happy-path session and one wrong-password session
+/// tick both the `successful_authentication_total` and the
+/// `failed_authentication_total` per-mechanism counters on the `/metrics`
+/// scrape.
+///
+/// The test checks the end-to-end wire path from the `SaslAuthenticate`
+/// dispatch site to the rendered Prometheus text.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "sasl plain authentication metrics tick for success and failure"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {}
+
 /// Send an HTTP GET `/metrics` to `addr` and return the response body.
 ///
 /// The returned body holds no HTTP head.
 async fn scrape_metrics(addr: SocketAddr) -> String { scrape_metrics_client(addr).await }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers plain: sasl plain wrong password closes connection")]
+async fn bdd_verify_sasl_plain_wrong_password_closes_connection() {
+    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
+    let result = drive_sasl_plain_session(addr, "alice", wrong_scram_password().as_bytes()).await;
+    handle.shutdown().await;
+    assert!(
+        result.is_err(),
+        "wrong password must fail the SASL session: {result:?}"
+    );
+}
 
 /// Negative path: with a wrong password, `SaslAuthenticate` responds with
 /// `error_code = SASL_AUTHENTICATION_FAILED` (58) and the broker closes the
@@ -95,16 +127,13 @@ async fn scrape_metrics(addr: SocketAddr) -> String { scrape_metrics_client(addr
 /// The first case is a non-zero `error_code` on the auth response. The second
 /// case is an EOF on the Metadata read that follows, when the peer closed the
 /// connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "sasl plain wrong password closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_wrong_password_closes_connection() {
-    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
-    let result = drive_sasl_plain_session(addr, "alice", wrong_scram_password().as_bytes()).await;
-    handle.shutdown().await;
-    assert!(
-        result.is_err(),
-        "wrong password must fail the SASL session: {result:?}"
-    );
-}
+async fn sasl_plain_wrong_password_closes_connection() {}
 
 /// Drive a complete SASL/PLAIN session against a `SASL_PLAINTEXT` listener.
 ///
@@ -151,34 +180,67 @@ pub async fn plain_authenticate(
     sasl_plain_reauthenticate_on(stream, corr, setup).await
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: plain session capped by connections max reauth then closes"
+)]
+async fn bdd_verify_plain_session_capped_by_connections_max_reauth_then_closes() {
+    capped_session_closes(SaslMechanism::Plain).await;
+}
+
 /// KIP-368: with `connections.max.reauth.ms` set, a PLAIN session reports the
 /// window as `session_lifetime_ms`, and a data-plane request that arrives after
 /// it elapses without an in-band re-authentication closes the connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "plain session capped by connections max reauth then closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_session_capped_by_connections_max_reauth_then_closes() {
-    capped_session_closes(SaslMechanism::Plain).await;
+async fn plain_session_capped_by_connections_max_reauth_then_closes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: plain in band reauth same principal reopens data plane"
+)]
+async fn bdd_verify_plain_in_band_reauth_same_principal_reopens_data_plane() {
+    same_principal_reopens(SaslMechanism::Plain).await;
 }
 
 /// KIP-368: an in-band re-authentication with the same principal succeeds and
 /// re-opens the data plane on the same connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "plain in band reauth same principal reopens data plane"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_in_band_reauth_same_principal_reopens_data_plane() {
-    same_principal_reopens(SaslMechanism::Plain).await;
+async fn plain_in_band_reauth_same_principal_reopens_data_plane() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: plain in band reauth with different principal closes"
+)]
+async fn bdd_verify_plain_in_band_reauth_with_different_principal_closes() {
+    different_principal_closes(SaslMechanism::Plain).await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a PLAIN re-auth that
 /// authenticates a different user answers `SASL_AUTHENTICATION_FAILED` (58)
 /// and the broker closes the connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "plain in band reauth with different principal closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_in_band_reauth_with_different_principal_closes() {
-    different_principal_closes(SaslMechanism::Plain).await;
-}
+async fn plain_in_band_reauth_with_different_principal_closes() {}
 
-/// A `SaslAuthenticate` before any handshake closes the connection with no
-/// response, as Kafka's `SaslServerAuthenticator.handleKafkaRequest` does
-/// (`InvalidRequestException`), rather than authenticating anyone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_authenticate_without_handshake_closes_the_connection() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: plain authenticate without handshake closes the connection"
+)]
+async fn bdd_verify_plain_authenticate_without_handshake_closes_the_connection() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle =
         start_reauth_broker(log_dir.path(), krabka_units::secs(30), SaslMechanism::Plain).await;
@@ -205,6 +267,25 @@ async fn plain_authenticate_without_handshake_closes_the_connection() {
     handle.shutdown().await;
 }
 
+/// A `SaslAuthenticate` before any handshake closes the connection with no
+/// response, as Kafka's `SaslServerAuthenticator.handleKafkaRequest` does
+/// (`InvalidRequestException`), rather than authenticating anyone.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "plain authenticate without handshake closes the connection"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_authenticate_without_handshake_closes_the_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers plain: plain reauth after the window elapsed keeps serving round after round"
+)]
+async fn bdd_verify_plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
+    repeated_expired_reauth(SaslMechanism::Plain, krabka_units::millis(300), 200..=300).await;
+}
+
 /// KIP-368: a PLAIN connection re-authenticates round after round, and each
 /// round may begin after its window has already elapsed.
 ///
@@ -212,7 +293,10 @@ async fn plain_authenticate_without_handshake_closes_the_connection() {
 /// on its own send cadence it opens the exchange past the deadline routinely.
 /// The window here is short and the test sleeps past it before every round, so
 /// each of the three rounds starts expired.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/plain.feature",
+    name = "plain reauth after the window elapsed keeps serving round after round"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    repeated_expired_reauth(SaslMechanism::Plain, krabka_units::millis(300), 200..=300).await;
-}
+async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {}

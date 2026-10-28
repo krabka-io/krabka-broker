@@ -57,8 +57,9 @@ async fn alice_metadata_fixture() -> AliceMetadataFixture {
     AliceMetadataFixture { handle, dir, addr }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_silent_filter_on_fetch_all() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers metadata group txn: metadata silent filter on fetch all")]
+async fn bdd_verify_metadata_silent_filter_on_fetch_all() {
     let AliceMetadataFixture {
         handle,
         dir: _dir,
@@ -88,8 +89,17 @@ async fn metadata_silent_filter_on_fetch_all() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/metadata_group_txn.feature",
+    name = "metadata silent filter on fetch all"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_explicit_deny_on_named_topic() {
+async fn metadata_silent_filter_on_fetch_all() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers metadata group txn: metadata explicit deny on named topic")]
+async fn bdd_verify_metadata_explicit_deny_on_named_topic() {
     let AliceMetadataFixture {
         handle,
         dir: _dir,
@@ -111,8 +121,19 @@ async fn metadata_explicit_deny_on_named_topic() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/metadata_group_txn.feature",
+    name = "metadata explicit deny on named topic"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn join_group_denied_without_group_read_acl() {
+async fn metadata_explicit_deny_on_named_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "acl handlers metadata group txn: join group denied without group read acl"
+)]
+async fn bdd_verify_join_group_denied_without_group_read_acl() {
     let (handle, _dir, _) = start_admin_alice().await;
     handle.wait_until_group_coordinator_ready().await;
     let addr = handle.listen_addr();
@@ -189,8 +210,19 @@ async fn join_group_denied_without_group_read_acl() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/metadata_group_txn.feature",
+    name = "join group denied without group read acl"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_denied_without_txn_acl() {
+async fn join_group_denied_without_group_read_acl() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "acl handlers metadata group txn: init producer id denied without txn acl"
+)]
+async fn bdd_verify_init_producer_id_denied_without_txn_acl() {
     let (handle, _dir, _) = start_admin_alice().await;
     let addr = handle.listen_addr();
 
@@ -213,3 +245,11 @@ async fn init_producer_id_denied_without_txn_acl() {
         "alice has no TransactionalId Write ACL on tx-1, expected TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53), got {resp:?}"
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/metadata_group_txn.feature",
+    name = "init producer id denied without txn acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_producer_id_denied_without_txn_acl() {}

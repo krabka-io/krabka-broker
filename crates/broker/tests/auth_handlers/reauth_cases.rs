@@ -147,12 +147,11 @@ pub async fn capped_session_closes(mechanism: SaslMechanism) {
     session.broker.shutdown().await;
 }
 
-/// KIP-368: a `SaslAuthenticate` that arrives on an expired session with no
-/// handshake before it closes the connection with no response, as Kafka's
-/// `Processor.processCompletedReceives` closes on any frame past the deadline
-/// that does not begin a re-authentication.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_expired_session_closes_on_a_bare_sasl_authenticate() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers reauth cases: plain expired session closes on a bare sasl authenticate"
+)]
+async fn bdd_verify_plain_expired_session_closes_on_a_bare_sasl_authenticate() {
     let mut session = Session::start(SaslMechanism::Plain, krabka_units::millis(300)).await;
     let initial = session.authenticate("alice").await.expect("authenticate");
     check!(initial.error_code == 0);
@@ -166,12 +165,23 @@ async fn plain_expired_session_closes_on_a_bare_sasl_authenticate() {
     session.broker.shutdown().await;
 }
 
-/// KIP-368: a `SaslHandshake` on an expired session that Kafka's one-second
-/// re-authentication interval refuses does not begin a re-authentication, so
-/// it closes the connection with no response rather than answering
-/// `ILLEGAL_SASL_STATE`.
+/// KIP-368: a `SaslAuthenticate` that arrives on an expired session with no
+/// handshake before it closes the connection with no response, as Kafka's
+/// `Processor.processCompletedReceives` closes on any frame past the deadline
+/// that does not begin a re-authentication.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/reauth_cases.feature",
+    name = "plain expired session closes on a bare sasl authenticate"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval() {
+async fn plain_expired_session_closes_on_a_bare_sasl_authenticate() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers reauth cases: plain expired session closes on a handshake inside the reauth interval"
+)]
+async fn bdd_verify_plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval() {
     let mut session = Session::start(SaslMechanism::Plain, krabka_units::millis(300)).await;
     let initial = session.authenticate("alice").await.expect("authenticate");
     check!(initial.error_code == 0);
@@ -193,6 +203,18 @@ async fn plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval(
     check!(harness::read_after_auth(&mut session.stream).await == 0);
     session.broker.shutdown().await;
 }
+
+/// KIP-368: a `SaslHandshake` on an expired session that Kafka's one-second
+/// re-authentication interval refuses does not begin a re-authentication, so
+/// it closes the connection with no response rather than answering
+/// `ILLEGAL_SASL_STATE`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/reauth_cases.feature",
+    name = "plain expired session closes on a handshake inside the reauth interval"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval() {}
 
 pub async fn same_principal_reopens(mechanism: SaslMechanism) {
     let mut session = Session::authenticated(mechanism).await;

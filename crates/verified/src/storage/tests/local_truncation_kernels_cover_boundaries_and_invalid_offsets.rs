@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use std::vec;
 
 krabka_macros::remote_segment_transition_matrix!(expected_transitions);
 
@@ -61,8 +63,11 @@ fn future_log_swap_requires_equal_frontiers() {
     assert2::assert!(!future_log_swap_admission(7, 8));
 }
 
-#[test]
-fn remote_segment_transition_matrix_matches_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "storage tests local truncation kernels cover boundaries and invalid offsets: remote segment transition matrix matches kafka"
+)]
+fn bdd_verify_remote_segment_transition_matrix_matches_kafka() {
     use RemoteSegmentLifecycle::{CopyFinished, CopyStarted, DeleteFinished, DeleteStarted};
 
     let states = [CopyStarted, CopyFinished, DeleteStarted, DeleteFinished];
@@ -78,8 +83,18 @@ fn remote_segment_transition_matrix_matches_kafka() {
     }
 }
 
-#[test]
-fn remote_partition_delete_transition_matrix_matches_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature",
+    name = "remote segment transition matrix matches kafka"
+)]
+fn remote_segment_transition_matrix_matches_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "storage tests local truncation kernels cover boundaries and invalid offsets: remote partition delete transition matrix matches kafka"
+)]
+fn bdd_verify_remote_partition_delete_transition_matrix_matches_kafka() {
     use RemotePartitionDeleteLifecycle::{Finished, Marked, Started};
 
     // Kafka's `RemotePartitionDeleteState.isValidTransition`, row =
@@ -99,6 +114,13 @@ fn remote_partition_delete_transition_matrix_matches_kafka() {
         }
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature",
+    name = "remote partition delete transition matrix matches kafka"
+)]
+fn remote_partition_delete_transition_matrix_matches_kafka() {}
 
 #[yare::parameterized(
     cannot_resurrect = {

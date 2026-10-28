@@ -353,11 +353,11 @@ fn describe_topic_configs(bootstrap: &str, topic: &str) -> String {
 /// Create a one-partition topic through the JVM `kafka-topics` tool.
 fn create_topic(bootstrap: &str, topic: &str) { create_console_topic_at(bootstrap, topic); }
 
-/// A distributed Connect worker boots against krabka, runs a `FileStream`
-/// source and sink over one topic, and the file survives the round trip.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn connect_distributed_worker_round_trips_a_file_through_krabka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm connect distributed: connect distributed worker round trips a file through krabka"
+)]
+async fn bdd_verify_connect_distributed_worker_round_trips_a_file_through_krabka() {
     let (broker, _dir) = jvm_acceptance::start_host_broker().await;
     let bootstrap = broker0_advertised();
 
@@ -402,3 +402,14 @@ async fn connect_distributed_worker_round_trips_a_file_through_krabka() {
     drop(worker);
     broker.shutdown().await;
 }
+
+/// A distributed Connect worker boots against krabka, runs a `FileStream`
+/// source and sink over one topic, and the file survives the round trip.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_connect_distributed.feature",
+    name = "connect distributed worker round trips a file through krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connect_distributed_worker_round_trips_a_file_through_krabka() {}

@@ -16,6 +16,14 @@ use {
     assert2::assert,
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance legacy compression: jvm legacy 010 compressed round trip"
+)]
+async fn bdd_verify_jvm_legacy_010_compressed_round_trip() {
+    compressed_round_trip("legacy-010-compressed-round-trip", "gzip").await;
+}
+
 /// Test 4: gzip-compressed legacy round-trip.
 ///
 /// A Kafka 0.10.1 console-producer with `compression.type=gzip`
@@ -25,10 +33,19 @@ use {
 /// the gzip path through `legacy_to_v2`, which decompresses the legacy
 /// batch and re-emits it as a v2 `RecordBatch` with the same compression
 /// marker.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_legacy_010_compressed_round_trip() {
-    compressed_round_trip("legacy-010-compressed-round-trip", "gzip").await;
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_legacy/compression.feature",
+    name = "jvm legacy 010 compressed round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_legacy_010_compressed_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance legacy compression: jvm legacy 010 snappy round trip")]
+async fn bdd_verify_jvm_legacy_010_snappy_round_trip() {
+    compressed_round_trip("legacy-010-snappy-round-trip", "snappy").await;
 }
 
 /// Snappy legacy-compression follow-up: snappy-compressed legacy round-trip.
@@ -43,11 +60,14 @@ async fn jvm_legacy_010_compressed_round_trip() {
 /// that reason the legacy-compression work stream deferred this test and exercised only gzip live.
 /// This test stays here as the documented follow-up. If it proves flaky in
 /// CI, pin a specific snappy-java version rather than delete it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn jvm_legacy_010_snappy_round_trip() {
-    compressed_round_trip("legacy-010-snappy-round-trip", "snappy").await;
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_legacy/compression.feature",
+    name = "jvm legacy 010 snappy round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_legacy_010_snappy_round_trip() {}
 
 async fn compressed_round_trip(topic: &str, compression: &str) {
     let (broker, _dir) = start_legacy_console_broker(topic).await;

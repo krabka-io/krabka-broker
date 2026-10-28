@@ -31,8 +31,9 @@ krabka_macros::topic_record_fixture!(single_partition_topic);
 /// inside the 30-second leader deadline.
 const FAST_ELECTION_TIMEOUT: Time = millis(200);
 
-#[test]
-fn public_snapshot_codec_round_trips_metadata() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("snapshot: public snapshot codec round trips metadata")]
+fn bdd_verify_public_snapshot_codec_round_trips_metadata() {
     let cid = Uuid::new_v4();
     let record = MetadataRecord::V1Topic(TopicRecord {
         name: "snapshot-codec".into(),
@@ -49,11 +50,16 @@ fn public_snapshot_codec_round_trips_metadata() {
     check!(MetadataImage::from_records(cid, &decoded) == image);
 }
 
-/// A broker-only observer installs a snapshot with its KIP-853 controls, so the
-/// image it rebuilds names the voters and their endpoints, as the image the
-/// controller wrote does. The restore path leaves the controls out.
-#[test]
-fn the_snapshot_image_keeps_the_quorum_controls() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/snapshot.feature",
+    name = "public snapshot codec round trips metadata"
+)]
+fn public_snapshot_codec_round_trips_metadata() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("snapshot: the snapshot image keeps the quorum controls")]
+fn bdd_verify_the_snapshot_image_keeps_the_quorum_controls() {
     use krabka_metadata::{
         KRaftVersionRange, KRaftVersionRecord, Voter, VoterEndpoint, VoterSet, VotersRecord,
     };
@@ -96,6 +102,16 @@ fn the_snapshot_image_keeps_the_quorum_controls() {
     );
 }
 
+/// A broker-only observer installs a snapshot with its KIP-853 controls, so the
+/// image it rebuilds names the voters and their endpoints, as the image the
+/// controller wrote does. The restore path leaves the controls out.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/snapshot.feature",
+    name = "the snapshot image keeps the quorum controls"
+)]
+fn the_snapshot_image_keeps_the_quorum_controls() {}
+
 async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
     let mut leader_watch = controller.watch_leader();
     time::timeout(Duration::from_secs(30), async {
@@ -107,8 +123,9 @@ async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
     .expect("no leader elected within 30s");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_then_restart_recovers_image() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("snapshot: snapshot then restart recovers image")]
+async fn bdd_verify_snapshot_then_restart_recovers_image() {
     let dir = TempDir::new().unwrap();
     let cid = Uuid::new_v4();
 
@@ -194,6 +211,14 @@ async fn snapshot_then_restart_recovers_image() {
         controller.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/snapshot.feature",
+    name = "snapshot then restart recovers image"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_then_restart_recovers_image() {}
 
 // A lagging follower catching up through the real KIP-595 `FetchSnapshot` is
 // covered by `kraft_engine_sim::lagging_follower_catches_up_via_snapshot`.

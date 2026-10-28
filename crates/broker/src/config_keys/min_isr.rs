@@ -157,20 +157,25 @@ mod tests {
         image
     }
 
-    #[yare::parameterized(
-        nothing_published = { None, None, 3, 1 },
-        cluster_default = { None, Some("2"), 3, 2 },
-        topic_override = { Some("3"), Some("2"), 3, 3 },
-        unparseable_value = { Some("many"), None, 3, 1 },
-        replication_factor_caps_topic = { Some("5"), None, 3, 3 },
-        replication_factor_caps_cluster = { None, Some("9"), 2, 2 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys min isr tests: the topic override wins then the cluster default then kafkas own for {example}"
     )]
-    fn the_topic_override_wins_then_the_cluster_default_then_kafkas_own(
-        topic_override: Option<&'static str>,
-        cluster_default: Option<&'static str>,
-        replication_factor: usize,
-        expected: usize,
+    fn bdd_verify_the_topic_override_wins_then_the_cluster_default_then_kafkas_own(
+        example: String,
     ) {
+        type Example = (Option<&'static str>, Option<&'static str>, usize, usize);
+        let (topic_override, cluster_default, replication_factor, expected): Example =
+            match example.as_str() {
+                "nothing published" => (None, None, 3, 1),
+                "cluster default" => (None, Some("2"), 3, 2),
+                "topic override" => (Some("3"), Some("2"), 3, 3),
+                "unparseable value" => (Some("many"), None, 3, 1),
+                "replication factor caps topic" => (Some("5"), None, 3, 3),
+                "replication factor caps cluster" => (None, Some("9"), 2, 2),
+                _ => panic!("unknown BDD example: {example}"),
+            };
+
         check!(
             effective_min_insync_replicas(
                 &image(topic_override, cluster_default),
@@ -178,6 +183,15 @@ mod tests {
                 replication_factor,
             ) == expected
         );
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/min_isr.feature",
+        name = "tests: the topic override wins then the cluster default then kafkas own"
+    )]
+    fn the_topic_override_wins_then_the_cluster_default_then_kafkas_own(example: String) {
+        let _ = example;
     }
 
     /// Node 2 carries a per-node `min.insync.replicas` where node 3 carries

@@ -692,21 +692,41 @@ mod tests {
         ]
     }
 
-    /// The key and value rules of Kafka's `ClientQuotaControlManager`
-    /// (#675), one row per rule.
-    #[test]
-    fn key_and_value_rules_match_kafkas_client_quota_control_manager() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter client quotas entries tests: key and value rules match kafkas client quota control manager"
+    )]
+    fn bdd_verify_key_and_value_rules_match_kafkas_client_quota_control_manager() {
         let mut rows = key_rules_set_and_remove_rows();
         rows.extend(key_rules_value_rows());
         run(rows);
     }
 
-    /// The entity rules of Kafka's `ClientQuotaControlManager` (#675): the
-    /// allowed types and names, and how a repeated key, entity or type ends.
-    #[test]
-    fn entity_rules_match_kafkas_client_quota_control_manager() {
+    /// The key and value rules of Kafka's `ClientQuotaControlManager`
+    /// (#675), one row per rule.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_client_quotas/entries.feature",
+        name = "tests: key and value rules match kafkas client quota control manager"
+    )]
+    fn key_and_value_rules_match_kafkas_client_quota_control_manager() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter client quotas entries tests: entity rules match kafkas client quota control manager"
+    )]
+    fn bdd_verify_entity_rules_match_kafkas_client_quota_control_manager() {
         let mut rows = entity_rules_name_rows();
         rows.extend(entity_rules_duplicate_rows());
         run(rows);
     }
+
+    /// The entity rules of Kafka's `ClientQuotaControlManager` (#675): the
+    /// allowed types and names, and how a repeated key, entity or type ends.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_client_quotas/entries.feature",
+        name = "tests: entity rules match kafkas client quota control manager"
+    )]
+    fn entity_rules_match_kafkas_client_quota_control_manager() {}
 }

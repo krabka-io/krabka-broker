@@ -501,19 +501,52 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        leader_restart_on_the_controller = { FaultKind::Restart { graceful: false }, Target::Leader, "controller", true },
-        leader_restart_on_a_leader = { FaultKind::Restart { graceful: false }, Target::Leader, "leader", false },
-        any_failover_pause_on_the_controller = { FaultKind::Pause { intends_failover: true }, Target::Broker(0), "controller", true },
-        quiet_pause_on_the_controller = { FaultKind::Pause { intends_failover: false }, Target::Broker(0), "controller", false },
-        controller_restart_measured_once = { FaultKind::Restart { graceful: true }, Target::Controller, "controller", true },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract executor tests: a fault that lands on the controller is measured for its failover for {example}"
     )]
-    fn a_fault_that_lands_on_the_controller_is_measured_for_its_failover(
-        kind: FaultKind,
-        target: Target,
-        role: &str,
-        measured: bool,
+    fn bdd_verify_a_fault_that_lands_on_the_controller_is_measured_for_its_failover(
+        example: String,
     ) {
+        type Example<'a> = (FaultKind, Target, &'a str, bool);
+        let (kind, target, role, measured): Example<'_> = match example.as_str() {
+            "leader restart on the controller" => (
+                FaultKind::Restart { graceful: false },
+                Target::Leader,
+                "controller",
+                true,
+            ),
+            "leader restart on a leader" => (
+                FaultKind::Restart { graceful: false },
+                Target::Leader,
+                "leader",
+                false,
+            ),
+            "any failover pause on the controller" => (
+                FaultKind::Pause {
+                    intends_failover: true,
+                },
+                Target::Broker(0),
+                "controller",
+                true,
+            ),
+            "quiet pause on the controller" => (
+                FaultKind::Pause {
+                    intends_failover: false,
+                },
+                Target::Broker(0),
+                "controller",
+                false,
+            ),
+            "controller restart measured once" => (
+                FaultKind::Restart { graceful: true },
+                Target::Controller,
+                "controller",
+                true,
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let checks = checks_for(&fault(kind, target), role);
         let failovers = checks
             .iter()
@@ -522,19 +555,43 @@ mod tests {
         check!(failovers == usize::from(measured));
     }
 
-    #[yare::parameterized(
-        leader_failover = { RecoveryCheck::LeaderFailover, true },
-        controller_failover = { RecoveryCheck::ControllerFailover, true },
-        isr_rejoin = { RecoveryCheck::IsrRejoin, false },
-        catch_up = { RecoveryCheck::CatchUpAfterPause, false },
-        certificate_served = { RecoveryCheck::CertificateServed, true },
-        reassignment_complete = { RecoveryCheck::ReassignmentComplete, true },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/executor.feature",
+        name = "tests: a fault that lands on the controller is measured for its failover"
     )]
-    fn a_failover_runs_from_the_injection_and_a_rejoin_from_the_cleanup(
-        check: RecoveryCheck,
-        from_injection: bool,
+    fn a_fault_that_lands_on_the_controller_is_measured_for_its_failover(example: String) {
+        let _ = example;
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract executor tests: a failover runs from the injection and a rejoin from the cleanup for {example}"
+    )]
+    fn bdd_verify_a_failover_runs_from_the_injection_and_a_rejoin_from_the_cleanup(
+        example: String,
     ) {
+        type Example = (RecoveryCheck, bool);
+        let (check, from_injection): Example = match example.as_str() {
+            "leader failover" => (RecoveryCheck::LeaderFailover, true),
+            "controller failover" => (RecoveryCheck::ControllerFailover, true),
+            "isr rejoin" => (RecoveryCheck::IsrRejoin, false),
+            "catch up" => (RecoveryCheck::CatchUpAfterPause, false),
+            "certificate served" => (RecoveryCheck::CertificateServed, true),
+            "reassignment complete" => (RecoveryCheck::ReassignmentComplete, true),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(measured_from_injection(check) == from_injection);
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/executor.feature",
+        name = "tests: a failover runs from the injection and a rejoin from the cleanup"
+    )]
+    fn a_failover_runs_from_the_injection_and_a_rejoin_from_the_cleanup(example: String) {
+        let _ = example;
     }
 
     /// Partition 0 of `t`, led by `leader`.
@@ -561,20 +618,25 @@ mod tests {
         Unmeasurable,
     }
 
-    #[yare::parameterized(
-        unknown_led_is_never_failed_over = { None, Some((2, 2)), Seen::Unmeasurable },
-        unknown_led_with_no_answer = { None, None, Seen::Unmeasurable },
-        nothing_led_has_nothing_to_move = { Some(&[]), Some((2, 1)), Seen::FailedOver },
-        led_partition_moved = { Some(&[0]), Some((2, 2)), Seen::FailedOver },
-        led_partition_still_on_the_target = { Some(&[0]), Some((2, 1)), Seen::Waiting },
-        only_the_target_answers = { Some(&[0]), Some((1, 2)), Seen::Waiting },
-        nobody_answers = { Some(&[0]), None, Seen::Waiting },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract executor tests: a leader failover is seen only against what the target is known to have led for {example}"
     )]
-    fn a_leader_failover_is_seen_only_against_what_the_target_is_known_to_have_led(
-        led: Option<&[i32]>,
-        answer: Option<(i32, i32)>,
-        seen: Seen,
+    fn bdd_verify_a_leader_failover_is_seen_only_against_what_the_target_is_known_to_have_led(
+        example: String,
     ) {
+        type Example<'a> = (Option<&'a [i32]>, Option<(i32, i32)>, Seen);
+        let (led, answer, seen): Example<'_> = match example.as_str() {
+            "unknown led is never failed over" => (None, Some((2, 2)), Seen::Unmeasurable),
+            "unknown led with no answer" => (None, None, Seen::Unmeasurable),
+            "nothing led has nothing to move" => (Some(&[]), Some((2, 1)), Seen::FailedOver),
+            "led partition moved" => (Some(&[0]), Some((2, 2)), Seen::FailedOver),
+            "led partition still on the target" => (Some(&[0]), Some((2, 1)), Seen::Waiting),
+            "only the target answers" => (Some(&[0]), Some((1, 2)), Seen::Waiting),
+            "nobody answers" => (Some(&[0]), None, Seen::Waiting),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let led = led.map(partitions);
         let states = answer.map(|(from, leader)| (from, leading(leader)));
         let outcome = leader_failover(
@@ -590,5 +652,16 @@ mod tests {
             Err(Waiting::Unmeasurable(_)) => Seen::Unmeasurable,
         };
         check!(outcome == seen);
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/executor.feature",
+        name = "tests: a leader failover is seen only against what the target is known to have led"
+    )]
+    fn a_leader_failover_is_seen_only_against_what_the_target_is_known_to_have_led(
+        example: String,
+    ) {
+        let _ = example;
     }
 }

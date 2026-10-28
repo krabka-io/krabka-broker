@@ -72,8 +72,9 @@ async fn probe(addr: SocketAddr, payload: &[u8]) -> io::Result<Vec<u8>> {
     round_trip(&mut stream, payload).await
 }
 
-#[tokio::test]
-async fn relay_forwards_bytes_to_the_upstream() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: relay forwards bytes to the upstream")]
+async fn bdd_verify_relay_forwards_bytes_to_the_upstream() {
     let upstream = start_echo().await;
     let relay = Relay::start(upstream).await;
 
@@ -87,8 +88,17 @@ async fn relay_forwards_bytes_to_the_upstream() {
     relay.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "relay forwards bytes to the upstream"
+)]
 #[tokio::test]
-async fn cut_tears_down_an_open_connection_and_stops_new_ones() {
+async fn relay_forwards_bytes_to_the_upstream() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: cut tears down an open connection and stops new ones")]
+async fn bdd_verify_cut_tears_down_an_open_connection_and_stops_new_ones() {
     let upstream = start_echo().await;
     let relay = Relay::start(upstream).await;
 
@@ -117,8 +127,17 @@ async fn cut_tears_down_an_open_connection_and_stops_new_ones() {
     relay.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "cut tears down an open connection and stops new ones"
+)]
 #[tokio::test]
-async fn heal_restores_forwarding_without_a_restart() {
+async fn cut_tears_down_an_open_connection_and_stops_new_ones() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: heal restores forwarding without a restart")]
+async fn bdd_verify_heal_restores_forwarding_without_a_restart() {
     let upstream = start_echo().await;
     let relay = Relay::start(upstream).await;
     let addr = relay.addr();
@@ -138,8 +157,17 @@ async fn heal_restores_forwarding_without_a_restart() {
     relay.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "heal restores forwarding without a restart"
+)]
 #[tokio::test]
-async fn shutdown_ends_the_relay_with_a_connection_still_open() {
+async fn heal_restores_forwarding_without_a_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: shutdown ends the relay with a connection still open")]
+async fn bdd_verify_shutdown_ends_the_relay_with_a_connection_still_open() {
     let upstream = start_echo().await;
     let relay = Relay::start(upstream).await;
     let addr = relay.addr();
@@ -160,8 +188,17 @@ async fn shutdown_ends_the_relay_with_a_connection_still_open() {
     assert!(let Err(_) = &reconnect, "the listener must be gone once shutdown returns");
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "shutdown ends the relay with a connection still open"
+)]
 #[tokio::test]
-async fn cut_and_heal_work_through_a_shared_relay() {
+async fn shutdown_ends_the_relay_with_a_connection_still_open() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: cut and heal work through a shared relay")]
+async fn bdd_verify_cut_and_heal_work_through_a_shared_relay() {
     // The partition tests hold the relay behind an `Arc` and cut it from a task
     // that is not the one that built it, which is why `cut`/`heal` take `&self`.
     let upstream = start_echo().await;
@@ -188,8 +225,17 @@ async fn cut_and_heal_work_through_a_shared_relay() {
         .await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "cut and heal work through a shared relay"
+)]
 #[tokio::test]
-async fn site_link_cuts_and_heals_both_listeners_together() {
+async fn cut_and_heal_work_through_a_shared_relay() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("support relay: site link cuts and heals both listeners together")]
+async fn bdd_verify_site_link_cuts_and_heals_both_listeners_together() {
     let controller_upstream = start_echo().await;
     let client_upstream = start_echo().await;
     let site = SiteLink::start(controller_upstream, client_upstream).await;
@@ -233,3 +279,11 @@ async fn site_link_cuts_and_heals_both_listeners_together() {
 
     site.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/support_relay.feature",
+    name = "site link cuts and heals both listeners together"
+)]
+#[tokio::test]
+async fn site_link_cuts_and_heals_both_listeners_together() {}

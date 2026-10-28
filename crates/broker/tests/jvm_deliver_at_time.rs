@@ -276,9 +276,11 @@ fn jvm_console_consume(bootstrap: &str) -> Vec<String> {
 
 // A stock JVM producer schedules a record and a stock JVM consumer waits for
 // it, with no client change on either side.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm deliver at time: a stock jvm client schedules and waits with no change"
+)]
+async fn bdd_verify_a_stock_jvm_client_schedules_and_waits_with_no_change() {
     let (broker, _dir) = start_host_broker().await;
     // The name the broker advertises, which is what a container resolves
     // through `--add-host=host.docker.internal:host-gateway`.
@@ -328,3 +330,12 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
 
     broker.shutdown().await;
 }
+
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_deliver_at_time.feature",
+    name = "a stock jvm client schedules and waits with no change"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {}

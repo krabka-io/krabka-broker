@@ -249,22 +249,21 @@ async fn scheduled_remote_retention_holds_unreadable_activation_evidence() {
     check!(rsm_impl.deletes_attempted.load(Ordering::Relaxed) == 0);
 }
 
-/// Kafka's `isSegmentBreachedByRetentionTime`: a segment goes when its
-/// `maxTimestampMs` is strictly below `cleanupUntilMs = now - retention.ms`,
-/// whatever that timestamp is, and there is no time axis at all while
-/// `cleanupUntilMs` is negative. `now` is 10 000 ms throughout.
-#[yare::parameterized(
-    unknown_timestamp = { -1, 1, true },
-    below_cutoff = { 8_999, 1_000, true },
-    on_cutoff = { 9_000, 1_000, false },
-    window_longer_than_clock = { -1, 10_001, false },
-    window_at_clock = { -1, 10_000, true },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "remote log manager remote retention tests: remote time retention follows kafkas cleanup until for {example}"
 )]
-fn remote_time_retention_follows_kafkas_cleanup_until(
-    max_ts: i64,
-    retention_ms: u32,
-    deleted: bool,
-) {
+fn bdd_verify_remote_time_retention_follows_kafkas_cleanup_until(example: String) {
+    type Example = (i64, u32, bool);
+    let (max_ts, retention_ms, deleted): Example = match example.as_str() {
+        "unknown timestamp" => (-1, 1, true),
+        "below cutoff" => (8_999, 1_000, true),
+        "on cutoff" => (9_000, 1_000, false),
+        "window longer than clock" => (-1, 10_001, false),
+        "window at clock" => (-1, 10_000, true),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let segments = vec![synth_remote_md(10, 0, 9, max_ts, 100)];
     let out = remote_retention_eviction_set(
         ArchiveMode::Mutable.into(),
@@ -280,6 +279,17 @@ fn remote_time_retention_follows_kafkas_cleanup_until(
         "{max_ts}, {retention_ms}"
     );
 }
+
+/// Kafka's `isSegmentBreachedByRetentionTime`: a segment goes when its
+/// `maxTimestampMs` is strictly below `cleanupUntilMs = now - retention.ms`,
+/// whatever that timestamp is, and there is no time axis at all while
+/// `cleanupUntilMs` is negative. `now` is 10 000 ms throughout.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/remote_log_manager/remote_retention/tests.feature",
+    name = "remote time retention follows kafkas cleanup until"
+)]
+fn remote_time_retention_follows_kafkas_cleanup_until(example: String) { let _ = example; }
 
 /// Kafka's `buildRetentionSizeData` counts the local bytes the remote tier
 /// does not hold yet (`onlyLocalLogSegmentsSize`) toward `retention.bytes`,

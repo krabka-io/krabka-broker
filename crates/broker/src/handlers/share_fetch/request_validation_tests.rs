@@ -171,8 +171,11 @@ async fn dispatch_share_fetch(
     .expect("handle share fetch")
 }
 
-#[tokio::test]
-async fn group_and_member_ids_are_checked_in_kafka_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers share fetch request validation tests: group and member ids are checked in kafka order"
+)]
+async fn bdd_verify_group_and_member_ids_are_checked_in_kafka_order() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
     krabka_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
@@ -218,6 +221,14 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
     assert!(actual == expected);
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/share_fetch/request_validation_tests.feature",
+    name = "group and member ids are checked in kafka order"
+)]
+#[tokio::test]
+async fn group_and_member_ids_are_checked_in_kafka_order() {}
 
 /// Kafka's `ShareFetch` does not look the member up in the group
 /// coordinator, so a group with a live share actor that does not know the

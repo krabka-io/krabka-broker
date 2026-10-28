@@ -55,11 +55,9 @@ use {
 // Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Test 1: `AlterClientQuotas` sets (ip=127.0.0.1)
-/// `connection_creation_rate=2.0`. The value must then appear in the metadata
-/// image and in `DescribeClientQuotas`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ip_quota_alter_then_describe_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("ip quotas: ip quota alter then describe round trip")]
+async fn bdd_verify_ip_quota_alter_then_describe_round_trip() {
     let (handle, _dir, addr) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
 
@@ -109,6 +107,23 @@ async fn ip_quota_alter_then_describe_round_trip() {
     );
 }
 
+/// Test 1: `AlterClientQuotas` sets (ip=127.0.0.1)
+/// `connection_creation_rate=2.0`. The value must then appear in the metadata
+/// image and in `DescribeClientQuotas`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/ip_quotas.feature",
+    name = "ip quota alter then describe round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ip_quota_alter_then_describe_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("ip quotas: connection creation rate closes the throttled connection")]
+async fn bdd_verify_connection_creation_rate_closes_the_throttled_connection() {
+    closes_the_second_connection_from_loopback("127.0.0.1").await;
+}
+
 /// Test 2: sets rate=1 connection per second for `127.0.0.1` through
 /// `submit_metadata_record_for_test`, because a PLAINTEXT cluster has no SASL
 /// admin path. Kafka's acceptor (`SocketServer.Acceptor.accept`) never serves
@@ -121,9 +136,21 @@ async fn ip_quota_alter_then_describe_round_trip() {
 /// | first from `127.0.0.1` | served, `ApiVersions` answers |
 /// | second from `127.0.0.1`, inside the window | closed without a response |
 /// | from `127.0.0.2`, while the second is held | served with no added delay |
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/ip_quotas.feature",
+    name = "connection creation rate closes the throttled connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn connection_creation_rate_closes_the_throttled_connection() {
-    closes_the_second_connection_from_loopback("127.0.0.1").await;
+async fn connection_creation_rate_closes_the_throttled_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "ip quotas: connection creation rate matches another spelling of the address"
+)]
+async fn bdd_verify_connection_creation_rate_matches_another_spelling_of_the_address() {
+    closes_the_second_connection_from_loopback("::ffff:127.0.0.1").await;
+    closes_the_second_connection_from_loopback("127.1").await;
 }
 
 /// Test 2, for an entity that spells the loopback address another way.
@@ -131,11 +158,13 @@ async fn connection_creation_rate_closes_the_throttled_connection() {
 /// record and matches it with the connection's address, so an IPv4-mapped IPv6
 /// literal, and `127.1`, which Java reads as `127.0.0.1`, throttle `127.0.0.1`
 /// as the canonical spelling does (#1214).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/ip_quotas.feature",
+    name = "connection creation rate matches another spelling of the address"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn connection_creation_rate_matches_another_spelling_of_the_address() {
-    closes_the_second_connection_from_loopback("::ffff:127.0.0.1").await;
-    closes_the_second_connection_from_loopback("127.1").await;
-}
+async fn connection_creation_rate_matches_another_spelling_of_the_address() {}
 
 /// Sets `connection_creation_rate=1` on the `ip` entity `entity_name`, and
 /// checks that a second connection from `127.0.0.1` is closed without a
@@ -243,10 +272,9 @@ async fn closes_the_second_connection_from_loopback(entity_name: &str) {
     drop((first, other));
 }
 
-/// Test 3: no `connection_creation_rate` quota is configured. The test opens 5
-/// connections and asserts a wall time < 500ms, the unthrottled baseline.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unthrottled_ip_unaffected() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("ip quotas: unthrottled ip unaffected")]
+async fn bdd_verify_unthrottled_ip_unaffected() {
     let (_handle, _dir, addr) = start_single_broker_plaintext().await;
     // No connection_creation_rate quota configured.
 
@@ -265,11 +293,19 @@ async fn unthrottled_ip_unaffected() {
     );
 }
 
-/// M-2: a per-IP connection cap refuses connections past the limit, and
-/// `ConnectionGuard::drop` frees the slot once an existing connection
-/// closes.
+/// Test 3: no `connection_creation_rate` quota is configured. The test opens 5
+/// connections and asserts a wall time < 500ms, the unthrottled baseline.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/ip_quotas.feature",
+    name = "unthrottled ip unaffected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
+async fn unthrottled_ip_unaffected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("ip quotas: max connections per ip refuses excess and frees on close")]
+async fn bdd_verify_max_connections_per_ip_refuses_excess_and_frees_on_close() {
     let (_handle, _dir, addr) = start_single_broker_plaintext_with_conn_caps(usize::MAX, 1).await;
 
     let av_body = {
@@ -332,3 +368,14 @@ async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
         time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// M-2: a per-IP connection cap refuses connections past the limit, and
+/// `ConnectionGuard::drop` frees the slot once an existing connection
+/// closes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/ip_quotas.feature",
+    name = "max connections per ip refuses excess and frees on close"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {}

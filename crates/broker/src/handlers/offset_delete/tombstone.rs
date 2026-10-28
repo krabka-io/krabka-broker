@@ -84,19 +84,39 @@ mod tests {
         check!(log.batches().await.is_empty());
     }
 
-    #[yare::parameterized(
-        network_exception = { codes::NETWORK_EXCEPTION, codes::COORDINATOR_LOAD_IN_PROGRESS },
-        unknown_topic = { codes::UNKNOWN_TOPIC_OR_PARTITION, codes::COORDINATOR_NOT_AVAILABLE },
-        corrupt_message = { codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE },
-        not_enough_replicas = { codes::NOT_ENOUGH_REPLICAS, codes::COORDINATOR_NOT_AVAILABLE },
-        request_timed_out = { codes::REQUEST_TIMED_OUT, codes::COORDINATOR_NOT_AVAILABLE },
-        not_leader = { codes::NOT_LEADER_OR_FOLLOWER, codes::NOT_COORDINATOR },
-        kafka_storage_error = { codes::KAFKA_STORAGE_ERROR, codes::NOT_COORDINATOR },
-        message_too_large = { codes::MESSAGE_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR },
-        record_list_too_large = { codes::RECORD_LIST_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR },
-        unknown_server_error = { codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers offset delete tombstone tests: write errors map as kafka handle operation exception for {example}"
     )]
-    fn write_errors_map_as_kafka_handle_operation_exception(write: i16, want: i16) {
+    fn bdd_verify_write_errors_map_as_kafka_handle_operation_exception(example: String) {
+        type Example = (i16, i16);
+        let (write, want): Example = match example.as_str() {
+            "network exception" => (
+                codes::NETWORK_EXCEPTION,
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+            "unknown topic" => (
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                codes::COORDINATOR_NOT_AVAILABLE,
+            ),
+            "corrupt message" => (codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE),
+            "not enough replicas" => (codes::NOT_ENOUGH_REPLICAS, codes::COORDINATOR_NOT_AVAILABLE),
+            "request timed out" => (codes::REQUEST_TIMED_OUT, codes::COORDINATOR_NOT_AVAILABLE),
+            "not leader" => (codes::NOT_LEADER_OR_FOLLOWER, codes::NOT_COORDINATOR),
+            "kafka storage error" => (codes::KAFKA_STORAGE_ERROR, codes::NOT_COORDINATOR),
+            "message too large" => (codes::MESSAGE_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR),
+            "record list too large" => (codes::RECORD_LIST_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR),
+            "unknown server error" => (codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(operation_error_code(write) == want, "{write}");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/offset_delete/tombstone.feature",
+        name = "tests: write errors map as kafka handle operation exception"
+    )]
+    fn write_errors_map_as_kafka_handle_operation_exception(example: String) { let _ = example; }
 }

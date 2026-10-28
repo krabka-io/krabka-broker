@@ -42,8 +42,9 @@ fn the_error_table_records_the_image_the_build_pins() {
     );
 }
 
-#[test]
-fn every_kafka_range_constant_appears_in_the_kafka_table() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("codes tests: every kafka range constant appears in the kafka table")]
+fn bdd_verify_every_kafka_range_constant_appears_in_the_kafka_table() {
     for wire in KAFKA_RANGE_CODES {
         let NamedCode { name, code } = wire;
         let kafka = KAFKA_ERROR_TABLE
@@ -52,6 +53,13 @@ fn every_kafka_range_constant_appears_in_the_kafka_table() {
         assert!(kafka == Some(wire), "{name} = {code}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/codes/tests.feature",
+    name = "every kafka range constant appears in the kafka table"
+)]
+fn every_kafka_range_constant_appears_in_the_kafka_table() {}
 
 /// The codes Kafka trunk adds after the 4.3.1 table ends, as
 /// `org.apache.kafka.common.protocol.Errors` assigns them at trunk
@@ -118,8 +126,9 @@ fn no_two_error_code_constants_collide() {
     }
 }
 
-#[test]
-fn krabka_private_codes_sit_above_the_whole_kafka_table() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("codes tests: krabka private codes sit above the whole kafka table")]
+fn bdd_verify_krabka_private_codes_sit_above_the_whole_kafka_table() {
     let highest_kafka = KAFKA_ERROR_TABLE
         .iter()
         .map(|kafka| kafka.code)
@@ -136,6 +145,13 @@ fn krabka_private_codes_sit_above_the_whole_kafka_table() {
         assert!(*code > highest_trunk, "{name}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/codes/tests.feature",
+    name = "krabka private codes sit above the whole kafka table"
+)]
+fn krabka_private_codes_sit_above_the_whole_kafka_table() {}
 
 #[yare::parameterized(
     unsupported_api = {

@@ -21,8 +21,9 @@ struct ClusterId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::KafkaUuid)]
 struct DirectoryId(u32);
 
-#[test]
-fn display_obeys_width_alignment_fill_and_precision() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kafka uuid: display obeys width alignment fill and precision")]
+fn bdd_verify_display_obeys_width_alignment_fill_and_precision() {
     let cluster = ClusterId(7);
     let directory = DirectoryId(7);
     assert!(cluster.to_string() == "kafka-7");
@@ -33,8 +34,16 @@ fn display_obeys_width_alignment_fill_and_precision() {
     assert!(format!("{directory:.5}") == "kafka");
 }
 
-#[test]
-fn parsing_and_serde_preserve_the_local_codec_contract() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_uuid.feature",
+    name = "display obeys width alignment fill and precision"
+)]
+fn display_obeys_width_alignment_fill_and_precision() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kafka uuid: parsing and serde preserve the local codec contract")]
+fn bdd_verify_parsing_and_serde_preserve_the_local_codec_contract() {
     assert!("kafka-7".parse::<ClusterId>() == Ok(ClusterId(7)));
     assert!("kafka-9".parse::<DirectoryId>() == Ok(DirectoryId(9)));
     assert!("hyphenated".parse::<ClusterId>() == Err("expected Kafka UUID"));
@@ -47,3 +56,10 @@ fn parsing_and_serde_preserve_the_local_codec_contract() {
     let error = serde_json::from_str::<DirectoryId>(r#""kafka-many""#).unwrap_err();
     assert!(error.to_string().starts_with("invalid Kafka UUID"));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kafka_uuid.feature",
+    name = "parsing and serde preserve the local codec contract"
+)]
+fn parsing_and_serde_preserve_the_local_codec_contract() {}

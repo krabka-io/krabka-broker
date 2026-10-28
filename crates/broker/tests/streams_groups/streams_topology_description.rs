@@ -109,8 +109,11 @@ async fn describe_with_description(client: &Client) -> DescribedGroup {
     group
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_member_is_asked_and_its_push_is_described() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams groups streams topology description: one member is asked and its push is described"
+)]
+async fn bdd_verify_one_member_is_asked_and_its_push_is_described() {
     let GroupCoordinatorBoot {
         broker: _broker,
         bootstrap,
@@ -184,10 +187,19 @@ async fn one_member_is_asked_and_its_push_is_described() {
     }
 }
 
-/// `DeleteGroups` drops what the plugin held, so the group that the next
-/// join creates is asked again and describes nothing stored.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_topology_description.feature",
+    name = "one member is asked and its push is described"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_and_recreated_group_is_asked_again() {
+async fn one_member_is_asked_and_its_push_is_described() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams groups streams topology description: a deleted and recreated group is asked again"
+)]
+async fn bdd_verify_a_deleted_and_recreated_group_is_asked_again() {
     let booted = Box::pin(boot_with_plugin()).await;
     let client = connect(&booted.bootstrap).await;
     finalize_streams_version(&client).await;
@@ -250,3 +262,13 @@ async fn a_deleted_and_recreated_group_is_asked_again() {
         ) == (1, None)
     );
 }
+
+/// `DeleteGroups` drops what the plugin held, so the group that the next
+/// join creates is asked again and describes nothing stored.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_topology_description.feature",
+    name = "a deleted and recreated group is asked again"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_and_recreated_group_is_asked_again() {}

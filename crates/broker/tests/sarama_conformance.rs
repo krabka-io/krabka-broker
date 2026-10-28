@@ -847,9 +847,11 @@ fn group_describe_shows_commit(offsets: &[CommittedOffset]) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "sarama conformance: sarama round trip and cluster views agree with krabka"
+)]
+async fn bdd_verify_sarama_round_trip_and_cluster_views_agree_with_krabka() {
     let (broker, _dir) = start_host_broker().await;
     let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
         .await
@@ -915,3 +917,12 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
 
     broker.shutdown().await;
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/sarama_conformance.feature",
+    name = "sarama round trip and cluster views agree with krabka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {}

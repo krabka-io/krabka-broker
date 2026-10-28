@@ -38,8 +38,11 @@ use {
 /// reading no reconcile interrupted.
 const HOLD_ATTEMPTS: usize = 20;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list offsets isolation high watermark: latest answers the high watermark not the unreplicated log end"
+)]
+async fn bdd_verify_latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
     const TOPIC: &str = "list-offsets-isolation-unreplicated";
 
     let p = support::start().await;
@@ -101,3 +104,11 @@ async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
     .expect("producer close");
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_offsets_isolation/high_watermark.feature",
+    name = "latest answers the high watermark not the unreplicated log end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {}

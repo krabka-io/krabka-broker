@@ -1,7 +1,12 @@
+#[cfg(test)]
+use std::vec;
 use {super::*, assert2::assert};
 
-#[test]
-fn sequence_arithmetic_matches_kafka_wraparound() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "producer tests sequence arithmetic matches kafka wraparound: sequence arithmetic matches kafka wraparound"
+)]
+fn bdd_verify_sequence_arithmetic_matches_kafka_wraparound() {
     // (sequence, step, incremented, decremented), from Kafka's
     // `DefaultRecordBatch.incrementSequence` / `decrementSequence`.
     let cases = [
@@ -26,8 +31,18 @@ fn sequence_arithmetic_matches_kafka_wraparound() {
     }
 }
 
-#[test]
-fn producer_decision_covers_all_outcomes() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature",
+    name = "sequence arithmetic matches kafka wraparound"
+)]
+fn sequence_arithmetic_matches_kafka_wraparound() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "producer tests sequence arithmetic matches kafka wraparound: producer decision covers all outcomes"
+)]
+fn bdd_verify_producer_decision_covers_all_outcomes() {
     // (label, entry, epoch, base sequence, last offset delta, decision)
     let cases = [
         (
@@ -136,11 +151,18 @@ fn producer_decision_covers_all_outcomes() {
     }
 }
 
-/// Kafka trunk's KAFKA-15591 rule, which Kafka 4.3.1 does not have: a
-/// producer with no entry must start at sequence 0 on a partition that has
-/// never held a record. Every other input keeps the 4.3.1 decision.
-#[test]
-fn a_producer_with_no_state_on_an_empty_log_starts_at_zero_under_trunk_rules() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature",
+    name = "producer decision covers all outcomes"
+)]
+fn producer_decision_covers_all_outcomes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "producer tests sequence arithmetic matches kafka wraparound: a producer with no state on an empty log starts at zero under trunk rules"
+)]
+fn bdd_verify_a_producer_with_no_state_on_an_empty_log_starts_at_zero_under_trunk_rules() {
     // (label, entry, base sequence, log empty, trunk rules, decision)
     let cases = [
         (
@@ -216,8 +238,21 @@ fn a_producer_with_no_state_on_an_empty_log_starts_at_zero_under_trunk_rules() {
     }
 }
 
-#[test]
-fn sequence_continues_across_wraparound() {
+#[cfg(test)]
+/// Kafka trunk's KAFKA-15591 rule, which Kafka 4.3.1 does not have: a
+/// producer with no entry must start at sequence 0 on a partition that has
+/// never held a record. Every other input keeps the 4.3.1 decision.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature",
+    name = "a producer with no state on an empty log starts at zero under trunk rules"
+)]
+fn a_producer_with_no_state_on_an_empty_log_starts_at_zero_under_trunk_rules() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "producer tests sequence arithmetic matches kafka wraparound: sequence continues across wraparound"
+)]
+fn bdd_verify_sequence_continues_across_wraparound() {
     let entry = ProducerEntryFacts {
         epoch: 0,
         last_sequence: i32::MAX,
@@ -239,3 +274,10 @@ fn sequence_continues_across_wraparound() {
             == ProducerDecision::OutOfOrder
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature",
+    name = "sequence continues across wraparound"
+)]
+fn sequence_continues_across_wraparound() {}

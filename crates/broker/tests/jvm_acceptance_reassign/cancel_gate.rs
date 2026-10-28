@@ -225,11 +225,11 @@ async fn approve_a_cancel(bootstrap: &str) {
     );
 }
 
-/// The gate off, then on and unapproved, then on and approved -- the same
-/// `--cancel` each time.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign cancel gate: reassign partitions cancel reports the break glass gate to the jvm tool"
+)]
+async fn bdd_verify_reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
     let (h1, h2, h3, cfg1, cfg2, cfg3, _d1, _d2, _d3) = Box::pin(
         start_three_broker_sasl_plaintext_jvm_cluster()
             .admin(ADMIN.0)
@@ -357,6 +357,17 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         handle.shutdown().await;
     }
 }
+
+/// The gate off, then on and unapproved, then on and approved -- the same
+/// `--cancel` each time.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/cancel_gate.feature",
+    name = "reassign partitions cancel reports the break glass gate to the jvm tool"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {}
 
 /// The brokers still live while one target is offline, and the plan whose
 /// reassignment is in flight.

@@ -148,23 +148,11 @@ async fn create_topic(client: &Client, name: &str) {
     assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");
 }
 
-/// PROACTIVE KIP-320 truncation detection.
-///
-/// See the module docs for the full rationale. The discriminating assertions
-/// are these:
-///   * `poll()` returns `ConsumerError::LogTruncation` with `fetch_offset = 4`,
-///     the consumer's pre-divergence position, and `safe_offset = 2`, the
-///     OFLE-derived epoch-0 boundary and NOT a fetch `log_start_offset`;
-///   * the broker's OFLE request counter strictly increased across the
-///     truncating poll, which proves that the validate pass sent the RPC.
-///
-/// The honesty check was verified by hand and then reverted. If either
-/// `validate_positions` or the `awaiting_validation` flagging in
-/// `refresh_leader_epochs` does nothing, this test FAILS, because no
-/// truncation is reported and the counter does not change. The test is
-/// therefore discriminating.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consumer_proactively_validates_and_surfaces_truncation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "consumer proactive validation: consumer proactively validates and surfaces truncation"
+)]
+async fn bdd_verify_consumer_proactively_validates_and_surfaces_truncation() {
     let (_dir, broker) = standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
     let topic = "proactive-trunc";
@@ -374,3 +362,26 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     consumer.close().await.unwrap();
     broker.shutdown().await;
 }
+
+/// PROACTIVE KIP-320 truncation detection.
+///
+/// See the module docs for the full rationale. The discriminating assertions
+/// are these:
+///   * `poll()` returns `ConsumerError::LogTruncation` with `fetch_offset = 4`,
+///     the consumer's pre-divergence position, and `safe_offset = 2`, the
+///     OFLE-derived epoch-0 boundary and NOT a fetch `log_start_offset`;
+///   * the broker's OFLE request counter strictly increased across the
+///     truncating poll, which proves that the validate pass sent the RPC.
+///
+/// The honesty check was verified by hand and then reverted. If either
+/// `validate_positions` or the `awaiting_validation` flagging in
+/// `refresh_leader_epochs` does nothing, this test FAILS, because no
+/// truncation is reported and the counter does not change. The test is
+/// therefore discriminating.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_proactive_validation.feature",
+    name = "consumer proactively validates and surfaces truncation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_proactively_validates_and_surfaces_truncation() {}

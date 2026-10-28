@@ -86,15 +86,9 @@ async fn produce_one(client: &Client, topic: &str, topic_id: Uuid, partition: i3
     }
 }
 
-/// A native `Consumer` against a 3-broker rf=1 cluster must fetch records from
-/// every partition. This includes partitions whose leader, and sole replica, is
-/// NOT the broker it bootstrapped at.
-///
-/// With rf=1 the bootstrap broker holds no replica for partitions led by other
-/// nodes. A bootstrap-only consumer gets no records for those partitions. The
-/// consumer MUST route each Fetch to the actual partition leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn consumer_fetches_from_non_bootstrap_leaders() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("consumer leader routing: consumer fetches from non bootstrap leaders")]
+async fn bdd_verify_consumer_fetches_from_non_bootstrap_leaders() {
     let _g = cluster_lock().lock().await;
     let topic = "routing-rf1";
     let (cluster, bootstrap, topic_id, n_partitions) = start_leader_routing_cluster(topic).await;
@@ -160,3 +154,18 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     consumer.close().await.unwrap();
     shutdown_cluster(cluster).await;
 }
+
+/// A native `Consumer` against a 3-broker rf=1 cluster must fetch records from
+/// every partition. This includes partitions whose leader, and sole replica, is
+/// NOT the broker it bootstrapped at.
+///
+/// With rf=1 the bootstrap broker holds no replica for partitions led by other
+/// nodes. A bootstrap-only consumer gets no records for those partitions. The
+/// consumer MUST route each Fetch to the actual partition leader.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_leader_routing.feature",
+    name = "consumer fetches from non bootstrap leaders"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn consumer_fetches_from_non_bootstrap_leaders() {}

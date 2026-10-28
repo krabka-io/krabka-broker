@@ -15,27 +15,9 @@ use {
     assert2::assert,
 };
 
-/// JVM acceptance: authorized produce + consume round-trip.
-///
-/// Admin (PLAIN super-user) provisions alice with:
-/// - `Allow Read+Write Topic LITERAL "foo"`
-/// - `Allow Read Group LITERAL "cg-foo"`
-///
-/// ACL implications grant Describe from Read/Write on the same resource, so
-/// the test seeds no explicit Describe ACL. The Metadata per-topic check
-/// relies on the implication path.
-///
-/// Alice (PLAIN, no super-user, no cluster perms) then drives
-/// `kafka-console-producer` and `kafka-console-consumer --group cg-foo`
-/// against the broker. This exercises the full `Produce`/`Fetch`/
-/// `JoinGroup`/`OffsetFetch`/`OffsetCommit` authorize preambles end-to-end.
-///
-/// The test deliberately avoids topic auto-creation. Admin creates `foo`
-/// before it grants alice access, so the Produce path does not have to
-/// short-circuit on a missing topic.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_authorized_produce_consume() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl acl authorized: jvm authorized produce consume")]
+async fn bdd_verify_jvm_authorized_produce_consume() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-foo";
 
@@ -112,3 +94,30 @@ async fn jvm_authorized_produce_consume() {
 
     broker.shutdown().await;
 }
+
+/// JVM acceptance: authorized produce + consume round-trip.
+///
+/// Admin (PLAIN super-user) provisions alice with:
+/// - `Allow Read+Write Topic LITERAL "foo"`
+/// - `Allow Read Group LITERAL "cg-foo"`
+///
+/// ACL implications grant Describe from Read/Write on the same resource, so
+/// the test seeds no explicit Describe ACL. The Metadata per-topic check
+/// relies on the implication path.
+///
+/// Alice (PLAIN, no super-user, no cluster perms) then drives
+/// `kafka-console-producer` and `kafka-console-consumer --group cg-foo`
+/// against the broker. This exercises the full `Produce`/`Fetch`/
+/// `JoinGroup`/`OffsetFetch`/`OffsetCommit` authorize preambles end-to-end.
+///
+/// The test deliberately avoids topic auto-creation. Admin creates `foo`
+/// before it grants alice access, so the Produce path does not have to
+/// short-circuit on a missing topic.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_authorized.feature",
+    name = "jvm authorized produce consume"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_authorized_produce_consume() {}

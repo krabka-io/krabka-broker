@@ -18,8 +18,11 @@ use {
     assert2::check,
 };
 
-#[tokio::test]
-async fn list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "deliver at time dat watermark: list offsets latest lands a seek to end on the first pending record"
+)]
+async fn bdd_verify_list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {
     struct Case {
         mode: Mode,
         expected: Visible,
@@ -69,8 +72,19 @@ async fn list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_watermark.feature",
+    name = "list offsets latest lands a seek to end on the first pending record"
+)]
 #[tokio::test]
-async fn a_batch_scheduled_far_out_holds_back_a_later_batch_that_is_already_due() {
+async fn list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "deliver at time dat watermark: a batch scheduled far out holds back a later batch that is already due"
+)]
+async fn bdd_verify_a_batch_scheduled_far_out_holds_back_a_later_batch_that_is_already_due() {
     struct Case {
         mode: Mode,
         expected: Visible,
@@ -115,3 +129,11 @@ async fn a_batch_scheduled_far_out_holds_back_a_later_batch_that_is_already_due(
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_watermark.feature",
+    name = "a batch scheduled far out holds back a later batch that is already due"
+)]
+#[tokio::test]
+async fn a_batch_scheduled_far_out_holds_back_a_later_batch_that_is_already_due() {}

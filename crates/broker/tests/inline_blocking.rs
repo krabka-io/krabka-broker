@@ -146,8 +146,9 @@ fn run_node(inline: bool) -> NodeRun {
     }
 }
 
-#[test]
-fn a_node_with_its_blocking_work_inline_starts_no_thread() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("inline blocking: a node with its blocking work inline starts no thread")]
+fn bdd_verify_a_node_with_its_blocking_work_inline_starts_no_thread() {
     // (inline, whether the runtime starts a thread)
     let cases = [(true, false), (false, true)];
     for (inline, starts_a_thread) in cases {
@@ -159,3 +160,10 @@ fn a_node_with_its_blocking_work_inline_starts_no_thread() {
         );
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/inline_blocking.feature",
+    name = "a node with its blocking work inline starts no thread"
+)]
+fn a_node_with_its_blocking_work_inline_starts_no_thread() {}

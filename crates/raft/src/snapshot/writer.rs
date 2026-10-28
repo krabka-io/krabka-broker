@@ -392,10 +392,11 @@ mod tests {
         28, 29,
     ];
 
-    /// Every data record of a checkpoint names an apiKey that Kafka knows,
-    /// also for the krabka-only state. One row for each krabka-only record.
-    #[test]
-    fn writer_emits_only_kafka_metadata_record_types() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "snapshot writer tests: writer emits only kafka metadata record types"
+    )]
+    fn bdd_verify_writer_emits_only_kafka_metadata_record_types() {
         use {
             krabka_metadata::{
                 BreakGlassAction, BreakGlassProposalRecord, FeatureLevelRecord,
@@ -482,4 +483,13 @@ mod tests {
             );
         }
     }
+
+    /// Every data record of a checkpoint names an apiKey that Kafka knows,
+    /// also for the krabka-only state. One row for each krabka-only record.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/snapshot/writer.feature",
+        name = "tests: writer emits only kafka metadata record types"
+    )]
+    fn writer_emits_only_kafka_metadata_record_types() {}
 }

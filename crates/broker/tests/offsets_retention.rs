@@ -85,10 +85,9 @@ async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     )
 }
 
-/// Both knobs come back on the broker resource, read-only and static, at
-/// Kafka's own defaults.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_configs_reports_the_retention_knobs() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("offsets retention: describe configs reports the retention knobs")]
+async fn bdd_verify_describe_configs_reports_the_retention_knobs() {
     let (_dir, broker) = standalone_broker().await;
     let client = client_for(&broker).await;
 
@@ -135,10 +134,19 @@ async fn describe_configs_reports_the_retention_knobs() {
     broker.shutdown().await;
 }
 
-/// A knob the broker's configuration names reports `STATIC_BROKER_CONFIG`,
-/// even at Kafka's own default value.
+/// Both knobs come back on the broker resource, read-only and static, at
+/// Kafka's own defaults.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offsets_retention.feature",
+    name = "describe configs reports the retention knobs"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_configs_reports_a_named_knob_as_static() {
+async fn describe_configs_reports_the_retention_knobs() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("offsets retention: describe configs reports a named knob as static")]
+async fn bdd_verify_describe_configs_reports_a_named_knob_as_static() {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = heartbeat_config(dir.path());
     // The same number Kafka defaults to, named explicitly.
@@ -180,16 +188,19 @@ async fn describe_configs_reports_a_named_knob_as_static() {
     broker.shutdown().await;
 }
 
-/// A group with no members and no committed offsets is dead, and the broker's
-/// own sweep drops it from `ListGroups` without an operator running
-/// `DeleteGroups`.
-///
-/// This is the shape a CI job or an ad-hoc `kafka-console-consumer` leaves
-/// behind once its offsets are gone. Verified against `apache/kafka:4.3.1`:
-/// a group left memberless by `kafka-consumer-groups --delete-offsets`
-/// disappears from `--list` after one `offsets.retention.check.interval.ms`.
+/// A knob the broker's configuration names reports `STATIC_BROKER_CONFIG`,
+/// even at Kafka's own default value.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offsets_retention.feature",
+    name = "describe configs reports a named knob as static"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
+async fn describe_configs_reports_a_named_knob_as_static() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("offsets retention: the broker sweep reaps a dead group on its own")]
+async fn bdd_verify_the_broker_sweep_reaps_a_dead_group_on_its_own() {
     const GROUP: &str = "leaked-by-ci";
     const TOPIC: &str = "orders";
 
@@ -239,3 +250,19 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
 
     broker.shutdown().await;
 }
+
+/// A group with no members and no committed offsets is dead, and the broker's
+/// own sweep drops it from `ListGroups` without an operator running
+/// `DeleteGroups`.
+///
+/// This is the shape a CI job or an ad-hoc `kafka-console-consumer` leaves
+/// behind once its offsets are gone. Verified against `apache/kafka:4.3.1`:
+/// a group left memberless by `kafka-consumer-groups --delete-offsets`
+/// disappears from `--list` after one `offsets.retention.check.interval.ms`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offsets_retention.feature",
+    name = "the broker sweep reaps a dead group on its own"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {}

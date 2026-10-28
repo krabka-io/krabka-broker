@@ -447,11 +447,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `GroupMetadataManager.replay` of the share group records, one
-    /// log per row: the whole group that replay holds afterwards, or the
-    /// exception that fails the load.
-    #[test]
-    fn share_records_replay_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified replay share tests: share records replay as kafka"
+    )]
+    fn bdd_verify_share_records_replay_as_kafka() {
         let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
         // Kafka's `ShareGroup.createGroupTombstoneRecords` for member `m`.
         let ReplayFixtures {
@@ -564,4 +564,14 @@ mod tests {
             |coord| coord.cached_share_seed("g"),
         );
     }
+
+    /// Kafka's `GroupMetadataManager.replay` of the share group records, one
+    /// log per row: the whole group that replay holds afterwards, or the
+    /// exception that fails the load.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/replay_share.feature",
+        name = "tests: share records replay as kafka"
+    )]
+    fn share_records_replay_as_kafka() {}
 }

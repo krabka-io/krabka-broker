@@ -40,18 +40,9 @@ async fn acknowledge_prefix_release(
     acknowledge_success(client, acknowledgement.release()).await;
 }
 
-/// Regression: a `ShareFetch` whose acquired offset begins a *later* record
-/// batch must still return that offset's record bytes, not an empty payload.
-/// The broker already consumed or archived a leading multi-record batch.
-///
-/// `ShareFetch.partition_max_bytes` is a v0-only field. At the supported
-/// versions (v1+) it is absent and decodes to 0. The read path must not use
-/// that 0 as the log-read byte budget. A 0 budget reads only one batch header,
-/// which cannot skip the leading batch to reach the acquired offset. The broker
-/// then returns the acquired record with no bytes, and the record stays locked.
-/// The read must fall back to the request-level `max_bytes`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acquire_past_leading_batch_returns_bytes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share consume record bytes: acquire past leading batch returns bytes")]
+async fn bdd_verify_acquire_past_leading_batch_returns_bytes() {
     let ConsumptionFixture {
         _permit,
         broker: _broker,
@@ -104,6 +95,24 @@ async fn acquire_past_leading_batch_returns_bytes() {
     );
 }
 
+/// Regression: a `ShareFetch` whose acquired offset begins a *later* record
+/// batch must still return that offset's record bytes, not an empty payload.
+/// The broker already consumed or archived a leading multi-record batch.
+///
+/// `ShareFetch.partition_max_bytes` is a v0-only field. At the supported
+/// versions (v1+) it is absent and decodes to 0. The read path must not use
+/// that 0 as the log-read byte budget. A 0 budget reads only one batch header,
+/// which cannot skip the leading batch to reach the acquired offset. The broker
+/// then returns the acquired record with no bytes, and the record stays locked.
+/// The read must fall back to the request-level `max_bytes`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/record_bytes.feature",
+    name = "acquire past leading batch returns bytes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acquire_past_leading_batch_returns_bytes() {}
+
 /// Produce a single record carrying `value` into `(topic, partition)` as its OWN
 /// batch, so each offset is a distinct on-disk batch. This matters for the
 /// fragmented-window read test: the share-fetch read path reads verbatim bytes
@@ -121,23 +130,11 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
         .await;
 }
 
-/// F5 (fragmented window): a single share fetch that returns DISJOINT acquired
-/// ranges must carry record bytes for exactly the acquired offsets. The gap
-/// offset's value must not appear.
-///
-/// Scenario: produce 3 records as THREE separate single-record batches, so
-/// offsets 0, 1, 2 are each their own on-disk batch. The share-fetch read is
-/// batch-granular, so byte-exact disjoint reads need separate batches. Acquire
-/// 0..2, then Accept the MIDDLE offset (1) only and Release the outer offsets 0
-/// and 2. The SPSO stays at 0 because offset 0 is not accepted. The broker
-/// acknowledges offset 1, and offsets 0, 2 return to Available, and that leaves
-/// a gap at offset 1.
-///
-/// The re-fetch acquires the DISJOINT set {0, 2}. The read concatenates the
-/// per-range bytes, so the payload decodes to exactly offsets {0, 2} (values
-/// v0, v2), never the gap offset 1's value v1.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fragmented_window_records_match_acquired_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share consume record bytes: fragmented window records match acquired offsets"
+)]
+async fn bdd_verify_fragmented_window_records_match_acquired_offsets() {
     let (_permit, broker, client, _dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
@@ -203,3 +200,26 @@ async fn fragmented_window_records_match_acquired_offsets() {
         "the gap offset's value v1 must be excluded, got {values:?}"
     );
 }
+
+/// F5 (fragmented window): a single share fetch that returns DISJOINT acquired
+/// ranges must carry record bytes for exactly the acquired offsets. The gap
+/// offset's value must not appear.
+///
+/// Scenario: produce 3 records as THREE separate single-record batches, so
+/// offsets 0, 1, 2 are each their own on-disk batch. The share-fetch read is
+/// batch-granular, so byte-exact disjoint reads need separate batches. Acquire
+/// 0..2, then Accept the MIDDLE offset (1) only and Release the outer offsets 0
+/// and 2. The SPSO stays at 0 because offset 0 is not accepted. The broker
+/// acknowledges offset 1, and offsets 0, 2 return to Available, and that leaves
+/// a gap at offset 1.
+///
+/// The re-fetch acquires the DISJOINT set {0, 2}. The read concatenates the
+/// per-range bytes, so the payload decodes to exactly offsets {0, 2} (values
+/// v0, v2), never the gap offset 1's value v1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_consume/record_bytes.feature",
+    name = "fragmented window records match acquired offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fragmented_window_records_match_acquired_offsets() {}

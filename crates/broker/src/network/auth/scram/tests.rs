@@ -542,11 +542,11 @@ fn tokenauth_extension_selects_the_credential_store() {
     }
 }
 
-/// `ScramSaslServer` refuses a stored credential below
-/// `ScramMechanism.minIterations` (4096) with a `SaslException`, after the
-/// authorization id check, for both mechanisms.
-#[test]
-fn a_credential_below_kafkas_iteration_floor_is_refused() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "network auth scram tests: a credential below kafkas iteration floor is refused"
+)]
+fn bdd_verify_a_credential_below_kafkas_iteration_floor_is_refused() {
     for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
         let source = FakeMetadataSource::builder()
             .records(&[
@@ -592,6 +592,16 @@ fn a_credential_below_kafkas_iteration_floor_is_refused() {
         run_cases(&source, &secret, mechanism, cases);
     }
 }
+
+/// `ScramSaslServer` refuses a stored credential below
+/// `ScramMechanism.minIterations` (4096) with a `SaslException`, after the
+/// authorization id check, for both mechanisms.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/network/auth/scram/tests.feature",
+    name = "a credential below kafkas iteration floor is refused"
+)]
+fn a_credential_below_kafkas_iteration_floor_is_refused() {}
 
 /// A token session carries the token expiry from round 1 to round 2.
 /// A client-final proof that does not decode to the mechanism's hash length
@@ -851,9 +861,9 @@ fn token_password_is_recomputed_from_the_secret_key() {
     }
 }
 
-/// `ClientFirst::parse` follows Kafka's `ClientFirstMessage` pattern.
-#[test]
-fn client_first_parses_as_kafka_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("network auth scram tests: client first parses as kafka does")]
+fn bdd_verify_client_first_parses_as_kafka_does() {
     /// A client-first message and what parsing it gives.
     struct ParseCase<'a> {
         message: &'a str,
@@ -930,6 +940,14 @@ fn client_first_parses_as_kafka_does() {
         );
     }
 }
+
+/// `ClientFirst::parse` follows Kafka's `ClientFirstMessage` pattern.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/network/auth/scram/tests.feature",
+    name = "client first parses as kafka does"
+)]
+fn client_first_parses_as_kafka_does() {}
 
 /// `ScramFormatter.username`.
 #[yare::parameterized(

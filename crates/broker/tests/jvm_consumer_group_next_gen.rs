@@ -100,9 +100,9 @@ fn parse_partitions(stdout: &str) -> BTreeSet<i32> {
     set
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kip848_single_consumer_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 single consumer round trip")]
+async fn bdd_verify_jvm_kip848_single_consumer_round_trip() {
     let bootstrap = bootstrap_addr();
     let StartedBroker {
         broker: _broker,
@@ -132,9 +132,18 @@ async fn jvm_kip848_single_consumer_round_trip() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_kip848_describe_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "jvm kip848 single consumer round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_single_consumer_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 describe group")]
+async fn bdd_verify_jvm_kip848_describe_group() {
     let bootstrap = bootstrap_addr();
     let StartedBroker {
         broker: _broker,
@@ -169,9 +178,18 @@ async fn jvm_kip848_describe_group() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_kip848_delete_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "jvm kip848 describe group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_describe_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 delete group")]
+async fn bdd_verify_jvm_kip848_delete_group() {
     let bootstrap = bootstrap_addr();
     let StartedBroker {
         broker: _broker,
@@ -202,9 +220,18 @@ async fn jvm_kip848_delete_group() {
     assert!(deleted.status.success(), "delete failed: {deleted:?}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_kip848_coexists_with_classic() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "jvm kip848 delete group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_delete_group() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 coexists with classic")]
+async fn bdd_verify_jvm_kip848_coexists_with_classic() {
     let bootstrap = bootstrap_addr();
     let StartedBroker {
         broker: _broker,
@@ -239,29 +266,20 @@ async fn jvm_kip848_coexists_with_classic() {
     assert!(ns.contains('p') && ns.contains('q'));
 }
 
-/// Migration interop within a *single* consumer group, deterministically.
-///
-/// Phase 1: a classic (cp-kafka 7.4.0) consumer forms group `g-migrate` and
-/// drains batch 1. That proves the classic protocol serves the group. Phase
-/// 2: a next-gen (apache/kafka 4.0.0, `group.protocol=consumer`) consumer joins
-/// the SAME group and drains a freshly-produced batch 2. Krabka's unified
-/// coordinator runs the default `Bidirectional` policy with the consumer
-/// rebalance protocol enabled, from `NextGenConfig::default`, because
-/// `start_host_broker` does not override it. The consumer protocol therefore
-/// serves the group in place, and the next-gen member reads batch 2 from the
-/// offsets that the classic member committed. Both protocols work against the
-/// same group, with offset continuity across the migration.
-///
-/// Each phase runs a SOLE member that owns all partitions, so the assignment is
-/// fixed and there is no concurrency or rebalance race. An earlier concurrent
-/// design flaked on CI, because the lone classic member drained every record
-/// and committed offsets before the next-gen member joined, which starved it.
-/// The in-process suite in `coordinator::unified` covers the live, concurrent
-/// mixed-membership split deterministically: upgrade, downgrade, round-trip,
-/// gap-free assignment, static membership, and committed-offset survival.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "jvm kip848 coexists with classic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_coexists_with_classic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm consumer group next gen: jvm kip848 classic and consumer in one group migrate"
+)]
+async fn bdd_verify_jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     let bootstrap = bootstrap_addr();
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     create_topic("mig", 4);
@@ -340,6 +358,35 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
 
     drop(broker);
 }
+
+/// Migration interop within a *single* consumer group, deterministically.
+///
+/// Phase 1: a classic (cp-kafka 7.4.0) consumer forms group `g-migrate` and
+/// drains batch 1. That proves the classic protocol serves the group. Phase
+/// 2: a next-gen (apache/kafka 4.0.0, `group.protocol=consumer`) consumer joins
+/// the SAME group and drains a freshly-produced batch 2. Krabka's unified
+/// coordinator runs the default `Bidirectional` policy with the consumer
+/// rebalance protocol enabled, from `NextGenConfig::default`, because
+/// `start_host_broker` does not override it. The consumer protocol therefore
+/// serves the group in place, and the next-gen member reads batch 2 from the
+/// offsets that the classic member committed. Both protocols work against the
+/// same group, with offset continuity across the migration.
+///
+/// Each phase runs a SOLE member that owns all partitions, so the assignment is
+/// fixed and there is no concurrency or rebalance race. An earlier concurrent
+/// design flaked on CI, because the lone classic member drained every record
+/// and committed offsets before the next-gen member joined, which starved it.
+/// The in-process suite in `coordinator::unified` covers the live, concurrent
+/// mixed-membership split deterministically: upgrade, downgrade, round-trip,
+/// gap-free assignment, static membership, and committed-offset survival.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "jvm kip848 classic and consumer in one group migrate"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {}
 
 // A `SubscribedTopicRegex` that does not compile is answered
 // `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, but

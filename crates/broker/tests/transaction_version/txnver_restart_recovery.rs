@@ -236,10 +236,11 @@ async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
     }
 }
 
-/// Primary durability matrix for the v1 (flexible, `TV_2` default) and v0
-/// (classic, `TV_0`) transaction-log codecs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver restart recovery: versioned ongoing transactions survive restart and decode recovery"
+)]
+async fn bdd_verify_versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
     let cases = [
         RecoveryCase {
             name: "v1/TV_2",
@@ -261,3 +262,13 @@ async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
         Box::pin(assert_ongoing_txn_survives_restart(case)).await;
     }
 }
+
+/// Primary durability matrix for the v1 (flexible, `TV_2` default) and v0
+/// (classic, `TV_0`) transaction-log codecs.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_restart_recovery.feature",
+    name = "versioned ongoing transactions survive restart and decode recovery"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {}

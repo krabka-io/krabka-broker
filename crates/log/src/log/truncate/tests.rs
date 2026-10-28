@@ -171,15 +171,9 @@ fn truncate_to_removes_future_empty_producer_snapshots() {
     assert2::assert!(snapshot_offsets(dir.path()) == vec![Offset(2)]);
 }
 
-/// Kafka takes a producer-state snapshot at a roll, on `close`, after
-/// `truncateTo` and after `truncateFullyAndStartAt`, and a truncation drops
-/// every snapshot at or below the log start. Each row starts from three
-/// two-record batches from one idempotent producer, one per segment (rolls at
-/// 2 and 4, log end 6), then
-/// applies an action and lists the snapshot offsets left on disk. A reopen
-/// then restores the same producer state it had.
-#[test]
-fn producer_snapshots_follow_kafkas_lifecycle() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("log truncate tests: producer snapshots follow kafkas lifecycle")]
+fn bdd_verify_producer_snapshots_follow_kafkas_lifecycle() {
     #[derive(Debug, Clone, Copy)]
     enum Action {
         Nothing,
@@ -230,6 +224,20 @@ fn producer_snapshots_follow_kafkas_lifecycle() {
         check!(reopened.producer_state_snapshot() == before, "{action:?}");
     }
 }
+
+/// Kafka takes a producer-state snapshot at a roll, on `close`, after
+/// `truncateTo` and after `truncateFullyAndStartAt`, and a truncation drops
+/// every snapshot at or below the log start. Each row starts from three
+/// two-record batches from one idempotent producer, one per segment (rolls at
+/// 2 and 4, log end 6), then
+/// applies an action and lists the snapshot offsets left on disk. A reopen
+/// then restores the same producer state it had.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/log/truncate/tests.feature",
+    name = "producer snapshots follow kafkas lifecycle"
+)]
+fn producer_snapshots_follow_kafkas_lifecycle() {}
 
 #[test]
 fn truncate_to_log_end_is_noop() {

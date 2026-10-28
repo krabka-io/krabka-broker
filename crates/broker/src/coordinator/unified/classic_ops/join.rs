@@ -749,10 +749,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `JoinGroupRequest.requiresKnownMemberId`: only a dynamic member
-    /// with no member id at v4 or later is sent back for an id.
-    #[test]
-    fn requires_known_member_id_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified classic ops join tests: requires known member id follows kafka"
+    )]
+    fn bdd_verify_requires_known_member_id_follows_kafka() {
         // (member id, group instance id, version, expected)
         let rows = [
             ("", None, 4, true),
@@ -768,6 +769,15 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `JoinGroupRequest.requiresKnownMemberId`: only a dynamic member
+    /// with no member id at v4 or later is sent back for an id.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/classic_ops/join.feature",
+        name = "tests: requires known member id follows kafka"
+    )]
+    fn requires_known_member_id_follows_kafka() {}
 
     /// #790: KIP-394. A dynamic member gets `MEMBER_ID_REQUIRED` at v4+ and
     /// joins with that id; an id the group never gave out is unknown.

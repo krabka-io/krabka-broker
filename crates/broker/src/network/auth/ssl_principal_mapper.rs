@@ -313,10 +313,11 @@ mod tests {
         }
     }
 
-    /// Kafka's own documented `ssl.principal.mapping.rules` examples, each
-    /// against a DN it matches and one it does not.
-    #[test]
-    fn kafka_documented_rules_map_the_subject_dn() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth ssl principal mapper tests: kafka documented rules map the subject dn"
+    )]
+    fn bdd_verify_kafka_documented_rules_map_the_subject_dn() {
         // (rules, distinguished name, principal)
         let cases = [
             mapping(
@@ -364,6 +365,15 @@ mod tests {
         ];
         check_mappings(cases);
     }
+
+    /// Kafka's own documented `ssl.principal.mapping.rules` examples, each
+    /// against a DN it matches and one it does not.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/ssl_principal_mapper.feature",
+        name = "tests: kafka documented rules map the subject dn"
+    )]
+    fn kafka_documented_rules_map_the_subject_dn() {}
 
     /// `Matcher.matches()` and `String.replaceAll`, which the `regex` crate
     /// reads differently: `$1_$2` is group 1, an underscore and group 2, a

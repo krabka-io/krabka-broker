@@ -1,30 +1,38 @@
-use super::*;
+use {super::*, std::vec};
 
-#[yare::parameterized(
-    before_expiry = { 10, 3, 6, true },
-    at_expiry = { 10, 3, 7, true },
-    after_expiry = { 10, 3, 8, false },
-    no_retained_cuts = { 10, 0, i64::MIN, false },
-    negative_retained_cuts = { 10, -1, i64::MIN, false },
-    minimum_published = { i64::MIN, 1, i64::MIN, false },
-    minimum_successor = { i64::MIN + 1, 1, i64::MIN, true },
-    maximum_published = { i64::MAX, i32::MAX, i64::MAX, false },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "retention tests barrier cut expiry is exact and fails closed at extremes: barrier cut expiry is exact and fails closed at extremes for {example}"
 )]
-fn barrier_cut_expiry_is_exact_and_fails_closed_at_extremes(
-    published: i64,
-    retained: i32,
-    held: i64,
-    expected: bool,
-) {
+fn bdd_verify_barrier_cut_expiry_is_exact_and_fails_closed_at_extremes(example: String) {
+    type Example = (i64, i32, i64, bool);
+    let (published, retained, held, expected): Example = match example.as_str() {
+        "before expiry" => (10, 3, 6, true),
+        "at expiry" => (10, 3, 7, true),
+        "after expiry" => (10, 3, 8, false),
+        "no retained cuts" => (10, 0, i64::MIN, false),
+        "negative retained cuts" => (10, -1, i64::MIN, false),
+        "minimum published" => (i64::MIN, 1, i64::MIN, false),
+        "minimum successor" => (i64::MIN + 1, 1, i64::MIN, true),
+        "maximum published" => (i64::MAX, i32::MAX, i64::MAX, false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(barrier_cut_expired(published, retained, held) == expected);
 }
 
-/// Kafka scenarios for `UnifiedLog.deleteOldSegments`: the log-start
-/// breach, `retention.bytes` and `retention.ms` passes, in that order,
-/// over every local segment with the active one last. Every expected
-/// count is worked from Kafka's passes by hand.
-#[test]
-fn local_prefix_matches_kafkas_delete_old_segments_passes() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature",
+    name = "barrier cut expiry is exact and fails closed at extremes"
+)]
+fn barrier_cut_expiry_is_exact_and_fails_closed_at_extremes(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "retention tests barrier cut expiry is exact and fails closed at extremes: local prefix matches kafkas delete old segments passes"
+)]
+fn bdd_verify_local_prefix_matches_kafkas_delete_old_segments_passes() {
     /// A name, the segments (the active one last), the size debt, and how
     /// many Kafka deletes.
     type Case<'a> = (&'a str, &'a [LocalRetentionSegment], Option<u64>, usize);
@@ -155,11 +163,22 @@ fn local_prefix_matches_kafkas_delete_old_segments_passes() {
     }
 }
 
-/// Kafka scenarios for `RemoteLogRetentionHandler`: per segment, the
-/// log-start breach, then `retention.ms`, then `retention.bytes`. Every
-/// expected count is worked from Kafka's handler by hand.
-#[test]
-fn remote_prefix_matches_kafkas_remote_log_retention_handler() {
+/// Kafka scenarios for `UnifiedLog.deleteOldSegments`: the log-start
+/// breach, `retention.bytes` and `retention.ms` passes, in that order,
+/// over every local segment with the active one last. Every expected
+/// count is worked from Kafka's passes by hand.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature",
+    name = "local prefix matches kafkas delete old segments passes"
+)]
+fn local_prefix_matches_kafkas_delete_old_segments_passes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "retention tests barrier cut expiry is exact and fails closed at extremes: remote prefix matches kafkas remote log retention handler"
+)]
+fn bdd_verify_remote_prefix_matches_kafkas_remote_log_retention_handler() {
     /// A name, the segments, the size debt, and how many Kafka deletes.
     type Case<'a> = (&'a str, &'a [RemoteRetentionSegment], u64, usize);
 
@@ -241,3 +260,13 @@ fn remote_prefix_matches_kafkas_remote_log_retention_handler() {
         );
     }
 }
+
+/// Kafka scenarios for `RemoteLogRetentionHandler`: per segment, the
+/// log-start breach, then `retention.ms`, then `retention.bytes`. Every
+/// expected count is worked from Kafka's handler by hand.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature",
+    name = "remote prefix matches kafkas remote log retention handler"
+)]
+fn remote_prefix_matches_kafkas_remote_log_retention_handler() {}

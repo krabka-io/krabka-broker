@@ -549,13 +549,11 @@ mod tests {
         );
     }
 
-    /// Kafka's `RemoteLeaderEndPoint` asks for `replica.fetch.response.max.bytes`
-    /// (10 MiB) across the response and `replica.fetch.max.bytes` (1 MiB) for
-    /// each partition. A response budget of one partition's share lets one
-    /// partition with a full batch waiting take every response, and starve the
-    /// other partitions that the fetcher follows from the same leader.
-    #[test]
-    fn the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "replicator fetch loop tests: the default envelope asks for kafka s response and partition maximums"
+    )]
+    fn bdd_verify_the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
         let replication = &cfg.connection.replication;
@@ -573,6 +571,18 @@ mod tests {
             ) == (10 * 1024 * 1024, 1024 * 1024)
         );
     }
+
+    /// Kafka's `RemoteLeaderEndPoint` asks for `replica.fetch.response.max.bytes`
+    /// (10 MiB) across the response and `replica.fetch.max.bytes` (1 MiB) for
+    /// each partition. A response budget of one partition's share lets one
+    /// partition with a full batch waiting take every response, and starve the
+    /// other partitions that the fetcher follows from the same leader.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/replicator/fetch_loop.feature",
+        name = "tests: the default envelope asks for kafka s response and partition maximums"
+    )]
+    fn the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {}
 
     #[test]
     fn a_later_request_names_only_the_partition_that_moved() {

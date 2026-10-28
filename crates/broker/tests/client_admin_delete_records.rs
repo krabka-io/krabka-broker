@@ -11,8 +11,11 @@ use {
     tokio::net,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_records_truncates_wal_and_maps_outcome() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client admin delete records: delete records truncates wal and maps outcome"
+)]
+async fn bdd_verify_delete_records_truncates_wal_and_maps_outcome() {
     let (_dir, _broker, bootstrap, mut admin) = standalone_admin().await;
     admin
         .create_topics(
@@ -87,6 +90,14 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
         "fetch below log start should return OFFSET_OUT_OF_RANGE, got {fetch_error:?}"
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_admin_delete_records.feature",
+    name = "delete records truncates wal and maps outcome"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_records_truncates_wal_and_maps_outcome() {}
 
 async fn connect_reader(bootstrap: &str) -> Connection {
     let addr = net::lookup_host(bootstrap)

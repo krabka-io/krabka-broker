@@ -33,12 +33,11 @@ use {
     },
 };
 
-/// `iterations < 4096` gives `UNACCEPTABLE_CREDENTIAL`.
-///
-/// The test uses a super-user principal, so the only error path it exercises
-/// is the parameter validation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_low_iterations_rejected() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds low iterations rejected"
+)]
+async fn bdd_verify_alter_scram_creds_low_iterations_rejected() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -60,8 +59,23 @@ async fn alter_scram_creds_low_iterations_rejected() {
     );
 }
 
+/// `iterations < 4096` gives `UNACCEPTABLE_CREDENTIAL`.
+///
+/// The test uses a super-user principal, so the only error path it exercises
+/// is the parameter validation.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds low iterations rejected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
+async fn alter_scram_creds_low_iterations_rejected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds high iterations rejected but max allowed"
+)]
+async fn bdd_verify_alter_scram_creds_high_iterations_rejected_but_max_allowed() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -108,8 +122,19 @@ async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds high iterations rejected but max allowed"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism() {
+async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds unknown mechanism returns unsupported sasl mechanism"
+)]
+async fn bdd_verify_alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
     let admin_password = format!(
@@ -150,11 +175,19 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
     );
 }
 
-/// Two upsertions for the same user in one request: Kafka's response is
-/// per username, so the single row for that username gets
-/// `DUPLICATE_RESOURCE` (92) even when the mechanisms differ.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds unknown mechanism returns unsupported sasl mechanism"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_duplicate_resource_rejected() {
+async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds duplicate resource rejected"
+)]
+async fn bdd_verify_alter_scram_creds_duplicate_resource_rejected() {
     let RetainedBroker {
         log_dir: _log_dir,
         handle,
@@ -183,8 +216,22 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
     );
 }
 
+/// Two upsertions for the same user in one request: Kafka's response is
+/// per username, so the single row for that username gets
+/// `DUPLICATE_RESOURCE` (92) even when the mechanisms differ.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds duplicate resource rejected"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() {
+async fn alter_scram_creds_duplicate_resource_rejected() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds duplicate deletion and upsertion rejected per user"
+)]
+async fn bdd_verify_alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() {
     let RandomScramAdmin {
         log_dir: _log_dir,
         admin_password,
@@ -242,8 +289,19 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds duplicate deletion and upsertion rejected per user"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
+async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers alter scram validation: alter scram creds missing deletion returns resource not found 91"
+)]
+async fn bdd_verify_alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
     let RandomScramAdmin {
         log_dir: _log_dir,
         admin_password,
@@ -272,6 +330,14 @@ async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
         resp.results[0]
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/alter_scram_validation.feature",
+    name = "alter scram creds missing deletion returns resource not found 91"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {}
 
 /// A SCRAM-admin broker with a random admin password, and the log directory
 /// that backs it.

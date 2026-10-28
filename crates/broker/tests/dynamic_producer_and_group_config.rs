@@ -161,13 +161,11 @@ async fn active_producer_ids(client: &Client, topic: &str) -> Vec<i64> {
         .collect()
 }
 
-/// A dynamic `producer.id.expiration.ms`, on either resource, shortens the
-/// window of the producer-expiry sweep that is already running: the sweep
-/// removes a producer that went idle under the static day-long window, and
-/// `DescribeProducers` no longer reports it. Kafka's
-/// `DynamicProducerStateManagerConfig` reconfigures the window of every log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic producer and group config: a dynamic producer id expiration reaches the running expiry sweep"
+)]
+async fn bdd_verify_a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
     let p = support::start_configured(|config: &mut BrokerConfig| {
         // The sweep runs every 50 ms instead of every ten minutes, so the
         // test sees several sweeps under each window.
@@ -234,6 +232,19 @@ async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
     p.broker.shutdown().await;
 }
 
+/// A dynamic `producer.id.expiration.ms`, on either resource, shortens the
+/// window of the producer-expiry sweep that is already running: the sweep
+/// removes a producer that went idle under the static day-long window, and
+/// `DescribeProducers` no longer reports it. Kafka's
+/// `DynamicProducerStateManagerConfig` reconfigures the window of every log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "a dynamic producer id expiration reaches the running expiry sweep"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {}
+
 /// A consumer heartbeat at `epoch` of the member `member_id`, subscribed to
 /// `topics`.
 fn subscribed(member_id: &str, epoch: i32, topics: &[&str]) -> ConsumerGroupHeartbeatRequest {
@@ -293,13 +304,11 @@ fn partition_zero(topic_id: Uuid) -> TopicPartitions {
     }
 }
 
-/// A broker-level `group.consumer.assignment.interval.ms` reaches a running
-/// group: with the static interval at zero, a cluster-wide 2 s holds back the
-/// target assignment of a subscription change until the interval since the
-/// group's last assignment has passed, as Kafka's
-/// `GroupMetadataManager.maybeUpdateTargetAssignment` holds it back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic producer and group config: a dynamic consumer assignment interval holds back the next assignment"
+)]
+async fn bdd_verify_a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment() {
     const INTERVAL: Duration = Duration::from_secs(2);
     let p = support::start_ready_group().await;
     let client = connect_client(p.broker.listen_addr().to_string(), Some("c-interval")).await;
@@ -364,12 +373,24 @@ async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment()
     p.broker.shutdown().await;
 }
 
-/// Kafka's `GroupCoordinatorConfig` refuses a broker-level assignment interval
-/// outside the broker's bounds when the alter builds the new `KafkaConfig`,
-/// and the refusal reaches the client as `INVALID_REQUEST` with the
-/// `require` message (KAFKA-13609).
+/// A broker-level `group.consumer.assignment.interval.ms` reaches a running
+/// group: with the static interval at zero, a cluster-wide 2 s holds back the
+/// target assignment of a subscription change until the interval since the
+/// group's last assignment has passed, as Kafka's
+/// `GroupMetadataManager.maybeUpdateTargetAssignment` holds it back.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "a dynamic consumer assignment interval holds back the next assignment"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_assignment_interval_above_the_broker_maximum_is_refused() {
+async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic producer and group config: an assignment interval above the broker maximum is refused"
+)]
+async fn bdd_verify_an_assignment_interval_above_the_broker_maximum_is_refused() {
     let p = support::start().await;
     let mut refusals = Vec::new();
     for (scope, protocol) in [
@@ -409,3 +430,15 @@ async fn an_assignment_interval_above_the_broker_maximum_is_refused() {
     );
     p.broker.shutdown().await;
 }
+
+/// Kafka's `GroupCoordinatorConfig` refuses a broker-level assignment interval
+/// outside the broker's bounds when the alter builds the new `KafkaConfig`,
+/// and the refusal reaches the client as `INVALID_REQUEST` with the
+/// `require` message (KAFKA-13609).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_producer_and_group_config.feature",
+    name = "an assignment interval above the broker maximum is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_assignment_interval_above_the_broker_maximum_is_refused() {}

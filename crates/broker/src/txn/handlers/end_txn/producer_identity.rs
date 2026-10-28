@@ -295,13 +295,11 @@ mod tests {
         );
     }
 
-    /// Kafka's `prepareFenceProducerEpoch` followed by the server's
-    /// `endTransaction`: `TV_2` bumps the epoch once, at completion, and keeps
-    /// the epoch the producer holds; below it the fence bumps once and keeps no
-    /// last epoch. `endTransactionWithTV1` stamps `TV_0` on the record at every
-    /// level below `TV_2`, `TV_1` included.
-    #[test]
-    fn a_server_abort_bumps_the_epoch_once_and_stamps_the_version_kafka_stamps() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn handlers end txn producer identity tests: a server abort bumps the epoch once and stamps the version kafka stamps"
+    )]
+    fn bdd_verify_a_server_abort_bumps_the_epoch_once_and_stamps_the_version_kafka_stamps() {
         let ongoing = entry(7, 3, TxnState::Ongoing);
         // (cluster level, epoch after the abort, last epoch, stamped version)
         let cases = [
@@ -327,6 +325,18 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `prepareFenceProducerEpoch` followed by the server's
+    /// `endTransaction`: `TV_2` bumps the epoch once, at completion, and keeps
+    /// the epoch the producer holds; below it the fence bumps once and keeps no
+    /// last epoch. `endTransactionWithTV1` stamps `TV_0` on the record at every
+    /// level below `TV_2`, `TV_1` included.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/handlers/end_txn/producer_identity.feature",
+        name = "tests: a server abort bumps the epoch once and stamps the version kafka stamps"
+    )]
+    fn a_server_abort_bumps_the_epoch_once_and_stamps_the_version_kafka_stamps() {}
 
     #[test]
     fn a_server_abort_at_the_epoch_boundary_rotates_the_producer_id_at_tv2_only() {

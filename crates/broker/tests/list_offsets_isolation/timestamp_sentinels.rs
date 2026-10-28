@@ -22,24 +22,11 @@ use {
     krabka_client_producer::Producer,
 };
 
-/// An open transaction fences `MAX_TIMESTAMP` and a by-timestamp lookup for a
-/// `read_committed` client, while a `read_uncommitted` client still resolves
-/// them, and a lookup that lands below the bound is answered for both.
-///
-/// LATEST is not the only way to ask where a partition ends. A record written
-/// inside an open transaction has a timestamp like any other, so a
-/// `read_committed` consumer that asked `MAX_TIMESTAMP` -- or offered the
-/// transaction's own timestamp to `offsetsForTimes` -- would be handed the
-/// offset of a record it is not allowed to read, and would seek straight into
-/// the open transaction that LATEST was careful to keep it out of. Kafka
-/// refuses both with `UNKNOWN_OFFSET` and no error code.
-///
-/// The unfenced control matters as much as the fenced readings: a lookup
-/// matching one of the settled records must still be answered normally at both
-/// isolation levels. Without it, a broker that answered -1 to every timestamp
-/// request would pass.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "list offsets isolation timestamp sentinels: an open transaction fences max timestamp and a timestamp lookup"
+)]
+async fn bdd_verify_an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {
     const TOPIC: &str = "list-offsets-isolation-timestamps";
     /// Request timestamp sentinel (-3, KIP-734) asking for the offset of the
     /// record with the highest timestamp. Kafka's
@@ -160,3 +147,27 @@ async fn an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {
     .expect("plain producer close");
     p.broker.shutdown().await;
 }
+
+/// An open transaction fences `MAX_TIMESTAMP` and a by-timestamp lookup for a
+/// `read_committed` client, while a `read_uncommitted` client still resolves
+/// them, and a lookup that lands below the bound is answered for both.
+///
+/// LATEST is not the only way to ask where a partition ends. A record written
+/// inside an open transaction has a timestamp like any other, so a
+/// `read_committed` consumer that asked `MAX_TIMESTAMP` -- or offered the
+/// transaction's own timestamp to `offsetsForTimes` -- would be handed the
+/// offset of a record it is not allowed to read, and would seek straight into
+/// the open transaction that LATEST was careful to keep it out of. Kafka
+/// refuses both with `UNKNOWN_OFFSET` and no error code.
+///
+/// The unfenced control matters as much as the fenced readings: a lookup
+/// matching one of the settled records must still be answered normally at both
+/// isolation levels. Without it, a broker that answered -1 to every timestamp
+/// request would pass.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/list_offsets_isolation/timestamp_sentinels.feature",
+    name = "an open transaction fences max timestamp and a timestamp lookup"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {}

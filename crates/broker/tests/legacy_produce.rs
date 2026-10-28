@@ -66,8 +66,9 @@ pub use crate::kafka_wire::legacy_round_trip as round_trip_v0;
 
 // ── Test ──────────────────────────────────────────────────────────────────────
 
-#[tokio::test]
-async fn produce_v0_upconverts_and_is_readable_via_fetch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("legacy produce: produce v0 upconverts and is readable via fetch")]
+async fn bdd_verify_produce_v0_upconverts_and_is_readable_via_fetch() {
     let p = support::start_legacy().await;
 
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
@@ -185,3 +186,11 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_produce.feature",
+    name = "produce v0 upconverts and is readable via fetch"
+)]
+#[tokio::test]
+async fn produce_v0_upconverts_and_is_readable_via_fetch() {}

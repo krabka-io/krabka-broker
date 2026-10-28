@@ -370,13 +370,11 @@ mod tests {
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
-    /// Table over `(session_id, session_epoch, session exists?)` to
-    /// `(top-level error code or decision, whether the cache still holds the
-    /// id)`. Matches Kafka's `FetchMetadata.isFull()` classification (#871):
-    /// full/final is decided by `session_epoch` alone, and a full fetch's
-    /// session id (if any) is closed rather than epoch-checked.
-    #[test]
-    fn classification_matches_kafkas_epoch_only_rule() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "fetch session classify tests: classification matches kafkas epoch only rule"
+    )]
+    fn bdd_verify_classification_matches_kafkas_epoch_only_rule() {
         enum Want {
             Sessionless,
             NewSession,
@@ -454,6 +452,18 @@ mod tests {
             check!(cache.len() == 0, "{}", case.name);
         }
     }
+
+    /// Table over `(session_id, session_epoch, session exists?)` to
+    /// `(top-level error code or decision, whether the cache still holds the
+    /// id)`. Matches Kafka's `FetchMetadata.isFull()` classification (#871):
+    /// full/final is decided by `session_epoch` alone, and a full fetch's
+    /// session id (if any) is closed rather than epoch-checked.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/fetch_session/classify.feature",
+        name = "tests: classification matches kafkas epoch only rule"
+    )]
+    fn classification_matches_kafkas_epoch_only_rule() {}
 
     #[test]
     fn incremental_merges_request_topics_and_bumps_epoch() {

@@ -25,9 +25,9 @@ use {
 // Fixed ports above 10000 — the other multi-broker tests use 9092-9992;
 // this test steps into 10000+ to dodge TIME_WAIT + raft-quorum collisions
 // when JVM tests run sequentially via the nextest broker-jvm-acceptance test group.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn acks_all_durability() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance durability acks all: acks all durability")]
+async fn bdd_verify_acks_all_durability() {
     const TOPIC: &str = "krabka-acks-all-itest";
 
     // Ports 10092/10192/10292 + 10093/10193/10293 — the next free hundred
@@ -91,3 +91,12 @@ async fn acks_all_durability() {
         h.shutdown().await;
     }
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/acks_all.feature",
+    name = "acks all durability"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_durability() {}

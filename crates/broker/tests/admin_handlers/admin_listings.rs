@@ -14,13 +14,11 @@ use {
     },
 };
 
-/// `ListConfigResources` v1 with empty `resource_types` returns the default
-/// set: every topic and every broker, plus empty client-metrics. This test
-/// verifies the dispatch glue, the ACL gate's allow path, and the response
-/// encoding. The pure `collect_resources` helper has its own unit tests in
-/// `crates/broker/src/handlers/list_config_resources.rs`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_config_resources_default_set_includes_topics_and_brokers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin listings: list config resources default set includes topics and brokers"
+)]
+async fn bdd_verify_list_config_resources_default_set_includes_topics_and_brokers() {
     const RESOURCE_TYPE_BROKER: i8 = 4;
 
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
@@ -58,11 +56,24 @@ async fn list_config_resources_default_set_includes_topics_and_brokers() {
     );
 }
 
-/// `ListGroups` includes a group that the test helper injected directly into
-/// the `GroupManager`. The test does not run a full `JoinGroup` /
-/// `SyncGroup` exchange.
+/// `ListConfigResources` v1 with empty `resource_types` returns the default
+/// set: every topic and every broker, plus empty client-metrics. This test
+/// verifies the dispatch glue, the ACL gate's allow path, and the response
+/// encoding. The pure `collect_resources` helper has its own unit tests in
+/// `crates/broker/src/handlers/list_config_resources.rs`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_listings.feature",
+    name = "list config resources default set includes topics and brokers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_includes_freshly_created_group() {
+async fn list_config_resources_default_set_includes_topics_and_brokers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin listings: list groups includes freshly created group"
+)]
+async fn bdd_verify_list_groups_includes_freshly_created_group() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -81,3 +92,14 @@ async fn list_groups_includes_freshly_created_group() {
         "expected `test-group-listed` in group list, got {ids:?}"
     );
 }
+
+/// `ListGroups` includes a group that the test helper injected directly into
+/// the `GroupManager`. The test does not run a full `JoinGroup` /
+/// `SyncGroup` exchange.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_listings.feature",
+    name = "list groups includes freshly created group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_groups_includes_freshly_created_group() {}

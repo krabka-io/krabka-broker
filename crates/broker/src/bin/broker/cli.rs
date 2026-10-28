@@ -386,11 +386,11 @@ mod tests {
         krabka_telemetry::profiling::ProfilingConfig, krabka_units::secs, std::path::Path,
     };
 
-    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
-    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
-    /// `java.util.UUID` form.
-    #[test]
-    fn cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "bin broker cli tests: cluster id accepts kafka base64 and hyphenated uuid forms"
+    )]
+    fn bdd_verify_cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
         let _guard = env_guard();
         let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 
@@ -407,6 +407,16 @@ mod tests {
             Args::try_parse_from(["krabka-broker", "--cluster-id", "not-a-cluster-id"]).is_err()
         );
     }
+
+    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
+    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
+    /// `java.util.UUID` form.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/bin/broker/cli.feature",
+        name = "tests: cluster id accepts kafka base64 and hyphenated uuid forms"
+    )]
+    fn cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {}
 
     #[test]
     fn profiling_policy_reads_environment_and_cli_wins() {

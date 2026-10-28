@@ -467,8 +467,11 @@ fn standby_rows_cold_start() -> Vec<Row> {
     ]
 }
 
-#[test]
-fn assign_matches_kafka_sticky_task_assignor() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator unified streams assignor tests: assign matches kafka sticky task assignor"
+)]
+fn bdd_verify_assign_matches_kafka_sticky_task_assignor() {
     let rows = active_rows()
         .into_iter()
         .chain(active_rows_stateful())
@@ -496,6 +499,13 @@ fn assign_matches_kafka_sticky_task_assignor() {
         assert!(assign(&reversed, &input) == want, "{} (reversed)", row.name);
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/assignor/tests.feature",
+    name = "assign matches kafka sticky task assignor"
+)]
+fn assign_matches_kafka_sticky_task_assignor() {}
 
 #[test]
 fn range_assigns_each_member_a_task_of_every_subtopology() {

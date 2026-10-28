@@ -235,13 +235,11 @@ mod tests {
         std::{sync::Arc, time::Duration},
     };
 
-    /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
-    /// assigned, the assignor keeps what it can when a member joins, and the
-    /// response carries the assignment only for a join, a request with a
-    /// subscription, or a changed assignment. Each row is one heartbeat and
-    /// the whole response it gets.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heartbeat_assignments_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share actor heartbeat tests: heartbeat assignments match kafka"
+    )]
+    async fn bdd_verify_heartbeat_assignments_match_kafka() {
         use krabka_protocol::owned::{
             common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
             share_group_heartbeat_response::Assignment,
@@ -318,6 +316,19 @@ mod tests {
         }
     }
 
+    /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
+    /// assigned, the assignor keeps what it can when a member joins, and the
+    /// response carries the assignment only for a join, a request with a
+    /// subscription, or a changed assignment. Each row is one heartbeat and
+    /// the whole response it gets.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "tests: heartbeat assignments match kafka"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_assignments_match_kafka() {}
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn member_limit_rejects_only_new_members() {
         let (metadata, _id) = metadata_with_topic().call();
@@ -349,12 +360,11 @@ mod tests {
         .await;
     }
 
-    /// Kafka's `shareGroupLeave`: a known member is fenced, with its records
-    /// tombstoned and the group epoch bumped, and the response echoes its id
-    /// and epoch `-1`. An unknown member answers `UNKNOWN_MEMBER_ID` and
-    /// leaves the group and the log untouched.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn leave_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share actor heartbeat tests: leave matches kafka"
+    )]
+    async fn bdd_verify_leave_matches_kafka() {
         // (leaving member id, expected response, expected new batches,
         // expected group epoch afterwards)
         let rows = [
@@ -415,6 +425,18 @@ mod tests {
         }
     }
 
+    /// Kafka's `shareGroupLeave`: a known member is fenced, with its records
+    /// tombstoned and the group epoch bumped, and the response echoes its id
+    /// and epoch `-1`. An unknown member answers `UNKNOWN_MEMBER_ID` and
+    /// leaves the group and the log untouched.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "tests: leave matches kafka"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leave_matches_kafka() {}
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stale_epoch_is_fenced() {
         let (_coord, _log, handle) = subscribed_group()
@@ -428,13 +450,11 @@ mod tests {
         assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
     }
 
-    /// The member epoch rule of Kafka's `throwIfShareGroupMemberEpochIsInvalid`.
-    /// Member `m1` is at epoch 4 with previous epoch 2: it joins at epoch 2,
-    /// `m2` and `m3` join (group epochs 3 and 4), and `m1` heartbeats once at
-    /// epoch 2. Each row sends one heartbeat on a fresh group and compares the
-    /// whole response.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn member_epoch_rule_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share actor heartbeat tests: member epoch rule matches kafka"
+    )]
+    async fn bdd_verify_member_epoch_rule_matches_kafka() {
         // (member id, request epoch, accepted)
         let rows = [
             ("m1", 0, true),
@@ -498,6 +518,19 @@ mod tests {
             check!(resp == expected, "row {index}");
         }
     }
+
+    /// The member epoch rule of Kafka's `throwIfShareGroupMemberEpochIsInvalid`.
+    /// Member `m1` is at epoch 4 with previous epoch 2: it joins at epoch 2,
+    /// `m2` and `m3` join (group epochs 3 and 4), and `m1` heartbeats once at
+    /// epoch 2. Each row sends one heartbeat on a fresh group and compares the
+    /// whole response.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/heartbeat.feature",
+        name = "tests: member epoch rule matches kafka"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn member_epoch_rule_matches_kafka() {}
 
     /// A heartbeat that carries a rack id replaces the stored one, a rejoin at
     /// epoch 0 included, and the member metadata record carries the new rack.

@@ -1644,8 +1644,11 @@ mod tests {
         },
     };
 
-    #[test]
-    fn an_idempotent_producer_stays_within_kafka_s_in_flight_limit() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "workload tests: an idempotent producer stays within kafka s in flight limit"
+    )]
+    fn bdd_verify_an_idempotent_producer_stays_within_kafka_s_in_flight_limit() {
         // (enable_idempotence, expected cap)
         let cases = [(true, 5), (false, 128)];
         for (enable_idempotence, expected) in cases {
@@ -1655,6 +1658,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/workload.feature",
+        name = "tests: an idempotent producer stays within kafka s in flight limit"
+    )]
+    fn an_idempotent_producer_stays_within_kafka_s_in_flight_limit() {}
 
     fn cfg(broker_count: u32) -> DriverConfig {
         DriverConfig {

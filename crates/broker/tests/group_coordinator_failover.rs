@@ -388,22 +388,12 @@ async fn retry_until_moved(
     }
 }
 
-/// Offsets that a KIP-848 group and a classic group committed survive their
-/// coordinator dying behind a replication barrier, the commits that timed out
-/// behind it do not, and every client answer during the move is a retriable
-/// coordinator error.
-///
-/// Both groups live on the one `__consumer_offsets` partition. Each commits
-/// an offset that is acknowledged, so replicated. The coordinator's relay is
-/// then cut, its followers stay in the ISR, and each group commits a newer
-/// offset, which reaches the coordinator's log only: Kafka answers both
-/// commits `COORDINATOR_NOT_AVAILABLE` after the write timeout, and an
-/// `OffsetFetch` still reads the acknowledged offsets. The coordinator then
-/// dies, a follower takes the partition over, and the new coordinator serves
-/// the acknowledged offsets, the KIP-848 member at its epoch, and the classic
-/// member at its generation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "group coordinator failover: acknowledged offsets survive a coordinator failover behind a replication barrier"
+)]
+async fn bdd_verify_acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier()
+ {
     let mut cluster = RelayedCluster::start(|config| {
         config.offsets_topic_num_partitions = 1;
         // The coordinator keeps its followers in the ISR while they cannot
@@ -602,3 +592,25 @@ async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replicatio
     }
     cluster.shutdown().await;
 }
+
+/// Offsets that a KIP-848 group and a classic group committed survive their
+/// coordinator dying behind a replication barrier, the commits that timed out
+/// behind it do not, and every client answer during the move is a retriable
+/// coordinator error.
+///
+/// Both groups live on the one `__consumer_offsets` partition. Each commits
+/// an offset that is acknowledged, so replicated. The coordinator's relay is
+/// then cut, its followers stay in the ISR, and each group commits a newer
+/// offset, which reaches the coordinator's log only: Kafka answers both
+/// commits `COORDINATOR_NOT_AVAILABLE` after the write timeout, and an
+/// `OffsetFetch` still reads the acknowledged offsets. The coordinator then
+/// dies, a follower takes the partition over, and the new coordinator serves
+/// the acknowledged offsets, the KIP-848 member at its epoch, and the classic
+/// member at its generation.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_coordinator_failover.feature",
+    name = "acknowledged offsets survive a coordinator failover behind a replication barrier"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier() {}

@@ -85,8 +85,11 @@ async fn create_topic(p: &support::InProcess, request: CreateTopicsRequest) {
     assert!(response.topics[0].error_code == 0, "{response:?}");
 }
 
-#[tokio::test]
-async fn named_request_returns_listed_topics_with_partitions() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: named request returns listed topics with partitions"
+)]
+async fn bdd_verify_named_request_returns_listed_topics_with_partitions() {
     let p = support::start().await;
     create_alpha_beta().p(&p).alpha_partitions(2).call().await;
 
@@ -120,8 +123,19 @@ async fn named_request_returns_listed_topics_with_partitions() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "named request returns listed topics with partitions"
+)]
 #[tokio::test]
-async fn fetch_all_returns_topics_in_alphabetical_order() {
+async fn named_request_returns_listed_topics_with_partitions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: fetch all returns topics in alphabetical order"
+)]
+async fn bdd_verify_fetch_all_returns_topics_in_alphabetical_order() {
     let p = support::start().await;
     // Create in non-alphabetical order to prove the broker sorts.
     create_topic(&p, configured_topic_request().topic("gamma").call()).await;
@@ -149,8 +163,19 @@ async fn fetch_all_returns_topics_in_alphabetical_order() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "fetch all returns topics in alphabetical order"
+)]
 #[tokio::test]
-async fn unknown_topic_in_named_request_returns_error_row() {
+async fn fetch_all_returns_topics_in_alphabetical_order() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: unknown topic in named request returns error row"
+)]
+async fn bdd_verify_unknown_topic_in_named_request_returns_error_row() {
     let p = support::start().await;
     create_topic(&p, configured_topic_request().topic("real-topic").call()).await;
 
@@ -176,14 +201,19 @@ async fn unknown_topic_in_named_request_returns_error_row() {
     p.broker.shutdown().await;
 }
 
-/// The JVM 3.8 admin client NPEs when `eligibleLeaderReplicas` or
-/// `lastKnownElr` decode as `null`. The NPE happens in
-/// `DescribeTopicPartitionsResponse.partitionToTopicPartitionInfo`. The
-/// schema marks both nullable, but real Kafka brokers always emit empty
-/// lists. This test pins the empty-list shape so the broker does not
-/// regress.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "unknown topic in named request returns error row"
+)]
 #[tokio::test]
-async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
+async fn unknown_topic_in_named_request_returns_error_row() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: elr lists are empty not null for jvm 3 8 admin compatibility"
+)]
+async fn bdd_verify_elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
     let DescribedTopic { p, response: resp } = Box::pin(described_topic("t", 1)).await;
 
     assert!(resp.topics.len() == 1);
@@ -203,22 +233,31 @@ async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
     p.broker.shutdown().await;
 }
 
+/// The JVM 3.8 admin client NPEs when `eligibleLeaderReplicas` or
+/// `lastKnownElr` decode as `null`. The NPE happens in
+/// `DescribeTopicPartitionsResponse.partitionToTopicPartitionInfo`. The
+/// schema marks both nullable, but real Kafka brokers always emit empty
+/// lists. This test pins the empty-list shape so the broker does not
+/// regress.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "elr lists are empty not null for jvm 3 8 admin compatibility"
+)]
+#[tokio::test]
+async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {}
+
 /// The `DescribeTopicPartitions` request the ELR-downgrade case sends twice,
 /// once on either side of the downgrade.
 fn describe_request() -> DescribeTopicPartitionsRequest {
     describe_topics_request(&["t"], 2000, None)
 }
 
-/// KIP-966: a downgrade of `eligible.leader.replicas.version` to 0 clears the
-/// memberships the feature published, so `DescribeTopicPartitions` reports an
-/// empty `Elr` afterwards.
-///
-/// This is the read side of Kafka's `generateRecordsForCleaningElr`. The
-/// membership is seeded as the topic-config override the controller publishes,
-/// which is how krabka carries ELR, and the downgrade goes through
-/// `UpdateFeatures` exactly as `kafka-features downgrade` sends it.
-#[tokio::test]
-async fn a_feature_downgrade_empties_the_reported_elr() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: a feature downgrade empties the reported elr"
+)]
+async fn bdd_verify_a_feature_downgrade_empties_the_reported_elr() {
     let p = support::start().await;
     create_topic(&p, configured_topic_request().topic("t").call()).await;
 
@@ -322,8 +361,27 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
     p.broker.shutdown().await;
 }
 
+/// KIP-966: a downgrade of `eligible.leader.replicas.version` to 0 clears the
+/// memberships the feature published, so `DescribeTopicPartitions` reports an
+/// empty `Elr` afterwards.
+///
+/// This is the read side of Kafka's `generateRecordsForCleaningElr`. The
+/// membership is seeded as the topic-config override the controller publishes,
+/// which is how krabka carries ELR, and the downgrade goes through
+/// `UpdateFeatures` exactly as `kafka-features downgrade` sends it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "a feature downgrade empties the reported elr"
+)]
 #[tokio::test]
-async fn topic_authorized_operations_populated_for_super_user() {
+async fn a_feature_downgrade_empties_the_reported_elr() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: topic authorized operations populated for super user"
+)]
+async fn bdd_verify_topic_authorized_operations_populated_for_super_user() {
     let DescribedTopic { p, response: resp } = Box::pin(described_topic("t", 1)).await;
 
     assert!(resp.topics.len() == 1);
@@ -340,8 +398,19 @@ async fn topic_authorized_operations_populated_for_super_user() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "topic authorized operations populated for super user"
+)]
 #[tokio::test]
-async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
+async fn topic_authorized_operations_populated_for_super_user() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe topic partitions: pagination caps response at partition limit and returns next cursor"
+)]
+async fn bdd_verify_pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
     let p = support::start().await;
     create_topic(
         &p,
@@ -396,6 +465,14 @@ async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_topic_partitions.feature",
+    name = "pagination caps response at partition limit and returns next cursor"
+)]
+#[tokio::test]
+async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {}
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct AlphaBetaTopicsSetup {

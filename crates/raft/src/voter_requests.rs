@@ -540,204 +540,203 @@ mod tests {
         );
     }
 
-    #[test]
-    fn replica_key_names_the_directory_in_kafka_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "voter requests tests: replica key names the directory in kafka form"
+    )]
+    fn bdd_verify_replica_key_names_the_directory_in_kafka_form() {
         check!(replica_key(3, WireUuid::ZERO) == "ReplicaKey(id=3, directoryId=<undefined>)");
         check!(replica_key(3, DIRECTORY) == "ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ)");
     }
 
-    #[yare::parameterized(
-        foreign_cluster_follower = {
-            "foreign cluster id, on a follower",
-            AddRaftVoterRequest { cluster_id: Some("cluster-b".into()), ..add_voter_request() },
-            false,
-            Some(foreign_cluster_refusal())
-        },
-        follower = {
-            "a follower",
-            add_voter_request(),
-            false,
-            Some((NOT_LEADER_OR_FOLLOWER, None))
-        },
-        invalid_follower = {
-            "a follower, with an invalid voter",
-            AddRaftVoterRequest { voter_id: -1, ..add_voter_request() },
-            false,
-            Some((NOT_LEADER_OR_FOLLOWER, None))
-        },
-        negative_voter = {
-            "negative voter id",
-            AddRaftVoterRequest { voter_id: -1, ..add_voter_request() },
-            true,
-            Some((INVALID_REQUEST, Some("Add voter request didn't include a valid voter".into())))
-        },
-        zero_directory = {
-            "zero directory id",
-            AddRaftVoterRequest { voter_directory_id: WireUuid::ZERO, ..add_voter_request() },
-            true,
-            Some((INVALID_REQUEST, Some("Add voter request didn't include a valid voter".into())))
-        },
-        no_listeners = {
-            "no listeners",
-            AddRaftVoterRequest { listeners: Vec::new(), ..add_voter_request() },
-            true,
-            Some((INVALID_REQUEST, Some("Add voter request didn't include a valid voter".into())))
-        },
-        no_controller_listener = {
-            "no controller listener",
-            {
-                let mut request = add_voter_request();
-                request.listeners[0].name = "PLAINTEXT".into();
-                request
-            },
-            true,
-            Some((
-                INVALID_REQUEST,
-                Some(
-                    "Add voter request didn't include the endpoint for the default listener CONTROLLER"
-                        .into(),
-                ),
-            )),
-        },
-        this_cluster = {
-            "this cluster",
-            AddRaftVoterRequest { cluster_id: Some(CLUSTER.into()), ..add_voter_request() },
-            true,
-            None
-        },
-        no_cluster_id = { "no cluster id", add_voter_request(), true, None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/voter_requests.feature",
+        name = "tests: replica key names the directory in kafka form"
     )]
-    fn add_voter_checks_run_in_kafka_order(
-        label: &'static str,
-        request: AddRaftVoterRequest,
-        is_leader: bool,
-        expected: Option<Refusal>,
-    ) {
+    fn replica_key_names_the_directory_in_kafka_form() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "voter requests tests: add voter checks run in kafka order for {example}"
+    )]
+    fn bdd_verify_add_voter_checks_run_in_kafka_order(example: String) {
+        type Example = (&'static str, AddRaftVoterRequest, bool, Option<Refusal>);
+        let (label , request , is_leader , expected ,) : Example = match example . as_str () { "foreign cluster follower" => ("foreign cluster id, on a follower" , AddRaftVoterRequest { cluster_id : Some ("cluster-b" . into ()) , .. add_voter_request () } , false , Some (foreign_cluster_refusal ()) ,) , "follower" => ("a follower" , add_voter_request () , false , Some ((NOT_LEADER_OR_FOLLOWER , None)) ,) , "invalid follower" => ("a follower, with an invalid voter" , AddRaftVoterRequest { voter_id : - 1 , .. add_voter_request () } , false , Some ((NOT_LEADER_OR_FOLLOWER , None)) ,) , "negative voter" => ("negative voter id" , AddRaftVoterRequest { voter_id : - 1 , .. add_voter_request () } , true , Some ((INVALID_REQUEST , Some ("Add voter request didn't include a valid voter" . into ()))) ,) , "zero directory" => ("zero directory id" , AddRaftVoterRequest { voter_directory_id : WireUuid :: ZERO , .. add_voter_request () } , true , Some ((INVALID_REQUEST , Some ("Add voter request didn't include a valid voter" . into ()))) ,) , "no listeners" => ("no listeners" , AddRaftVoterRequest { listeners : Vec :: new () , .. add_voter_request () } , true , Some ((INVALID_REQUEST , Some ("Add voter request didn't include a valid voter" . into ()))) ,) , "no controller listener" => ("no controller listener" , { let mut request = add_voter_request () ; request . listeners [0] . name = "PLAINTEXT" . into () ; request } , true , Some ((INVALID_REQUEST , Some ("Add voter request didn't include the endpoint for the default listener CONTROLLER" . into () ,) ,)) ,) , "this cluster" => ("this cluster" , AddRaftVoterRequest { cluster_id : Some (CLUSTER . into ()) , .. add_voter_request () } , true , None ,) , "no cluster id" => ("no cluster id" , add_voter_request () , true , None ,) , _ => panic ! ("unknown BDD example: {example}") , } ;
+
         check!(
             add_voter_refusal(&request, CLUSTER, &quorum(is_leader)) == expected,
             "{label}"
         );
     }
 
-    #[yare::parameterized(
-        foreign_cluster = {
-            "foreign cluster id",
-            remove_voter_request(Some("cluster-b"), 2, DIRECTORY),
-            true,
-            Some(foreign_cluster_refusal()),
-        },
-        follower = {
-            "a follower",
-            remove_voter_request(None, -1, DIRECTORY),
-            false,
-            Some((NOT_LEADER_OR_FOLLOWER, None)),
-        },
-        negative_voter = {
-            "negative voter id",
-            remove_voter_request(None, -1, DIRECTORY),
-            true,
-            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into()))),
-        },
-        zero_directory = {
-            "zero directory id",
-            remove_voter_request(None, 2, WireUuid::ZERO),
-            true,
-            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into()))),
-        },
-        valid_voter = {
-            "a valid voter",
-            remove_voter_request(Some(CLUSTER), 2, DIRECTORY),
-            true,
-            None,
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/voter_requests.feature",
+        name = "tests: add voter checks run in kafka order"
     )]
-    fn remove_voter_checks_run_in_kafka_order(
-        label: &'static str,
-        request: RemoveRaftVoterRequest,
-        is_leader: bool,
-        expected: Option<Refusal>,
-    ) {
+    fn add_voter_checks_run_in_kafka_order(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "voter requests tests: remove voter checks run in kafka order for {example}"
+    )]
+    fn bdd_verify_remove_voter_checks_run_in_kafka_order(example: String) {
+        type Example = (&'static str, RemoveRaftVoterRequest, bool, Option<Refusal>);
+        let (label, request, is_leader, expected): Example = match example.as_str() {
+            "foreign cluster" => (
+                "foreign cluster id",
+                remove_voter_request(Some("cluster-b"), 2, DIRECTORY),
+                true,
+                Some(foreign_cluster_refusal()),
+            ),
+            "follower" => (
+                "a follower",
+                remove_voter_request(None, -1, DIRECTORY),
+                false,
+                Some((NOT_LEADER_OR_FOLLOWER, None)),
+            ),
+            "negative voter" => (
+                "negative voter id",
+                remove_voter_request(None, -1, DIRECTORY),
+                true,
+                Some((
+                    INVALID_REQUEST,
+                    Some("Remove voter request didn't include a valid voter".into()),
+                )),
+            ),
+            "zero directory" => (
+                "zero directory id",
+                remove_voter_request(None, 2, WireUuid::ZERO),
+                true,
+                Some((
+                    INVALID_REQUEST,
+                    Some("Remove voter request didn't include a valid voter".into()),
+                )),
+            ),
+            "valid voter" => (
+                "a valid voter",
+                remove_voter_request(Some(CLUSTER), 2, DIRECTORY),
+                true,
+                None,
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(
             remove_voter_refusal(&request, CLUSTER, &quorum(is_leader)) == expected,
             "{label}"
         );
     }
 
-    #[yare::parameterized(
-        foreign_cluster = {
-            "foreign cluster id",
-            UpdateRaftVoterRequest { cluster_id: Some("cluster-b".into()), ..update_voter_request() },
-            true,
-            Some(INCONSISTENT_CLUSTER_ID),
-        },
-        epoch_below = {
-            "an epoch below the local one",
-            UpdateRaftVoterRequest { current_leader_epoch: 6, ..update_voter_request() },
-            true,
-            Some(FENCED_LEADER_EPOCH),
-        },
-        epoch_above = {
-            "an epoch above the local one",
-            UpdateRaftVoterRequest { current_leader_epoch: 8, ..update_voter_request() },
-            true,
-            Some(UNKNOWN_LEADER_EPOCH),
-        },
-        follower = { "a follower", update_voter_request(), false, Some(NOT_LEADER_OR_FOLLOWER) },
-        zero_directory = {
-            "zero directory id",
-            UpdateRaftVoterRequest { voter_directory_id: WireUuid::ZERO, ..update_voter_request() },
-            true,
-            Some(INVALID_REQUEST),
-        },
-        negative_kraft_version = {
-            "a negative kraft.version",
-            UpdateRaftVoterRequest {
-                k_raft_version_feature: KRaftVersionFeature {
-                    min_supported_version: -1,
-                    ..update_voter_request().k_raft_version_feature
-                },
-                ..update_voter_request()
-            },
-            true,
-            Some(INVALID_REQUEST),
-        },
-        inverted_kraft_version = {
-            "an inverted kraft.version range",
-            UpdateRaftVoterRequest {
-                k_raft_version_feature: KRaftVersionFeature {
-                    min_supported_version: 2,
-                    ..update_voter_request().k_raft_version_feature
-                },
-                ..update_voter_request()
-            },
-            true,
-            Some(INVALID_REQUEST),
-        },
-        no_controller_listener = {
-            "no controller listener",
-            UpdateRaftVoterRequest {
-                listeners: vec![UpdateListener {
-                    name: "PLAINTEXT".into(),
-                    ..Default::default()
-                }],
-                ..update_voter_request()
-            },
-            true,
-            Some(INVALID_REQUEST),
-        },
-        valid_update = { "a valid update", update_voter_request(), true, None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/voter_requests.feature",
+        name = "tests: remove voter checks run in kafka order"
     )]
-    fn update_voter_checks_run_in_kafka_order(
-        label: &'static str,
-        request: UpdateRaftVoterRequest,
-        is_leader: bool,
-        expected: Option<i16>,
-    ) {
+    fn remove_voter_checks_run_in_kafka_order(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "voter requests tests: update voter checks run in kafka order for {example}"
+    )]
+    fn bdd_verify_update_voter_checks_run_in_kafka_order(example: String) {
+        type Example = (&'static str, UpdateRaftVoterRequest, bool, Option<i16>);
+        let (label, request, is_leader, expected): Example = match example.as_str() {
+            "foreign cluster" => (
+                "foreign cluster id",
+                UpdateRaftVoterRequest {
+                    cluster_id: Some("cluster-b".into()),
+                    ..update_voter_request()
+                },
+                true,
+                Some(INCONSISTENT_CLUSTER_ID),
+            ),
+            "epoch below" => (
+                "an epoch below the local one",
+                UpdateRaftVoterRequest {
+                    current_leader_epoch: 6,
+                    ..update_voter_request()
+                },
+                true,
+                Some(FENCED_LEADER_EPOCH),
+            ),
+            "epoch above" => (
+                "an epoch above the local one",
+                UpdateRaftVoterRequest {
+                    current_leader_epoch: 8,
+                    ..update_voter_request()
+                },
+                true,
+                Some(UNKNOWN_LEADER_EPOCH),
+            ),
+            "follower" => (
+                "a follower",
+                update_voter_request(),
+                false,
+                Some(NOT_LEADER_OR_FOLLOWER),
+            ),
+            "zero directory" => (
+                "zero directory id",
+                UpdateRaftVoterRequest {
+                    voter_directory_id: WireUuid::ZERO,
+                    ..update_voter_request()
+                },
+                true,
+                Some(INVALID_REQUEST),
+            ),
+            "negative kraft version" => (
+                "a negative kraft.version",
+                UpdateRaftVoterRequest {
+                    k_raft_version_feature: KRaftVersionFeature {
+                        min_supported_version: -1,
+                        ..update_voter_request().k_raft_version_feature
+                    },
+                    ..update_voter_request()
+                },
+                true,
+                Some(INVALID_REQUEST),
+            ),
+            "inverted kraft version" => (
+                "an inverted kraft.version range",
+                UpdateRaftVoterRequest {
+                    k_raft_version_feature: KRaftVersionFeature {
+                        min_supported_version: 2,
+                        ..update_voter_request().k_raft_version_feature
+                    },
+                    ..update_voter_request()
+                },
+                true,
+                Some(INVALID_REQUEST),
+            ),
+            "no controller listener" => (
+                "no controller listener",
+                UpdateRaftVoterRequest {
+                    listeners: vec![UpdateListener {
+                        name: "PLAINTEXT".into(),
+                        ..Default::default()
+                    }],
+                    ..update_voter_request()
+                },
+                true,
+                Some(INVALID_REQUEST),
+            ),
+            "valid update" => ("a valid update", update_voter_request(), true, None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(
             update_voter_refusal(&request, CLUSTER, &quorum(is_leader)) == expected,
             "{label}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/voter_requests.feature",
+        name = "tests: update voter checks run in kafka order"
+    )]
+    fn update_voter_checks_run_in_kafka_order(example: String) { let _ = example; }
 
     #[yare::parameterized(
         known_leader = {
@@ -765,62 +764,26 @@ mod tests {
         check!(update_voter_current_leader(&quorum) == expected, "{label}");
     }
 
-    #[yare::parameterized(
-        committed = { "committed", Ok(ReconfigOutcome::Committed), (0, None) },
-        not_leader = {
-            "not the leader",
-            Ok(ReconfigOutcome::NotLeader { leader: Some(NodeId(2)) }),
-            (NOT_LEADER_OR_FOLLOWER, None)
-        },
-        lagging = {
-            "a lagging candidate",
-            Err(RaftError::VoterNotCaughtUp { id: NodeId(3), lag: 10 }),
-            (
-                REQUEST_TIMED_OUT,
-                Some(format!(
-                    "Aborted add voter operation for {TEST_VOTER_KEY} since it is lagging behind"
-                )),
-            ),
-        },
-        pending_change = {
-            "a pending change",
-            Err(RaftError::ReconfigInProgress),
-            (
-                REQUEST_TIMED_OUT,
-                Some("Request timed out waiting for leader to handle previous voter change request".into()),
-            ),
-        },
-        duplicate_voter = {
-            "a duplicate voter",
-            Err(RaftError::DuplicateVoter(NodeId(3))),
-            (
-                DUPLICATE_VOTER,
-                Some(format!(
-                    "The voter id for {TEST_VOTER_KEY} is already part of the set of voters"
-                )),
-            ),
-        },
-        unknown_voter = {
-            "an unknown voter",
-            Err(RaftError::VoterNotFound(NodeId(3))),
-            (VOTER_NOT_FOUND, Some(format!("Cannot remove voter {TEST_VOTER_KEY} from the set of voters")))
-        },
-        rejected_change = {
-            "a rejected change",
-            Err(RaftError::ReconfigRejected("empty voter set".into())),
-            (INVALID_REQUEST, Some("empty voter set".into()))
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "voter requests tests: reconfiguration outcomes get kafka codes for {example}"
     )]
-    fn reconfiguration_outcomes_get_kafka_codes(
-        label: &'static str,
-        result: Result<ReconfigOutcome, RaftError>,
-        expected: Refusal,
-    ) {
+    fn bdd_verify_reconfiguration_outcomes_get_kafka_codes(example: String) {
+        type Example = (&'static str, Result<ReconfigOutcome, RaftError>, Refusal);
+        let (label , result , expected ,) : Example = match example . as_str () { "committed" => ("committed" , Ok (ReconfigOutcome :: Committed) , (0 , None) ,) , "not leader" => ("not the leader" , Ok (ReconfigOutcome :: NotLeader { leader : Some (NodeId (2)) }) , (NOT_LEADER_OR_FOLLOWER , None) ,) , "lagging" => ("a lagging candidate" , Err (RaftError :: VoterNotCaughtUp { id : NodeId (3) , lag : 10 }) , (REQUEST_TIMED_OUT , Some (format ! ("Aborted add voter operation for {TEST_VOTER_KEY} since it is lagging behind")) ,) ,) , "pending change" => ("a pending change" , Err (RaftError :: ReconfigInProgress) , (REQUEST_TIMED_OUT , Some ("Request timed out waiting for leader to handle previous voter change request" . into ()) ,) ,) , "duplicate voter" => ("a duplicate voter" , Err (RaftError :: DuplicateVoter (NodeId (3))) , (DUPLICATE_VOTER , Some (format ! ("The voter id for {TEST_VOTER_KEY} is already part of the set of voters")) ,) ,) , "unknown voter" => ("an unknown voter" , Err (RaftError :: VoterNotFound (NodeId (3))) , (VOTER_NOT_FOUND , Some (format ! ("Cannot remove voter {TEST_VOTER_KEY} from the set of voters"))) ,) , "rejected change" => ("a rejected change" , Err (RaftError :: ReconfigRejected ("empty voter set" . into ())) , (INVALID_REQUEST , Some ("empty voter set" . into ())) ,) , _ => panic ! ("unknown BDD example: {example}") , } ;
+
         check!(
             reconfiguration_refusal(result, VoterOperation::Add, 3, DIRECTORY) == expected,
             "{label}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/voter_requests.feature",
+        name = "tests: reconfiguration outcomes get kafka codes"
+    )]
+    fn reconfiguration_outcomes_get_kafka_codes(example: String) { let _ = example; }
 
     /// `AddVoterHandler` and `RemoveVoterHandler` name their own operation in
     /// the `UNSUPPORTED_VERSION` message, and the level is the finalized one.

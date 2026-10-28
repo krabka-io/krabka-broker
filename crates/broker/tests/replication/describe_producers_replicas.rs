@@ -265,14 +265,11 @@ fn reported_timestamp(answer: &DescribeProducersResponse, producer_id: i64) -> i
         .map_or(-1, |row| row.last_timestamp)
 }
 
-/// The leader appends batches of an idempotent producer and of three
-/// transactional producers: one commits at its epoch, one aborts at the next
-/// epoch, and one keeps its transaction open. Once every follower has the
-/// whole log, each broker gives the same `DescribeProducers` answer: one row
-/// for each producer, in producer id order, with the sequence, the timestamp
-/// and the transaction fields of the producer state of its log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_replica_describes_the_producers_of_its_log() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication describe producers replicas: every replica describes the producers of its log"
+)]
+async fn bdd_verify_every_replica_describes_the_producers_of_its_log() {
     let _g = cluster_lock().lock().await;
     let cluster = start_cluster().await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
@@ -420,3 +417,17 @@ async fn every_replica_describes_the_producers_of_its_log() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// The leader appends batches of an idempotent producer and of three
+/// transactional producers: one commits at its epoch, one aborts at the next
+/// epoch, and one keeps its transaction open. Once every follower has the
+/// whole log, each broker gives the same `DescribeProducers` answer: one row
+/// for each producer, in producer id order, with the sequence, the timestamp
+/// and the transaction fields of the producer state of its log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication/describe_producers_replicas.feature",
+    name = "every replica describes the producers of its log"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_replica_describes_the_producers_of_its_log() {}

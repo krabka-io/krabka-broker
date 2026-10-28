@@ -169,11 +169,11 @@ mod tests {
         assert2::assert!(names[0] != names[1]);
     }
 
-    /// `ReplicaState.updateFollowerState`: a fetch at or past the leader's log
-    /// end is caught up now, and one short of it is caught up as of the
-    /// previous fetch when it reaches the log end that fetch saw.
-    #[test]
-    fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "role tests: a fetch updates the caught up time by kafkas two branch rule"
+    )]
+    fn bdd_verify_a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
         /// A run of fetches and the progress the last of them leaves.
         struct Case {
             label: &'static str,
@@ -244,6 +244,16 @@ mod tests {
             assert2::assert!(actual == expected, "{label}");
         }
     }
+
+    /// `ReplicaState.updateFollowerState`: a fetch at or past the leader's log
+    /// end is caught up now, and one short of it is caught up as of the
+    /// previous fetch when it reaches the log end that fetch saw.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/role.feature",
+        name = "tests: a fetch updates the caught up time by kafkas two branch rule"
+    )]
+    fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {}
 
     /// `LeaderState.isReplicaCaughtUp`: caught up at some point, and fetched
     /// within the last hour.

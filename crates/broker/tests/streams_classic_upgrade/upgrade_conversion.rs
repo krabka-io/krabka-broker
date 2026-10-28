@@ -23,12 +23,11 @@ use {
     },
 };
 
-/// The broker converts a drained classic group to a streams group when a
-/// `StreamsGroupHeartbeat` arrives. A drained group has zero live members and
-/// keeps its committed offsets. Committed offsets survive the flip, and
-/// `OffsetFetch` can read them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_classic_group_converts_and_preserves_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic upgrade upgrade conversion: drained classic group converts and preserves offsets"
+)]
+async fn bdd_verify_drained_classic_group_converts_and_preserves_offsets() {
     let (broker, bootstrap, _dir) = boot().await;
 
     // Separate connections: JoinGroup parks the classic-protocol client for
@@ -115,3 +114,15 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
     // ── Phase 3: committed offsets survive the flip. ──
     assert_committed_offset(&streams_client, topic_id, 42).await;
 }
+
+/// The broker converts a drained classic group to a streams group when a
+/// `StreamsGroupHeartbeat` arrives. A drained group has zero live members and
+/// keeps its committed offsets. Committed offsets survive the flip, and
+/// `OffsetFetch` can read them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_upgrade/upgrade_conversion.feature",
+    name = "drained classic group converts and preserves offsets"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drained_classic_group_converts_and_preserves_offsets() {}

@@ -101,8 +101,11 @@ mod tests {
         assert2::assert,
     };
 
-    #[test]
-    fn target_assignment_member_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence assignment tests: target assignment member bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
         let v = ShareGroupTargetAssignmentMemberValue {
             topic_partitions: vec![(Uuid([1; 16]), vec![3])],
         };
@@ -116,6 +119,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",
+        name = "tests: target assignment member bytes match kafka schema"
+    )]
+    fn target_assignment_member_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_member_round_trip() {
@@ -134,8 +144,11 @@ mod tests {
         assert!(ShareGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn current_member_assignment_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence assignment tests: current member assignment bytes match kafka schema"
+    )]
+    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
         let v = ShareGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
@@ -150,6 +163,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",
+        name = "tests: current member assignment bytes match kafka schema"
+    )]
+    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     #[test]
     fn current_member_assignment_round_trip() {

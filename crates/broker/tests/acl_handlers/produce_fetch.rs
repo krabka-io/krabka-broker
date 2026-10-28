@@ -27,8 +27,9 @@ use {
     assert2::assert,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_denied_without_topic_acl() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers produce fetch: produce denied without topic acl")]
+async fn bdd_verify_produce_denied_without_topic_acl() {
     let (handle, _dir, addr) = start_denied_foo().await;
 
     // alice has NO Write-on-foo binding → Produce must return 29.
@@ -48,8 +49,17 @@ async fn produce_denied_without_topic_acl() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
+    name = "produce denied without topic acl"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_allowed_with_topic_write_acl() {
+async fn produce_denied_without_topic_acl() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers produce fetch: produce allowed with topic write acl")]
+async fn bdd_verify_produce_allowed_with_topic_write_acl() {
     // Commit the literal Allow Write grant through the controller.
     let (handle, _dir, addr) = start_alice_topic_grant(krabka_metadata::AclOperation::Write).await;
 
@@ -78,8 +88,17 @@ async fn produce_allowed_with_topic_write_acl() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
+    name = "produce allowed with topic write acl"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_denied_without_topic_read_acl() {
+async fn produce_allowed_with_topic_write_acl() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers produce fetch: fetch denied without topic read acl")]
+async fn bdd_verify_fetch_denied_without_topic_read_acl() {
     let (handle, _dir, addr) = start_denied_foo().await;
 
     // alice has NO Read-on-foo binding → Fetch must return 29 on the
@@ -104,3 +123,11 @@ async fn fetch_denied_without_topic_read_acl() {
         "alice has no Read ACL on foo, expected TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
+    name = "fetch denied without topic read acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_denied_without_topic_read_acl() {}

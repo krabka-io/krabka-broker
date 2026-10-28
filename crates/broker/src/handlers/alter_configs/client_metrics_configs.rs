@@ -65,11 +65,11 @@ mod tests {
         assert!(record == expected);
     }
 
-    /// `ClientMetricsConfigs.validate`: an unknown key, an out-of-range
-    /// interval and an empty subscription name are `InvalidRequestException`
-    /// (42), a value `ConfigDef` cannot parse is `ConfigException` (40).
-    #[test]
-    fn client_metrics_replacement_refusals_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter configs client metrics configs tests: client metrics replacement refusals match kafka"
+    )]
+    fn bdd_verify_client_metrics_replacement_refusals_match_kafka() {
         for (name, subscription, configs, expected) in [
             (
                 "interval below the minimum",
@@ -112,4 +112,14 @@ mod tests {
             assert2::check!(error == (expected.0, expected.1.to_owned()), "case {name}");
         }
     }
+
+    /// `ClientMetricsConfigs.validate`: an unknown key, an out-of-range
+    /// interval and an empty subscription name are `InvalidRequestException`
+    /// (42), a value `ConfigDef` cannot parse is `ConfigException` (40).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_configs/client_metrics_configs.feature",
+        name = "tests: client metrics replacement refusals match kafka"
+    )]
+    fn client_metrics_replacement_refusals_match_kafka() {}
 }

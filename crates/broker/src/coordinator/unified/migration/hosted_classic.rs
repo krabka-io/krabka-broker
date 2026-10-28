@@ -396,12 +396,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `classicGroupSyncToConsumerGroup`: (label, the group's
-    /// members, the request) to the whole answer. A served sync returns the
-    /// partitions the member is ASSIGNED, not its target, at the version of
-    /// its first protocol, and echoes the request's protocol type and name.
-    #[test]
-    fn classic_sync_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration hosted classic tests: classic sync follows kafka"
+    )]
+    fn bdd_verify_classic_sync_follows_kafka() {
         struct SyncRow {
             label: &'static str,
             members: Vec<MemberState>,
@@ -538,6 +537,17 @@ mod tests {
         }
     }
 
+    /// Kafka's `classicGroupSyncToConsumerGroup`: (label, the group's
+    /// members, the request) to the whole answer. A served sync returns the
+    /// partitions the member is ASSIGNED, not its target, at the version of
+    /// its first protocol, and echoes the request's protocol type and name.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
+        name = "tests: classic sync follows kafka"
+    )]
+    fn classic_sync_follows_kafka() {}
+
     /// Kafka's `checkAssignmentVersion`: the assignment is written at the
     /// version of the member's first protocol, a version above the highest
     /// the schema knows as the highest, and a negative version is an error.
@@ -573,13 +583,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `classicGroupHeartbeatToConsumerGroup`: (label, the member's
-    /// epoch and state, whether another member still holds the partition the
-    /// member waits for) to the answer. The member rejoins when the target
-    /// moved past it, when it revokes, and when the partition it waits for
-    /// is free.
-    #[test]
-    fn classic_heartbeat_asks_for_a_rejoin_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration hosted classic tests: classic heartbeat asks for a rejoin as kafka does"
+    )]
+    fn bdd_verify_classic_heartbeat_asks_for_a_rejoin_as_kafka_does() {
         let rows = [
             (
                 "reconciled",
@@ -641,6 +649,18 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `classicGroupHeartbeatToConsumerGroup`: (label, the member's
+    /// epoch and state, whether another member still holds the partition the
+    /// member waits for) to the answer. The member rejoins when the target
+    /// moved past it, when it revokes, and when the partition it waits for
+    /// is free.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
+        name = "tests: classic heartbeat asks for a rejoin as kafka does"
+    )]
+    fn classic_heartbeat_asks_for_a_rejoin_as_kafka_does() {}
 
     #[test]
     fn classic_heartbeat_waits_for_large_reordered_assignments_and_refreshes_sessions() {
@@ -715,10 +735,11 @@ mod tests {
         }
     }
 
-    /// The member checks of the classic `Heartbeat` are the sync's: (label,
-    /// request) to the error.
-    #[test]
-    fn classic_heartbeat_refuses_what_kafka_refuses() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified migration hosted classic tests: classic heartbeat refuses what kafka refuses"
+    )]
+    fn bdd_verify_classic_heartbeat_refuses_what_kafka_refuses() {
         let mut static_m = member("m", true);
         static_m.instance_id = Some("instance-1".into());
         let request = |member_id: &str, instance: Option<&str>, generation_id| HeartbeatRequest {
@@ -764,6 +785,15 @@ mod tests {
             );
         }
     }
+
+    /// The member checks of the classic `Heartbeat` are the sync's: (label,
+    /// request) to the error.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
+        name = "tests: classic heartbeat refuses what kafka refuses"
+    )]
+    fn classic_heartbeat_refuses_what_kafka_refuses() {}
 
     /// Kafka's `supportsClassicProtocols`: (label, protocol type, protocols)
     /// to whether a group whose classic members both support `range`, and one

@@ -74,13 +74,11 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
     .await;
 }
 
-/// Test #1: a successful OAUTHBEARER authentication carries
-/// `session_lifetime_ms ≈ exp - now`.
-///
-/// `session_lifetime_ms` is the KIP-368 wire field on
-/// `sasl_authenticate_response::SaslAuthenticateResponse v1+`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer session lifetime ms set from token exp"
+)]
+async fn bdd_verify_oauthbearer_session_lifetime_ms_set_from_token_exp() {
     let (_log_dir, handle, addr) =
         oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
@@ -101,14 +99,24 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
     handle.shutdown().await;
 }
 
-/// The broker clamps `session_lifetime_ms` when the listener sets
-/// `connections.max.reauth.ms`.
+/// Test #1: a successful OAUTHBEARER authentication carries
+/// `session_lifetime_ms ≈ exp - now`.
 ///
-/// The response value becomes `min(token_exp_ms - now_ms, cap * 1000)`. The
-/// dispatch loop anchors its deadline to the CLAMPED value, so the broker
-/// enforces what it told the client.
+/// `session_lifetime_ms` is the KIP-368 wire field on
+/// `sasl_authenticate_response::SaslAuthenticateResponse v1+`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session lifetime ms set from token exp"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_capped_by_connections_max_reauth() {
+async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer session capped by connections max reauth"
+)]
+async fn bdd_verify_oauthbearer_session_capped_by_connections_max_reauth() {
     let (_log_dir, handle, addr) = oauthbearer_fixture(
         oauthbearer_zero_skew_validator(),
         Some(krabka_units::millis(300)),
@@ -141,14 +149,25 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
     handle.shutdown().await;
 }
 
-/// Test #2: a request that arrives past the token's `exp` closes the TCP
-/// stream, and the client observes EOF on the next read.
+/// The broker clamps `session_lifetime_ms` when the listener sets
+/// `connections.max.reauth.ms`.
 ///
-/// The token is given a few seconds of life and the test waits it out, rather
-/// than jumping a paused tokio clock: the deadline is a wall-clock instant the
-/// dispatch loop compares each arriving request against, not a timer.
+/// The response value becomes `min(token_exp_ms - now_ms, cap * 1000)`. The
+/// dispatch loop anchors its deadline to the CLAMPED value, so the broker
+/// enforces what it told the client.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session capped by connections max reauth"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_session_expires_closes_connection() {
+async fn oauthbearer_session_capped_by_connections_max_reauth() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer session expires closes connection"
+)]
+async fn bdd_verify_oauthbearer_session_expires_closes_connection() {
     let (_log_dir, handle, addr) =
         oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
@@ -176,15 +195,25 @@ async fn oauthbearer_session_expires_closes_connection() {
     handle.shutdown().await;
 }
 
-/// Test #3: an in-band SaslHandshake/SaslAuthenticate pair with a fresh token
-/// on an already-authenticated stream resets the per-connection deadline.
+/// Test #2: a request that arrives past the token's `exp` closes the TCP
+/// stream, and the client observes EOF on the next read.
 ///
-/// The re-auth here runs *after* token A has already expired, which is what a
-/// JVM client does: it picks a re-auth point inside the window but acts on it
-/// only when it next has a request to write. The broker must serve the
-/// exchange and then re-arm the session from token B's `exp`.
+/// The token is given a few seconds of life and the test waits it out, rather
+/// than jumping a paused tokio clock: the deadline is a wall-clock instant the
+/// dispatch loop compares each arriving request against, not a timer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer session expires closes connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
+async fn oauthbearer_session_expires_closes_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer in band reauth with fresh token resets timer"
+)]
+async fn bdd_verify_oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     let (_log_dir, handle, addr) =
         oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
@@ -233,15 +262,26 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     handle.shutdown().await;
 }
 
-/// Test #4: the broker rejects an in-band re-auth with a token whose `sub`
-/// differs from the original principal name.
+/// Test #3: an in-band SaslHandshake/SaslAuthenticate pair with a fresh token
+/// on an already-authenticated stream resets the per-connection deadline.
 ///
-/// `sasl_authenticate_response::SaslAuthenticateResponse` carries
-/// `error_code = SASL_AUTHENTICATION_FAILED (58)`, and the connection closes.
-/// The client then reads EOF. KIP-368 forbids a change of principal across an
-/// in-band re-auth.
+/// The re-auth here runs *after* token A has already expired, which is what a
+/// JVM client does: it picks a re-auth point inside the window but acts on it
+/// only when it next has a request to write. The broker must serve the
+/// exchange and then re-arm the session from token B's `exp`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with fresh token resets timer"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
+async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer in band reauth with different principal closes"
+)]
+async fn bdd_verify_oauthbearer_in_band_reauth_with_different_principal_closes() {
     let (_log_dir, handle, addr) =
         oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
@@ -266,15 +306,26 @@ async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
     handle.shutdown().await;
 }
 
-/// Test #5: the broker rejects an in-band `SaslHandshake` whose `mechanism`
-/// differs from the mechanism it first negotiated.
+/// Test #4: the broker rejects an in-band re-auth with a token whose `sub`
+/// differs from the original principal name.
 ///
-/// The response carries `NONE`, and the next frame closes the connection
-/// (Kafka's `REAUTH_BAD_MECHANISM`). KIP-368 needs
-/// the same mechanism across an in-band re-auth, even when the broker would
-/// otherwise accept SCRAM on a fresh connection.
+/// `sasl_authenticate_response::SaslAuthenticateResponse` carries
+/// `error_code = SASL_AUTHENTICATION_FAILED (58)`, and the connection closes.
+/// The client then reads EOF. KIP-368 forbids a change of principal across an
+/// in-band re-auth.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with different principal closes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
+async fn oauthbearer_in_band_reauth_with_different_principal_closes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: oauthbearer in band reauth with different mechanism closes"
+)]
+async fn bdd_verify_oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     // Enable both OAUTHBEARER + SCRAM-SHA-512 on the same listener so a
     // fresh-connection SCRAM handshake WOULD succeed. The reject here
     // must be due to the same-mechanism rule, not "mechanism unknown".
@@ -343,24 +394,26 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     handle.shutdown().await;
 }
 
-/// Test #6: regression for PLAIN listeners.
+/// Test #5: the broker rejects an in-band `SaslHandshake` whose `mechanism`
+/// differs from the mechanism it first negotiated.
 ///
-/// A PLAIN `SaslAuthenticate` response must carry `session_lifetime_ms = 0`.
-/// The KIP-368 wire field has a meaning for OAUTHBEARER only. The dispatch
-/// loop must NOT arm a per-connection deadline. An advance of the tokio clock
-/// by one hour is harmless, and a Metadata RPC still succeeds.
-///
-/// The test uses the `current_thread` flavor, because `tokio::time::pause()`
-/// needs a single-threaded runtime. See the comment on test #2 for why we
-/// pause after the handshake and do not set `start_paused = true`.
-///
-/// The fixture switches `connections.max.idle.ms` off. That deadline is the
-/// other reason this connection could be closed an hour on, and it is not the
-/// one under test here -- `crates/broker/tests/connections_max_idle.rs` covers
-/// it. Leaving it at Kafka's ten minutes would close the connection for being
-/// idle and say nothing about the KIP-368 timer.
-#[tokio::test(flavor = "current_thread")]
-async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
+/// The response carries `NONE`, and the next frame closes the connection
+/// (Kafka's `REAUTH_BAD_MECHANISM`). KIP-368 needs
+/// the same mechanism across an in-band re-auth, even when the broker would
+/// otherwise accept SCRAM on a fresh connection.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "oauthbearer in band reauth with different mechanism closes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers oauthbearer sessions: plain listener session lifetime ms is zero and no timer"
+)]
+async fn bdd_verify_plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.connections_max_idle = Some(krabka_units::millis(0));
@@ -450,6 +503,30 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
 
     handle.shutdown().await;
 }
+
+/// Test #6: regression for PLAIN listeners.
+///
+/// A PLAIN `SaslAuthenticate` response must carry `session_lifetime_ms = 0`.
+/// The KIP-368 wire field has a meaning for OAUTHBEARER only. The dispatch
+/// loop must NOT arm a per-connection deadline. An advance of the tokio clock
+/// by one hour is harmless, and a Metadata RPC still succeeds.
+///
+/// The test uses the `current_thread` flavor, because `tokio::time::pause()`
+/// needs a single-threaded runtime. See the comment on test #2 for why we
+/// pause after the handshake and do not set `start_paused = true`.
+///
+/// The fixture switches `connections.max.idle.ms` off. That deadline is the
+/// other reason this connection could be closed an hour on, and it is not the
+/// one under test here -- `crates/broker/tests/connections_max_idle.rs` covers
+/// it. Leaving it at Kafka's ten minutes would close the connection for being
+/// idle and say nothing about the KIP-368 timer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/oauthbearer_sessions.feature",
+    name = "plain listener session lifetime ms is zero and no timer"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {}
 
 async fn read_session_end(stream: &mut TcpStream) -> usize {
     let mut buf = [0_u8; 16];

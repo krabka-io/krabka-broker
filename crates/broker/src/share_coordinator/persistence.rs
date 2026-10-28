@@ -363,14 +363,11 @@ mod tests {
         assert!(parse_state_key(&b.freeze()).is_err());
     }
 
-    /// The bytes of each value, derived field by field from Kafka's
-    /// `ShareSnapshotValue.json` and `ShareUpdateValue.json` at version 0:
-    /// the `i16` version, the fixed fields in schema order, a compact batch
-    /// array whose batches each end with an empty tag trailer, and a message
-    /// trailer that carries tag 0 only when `DeliveryCompleteCount` is not
-    /// `-1`.
-    #[test]
-    fn snapshot_values_match_the_kafka_layout() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator persistence tests: snapshot values match the kafka layout"
+    )]
+    fn bdd_verify_snapshot_values_match_the_kafka_layout() {
         let rows = [
             (
                 ShareSnapshotValue {
@@ -418,8 +415,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn update_values_match_the_kafka_layout() {
+    /// The bytes of each value, derived field by field from Kafka's
+    /// `ShareSnapshotValue.json` and `ShareUpdateValue.json` at version 0:
+    /// the `i16` version, the fixed fields in schema order, a compact batch
+    /// array whose batches each end with an empty tag trailer, and a message
+    /// trailer that carries tag 0 only when `DeliveryCompleteCount` is not
+    /// `-1`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/persistence.feature",
+        name = "tests: snapshot values match the kafka layout"
+    )]
+    fn snapshot_values_match_the_kafka_layout() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator persistence tests: update values match the kafka layout"
+    )]
+    fn bdd_verify_update_values_match_the_kafka_layout() {
         let rows = [
             (
                 ShareUpdateValue {
@@ -449,6 +462,13 @@ mod tests {
             check!(ShareUpdateValue::decode(&bytes).unwrap() == value);
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/persistence.feature",
+        name = "tests: update values match the kafka layout"
+    )]
+    fn update_values_match_the_kafka_layout() {}
 
     /// A reader skips a tag it does not know, and refuses a version other
     /// than 0 and a malformed tag 0.

@@ -343,6 +343,13 @@ crate.annotation(
     gen_binaries = ["cargo-mutants"],
     repositories = ["mutants"],
 )
+
+# Its nested-Cargo helper compiles even when no scenario uses it. Resolve the
+# command through PATH rather than embedding a host toolchain's absolute path.
+crate.annotation(
+    crate = "rstest-bdd-harness",
+    rustc_env = {"CARGO": "cargo"},
+)
 crate.annotation(
     crate = "aws-lc-rs",
     gen_build_script = "off",

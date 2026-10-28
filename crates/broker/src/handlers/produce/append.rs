@@ -550,15 +550,11 @@ mod tests {
         },
     };
 
-    /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
-    /// at `REQUEST_TIMED_OUT`, and `Partition.checkEnoughReplicasReachOffset`
-    /// answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark
-    /// arrived but the ISR is below the effective `min.insync.replicas`. It
-    /// reads that minimum at completion, so a change during the wait applies.
-    /// A partition that is gone or was replaced by a recreated topic answers
-    /// the code `ReplicaManager.getPartitionOrError` gives it, reached or not.
-    #[tokio::test]
-    async fn an_acks_all_wait_ends_with_kafkas_completion_code() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers produce append tests: an acks all wait ends with kafkas completion code"
+    )]
+    async fn bdd_verify_an_acks_all_wait_ends_with_kafkas_completion_code() {
         struct Case {
             name: &'static str,
             /// The frontier the high watermark has to reach. The log is
@@ -697,6 +693,21 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
+    /// at `REQUEST_TIMED_OUT`, and `Partition.checkEnoughReplicasReachOffset`
+    /// answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark
+    /// arrived but the ISR is below the effective `min.insync.replicas`. It
+    /// reads that minimum at completion, so a change during the wait applies.
+    /// A partition that is gone or was replaced by a recreated topic answers
+    /// the code `ReplicaManager.getPartitionOrError` gives it, reached or not.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/produce/append.feature",
+        name = "tests: an acks all wait ends with kafkas completion code"
+    )]
+    #[tokio::test]
+    async fn an_acks_all_wait_ends_with_kafkas_completion_code() {}
 
     #[tokio::test]
     async fn leadership_change_finishes_old_acks_before_publishing_the_new_target() {

@@ -138,15 +138,9 @@ async fn kafka_configs(args: &[&str]) -> Output {
 
 fn combined(output: &Output) -> String { support::combined_output(output) }
 
-/// The whole `broker-loggers` operator loop, driven by the real 4.3.1 tool.
-///
-/// One test and one broker: each `kafka-configs` invocation is a JVM start, so
-/// splitting the cases would multiply the container count without covering
-/// anything the ordering here does not already cover -- the alter has to be
-/// read back by a later describe to mean anything.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_describes_and_alters_broker_loggers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm broker loggers: kafka configs describes and alters broker loggers")]
+async fn bdd_verify_kafka_configs_describes_and_alters_broker_loggers() {
     let StartedBroker {
         broker: _broker,
         dir: _dir,
@@ -212,3 +206,18 @@ async fn kafka_configs_describes_and_alters_broker_loggers() {
         "deleting the override should restore the startup level:\n{rendered}"
     );
 }
+
+/// The whole `broker-loggers` operator loop, driven by the real 4.3.1 tool.
+///
+/// One test and one broker: each `kafka-configs` invocation is a JVM start, so
+/// splitting the cases would multiply the container count without covering
+/// anything the ordering here does not already cover -- the alter has to be
+/// read back by a later describe to mean anything.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_broker_loggers.feature",
+    name = "kafka configs describes and alters broker loggers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_configs_describes_and_alters_broker_loggers() {}

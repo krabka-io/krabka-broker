@@ -295,15 +295,11 @@ fn initialized(
     }
 }
 
-/// `InitializeShareGroupState` as Kafka's `ShareCoordinatorShard.initializeState`
-/// answers a second request on a key that state epoch 5 and start offset 100
-/// initialized. Kafka 4.3.1 skips the fence for a state epoch of `-1` and
-/// always writes a new snapshot; trunk refuses a negative state epoch and
-/// takes a repeat of the stored epoch and start offset as a no-op. The rows
-/// are the request's `(state epoch, start offset)`, then the result under
-/// Kafka 4.3.1 and under trunk.
-#[tokio::test]
-async fn initialize_follows_the_rules_of_each_kafka_release() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share coordinator coordinator state machine tests: initialize follows the rules of each kafka release"
+)]
+async fn bdd_verify_initialize_follows_the_rules_of_each_kafka_release() {
     let fenced = || refused(codes::FENCED_STATE_EPOCH, message::FENCED_STATE_EPOCH);
     let negative = || refused(codes::INVALID_REQUEST, message::NEGATIVE_STATE_EPOCH);
     let first = Some((5, 0, Offset(100), 0));
@@ -393,6 +389,21 @@ async fn initialize_follows_the_rules_of_each_kafka_release() {
         }
     }
 }
+
+/// `InitializeShareGroupState` as Kafka's `ShareCoordinatorShard.initializeState`
+/// answers a second request on a key that state epoch 5 and start offset 100
+/// initialized. Kafka 4.3.1 skips the fence for a state epoch of `-1` and
+/// always writes a new snapshot; trunk refuses a negative state epoch and
+/// takes a repeat of the stored epoch and start offset as a no-op. The rows
+/// are the request's `(state epoch, start offset)`, then the result under
+/// Kafka 4.3.1 and under trunk.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests.feature",
+    name = "initialize follows the rules of each kafka release"
+)]
+#[tokio::test]
+async fn initialize_follows_the_rules_of_each_kafka_release() {}
 
 /// A coordinator with stored state, and the image it runs over.
 struct Seeded {
@@ -697,11 +708,11 @@ fn refused_write_rows() -> Vec<WriteRow> {
     ]
 }
 
-/// `WriteShareGroupState` as Kafka's `ShareCoordinatorShard.writeState`
-/// answers it, under the rules of Kafka 4.3.1 and of Kafka trunk, and the
-/// stored summary after each write.
-#[tokio::test]
-async fn write_matches_kafka_checks_and_record_rules() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share coordinator coordinator state machine tests: write matches kafka checks and record rules"
+)]
+async fn bdd_verify_write_matches_kafka_checks_and_record_rules() {
     for trunk in [false, true] {
         for (index, row) in write_rows().into_iter().enumerate() {
             let WriteRequest {
@@ -743,6 +754,17 @@ async fn write_matches_kafka_checks_and_record_rules() {
         }
     }
 }
+
+/// `WriteShareGroupState` as Kafka's `ShareCoordinatorShard.writeState`
+/// answers it, under the rules of Kafka 4.3.1 and of Kafka trunk, and the
+/// stored summary after each write.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests.feature",
+    name = "write matches kafka checks and record rules"
+)]
+#[tokio::test]
+async fn write_matches_kafka_checks_and_record_rules() {}
 
 /// `ReadShareGroupState` as Kafka's `readStateAndMaybeUpdateLeaderEpoch`
 /// answers it, then a write with leader epoch 3, and the stored leader epoch

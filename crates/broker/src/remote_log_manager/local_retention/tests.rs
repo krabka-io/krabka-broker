@@ -64,8 +64,11 @@ struct RollCase {
 // it, but when the walk reaches it and the time or size predicate holds
 // for it, Kafka rolls it so the next copy can upload it. `now` is
 // 10 000 ms.
-#[test]
-fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "remote log manager local retention tests: the walk rolls a breached active segment only where kafka would"
+)]
+fn bdd_verify_the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
     let two_sealed = || fixtures::two_exports_with_size(bytes(100));
     let cases = [
         RollCase {
@@ -222,6 +225,13 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
         );
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/remote_log_manager/local_retention/tests.feature",
+    name = "the walk rolls a breached active segment only where kafka would"
+)]
+fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {}
 
 #[test]
 fn local_retention_target_returns_none_when_no_finished_segments() {

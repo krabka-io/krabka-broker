@@ -141,14 +141,24 @@ mod tests {
         assert!(wire_node_id(krabka_metadata::NodeId(42)) == 42);
     }
 
-    #[test]
-    fn share_key_parser_accepts_kafka_uuid_and_colons_in_group() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers find coordinator resolve tests: share key parser accepts kafka uuid and colons in group"
+    )]
+    fn bdd_verify_share_key_parser_accepts_kafka_uuid_and_colons_in_group() {
         let key = format!("group:with:colon:{TOPIC_ID}:7");
         let (group, topic_id, partition) = parse_share_key(&key).expect("valid share key");
         assert!(group == "group:with:colon");
         assert!(topic_id == uuid::Uuid::from_bytes([5; 16]));
         assert!(partition == 7);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/find_coordinator/resolve.feature",
+        name = "tests: share key parser accepts kafka uuid and colons in group"
+    )]
+    fn share_key_parser_accepts_kafka_uuid_and_colons_in_group() {}
 
     #[yare::parameterized(
         empty_group = { format!(":{TOPIC_ID}:0") },

@@ -32,8 +32,11 @@ mod support;
 
 use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
 
-#[tokio::test]
-async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "api versions features: v3 response advertises supported and bootstrapped finalized features"
+)]
+async fn bdd_verify_v3_response_advertises_supported_and_bootstrapped_finalized_features() {
     let p = support::start().await;
 
     let resp = support::discovery::api_versions(&p.client).await;
@@ -121,3 +124,11 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_features.feature",
+    name = "v3 response advertises supported and bootstrapped finalized features"
+)]
+#[tokio::test]
+async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() {}

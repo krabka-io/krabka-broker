@@ -698,14 +698,9 @@ fn bounds() -> [Bound; 5] {
     ]
 }
 
-/// Four hours of continuous produce and consume across three brokers, and a
-/// failure when any resource level drifts.
-///
-/// See the module documentation for the topics, the cycle counts and how a
-/// developer runs a short version.
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "requires Docker and //packaging:image; runs in the scheduled soak lane"]
-async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("soak: a three broker cluster holds its resources over a soak")]
+async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
     let duration = soak_duration();
     let interval = (duration / SAMPLES).max(MIN_SAMPLE_INTERVAL);
     let http = reqwest::Client::builder()
@@ -916,3 +911,17 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
         failed.join("\n")
     );
 }
+
+/// Four hours of continuous produce and consume across three brokers, and a
+/// failure when any resource level drifts.
+///
+/// See the module documentation for the topics, the cycle counts and how a
+/// developer runs a short version.
+#[ignore = "requires Docker and //packaging:image; runs in the scheduled soak lane"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak.feature",
+    name = "a three broker cluster holds its resources over a soak"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {}

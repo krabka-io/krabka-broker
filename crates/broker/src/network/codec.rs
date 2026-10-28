@@ -143,14 +143,25 @@ mod tests {
         assert!(received.as_ref() == b"hello broker");
     }
 
-    #[test]
-    fn kafka_max_frame_size_is_one_hundred_mib() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("network codec tests: kafka max frame size is one hundred mib")]
+    fn bdd_verify_kafka_max_frame_size_is_one_hundred_mib() {
         assert!(DEFAULT_MAX_FRAME_BYTES == 100 * 1024 * 1024);
         assert!(DEFAULT_MAX_FRAME_BYTES == 104_857_600);
     }
 
-    #[test]
-    fn codec_decodes_frames_larger_than_tokio_default_but_within_kafka_max() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/codec.feature",
+        name = "tests: kafka max frame size is one hundred mib"
+    )]
+    fn kafka_max_frame_size_is_one_hundred_mib() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network codec tests: codec decodes frames larger than tokio default but within kafka max"
+    )]
+    fn bdd_verify_codec_decodes_frames_larger_than_tokio_default_but_within_kafka_max() {
         let payload_len = 9 * 1024 * 1024;
         assert!(payload_len < DEFAULT_MAX_FRAME_BYTES);
 
@@ -166,6 +177,13 @@ mod tests {
         check!(decoded[0] == 0xA5);
         check!(decoded[payload_len - 1] == 0xA5);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/codec.feature",
+        name = "tests: codec decodes frames larger than tokio default but within kafka max"
+    )]
+    fn codec_decodes_frames_larger_than_tokio_default_but_within_kafka_max() {}
 
     #[test]
     fn codec_limits_requests_only_and_does_not_limit_responses() {
@@ -245,8 +263,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codec_rejects_frames_over_kafka_max() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("network codec tests: codec rejects frames over kafka max")]
+    fn bdd_verify_codec_rejects_frames_over_kafka_max() {
         let mut bytes = BytesMut::with_capacity(4);
         bytes.put_u32(
             u32::try_from(DEFAULT_MAX_FRAME_BYTES + 1).expect("max frame length fits u32"),
@@ -260,4 +279,11 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/codec.feature",
+        name = "tests: codec rejects frames over kafka max"
+    )]
+    fn codec_rejects_frames_over_kafka_max() {}
 }

@@ -194,40 +194,81 @@ mod tests {
         std::path::PathBuf,
     };
 
-    #[yare::parameterized(
-        explicit_wins = { Some("/e"), Some("/b"), Some("/e") },
-        bazel_outputs = { None, Some("/b"), Some("/b") },
-        neither = { None, None, None },
-        empty_is_unset = { Some(""), None, None },
-        empty_does_not_hide_bazel_outputs = { Some(""), Some("/b"), Some("/b") },
-        empty_bazel_outputs_is_unset = { None, Some(""), None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract host tests: the evidence goes where the runner asks for {example}"
     )]
-    fn the_evidence_goes_where_the_runner_asks(
-        explicit: Option<&str>,
-        bazel: Option<&str>,
-        chosen: Option<&str>,
-    ) {
+    fn bdd_verify_the_evidence_goes_where_the_runner_asks(example: String) {
+        type Example<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
+        let (explicit, bazel, chosen): Example<'_> = match example.as_str() {
+            "explicit wins" => (Some("/e"), Some("/b"), Some("/e")),
+            "bazel outputs" => (None, Some("/b"), Some("/b")),
+            "neither" => (None, None, None),
+            "empty is unset" => (Some(""), None, None),
+            "empty does not hide bazel outputs" => (Some(""), Some("/b"), Some("/b")),
+            "empty bazel outputs is unset" => (None, Some(""), None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(
             chosen_evidence_dir(explicit.map(str::to_owned), bazel.map(str::to_owned))
                 == chosen.map(PathBuf::from)
         );
     }
 
-    #[yare::parameterized(
-        kibibytes = { "MemTotal:       16384 kB\nMemFree: 1 kB\n", Some(16_384 * 1024) },
-        absent = { "MemFree: 1 kB\n", None },
-        other_unit = { "MemTotal: 16 MB\n", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/host.feature",
+        name = "tests: the evidence goes where the runner asks"
     )]
-    fn memory_is_read_in_kibibytes(meminfo: &str, bytes: Option<u64>) {
+    fn the_evidence_goes_where_the_runner_asks(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract host tests: memory is read in kibibytes for {example}"
+    )]
+    fn bdd_verify_memory_is_read_in_kibibytes(example: String) {
+        type Example<'a> = (&'a str, Option<u64>);
+        let (meminfo, bytes): Example<'_> = match example.as_str() {
+            "kibibytes" => (
+                "MemTotal:       16384 kB\nMemFree: 1 kB\n",
+                Some(16_384 * 1024),
+            ),
+            "absent" => ("MemFree: 1 kB\n", None),
+            "other unit" => ("MemTotal: 16 MB\n", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(mem_total_bytes(meminfo) == bytes);
     }
 
-    #[yare::parameterized(
-        plain = { "   Avail\n25769803776\n", Some(25_769_803_776) },
-        header_only = { "Avail\n", None },
-        garbage = { "Avail\nlots\n", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/host.feature",
+        name = "tests: memory is read in kibibytes"
     )]
-    fn free_space_is_the_number_under_the_header(output: &str, bytes: Option<u64>) {
+    fn memory_is_read_in_kibibytes(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract host tests: free space is the number under the header for {example}"
+    )]
+    fn bdd_verify_free_space_is_the_number_under_the_header(example: String) {
+        type Example<'a> = (&'a str, Option<u64>);
+        let (output, bytes): Example<'_> = match example.as_str() {
+            "plain" => ("   Avail\n25769803776\n", Some(25_769_803_776)),
+            "header only" => ("Avail\n", None),
+            "garbage" => ("Avail\nlots\n", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(df_available_bytes(output) == bytes);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/host.feature",
+        name = "tests: free space is the number under the header"
+    )]
+    fn free_space_is_the_number_under_the_header(example: String) { let _ = example; }
 }

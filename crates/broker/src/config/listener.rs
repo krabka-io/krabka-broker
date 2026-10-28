@@ -738,8 +738,11 @@ mod connections_max_idle_tests {
         }
     }
 
-    #[test]
-    fn an_unnamed_listener_gets_kafkas_ten_minute_default() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config listener connections max idle tests: an unnamed listener gets kafkas ten minute default"
+    )]
+    fn bdd_verify_an_unnamed_listener_gets_kafkas_ten_minute_default() {
         // Kafka spells the default 600000, which is the ten minutes below.
         assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
         assert!(
@@ -747,6 +750,13 @@ mod connections_max_idle_tests {
                 == Some(Duration::from_mins(10))
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/listener.feature",
+        name = "connections max idle tests: an unnamed listener gets kafkas ten minute default"
+    )]
+    fn an_unnamed_listener_gets_kafkas_ten_minute_default() {}
 
     #[test]
     fn a_listener_override_wins_over_the_broker_wide_window() {

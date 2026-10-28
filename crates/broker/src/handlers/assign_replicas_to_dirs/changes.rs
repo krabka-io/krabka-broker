@@ -325,12 +325,11 @@ mod tests {
         assert!(assignment_change(&image, 2, "t", 0, DIR) == Ok(None));
     }
 
-    /// One request that reports, for broker 2, a partition it replicates, a
-    /// partition the topic does not have, a partition of a topic it does not
-    /// replicate, a topic id that names no topic, and the zero id. Only the
-    /// first partition gives a record, and each row carries Kafka's code.
-    #[test]
-    fn plan_answers_each_partition_with_kafkas_error_code() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers assign replicas to dirs changes tests: plan answers each partition with kafkas error code"
+    )]
+    fn bdd_verify_plan_answers_each_partition_with_kafkas_error_code() {
         /// The error code the plan answers for one partition of a topic.
         #[derive(Clone, Copy)]
         struct PartitionAnswer {
@@ -437,4 +436,15 @@ mod tests {
         };
         assert!(plan_assignments(&image, 2, &req) == expected);
     }
+
+    /// One request that reports, for broker 2, a partition it replicates, a
+    /// partition the topic does not have, a partition of a topic it does not
+    /// replicate, a topic id that names no topic, and the zero id. Only the
+    /// first partition gives a record, and each row carries Kafka's code.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/assign_replicas_to_dirs/changes.feature",
+        name = "tests: plan answers each partition with kafkas error code"
+    )]
+    fn plan_answers_each_partition_with_kafkas_error_code() {}
 }

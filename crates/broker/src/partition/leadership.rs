@@ -675,8 +675,11 @@ mod tests {
         assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 4);
     }
 
-    #[tokio::test]
-    async fn each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "partition leadership tests: each api spells the no epoch sentinel the way kafka spells it"
+    )]
+    async fn bdd_verify_each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it() {
         // Live epoch 3. Kafka fences a `ListOffsets` row for every request
         // epoch but `-1` and the live one, while Fetch also lets every other
         // negative epoch through. Verified on apache/kafka:4.3.1: with a live
@@ -708,6 +711,14 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/partition/leadership.feature",
+        name = "tests: each api spells the no epoch sentinel the way kafka spells it"
+    )]
+    #[tokio::test]
+    async fn each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it() {}
 
     #[tokio::test]
     async fn test_set_leader_epoch_updates_cached_epoch() {

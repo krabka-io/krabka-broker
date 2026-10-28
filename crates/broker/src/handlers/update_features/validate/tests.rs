@@ -98,117 +98,195 @@ fn plan(records: Vec<MetadataRecord>, features: &[&str]) -> UpdatePlan {
     }
 }
 
-/// The row-validation cases of krabka-io/krabka-broker#780, each against
-/// Kafka 4.3.1's `FeatureControlManager.updateFeature`.
-#[yare::parameterized(
-    empty_request = {
-        "empty request",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![],
-        Ok(plan(vec![], &[])),
-    },
-    repeated_name_keeps_last_row = {
-        "a repeated name keeps its last row",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("group.version", 9, UPGRADE), named_update("group.version", 1, UPGRADE)],
-        Ok(plan(vec![feature_record("group.version", 1)], &["group.version"])),
-    },
-    unknown_feature_above_zero = {
-        "unknown feature above level 0",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("no.such.feature", 1, UPGRADE)],
-        Err(invalid("no.such.feature", 1, "Local controller 1 does not support this feature.")),
-    },
-    unknown_feature_at_zero = {
-        "unknown feature at level 0",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("no.such.feature", 0, SAFE)],
-        Err(invalid("no.such.feature", 0, "Feature no.such.feature not found.")),
-    },
-    level_zero_downgrade_of_unfinalized_feature = {
-        "level 0 downgrade of a feature that is not finalized",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("share.version", 0, SAFE)],
-        Ok(plan(vec![feature_record("share.version", 0)], &["share.version"])),
-    },
-    unknown_upgrade_type = {
-        "an unknown upgrade type",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("group.version", 1, 0)],
-        Err(invalid("group.version", 1, "The controller does not support the given upgrade type.")),
-    },
-    negative_level = {
-        "a negative level",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("group.version", -1, UPGRADE)],
-        Err(invalid("group.version", -1, "A feature version cannot be less than 0.")),
-    },
-    above_local_range = {
-        "a level above the local range",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("share.version", 9, UPGRADE)],
-        Err(invalid("share.version", 9, "Local controller 1 only supports versions 0-1")),
-    },
-    downgrade_without_downgrade_type = {
-        "a downgrade without a downgrade type",
-        image(&[
-            FeatureLevel {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers update features validate tests: rows validate as kafkas update feature for {example}"
+)]
+fn bdd_verify_rows_validate_as_kafkas_update_feature(example: String) {
+    type Example<'a> = (
+        &'a str,
+        krabka_metadata::MetadataImage,
+        Vec<FeatureUpdateKey>,
+        Result<UpdatePlan, UpdateError>,
+    );
+    let (case, image, updates, expected): Example<'_> = match example.as_str() {
+        "empty request" => (
+            "empty request",
+            image(&[FeatureLevel {
                 name: "metadata.version",
                 level: 25,
-            },
-            FeatureLevel {
-                name: "group.version",
-                level: 1,
-            },
-        ]),
-        vec![named_update("group.version", 0, UPGRADE)],
-        Err(invalid(
-            "group.version",
-            0,
-            "Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade.",
-        )),
-    },
-    downgrade_type_raises_level = {
-        "a downgrade type that raises the level",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }]),
-        vec![named_update("group.version", 1, SAFE)],
-        Err(invalid("group.version", 1, "Can't downgrade to a newer version.")),
-    },
-    dependency_uses_proposed_levels = {
-        "dependencies read the levels the request proposes",
-        image(&[FeatureLevel { name: "metadata.version", level: 22 }]),
-        vec![metadata_update(23, UPGRADE), elr_update(1, UPGRADE)],
-        Ok(UpdatePlan {
-            enables_elr: true,
-            ..plan(
-                vec![
-                    feature_record("metadata.version", 23),
-                    feature_record("eligible.leader.replicas.version", 1),
-                ],
-                &["metadata.version", "eligible.leader.replicas.version"],
-            )
-        }),
-    },
-    unmet_dependency = {
-        "an unmet dependency",
-        image(&[FeatureLevel { name: "metadata.version", level: 22 }]),
-        vec![elr_update(1, UPGRADE)],
-        Err(invalid(
-            "eligible.leader.replicas.version",
-            1,
-            "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23",
-        )),
-    },
-)]
-fn rows_validate_as_kafkas_update_feature(
-    case: &str,
-    image: krabka_metadata::MetadataImage,
-    updates: Vec<FeatureUpdateKey>,
-    expected: Result<UpdatePlan, UpdateError>,
-) {
+            }]),
+            vec![],
+            Ok(plan(vec![], &[])),
+        ),
+        "repeated name keeps last row" => (
+            "a repeated name keeps its last row",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![
+                named_update("group.version", 9, UPGRADE),
+                named_update("group.version", 1, UPGRADE),
+            ],
+            Ok(plan(vec![feature_record("group.version", 1)], &[
+                "group.version",
+            ])),
+        ),
+        "unknown feature above zero" => (
+            "unknown feature above level 0",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("no.such.feature", 1, UPGRADE)],
+            Err(invalid(
+                "no.such.feature",
+                1,
+                "Local controller 1 does not support this feature.",
+            )),
+        ),
+        "unknown feature at zero" => (
+            "unknown feature at level 0",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("no.such.feature", 0, SAFE)],
+            Err(invalid(
+                "no.such.feature",
+                0,
+                "Feature no.such.feature not found.",
+            )),
+        ),
+        "level zero downgrade of unfinalized feature" => (
+            "level 0 downgrade of a feature that is not finalized",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("share.version", 0, SAFE)],
+            Ok(plan(vec![feature_record("share.version", 0)], &[
+                "share.version",
+            ])),
+        ),
+        "unknown upgrade type" => (
+            "an unknown upgrade type",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("group.version", 1, 0)],
+            Err(invalid(
+                "group.version",
+                1,
+                "The controller does not support the given upgrade type.",
+            )),
+        ),
+        "negative level" => (
+            "a negative level",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("group.version", -1, UPGRADE)],
+            Err(invalid(
+                "group.version",
+                -1,
+                "A feature version cannot be less than 0.",
+            )),
+        ),
+        "above local range" => (
+            "a level above the local range",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("share.version", 9, UPGRADE)],
+            Err(invalid(
+                "share.version",
+                9,
+                "Local controller 1 only supports versions 0-1",
+            )),
+        ),
+        "downgrade without downgrade type" => (
+            "a downgrade without a downgrade type",
+            image(&[
+                FeatureLevel {
+                    name: "metadata.version",
+                    level: 25,
+                },
+                FeatureLevel {
+                    name: "group.version",
+                    level: 1,
+                },
+            ]),
+            vec![named_update("group.version", 0, UPGRADE)],
+            Err(invalid(
+                "group.version",
+                0,
+                "Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade.",
+            )),
+        ),
+        "downgrade type raises level" => (
+            "a downgrade type that raises the level",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            }]),
+            vec![named_update("group.version", 1, SAFE)],
+            Err(invalid(
+                "group.version",
+                1,
+                "Can't downgrade to a newer version.",
+            )),
+        ),
+        "dependency uses proposed levels" => (
+            "dependencies read the levels the request proposes",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 22,
+            }]),
+            vec![metadata_update(23, UPGRADE), elr_update(1, UPGRADE)],
+            Ok(UpdatePlan {
+                enables_elr: true,
+                ..plan(
+                    vec![
+                        feature_record("metadata.version", 23),
+                        feature_record("eligible.leader.replicas.version", 1),
+                    ],
+                    &["metadata.version", "eligible.leader.replicas.version"],
+                )
+            }),
+        ),
+        "unmet dependency" => (
+            "an unmet dependency",
+            image(&[FeatureLevel {
+                name: "metadata.version",
+                level: 22,
+            }]),
+            vec![elr_update(1, UPGRADE)],
+            Err(invalid(
+                "eligible.leader.replicas.version",
+                1,
+                "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23",
+            )),
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let actual = plan_updates(&validate_only(updates), &image, LOCAL);
     assert2::assert!(actual == expected, "{case}");
 }
+
+/// The row-validation cases of krabka-io/krabka-broker#780, each against
+/// Kafka 4.3.1's `FeatureControlManager.updateFeature`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/update_features/validate/tests.feature",
+    name = "rows validate as kafkas update feature"
+)]
+fn rows_validate_as_kafkas_update_feature(example: String) { let _ = example; }
 
 /// A version 0 row carries `AllowDowngrade` rather than `UpgradeType`, and
 /// Kafka reads the `UpgradeType` default, UPGRADE, so the flag never
@@ -383,33 +461,51 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
     }
 }
 
-#[yare::parameterized(
-    upgrade = {
-        "upgrade",
-        vec![named_update("kraft.version", 1, UPGRADE)],
-        Ok(UpdatePlan { kraft_upgrade: Some(1), ..plan(vec![], &["kraft.version"]) }),
-    },
-    upgrade_to_current = {
-        "upgrade to the current level",
-        vec![named_update("kraft.version", 0, UPGRADE)],
-        Ok(plan(vec![], &["kraft.version"])),
-    },
-    downgrade_type_raises_level = {
-        "a downgrade type that raises the level",
-        vec![named_update("kraft.version", 1, SAFE)],
-        Err(invalid("kraft.version", 1, "Can't downgrade to a newer version.")),
-    },
-    above_supported_range = {
-        "above the supported range",
-        vec![named_update("kraft.version", 2, UPGRADE)],
-        Err(invalid("kraft.version", 2, "Local controller 1 only supports versions 0-1")),
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers update features validate tests: kraft version rows follow kafka for {example}"
 )]
-fn kraft_version_rows_follow_kafka(
-    case: &str,
-    updates: Vec<FeatureUpdateKey>,
-    expected: Result<UpdatePlan, UpdateError>,
-) {
+fn bdd_verify_kraft_version_rows_follow_kafka(example: String) {
+    type Example<'a> = (
+        &'a str,
+        Vec<FeatureUpdateKey>,
+        Result<UpdatePlan, UpdateError>,
+    );
+    let (case, updates, expected): Example<'_> = match example.as_str() {
+        "upgrade" => (
+            "upgrade",
+            vec![named_update("kraft.version", 1, UPGRADE)],
+            Ok(UpdatePlan {
+                kraft_upgrade: Some(1),
+                ..plan(vec![], &["kraft.version"])
+            }),
+        ),
+        "upgrade to current" => (
+            "upgrade to the current level",
+            vec![named_update("kraft.version", 0, UPGRADE)],
+            Ok(plan(vec![], &["kraft.version"])),
+        ),
+        "downgrade type raises level" => (
+            "a downgrade type that raises the level",
+            vec![named_update("kraft.version", 1, SAFE)],
+            Err(invalid(
+                "kraft.version",
+                1,
+                "Can't downgrade to a newer version.",
+            )),
+        ),
+        "above supported range" => (
+            "above the supported range",
+            vec![named_update("kraft.version", 2, UPGRADE)],
+            Err(invalid(
+                "kraft.version",
+                2,
+                "Local controller 1 only supports versions 0-1",
+            )),
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let image = image(&[FeatureLevel {
         name: "metadata.version",
         level: 25,
@@ -419,6 +515,13 @@ fn kraft_version_rows_follow_kafka(
         "{case}"
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/update_features/validate/tests.feature",
+    name = "kraft version rows follow kafka"
+)]
+fn kraft_version_rows_follow_kafka(example: String) { let _ = example; }
 
 /// An image at 4.3-IV0, with `eligible.leader.replicas.version` finalized at
 /// `elr_level` when one is given and a published ELR on topic `orders` when
@@ -516,13 +619,11 @@ fn a_feature_unaware_broker_blocks_only_enabling() {
     }
 }
 
-/// Kafka's `maybeGenerateElrSafetyRecords`, over the starting broker configs:
-/// the cluster-level `min.insync.replicas` is kept or set to the static
-/// value, and a broker-level one is removed, whether or not that broker is
-/// still registered: Kafka walks every broker config resource
-/// (`brokersWithConfigs`), not the registered brokers.
-#[test]
-fn enabling_elr_writes_kafkas_safety_config_records() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers update features validate tests: enabling elr writes kafkas safety config records"
+)]
+fn bdd_verify_enabling_elr_writes_kafkas_safety_config_records() {
     let key = MIN_INSYNC_REPLICAS;
     let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
     let node = NodeId(1);
@@ -562,6 +663,18 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
     }
 }
 
+/// Kafka's `maybeGenerateElrSafetyRecords`, over the starting broker configs:
+/// the cluster-level `min.insync.replicas` is kept or set to the static
+/// value, and a broker-level one is removed, whether or not that broker is
+/// still registered: Kafka walks every broker config resource
+/// (`brokersWithConfigs`), not the registered brokers.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/update_features/validate/tests.feature",
+    name = "enabling elr writes kafkas safety config records"
+)]
+fn enabling_elr_writes_kafkas_safety_config_records() {}
+
 /// One `UpdateFeatures` case: its name, the image it plans against, the one
 /// update it carries, and the plan or error it must produce.
 type PlanCase<'a> = (
@@ -590,15 +703,11 @@ fn assert_planned<const N: usize>(cases: [PlanCase<'_>; N]) {
     assert!(actual == expected);
 }
 
-/// `krabka.version` finalizes as Kafka 4.3.1's `FeatureControlManager`
-/// finalizes a feature other than `metadata.version` and `kraft.version`,
-/// `transaction.version` for one: a level every node supports writes a
-/// `FeatureLevelRecord`; a level the local controller or a registered broker
-/// does not support is refused; a downgrade needs `SAFE_DOWNGRADE` or
-/// `UNSAFE_DOWNGRADE`, and with either it is written, since no
-/// `metadata changed` check applies outside `metadata.version`.
-#[test]
-fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers update features validate tests: krabka version finalizes as kafka finalizes a non metadata feature"
+)]
+fn bdd_verify_krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
     let kv = krabka_version::KRABKA_VERSION_FEATURE;
     let mv = "metadata.version";
     let with_broker = |levels: &[FeatureLevel<'_>], range| {
@@ -749,6 +858,20 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
     ];
     assert_planned(cases);
 }
+
+/// `krabka.version` finalizes as Kafka 4.3.1's `FeatureControlManager`
+/// finalizes a feature other than `metadata.version` and `kraft.version`,
+/// `transaction.version` for one: a level every node supports writes a
+/// `FeatureLevelRecord`; a level the local controller or a registered broker
+/// does not support is refused; a downgrade needs `SAFE_DOWNGRADE` or
+/// `UNSAFE_DOWNGRADE`, and with either it is written, since no
+/// `metadata changed` check applies outside `metadata.version`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/update_features/validate/tests.feature",
+    name = "krabka version finalizes as kafka finalizes a non metadata feature"
+)]
+fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {}
 
 /// krabka-io/krabka-broker#1763: `krabka.version` level 2 turns on diskless
 /// WAL object reservations. The controller finalizes it only once every

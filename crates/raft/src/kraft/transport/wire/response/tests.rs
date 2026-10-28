@@ -275,38 +275,51 @@ fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
     );
 }
 
-/// The bytes are those of Kafka's `KafkaRaftClient.buildEmptyFetchResponse`
-/// on a follower of leader 2: the error, the leader and epoch, no high
-/// watermark, the log start, empty non-null records and aborted
-/// transactions, and the leader's `NodeEndpoints` entry.
-#[yare::parameterized(
-        known_leader = {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft transport wire response tests: a refused fetch is kafkas empty fetch response for {example}"
+)]
+fn bdd_verify_a_refused_fetch_is_kafkas_empty_fetch_response(example: String) {
+    type Example = (&'static str, PeerResponse, FetchResponse);
+    let (case, answer, expected): Example = match example.as_str() {
+        "known leader" => (
             "known leader",
-            refused_fetch_answer(leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
+            refused_fetch_answer(leader(
+                Some(2),
+                5,
+                Some(leader_endpoint("controller-2", 9093)),
+            )),
             kafka_empty_fetch_response(2, 5, vec![fetch_resp::NodeEndpoint {
                 node_id: 2,
                 host: "controller-2".into(),
                 port: 9093,
                 ..Default::default()
             }]),
-        },
-        // `singletonFetchResponse` adds no entry without a leader id.
-        unknown_leader = {
+        ),
+        "unknown leader" => (
             "unknown leader",
             refused_fetch_answer(leader(None, 5, Some(leader_endpoint("controller-2", 9093)))),
-            kafka_empty_fetch_response(-1, 5, Vec::new())
-        },
-)]
-fn a_refused_fetch_is_kafkas_empty_fetch_response(
-    case: &'static str,
-    answer: PeerResponse,
-    expected: FetchResponse,
-) {
+            kafka_empty_fetch_response(-1, 5, Vec::new()),
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         answer.encode() == encode_body(&expected, FETCH_VERSION),
         "{case}"
     );
 }
+
+/// The bytes are those of Kafka's `KafkaRaftClient.buildEmptyFetchResponse`
+/// on a follower of leader 2: the error, the leader and epoch, no high
+/// watermark, the log start, empty non-null records and aborted
+/// transactions, and the leader's `NodeEndpoints` entry.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/transport/wire/response/tests.feature",
+    name = "a refused fetch is kafkas empty fetch response"
+)]
+fn a_refused_fetch_is_kafkas_empty_fetch_response(example: String) { let _ = example; }
 
 /// Kafka's `Endpoints.fromFetchResponse` keeps only the entry for
 /// `CurrentLeader.LeaderId`.

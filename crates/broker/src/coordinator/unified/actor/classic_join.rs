@@ -951,13 +951,11 @@ mod tests {
         );
     }
 
-    /// Kafka's `classicGroupJoin` against a consumer group: (label, policy,
-    /// native members) to (join error code, consumer group tombstoned, group
-    /// classic afterwards). An empty consumer group is replaced by a classic
-    /// group; a live one under policy `disabled` refuses the classic member
-    /// with `INCONSISTENT_GROUP_PROTOCOL`.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_join_against_a_consumer_group_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor classic join tests: classic join against a consumer group follows kafka"
+    )]
+    async fn bdd_verify_classic_join_against_a_consumer_group_follows_kafka() {
         use crate::coordinator::unified::{
             actor::GroupKindTag, config::ConsumerGroupMigrationPolicy as Policy,
         };
@@ -1007,6 +1005,19 @@ mod tests {
             check!(got == want, "{label}");
         }
     }
+
+    /// Kafka's `classicGroupJoin` against a consumer group: (label, policy,
+    /// native members) to (join error code, consumer group tombstoned, group
+    /// classic afterwards). An empty consumer group is replaced by a classic
+    /// group; a live one under policy `disabled` refuses the classic member
+    /// with `INCONSISTENT_GROUP_PROTOCOL`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "tests: classic join against a consumer group follows kafka"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_join_against_a_consumer_group_follows_kafka() {}
 
     /// Kafka's `classicGroupJoinToConsumerGroup` answer: no leader and no
     /// member list, so the client follows, and the member epoch as the
@@ -1319,12 +1330,11 @@ mod tests {
         check!(shape[..6] == replace_member_shape(&first.member_id, &second.member_id)[..]);
     }
 
-    /// A static classic member that joins with a member id must be the member
-    /// that holds its instance id: (label, member id, where `None` is the id
-    /// the static member `instance-1` was given, instance id) to Kafka's
-    /// error, which carries only the code, and the group does not change.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor classic join tests: a static classic rejoin with a member id is checked as kafka does"
+    )]
+    async fn bdd_verify_a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does() {
         let rows = [
             (
                 "an instance id no member holds",
@@ -1364,6 +1374,18 @@ mod tests {
             check!(member_ids(&handle).await == want_members, "{label}");
         }
     }
+
+    /// A static classic member that joins with a member id must be the member
+    /// that holds its instance id: (label, member id, where `None` is the id
+    /// the static member `instance-1` was given, instance id) to Kafka's
+    /// error, which carries only the code, and the group does not change.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "tests: a static classic rejoin with a member id is checked as kafka does"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does() {}
 
     /// Kafka's `throwIfConsumerGroupIsFull` and
     /// `throwIfClassicProtocolIsNotSupported`, which refuse a classic join to

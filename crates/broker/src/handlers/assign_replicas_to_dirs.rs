@@ -194,12 +194,11 @@ mod tests {
         ZeroTopicId,
     }
 
-    /// Kafka's `ReplicationControlManager.handleAssignReplicasToDirs` answers
-    /// `UNKNOWN_TOPIC_ID` for a topic id that names no topic, the zero id
-    /// included, and `UNKNOWN_TOPIC_OR_PARTITION` for a partition that the
-    /// topic does not have.
-    #[tokio::test]
-    async fn handle_answers_each_partition_with_kafkas_error_code() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers assign replicas to dirs tests: handle answers each partition with kafkas error code"
+    )]
+    async fn bdd_verify_handle_answers_each_partition_with_kafkas_error_code() {
         let fixture = seeded_topic_fixture(broker_fixture_support::start_broker_with(|_| {})).await;
 
         let cases = [
@@ -252,6 +251,18 @@ mod tests {
 
         fixture.handle.shutdown().await;
     }
+
+    /// Kafka's `ReplicationControlManager.handleAssignReplicasToDirs` answers
+    /// `UNKNOWN_TOPIC_ID` for a topic id that names no topic, the zero id
+    /// included, and `UNKNOWN_TOPIC_OR_PARTITION` for a partition that the
+    /// topic does not have.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/assign_replicas_to_dirs.feature",
+        name = "tests: handle answers each partition with kafkas error code"
+    )]
+    #[tokio::test]
+    async fn handle_answers_each_partition_with_kafkas_error_code() {}
 
     /// Seed topic "t" with id `topic_uuid` and partition 0 on broker 1.
     async fn seed_topic(broker: &Broker, topic_uuid: uuid::Uuid) {

@@ -268,8 +268,11 @@ mod tests {
         want: Option<FetchSessionId>,
     }
 
-    #[test]
-    fn victim_selection_follows_kafkas_try_evict() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "fetch session order tests: victim selection follows kafkas try evict"
+    )]
+    fn bdd_verify_victim_selection_follows_kafkas_try_evict() {
         // Ids 1 and 2 are consumer sessions, ids 3 and 4 follower sessions.
         // Every session below that has been touched after `MIN_EVICTION` (120
         // s) of life is "old" by creation; the others are not.
@@ -387,6 +390,13 @@ mod tests {
             );
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/fetch_session/order.feature",
+        name = "tests: victim selection follows kafkas try evict"
+    )]
+    fn victim_selection_follows_kafkas_try_evict() {}
 
     #[test]
     fn a_larger_follower_displaces_an_old_follower_session() {

@@ -163,8 +163,11 @@ async fn transaction_v2_broker() -> HandlerStartedBroker {
     })
     .await
 }
-#[tokio::test]
-async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers init producer id tests: handler refuses a timeout kafka refuses and stores the rest as sent"
+)]
+async fn bdd_verify_handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     krabka_macros::broker_test_setup!(
         bind(broker_handle, _dir, broker);
         boot [transaction_v2_broker()];
@@ -296,6 +299,14 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     drop(completed);
     broker_handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/init_producer_id/tests.feature",
+    name = "handler refuses a timeout kafka refuses and stores the rest as sent"
+)]
+#[tokio::test]
+async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {}
 
 /// krabka-io/krabka-broker#784: Kafka 4.3.1 gates KIP-939 on
 /// `transaction.two.phase.commit.enable`, not on a `transaction.version`

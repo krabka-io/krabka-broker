@@ -18,29 +18,11 @@ use {
     std::{collections::BTreeMap, slice},
 };
 
-/// JVM acceptance test for `kafka-leader-election --election-type preferred`.
-///
-/// The cluster has three brokers because `controllerId` rotates over the
-/// unfenced brokers rather than naming the quorum leader, so the
-/// `AdminClient` inside the tool may send `ElectLeaders` to any of them. A
-/// two-broker cluster would hide an election that only one node answers
-/// correctly, which is the regression this case exists to catch.
-///
-/// Scenario:
-/// 1. Boot a 3-broker `SASL_PLAINTEXT` cluster and create an rf=2 topic.
-/// 2. Wait for the cluster to assign a leader. Expect broker 1, the
-///    preferred replica.
-/// 3. Move leadership to broker 2 by injecting a `PartitionRecord`, keeping
-///    broker 1 in the ISR. The comment at the injection says why the test
-///    does not kill a broker to get there.
-/// 4. Wait until every broker would let an operator elect broker 1.
-/// 5. Run `kafka-leader-election --election-type preferred` from the JVM CLI
-///    image cp-kafka:7.5.0. Older images do not ship this tool.
-/// 6. Assert Docker exits 0.
-/// 7. Poll until broker 1 is leader again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_leader_election_preferred() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign preferred election: jvm kafka leader election preferred"
+)]
+async fn bdd_verify_jvm_kafka_leader_election_preferred() {
     const TOPIC: &str = "krabka-elect-preferred-itest";
 
     let (cluster, admin_props) = Box::pin(admin_cluster()).await;
@@ -174,6 +156,35 @@ async fn jvm_kafka_leader_election_preferred() {
     cluster.h3.shutdown().await;
 }
 
+/// JVM acceptance test for `kafka-leader-election --election-type preferred`.
+///
+/// The cluster has three brokers because `controllerId` rotates over the
+/// unfenced brokers rather than naming the quorum leader, so the
+/// `AdminClient` inside the tool may send `ElectLeaders` to any of them. A
+/// two-broker cluster would hide an election that only one node answers
+/// correctly, which is the regression this case exists to catch.
+///
+/// Scenario:
+/// 1. Boot a 3-broker `SASL_PLAINTEXT` cluster and create an rf=2 topic.
+/// 2. Wait for the cluster to assign a leader. Expect broker 1, the
+///    preferred replica.
+/// 3. Move leadership to broker 2 by injecting a `PartitionRecord`, keeping
+///    broker 1 in the ISR. The comment at the injection says why the test
+///    does not kill a broker to get there.
+/// 4. Wait until every broker would let an operator elect broker 1.
+/// 5. Run `kafka-leader-election --election-type preferred` from the JVM CLI
+///    image cp-kafka:7.5.0. Older images do not ship this tool.
+/// 6. Assert Docker exits 0.
+/// 7. Poll until broker 1 is leader again.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
+    name = "jvm kafka leader election preferred"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_leader_election_preferred() {}
+
 // ── the two partition selectors, and the two per-partition codes ────────────
 //
 // The case above drives `--election-type preferred --topic --partition`, which
@@ -215,18 +226,11 @@ fn selector_partitions() -> Vec<TopicPartition> {
         .collect()
 }
 
-/// `--all-topic-partitions` and `--path-to-json-file` over a cluster where
-/// every partition already sits on its preferred leader, compared with Apache
-/// Kafka.
-///
-/// A topic at replication factor one is preferred-elected by construction: its
-/// only replica is `replicas[0]` and it leads. So both selectors are asked a
-/// question whose answer is `ELECTION_NOT_NEEDED` for every partition, which
-/// is the one per-partition code an operator meets on a healthy cluster and
-/// the one this suite could not otherwise reach.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign preferred election: election selectors report election not needed as apache kafka does"
+)]
+async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafka_does() {
     // Kafka first: the claim that a healthy partition answers 84 rather than
     // succeeding is a claim about Kafka, and this is where a wrong one fails.
     let comparison = OracleComparison::start("elect-selectors").await;
@@ -301,26 +305,29 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
     comparison.broker.shutdown().await;
 }
 
-/// A partition whose preferred replica is out of the ISR reports
-/// `PREFERRED_LEADER_NOT_AVAILABLE` (80), and the tool builds Kafka's own
-/// exception from it.
+/// `--all-topic-partitions` and `--path-to-json-file` over a cluster where
+/// every partition already sits on its preferred leader, compared with Apache
+/// Kafka.
 ///
-/// # Why this half has no oracle
-///
-/// Code 80 needs a partition whose `replicas[0]` is alive but not electable,
-/// which needs a replica set larger than one, which needs more than one
-/// broker. The oracle in this file is a single stock node, so it cannot be put
-/// in that shape at all -- and a multi-node stock cluster is a different
-/// harness, not a variation on this one.
-///
-/// What is still cross-validated is the half that matters most: `Errors` is
-/// Kafka's, and `LeaderElectionCommand` is Kafka's, so the class name asserted
-/// below is what Kafka's own client built out of the number krabka sent. A
-/// broker that answered 84, or 41, or an unassigned code would print a
-/// different class here, or none.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// A topic at replication factor one is preferred-elected by construction: its
+/// only replica is `replicas[0]` and it leads. So both selectors are asked a
+/// question whose answer is `ELECTION_NOT_NEEDED` for every partition, which
+/// is the one per-partition code an operator meets on a healthy cluster and
+/// the one this suite could not otherwise reach.
 #[ignore = "requires Docker"]
-async fn a_preferred_replica_outside_the_isr_reports_code_80() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
+    name = "election selectors report election not needed as apache kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance reassign preferred election: a preferred replica outside the isr reports code 80"
+)]
+async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
     const TOPIC: &str = "krabka-elect-unavailable-itest";
 
     let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
@@ -422,3 +429,29 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
         handle.shutdown().await;
     }
 }
+
+/// A partition whose preferred replica is out of the ISR reports
+/// `PREFERRED_LEADER_NOT_AVAILABLE` (80), and the tool builds Kafka's own
+/// exception from it.
+///
+/// # Why this half has no oracle
+///
+/// Code 80 needs a partition whose `replicas[0]` is alive but not electable,
+/// which needs a replica set larger than one, which needs more than one
+/// broker. The oracle in this file is a single stock node, so it cannot be put
+/// in that shape at all -- and a multi-node stock cluster is a different
+/// harness, not a variation on this one.
+///
+/// What is still cross-validated is the half that matters most: `Errors` is
+/// Kafka's, and `LeaderElectionCommand` is Kafka's, so the class name asserted
+/// below is what Kafka's own client built out of the number krabka sent. A
+/// broker that answered 84, or 41, or an unassigned code would print a
+/// different class here, or none.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
+    name = "a preferred replica outside the isr reports code 80"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_preferred_replica_outside_the_isr_reports_code_80() {}

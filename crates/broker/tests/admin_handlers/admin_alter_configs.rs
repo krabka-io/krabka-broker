@@ -22,11 +22,9 @@ use {
     tokio::task,
 };
 
-/// `AlterConfigs` round-trip: a request that sets `retention.ms` on a known
-/// topic returns `error_code == 0`. The supervisor then pushes the new config
-/// into the partition's log.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_configs_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("admin handlers admin alter configs: alter configs round trip")]
+async fn bdd_verify_alter_configs_round_trip() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -77,10 +75,20 @@ async fn alter_configs_round_trip() {
     );
 }
 
-/// `AlterConfigs` rejects an unknown key with `error_code == 40` (`INVALID_CONFIG`)
-/// and includes the offending key name in the error message.
+/// `AlterConfigs` round-trip: a request that sets `retention.ms` on a known
+/// topic returns `error_code == 0`. The supervisor then pushes the new config
+/// into the partition's log.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_alter_configs.feature",
+    name = "alter configs round trip"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_configs_rejects_unknown_key() {
+async fn alter_configs_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("admin handlers admin alter configs: alter configs rejects unknown key")]
+async fn bdd_verify_alter_configs_rejects_unknown_key() {
     let (_cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
 
     create_topic_helper(&client, "t-bad-cfg", 1).await;
@@ -114,14 +122,21 @@ async fn alter_configs_rejects_unknown_key() {
     );
 }
 
-/// `min.insync.replicas` pre-flight against a replication-factor-1 topic:
-/// the operator sets `min.insync.replicas=2` with `AlterConfigs`. Kafka's
-/// `Partition.effectiveMinIsr` clamps the threshold to the replica count,
-/// so an `acks=-1` produce with ISR={1} is accepted, as is an `acks=1`
-/// produce. The refusal when the ISR falls below a satisfiable threshold is
-/// covered by `leadership.rs`'s table test.
+/// `AlterConfigs` rejects an unknown key with `error_code == 40` (`INVALID_CONFIG`)
+/// and includes the offending key name in the error message.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_alter_configs.feature",
+    name = "alter configs rejects unknown key"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
+async fn alter_configs_rejects_unknown_key() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "admin handlers admin alter configs: min insync replicas is clamped to the replica count for acks all"
+)]
+async fn bdd_verify_min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -202,3 +217,17 @@ async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
         ok.responses[0].partition_responses[0].error_code
     );
 }
+
+/// `min.insync.replicas` pre-flight against a replication-factor-1 topic:
+/// the operator sets `min.insync.replicas=2` with `AlterConfigs`. Kafka's
+/// `Partition.effectiveMinIsr` clamps the threshold to the replica count,
+/// so an `acks=-1` produce with ISR={1} is accepted, as is an `acks=1`
+/// produce. The refusal when the ISR falls below a satisfiable threshold is
+/// covered by `leadership.rs`'s table test.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/admin_handlers/admin_alter_configs.feature",
+    name = "min insync replicas is clamped to the replica count for acks all"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {}

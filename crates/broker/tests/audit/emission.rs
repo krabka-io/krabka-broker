@@ -102,8 +102,9 @@ fn records_for(records: &[serde_json::Value], operation: &str) -> usize {
         .count()
 }
 
-#[tokio::test]
-async fn audit_topic_exists_after_startup() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit emission: audit topic exists after startup")]
+async fn bdd_verify_audit_topic_exists_after_startup() {
     let p = support::start().await;
     p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
@@ -134,8 +135,17 @@ async fn audit_topic_exists_after_startup() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "audit topic exists after startup"
+)]
 #[tokio::test]
-async fn broker_started_event_is_written_to_audit_topic() {
+async fn audit_topic_exists_after_startup() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit emission: broker started event is written to audit topic")]
+async fn bdd_verify_broker_started_event_is_written_to_audit_topic() {
     let p = support::start().await;
 
     // Wait for the BrokerStarted event to be durably written to the audit topic
@@ -154,23 +164,17 @@ async fn broker_started_event_is_written_to_audit_topic() {
     p.broker.shutdown().await;
 }
 
-/// Every admin mutation this fixture can drive emits one OCSF `ApiActivity`
-/// record naming the api and the resource it changed.
-///
-/// The requests run in order because they build on each other: the topic has
-/// to exist before its partitions grow, and it has to go away last. The
-/// expectations are then checked as a table. `wait_for_audit_record` reads the
-/// whole topic back on each call, so the order the records land in does not
-/// matter to the assertions.
-///
-/// Four apis are out of this fixture's reach. `AlterPartitionReassignments`,
-/// `UnregisterBroker`, `AddRaftVoter` and `RemoveRaftVoter` need more than one
-/// broker, and the three delegation-token apis need a SASL listener with a
-/// master key. `ElectLeaders` is reachable but moves nothing here: a preferred
-/// election on a one-broker cluster is already at its preferred leader, and an
-/// election that changed no partition is not an audited mutation.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "broker started event is written to audit topic"
+)]
 #[tokio::test]
-async fn every_admin_mutation_is_audited() {
+async fn broker_started_event_is_written_to_audit_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit emission: every admin mutation is audited")]
+async fn bdd_verify_every_admin_mutation_is_audited() {
     let p = support::start().await;
     p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
@@ -387,17 +391,32 @@ async fn every_admin_mutation_is_audited() {
     p.broker.shutdown().await;
 }
 
-/// A SASL/PLAIN exchange writes one OCSF `Authentication` row per completed
-/// attempt, whichever way it ended.
+/// Every admin mutation this fixture can drive emits one OCSF `ApiActivity`
+/// record naming the api and the resource it changed.
 ///
-/// Both halves run on one broker because each half is one connection, and the
-/// row an auditor needs is the one that says which credential the connection
-/// presented and from where. The success row is written by the reading
-/// client's own login; the failure row by a second connection whose password
-/// is wrong, which the broker answers with `SASL_AUTHENTICATION_FAILED` and
-/// closes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_logins_are_audited_either_way() {
+/// The requests run in order because they build on each other: the topic has
+/// to exist before its partitions grow, and it has to go away last. The
+/// expectations are then checked as a table. `wait_for_audit_record` reads the
+/// whole topic back on each call, so the order the records land in does not
+/// matter to the assertions.
+///
+/// Four apis are out of this fixture's reach. `AlterPartitionReassignments`,
+/// `UnregisterBroker`, `AddRaftVoter` and `RemoveRaftVoter` need more than one
+/// broker, and the three delegation-token apis need a SASL listener with a
+/// master key. `ElectLeaders` is reachable but moves nothing here: a preferred
+/// election on a one-broker cluster is already at its preferred leader, and an
+/// election that changed no partition is not an audited mutation.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "every admin mutation is audited"
+)]
+#[tokio::test]
+async fn every_admin_mutation_is_audited() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("audit emission: sasl plain logins are audited either way")]
+async fn bdd_verify_sasl_plain_logins_are_audited_either_way() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl()
         .dir(&dir.path().join("data"))
@@ -441,3 +460,20 @@ async fn sasl_plain_logins_are_audited_either_way() {
 
     broker.shutdown().await;
 }
+
+/// A SASL/PLAIN exchange writes one OCSF `Authentication` row per completed
+/// attempt, whichever way it ended.
+///
+/// Both halves run on one broker because each half is one connection, and the
+/// row an auditor needs is the one that says which credential the connection
+/// presented and from where. The success row is written by the reading
+/// client's own login; the failure row by a second connection whose password
+/// is wrong, which the broker answers with `SASL_AUTHENTICATION_FAILED` and
+/// closes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/emission.feature",
+    name = "sasl plain logins are audited either way"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_plain_logins_are_audited_either_way() {}

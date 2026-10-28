@@ -228,8 +228,11 @@ async fn await_cold_row(tiered: &TieredBroker, topic: &str, topic_id: WireUuid, 
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered dynamic remote log: the remote fetch quota holds back cold reads until it is raised"
+)]
+async fn bdd_verify_the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {
     const TOPIC: &str = "tiered-fetch-quota";
     let tiered = start_tiered_broker().await;
     let topic_id = tiered_topic_with_records(&tiered, TOPIC).await;
@@ -248,6 +251,14 @@ async fn the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {
 
     tiered.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_dynamic_remote_log.feature",
+    name = "the remote fetch quota holds back cold reads until it is raised"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {}
 
 /// How many segments of `topic` the archive under `root` holds.
 fn archived_segments(root: &Path, topic: &str) -> usize {
@@ -270,8 +281,11 @@ async fn await_archived_segments(root: &Path, topic: &str, wanted: usize) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered dynamic remote log: the remote copy quota holds back uploads until it is raised"
+)]
+async fn bdd_verify_the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {
     const TOPIC: &str = "tiered-copy-quota";
     let tiered = start_tiered_broker().await;
     // One byte a second, set before the topic exists so the first copy pass
@@ -292,3 +306,11 @@ async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {
 
     tiered.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_dynamic_remote_log.feature",
+    name = "the remote copy quota holds back uploads until it is raised"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {}

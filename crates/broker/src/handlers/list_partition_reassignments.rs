@@ -275,13 +275,11 @@ mod tests {
         indexes: &'a [i32],
     }
 
-    /// Kafka's `ReplicationControlManager.listPartitionReassignments` and
-    /// `listReassigningTopic`: null topics list every reassigning partition,
-    /// a named topic lists only its requested indexes that are reassigning,
-    /// in request order and once per occurrence, and a topic with none (an
-    /// empty index list, an idle partition, an unknown topic) gives no row.
-    #[tokio::test]
-    async fn success_response_lists_what_kafka_lists() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers list partition reassignments tests: success response lists what kafka lists"
+    )]
+    async fn bdd_verify_success_response_lists_what_kafka_lists() {
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
@@ -421,4 +419,17 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `ReplicationControlManager.listPartitionReassignments` and
+    /// `listReassigningTopic`: null topics list every reassigning partition,
+    /// a named topic lists only its requested indexes that are reassigning,
+    /// in request order and once per occurrence, and a topic with none (an
+    /// empty index list, an idle partition, an unknown topic) gives no row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/list_partition_reassignments.feature",
+        name = "tests: success response lists what kafka lists"
+    )]
+    #[tokio::test]
+    async fn success_response_lists_what_kafka_lists() {}
 }

@@ -62,8 +62,11 @@ fn replay(records: Vec<LogRecord>) -> Outcome {
     })
 }
 
-#[test]
-fn partition_metadata_replays_as_kafka_4_3_1_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator bootstrap partition metadata replay tests: partition metadata replays as kafka 4 3 1 does"
+)]
+fn bdd_verify_partition_metadata_replays_as_kafka_4_3_1_does() {
     struct Case {
         name: &'static str,
         records: Vec<LogRecord>,
@@ -143,3 +146,10 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
         check!(replay(records) == expected, "{name}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/bootstrap/partition_metadata_replay_tests.feature",
+    name = "partition metadata replays as kafka 4 3 1 does"
+)]
+fn partition_metadata_replays_as_kafka_4_3_1_does() {}

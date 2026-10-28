@@ -31,11 +31,11 @@ use {
 /// arrived on, so this is the endpoint name the refusals must answer with.
 const PLAINTEXT_LISTENER: &str = "PLAINTEXT";
 
-/// A client `Produce` and a consumer `Fetch` that reach the witness are
-/// refused, while replication to that same witness keeps advancing: its local
-/// log reaches the produced offset and it stays in the ISR.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn witness_refuses_client_traffic_while_replication_advances() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "witness role witness client traffic: witness refuses client traffic while replication advances"
+)]
+async fn bdd_verify_witness_refuses_client_traffic_while_replication_advances() {
     let _guard = cluster_lock().lock().await;
     let cluster = start_stretch_cluster().await;
 
@@ -136,3 +136,14 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
 
     shutdown(cluster).await;
 }
+
+/// A client `Produce` and a consumer `Fetch` that reach the witness are
+/// refused, while replication to that same witness keeps advancing: its local
+/// log reaches the produced offset and it stays in the ISR.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/witness_role/witness_client_traffic.feature",
+    name = "witness refuses client traffic while replication advances"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn witness_refuses_client_traffic_while_replication_advances() {}

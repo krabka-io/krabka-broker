@@ -553,13 +553,9 @@ mod tests {
         }
     }
 
-    /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
-    /// included. A cluster with a `PLAINTEXT` controller listener and a
-    /// deny-capable authorizer needs it: the controllers and the node's own
-    /// broker heartbeats reach that listener as `ANONYMOUS`, and every request
-    /// there needs `ClusterAction`.
-    #[test]
-    fn accepts_every_super_user_set_kafka_accepts() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("config validate tests: accepts every super user set kafka accepts")]
+    fn bdd_verify_accepts_every_super_user_set_kafka_accepts() {
         let cases: [&[&str]; 4] = [&[], &["operator"], &["ANONYMOUS"], &[
             "ANONYMOUS",
             "operator",
@@ -572,6 +568,18 @@ mod tests {
             assert!(config.validate().is_ok(), "{super_users:?}");
         }
     }
+
+    /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
+    /// included. A cluster with a `PLAINTEXT` controller listener and a
+    /// deny-capable authorizer needs it: the controllers and the node's own
+    /// broker heartbeats reach that listener as `ANONYMOUS`, and every request
+    /// there needs `ClusterAction`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/validate.feature",
+        name = "tests: accepts every super user set kafka accepts"
+    )]
+    fn accepts_every_super_user_set_kafka_accepts() {}
 
     /// PLAIN has no dynamic credential path, so an enabled-but-empty table is
     /// a startup error rather than a run of `SASL_AUTHENTICATION_FAILED`.

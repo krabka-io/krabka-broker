@@ -175,11 +175,9 @@ async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     vec![(broker0, cfg0, dir0), (broker1, cfg1, dir1)]
 }
 
-/// Start two brokers with a `SASL_PLAINTEXT` inter-broker listener,
-/// create a topic with rf=2, produce, and check that the follower
-/// converges.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_broker_sasl_plaintext_replication() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers two broker sasl: two broker sasl plaintext replication")]
+async fn bdd_verify_two_broker_sasl_plaintext_replication() {
     let cluster = start_two_node_sasl().await;
 
     // Wait for both brokers to register in each other's image.
@@ -236,3 +234,14 @@ async fn two_broker_sasl_plaintext_replication() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// Start two brokers with a `SASL_PLAINTEXT` inter-broker listener,
+/// create a topic with rf=2, produce, and check that the follower
+/// converges.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/two_broker_sasl.feature",
+    name = "two broker sasl plaintext replication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_broker_sasl_plaintext_replication() {}

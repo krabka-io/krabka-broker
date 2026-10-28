@@ -531,12 +531,11 @@ mod tests {
         }
     }
 
-    /// Every shape Kafka's `deserialize` refuses. A missing principal is
-    /// included because `request_principal` is nullable on the wire: KIP-590
-    /// always populates it, and a null one leaves the controller with no
-    /// identity to authorize the embedded request against.
-    #[test]
-    fn a_principal_kafka_would_refuse_is_a_deserialization_failure() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "envelope tests: a principal kafka would refuse is a deserialization failure"
+    )]
+    fn bdd_verify_a_principal_kafka_would_refuse_is_a_deserialization_failure() {
         struct Case {
             label: &'static str,
             bytes: Option<Vec<u8>>,
@@ -580,12 +579,22 @@ mod tests {
         }
     }
 
-    /// The `EnvelopeResponse.error_code` for each failure, as
-    /// `kafka.server.EnvelopeUtils` assigns them. A substitution here is
-    /// invisible to a Rust caller and changes what a JVM forwarder reports to
-    /// its own client.
-    #[test]
-    fn each_failure_carries_the_error_code_kafka_assigns_it() {
+    /// Every shape Kafka's `deserialize` refuses. A missing principal is
+    /// included because `request_principal` is nullable on the wire: KIP-590
+    /// always populates it, and a null one leaves the controller with no
+    /// identity to authorize the embedded request against.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/envelope.feature",
+        name = "tests: a principal kafka would refuse is a deserialization failure"
+    )]
+    fn a_principal_kafka_would_refuse_is_a_deserialization_failure() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "envelope tests: each failure carries the error code kafka assigns it"
+    )]
+    fn bdd_verify_each_failure_carries_the_error_code_kafka_assigns_it() {
         let cases = [
             (EnvelopeError::ClusterAuthorizationFailed, 31),
             (EnvelopeError::PrincipalDeserializationFailure, 97),
@@ -597,6 +606,17 @@ mod tests {
             check!(error.code() == want, "{error:?}");
         }
     }
+
+    /// The `EnvelopeResponse.error_code` for each failure, as
+    /// `kafka.server.EnvelopeUtils` assigns them. A substitution here is
+    /// invisible to a Rust caller and changes what a JVM forwarder reports to
+    /// its own client.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/envelope.feature",
+        name = "tests: each failure carries the error code kafka assigns it"
+    )]
+    fn each_failure_carries_the_error_code_kafka_assigns_it() {}
 
     /// `client_host_address` is exactly what `InetAddress.getByAddress`
     /// accepts: four octets or sixteen, with an IPv4-mapped sixteen folded
@@ -926,11 +946,9 @@ mod tests {
         check!(decode_request(&encoded, 0) == Ok(want));
     }
 
-    /// The forwardable set is `ApiKeys.forwardable` from
-    /// `kafka-clients-4.3.1.jar`. The five write APIs issue #82 names are in
-    /// it, and so is `UpdateFeatures`, which `kafka-features.sh` drives.
-    #[test]
-    fn the_forwardable_set_is_the_one_kafka_publishes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("envelope tests: the forwardable set is the one kafka publishes")]
+    fn bdd_verify_the_forwardable_set_is_the_one_kafka_publishes() {
         let want: BTreeSet<i16> = maplit::btreeset! {
             19, 20, 30, 31, 33, 37, 38, 39, 40, 43, 44, 45, 46, 49, 51, 55, 57, 64, 67, 80, 81,
             94,
@@ -943,6 +961,16 @@ mod tests {
         // Produce is a data-plane api the controller never serves.
         check!(!is_forwardable(0));
     }
+
+    /// The forwardable set is `ApiKeys.forwardable` from
+    /// `kafka-clients-4.3.1.jar`. The five write APIs issue #82 names are in
+    /// it, and so is `UpdateFeatures`, which `kafka-features.sh` drives.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/envelope.feature",
+        name = "tests: the forwardable set is the one kafka publishes"
+    )]
+    fn the_forwardable_set_is_the_one_kafka_publishes() {}
 
     krabka_macros::request_frame_fixture!(wire_request_frame);
 
@@ -1083,20 +1111,11 @@ mod tests {
         }
     }
 
-    /// `EnvelopeUtils.handleEnvelopeRequest` answers each way an embedded
-    /// request can fail with the code its own throw site gives.
-    ///
-    /// - A header `RequestHeader.parse` refuses is `UNSUPPORTED_VERSION`: a
-    ///   frame too short for one, an api key the release does not have (93 and
-    ///   up on 4.3.1, trunk's own keys until `unstable.api.versions.enable`),
-    ///   and the removed keys 4 to 7.
-    /// - A known key outside `ApiKeys.forwardable` is `INVALID_REQUEST`, and
-    ///   the forwardable test runs before the body is read.
-    /// - A forwardable key whose body does not decode is
-    ///   `UNSUPPORTED_VERSION`, since `parseForwardedRequest` rewraps the
-    ///   `InvalidRequestException` of `RequestContext.parseRequest`.
-    #[test]
-    fn an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "envelope tests: an embedded request kafka would refuse gets the code kafka gives"
+    )]
+    fn bdd_verify_an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {
         struct Case {
             label: &'static str,
             frame: Bytes,
@@ -1228,6 +1247,25 @@ mod tests {
             );
         }
     }
+
+    /// `EnvelopeUtils.handleEnvelopeRequest` answers each way an embedded
+    /// request can fail with the code its own throw site gives.
+    ///
+    /// - A header `RequestHeader.parse` refuses is `UNSUPPORTED_VERSION`: a
+    ///   frame too short for one, an api key the release does not have (93 and
+    ///   up on 4.3.1, trunk's own keys until `unstable.api.versions.enable`),
+    ///   and the removed keys 4 to 7.
+    /// - A known key outside `ApiKeys.forwardable` is `INVALID_REQUEST`, and
+    ///   the forwardable test runs before the body is read.
+    /// - A forwardable key whose body does not decode is
+    ///   `UNSUPPORTED_VERSION`, since `parseForwardedRequest` rewraps the
+    ///   `InvalidRequestException` of `RequestContext.parseRequest`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/envelope.feature",
+        name = "tests: an embedded request kafka would refuse gets the code kafka gives"
+    )]
+    fn an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {}
 
     /// `response_data` is the embedded response header followed by the
     /// handler's body, and the header is v1 exactly when the embedded body is

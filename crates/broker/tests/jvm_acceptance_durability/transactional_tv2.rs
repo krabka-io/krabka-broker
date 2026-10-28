@@ -181,13 +181,11 @@ async fn harness(client_id: &str, topics: &[&str]) -> Harness {
     }
 }
 
-/// A Kafka 4.x transactional producer against a `transaction.version=2`
-/// broker: the commit/abort split is what `read_committed` sees, no
-/// `AddPartitionsToTxn` is sent, and the epoch advances across the second
-/// transaction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance durability transactional tv2: a kafka 4x client runs transactions without add partitions to txn"
+)]
+async fn bdd_verify_a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {
     let Harness {
         broker,
         _dir,
@@ -285,6 +283,19 @@ async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {
 
     broker.shutdown().await;
 }
+
+/// A Kafka 4.x transactional producer against a `transaction.version=2`
+/// broker: the commit/abort split is what `read_committed` sees, no
+/// `AddPartitionsToTxn` is sent, and the epoch advances across the second
+/// transaction.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_tv2.feature",
+    name = "a kafka 4x client runs transactions without add partitions to txn"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {}
 
 /// Every read command of `kafka-transactions` against the open transaction,
 /// each compared with the answer the same broker gives in process.
@@ -384,16 +395,11 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
     open_producer_state
 }
 
-/// `kafka-transactions` (KIP-664) against a transaction left open, compared
-/// column for column with the answers the same broker gives an in-process
-/// admin client, and then aborted through the tool.
-///
-/// The open transaction is held by an in-process producer rather than by the
-/// JVM helper, because the helper commits, aborts and exits: nothing in it can
-/// be made to hold a transaction open while a container runs beside it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance durability transactional tv2: the transactions tool agrees with the broker and can abort"
+)]
+async fn bdd_verify_the_transactions_tool_agrees_with_the_broker_and_can_abort() {
     let Harness {
         broker,
         _dir,
@@ -483,6 +489,22 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
     .expect("close the in-process producer");
     broker.shutdown().await;
 }
+
+/// `kafka-transactions` (KIP-664) against a transaction left open, compared
+/// column for column with the answers the same broker gives an in-process
+/// admin client, and then aborted through the tool.
+///
+/// The open transaction is held by an in-process producer rather than by the
+/// JVM helper, because the helper commits, aborts and exits: nothing in it can
+/// be made to hold a transaction open while a container runs beside it.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_durability/transactional_tv2.feature",
+    name = "the transactions tool agrees with the broker and can abort"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {}
 
 /// Close the in-process producer once its transaction guard has let go of it.
 async fn close_released(producer: Arc<Producer>) -> Result<(), ProducerError> {

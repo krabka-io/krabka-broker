@@ -143,26 +143,56 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        kafka_default = { -1, -1, Ok(None) },
-        negative_end_offset = { 3, -1, Ok(None) },
-        named_divergence = { 3, 10, Ok(Some(LogOffsetMetadata { offset: 10, epoch: 3 })) },
-        epoch_zero = { 0, 0, Ok(Some(LogOffsetMetadata { offset: 0, epoch: 0 })) },
-        negative_epoch = {
-            -1,
-            10,
-            Err(String::from("leader returned an invalid WAL diverging epoch")),
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "wal quorum follower fetch tests: diverging epoch is absent at the kafka default and needs a real epoch for {example}"
     )]
-    fn diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(
-        epoch: i32,
-        end_offset: i64,
-        expected: Result<Option<LogOffsetMetadata>, String>,
+    fn bdd_verify_diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(
+        example: String,
     ) {
+        type Example = (i32, i64, Result<Option<LogOffsetMetadata>, String>);
+        let (epoch, end_offset, expected): Example = match example.as_str() {
+            "kafka default" => (-1, -1, Ok(None)),
+            "negative end offset" => (3, -1, Ok(None)),
+            "named divergence" => (
+                3,
+                10,
+                Ok(Some(LogOffsetMetadata {
+                    offset: 10,
+                    epoch: 3,
+                })),
+            ),
+            "epoch zero" => (
+                0,
+                0,
+                Ok(Some(LogOffsetMetadata {
+                    offset: 0,
+                    epoch: 0,
+                })),
+            ),
+            "negative epoch" => (
+                -1,
+                10,
+                Err(String::from(
+                    "leader returned an invalid WAL diverging epoch",
+                )),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let mut partition = frontiers(0, 0, 10);
         partition.diverging_epoch.epoch = epoch;
         partition.diverging_epoch.end_offset = end_offset;
         assert2::assert!(validate_diverging_epoch(&partition) == expected);
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/wal/quorum/follower/fetch.feature",
+        name = "tests: diverging epoch is absent at the kafka default and needs a real epoch"
+    )]
+    fn diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(example: String) {
+        let _ = example;
     }
 
     #[test]

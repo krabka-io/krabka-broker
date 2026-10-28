@@ -86,8 +86,11 @@ mod tests {
         assert!(ShareGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn member_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence member tests: member metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_member_metadata_bytes_match_kafka_schema() {
         let v = ShareGroupMemberMetadataValue {
             rack_id: Some("r".into()),
             client_id: "c".into(),
@@ -96,6 +99,13 @@ mod tests {
         };
         assert!(&v.encode()[..] == b"\x00\x00\x02r\x02c\x02h\x02\x02a\x00");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/member.feature",
+        name = "tests: member metadata bytes match kafka schema"
+    )]
+    fn member_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn member_metadata_rejects_a_missing_tagged_trailer() {

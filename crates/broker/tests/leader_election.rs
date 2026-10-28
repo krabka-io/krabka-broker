@@ -65,8 +65,9 @@ async fn wait_for_controller_leader_other_than(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_death_elects_new_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader election: broker death elects new leader")]
+async fn bdd_verify_broker_death_elects_new_leader() {
     let _g = cluster_lock().lock().await;
     let (mut cluster, _bootstrap_1) = replicated_topic_fixture().topic("elect").call().await;
 
@@ -105,8 +106,17 @@ async fn broker_death_elects_new_leader() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "broker death elects new leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unclean_failover_recovers_after_a_real_broker_restart() {
+async fn broker_death_elects_new_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader election: unclean failover recovers after a real broker restart")]
+async fn bdd_verify_unclean_failover_recovers_after_a_real_broker_restart() {
     let _g = cluster_lock().lock().await;
     let (mut cluster, _bootstrap) = replicated_topic_fixture()
         .topic("kip704-restart")
@@ -176,8 +186,17 @@ async fn unclean_failover_recovers_after_a_real_broker_restart() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "unclean failover recovers after a real broker restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_completes_after_isr_shrink() {
+async fn unclean_failover_recovers_after_a_real_broker_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader election: acks all completes after isr shrink")]
+async fn bdd_verify_acks_all_completes_after_isr_shrink() {
     let _g = cluster_lock().lock().await;
     let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("shrink2").call().await;
 
@@ -204,8 +223,17 @@ async fn acks_all_completes_after_isr_shrink() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "acks all completes after isr shrink"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isr_expand_on_catchup() {
+async fn acks_all_completes_after_isr_shrink() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader election: isr expand on catchup")]
+async fn bdd_verify_isr_expand_on_catchup() {
     let _g = cluster_lock().lock().await;
     let (mut cluster, _bootstrap_1) = replicated_topic_fixture().topic("expand").call().await;
 
@@ -287,8 +315,17 @@ async fn isr_expand_on_catchup() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "isr expand on catchup"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_during_leader_failover() {
+async fn isr_expand_on_catchup() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader election: produce during leader failover")]
+async fn bdd_verify_produce_during_leader_failover() {
     let _g = cluster_lock().lock().await;
     let (mut cluster, bootstrap_1) = replicated_topic_fixture().topic("failover").call().await;
 
@@ -332,6 +369,14 @@ async fn produce_during_leader_failover() {
     shutdown_cluster(cluster).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "produce during leader failover"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn produce_during_leader_failover() {}
+
 /// The heartbeat session of the soak cluster and of Kafka's default
 /// `broker.session.timeout.ms`.
 const RESTART_SESSION_TIMEOUT: krabka_units::Time = krabka_units::secs(9);
@@ -368,26 +413,11 @@ async fn produce_to_current_leader(
     .await
 }
 
-/// krabka-io/krabka-broker#1450: a partition leader that is killed and comes
-/// back inside its heartbeat session is a new process, and Kafka treats it as
-/// one.
-///
-/// A Kafka broker draws a new incarnation id at every start.
-/// `ClusterControlManager.registerBroker` refuses that incarnation with
-/// `DUPLICATE_BROKER_REGISTRATION` while the previous one still holds a
-/// session. Once the session expires, either the expiry fences the old
-/// registration (`ReplicationControlManager.handleBrokerFenced`) or the new
-/// registration runs `handleBrokerShutdown` first. Both take the broker out of
-/// its ISRs and elect another leader at a new leader epoch, so the restarted
-/// process does not resume a leadership whose log it may not hold. The
-/// restarted broker then catches up and is unfenced as a follower. A krabka
-/// broker's self-registration takes the second path at once, so the deadline
-/// is Kafka's worst case, not krabka's.
-///
-/// The victim is not the controller leader, so nothing here waits on a
-/// controller failover.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "leader election: a leader restarted inside its session is fenced and loses leadership"
+)]
+async fn bdd_verify_a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() {
     const TOPIC: &str = "restart-fencing";
     let _g = cluster_lock().lock().await;
     let mut cluster = support::start_n_node_with(3, |_, config| {
@@ -530,6 +560,32 @@ async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() 
     shutdown_cluster(cluster).await;
 }
 
+/// krabka-io/krabka-broker#1450: a partition leader that is killed and comes
+/// back inside its heartbeat session is a new process, and Kafka treats it as
+/// one.
+///
+/// A Kafka broker draws a new incarnation id at every start.
+/// `ClusterControlManager.registerBroker` refuses that incarnation with
+/// `DUPLICATE_BROKER_REGISTRATION` while the previous one still holds a
+/// session. Once the session expires, either the expiry fences the old
+/// registration (`ReplicationControlManager.handleBrokerFenced`) or the new
+/// registration runs `handleBrokerShutdown` first. Both take the broker out of
+/// its ISRs and elect another leader at a new leader epoch, so the restarted
+/// process does not resume a leadership whose log it may not hold. The
+/// restarted broker then catches up and is unfenced as a follower. A krabka
+/// broker's self-registration takes the second path at once, so the deadline
+/// is Kafka's worst case, not krabka's.
+///
+/// The victim is not the controller leader, so nothing here waits on a
+/// controller failover.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a leader restarted inside its session is fenced and loses leadership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() {}
+
 /// Whether `image` has partition 0 of `topic` led by a broker other than
 /// `victim`, at a leader epoch past the one `before` records.
 fn leadership_moved_off(
@@ -558,18 +614,12 @@ fn rejoined_as_follower(
         && image.broker(victim).is_some_and(|broker| !broker.fenced)
 }
 
-/// krabka-io/krabka-broker#1442: the partition leader killed and restarted
-/// inside its heartbeat session is also the active controller.
-///
-/// A combined node registers its broker before its broker layer is built, so
-/// a restarted node that wins the controller election first admits its own
-/// registration before anything else can. That batch still has to retire the
-/// previous incarnation, as Kafka's `registerBroker` does on any active
-/// controller: the broker leaves the ISR and another replica leads at a new
-/// leader epoch. The victim here is the whole voter set, so its restart always
-/// takes that path, and two broker-only nodes are the other replicas.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "leader election: a controller leader restarted inside its session loses its partition leadership"
+)]
+async fn bdd_verify_a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership()
+ {
     const TOPIC: &str = "controller-restart-fencing";
     const NODES: usize = 3;
     let _g = cluster_lock().lock().await;
@@ -664,3 +714,21 @@ async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_le
     }
     reborn.shutdown().await;
 }
+
+/// krabka-io/krabka-broker#1442: the partition leader killed and restarted
+/// inside its heartbeat session is also the active controller.
+///
+/// A combined node registers its broker before its broker layer is built, so
+/// a restarted node that wins the controller election first admits its own
+/// registration before anything else can. That batch still has to retire the
+/// previous incarnation, as Kafka's `registerBroker` does on any active
+/// controller: the broker leaves the ISR and another replica leads at a new
+/// leader epoch. The victim here is the whole voter set, so its restart always
+/// takes that path, and two broker-only nodes are the other replicas.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a controller leader restarted inside its session loses its partition leadership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_controller_leader_restarted_inside_its_session_loses_its_partition_leadership() {}

@@ -56,8 +56,11 @@ fn the_canonical_bytes_match_the_documented_layout() {
     );
 }
 
-#[test]
-fn a_literal_freeze_takes_the_kafka_pattern_type_byte() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "freeze signing tests canonical bytes: a literal freeze takes the kafka pattern type byte"
+)]
+fn bdd_verify_a_literal_freeze_takes_the_kafka_pattern_type_byte() {
     let literal = freeze_signing_bytes(CLUSTER_ID, &record());
     let prefixed = freeze_signing_bytes(CLUSTER_ID, &TopicFreezeRecord {
         pattern_type: PatternType::Prefixed,
@@ -68,6 +71,13 @@ fn a_literal_freeze_takes_the_kafka_pattern_type_byte() {
     check!(literal[pattern_byte] == 3);
     check!(prefixed[pattern_byte] == 4);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/freeze/signing/tests/canonical_bytes.feature",
+    name = "a literal freeze takes the kafka pattern type byte"
+)]
+fn a_literal_freeze_takes_the_kafka_pattern_type_byte() {}
 
 /// A length prefix is what keeps two different records from building one
 /// byte string.

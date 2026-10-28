@@ -181,13 +181,11 @@ fn the_unbounded_policy_admits_every_timestamp() {
     check!(prepare(&ancient, unbounded, Some(CompressionType::Zstd)) == Ok(()));
 }
 
-/// Kafka 4.3.1 defaults `message.timestamp.after.max.ms` to one hour and
-/// `message.timestamp.before.max.ms` to `Long.MAX_VALUE`, so a topic that
-/// configured nothing refuses a record stamped more than an hour ahead of the
-/// broker's clock and accepts one from any point in the past. A topic that did
-/// not opt into KFC-1 has to behave exactly that way.
-#[test]
-fn a_stock_topic_carries_kafkas_one_hour_future_window() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers produce prepare tests timestamp window: a stock topic carries kafkas one hour future window"
+)]
+fn bdd_verify_a_stock_topic_carries_kafkas_one_hour_future_window() {
     let now = now_ms();
     let stock = policy(&[]);
     let cases = [
@@ -216,6 +214,18 @@ fn a_stock_topic_carries_kafkas_one_hour_future_window() {
         );
     }
 }
+
+/// Kafka 4.3.1 defaults `message.timestamp.after.max.ms` to one hour and
+/// `message.timestamp.before.max.ms` to `Long.MAX_VALUE`, so a topic that
+/// configured nothing refuses a record stamped more than an hour ahead of the
+/// broker's clock and accepts one from any point in the past. A topic that did
+/// not opt into KFC-1 has to behave exactly that way.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/produce/prepare/tests/timestamp_window.feature",
+    name = "a stock topic carries kafkas one hour future window"
+)]
+fn a_stock_topic_carries_kafkas_one_hour_future_window() {}
 
 /// KFC-1: a scheduled topic's timestamps are delivery times, and the default
 /// `delivery.max.delay.ms` is seven days. Kafka's one-hour future window would

@@ -25,8 +25,11 @@ use {
     tokio::time,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn trimmed_diskless_offsets_are_served_from_the_object_store() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless e2e cold read: trimmed diskless offsets are served from the object store"
+)]
+async fn bdd_verify_trimmed_diskless_offsets_are_served_from_the_object_store() {
     // Flush often, and keep no safety lag behind the committed index frontier,
     // so the trim reaches every offset the flush covered.
     let (cluster, admin, topic_id, leader, _values, producer) =
@@ -64,6 +67,14 @@ async fn trimmed_diskless_offsets_are_served_from_the_object_store() {
     drop(admin);
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/cold_read.feature",
+    name = "trimmed diskless offsets are served from the object store"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trimmed_diskless_offsets_are_served_from_the_object_store() {}
 
 /// The leader's log start, high watermark and projected flush frontier.
 struct TrimmedFlush {
@@ -106,18 +117,11 @@ async fn await_trimmed_flush(leader: &krabka_broker::BrokerHandle, committed: i6
     }
 }
 
-/// `DeleteRecords` on a diskless topic has to reach the object tier, not just
-/// the local WAL.
-///
-/// The trim frontier is no help here. By the time this runs the flusher has
-/// already trimmed the local log past every offset the case deletes, so a
-/// broker that measured the delete against `log_start_offset` would call the
-/// request a no-op and go on serving the deleted records out of the bucket for
-/// as long as the topic lived. The two assertions below are what an operator
-/// checks after running `kafka-delete-records`: the deleted offsets are gone,
-/// and the ones above the floor are not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleted_diskless_records_leave_the_object_store_unreadable() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless e2e cold read: deleted diskless records leave the object store unreadable"
+)]
+async fn bdd_verify_deleted_diskless_records_leave_the_object_store_unreadable() {
     let (cluster, admin, topic_id, leader, _values, producer) =
         flushing_workload(krabka_units::millis(100)).await;
     let bootstrap = cluster.bootstrap_for_node(leader);
@@ -159,3 +163,21 @@ async fn deleted_diskless_records_leave_the_object_store_unreadable() {
     drop(admin);
     cluster.shutdown().await;
 }
+
+/// `DeleteRecords` on a diskless topic has to reach the object tier, not just
+/// the local WAL.
+///
+/// The trim frontier is no help here. By the time this runs the flusher has
+/// already trimmed the local log past every offset the case deletes, so a
+/// broker that measured the delete against `log_start_offset` would call the
+/// request a no-op and go on serving the deleted records out of the bucket for
+/// as long as the topic lived. The two assertions below are what an operator
+/// checks after running `kafka-delete-records`: the deleted offsets are gone,
+/// and the ones above the floor are not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/cold_read.feature",
+    name = "deleted diskless records leave the object store unreadable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleted_diskless_records_leave_the_object_store_unreadable() {}

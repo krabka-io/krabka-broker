@@ -16,12 +16,18 @@ use {
     wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
 };
 
-#[yare::parameterized(
-    no_registry_section = { false },
-    registry_returns_500 = { true },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation registry availability: a registry that cannot answer fails closed for {example}"
 )]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn a_registry_that_cannot_answer_fails_closed(registry_returns_500: bool) {
+async fn bdd_verify_a_registry_that_cannot_answer_fails_closed(example: String) {
+    type Example = (bool,);
+    let (registry_returns_500,): Example = match example.as_str() {
+        "no registry section" => (false,),
+        "registry returns 500" => (true,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let registry = if registry_returns_500 {
         Some(unavailable_registry().await)
     } else {
@@ -40,8 +46,19 @@ async fn a_registry_that_cannot_answer_fails_closed(registry_returns_500: bool) 
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/registry_availability.feature",
+    name = "a registry that cannot answer fails closed"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
+async fn a_registry_that_cannot_answer_fails_closed(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation registry availability: fail open admits a record the registry could not answer for"
+)]
+async fn bdd_verify_fail_open_admits_a_record_the_registry_could_not_answer_for() {
     let registry = unavailable_registry().await;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -65,6 +82,14 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/registry_availability.feature",
+    name = "fail open admits a record the registry could not answer for"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {}
 
 async fn expect_fail_closed(broker: &krabka_broker::BrokerHandle, client: &Client) {
     let id = create_topic().broker(broker).client(client).call().await;

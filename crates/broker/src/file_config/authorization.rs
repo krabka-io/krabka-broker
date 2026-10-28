@@ -133,10 +133,11 @@ mod tests {
         tokio::runtime::Runtime,
     };
 
-    /// Both `super_users` lists take Kafka's `User:<name>` form, and
-    /// `User:ANONYMOUS` is a super user as in Kafka.
-    #[test]
-    fn super_users_take_the_kafka_principal_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config authorization tests: super users take the kafka principal form"
+    )]
+    fn bdd_verify_super_users_take_the_kafka_principal_form() {
         let cases = [
             (
                 "top level",
@@ -164,6 +165,15 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
             assert2::assert!(cfg.validate().is_ok(), "{case}");
         }
     }
+
+    /// Both `super_users` lists take Kafka's `User:<name>` form, and
+    /// `User:ANONYMOUS` is a super user as in Kafka.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/authorization.feature",
+        name = "tests: super users take the kafka principal form"
+    )]
+    fn super_users_take_the_kafka_principal_form() {}
 
     #[test]
     fn super_users_toml_populates_broker_config_set() {

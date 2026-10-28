@@ -200,11 +200,11 @@ mod tests {
         CheckpointInDir { dir, checkpoint }
     }
 
-    /// One row per case of `getOffsetTruncationState`: the current log's
-    /// answer, the future log's epochs (epoch 1 from 0, epoch 3 from 10) and
-    /// end (15), and the truncation it makes.
-    #[test]
-    fn the_truncation_state_follows_kafkas_getoffsettruncationstate() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "future log truncation tests: the truncation state follows kafkas getoffsettruncationstate"
+    )]
+    fn bdd_verify_the_truncation_state_follows_kafkas_getoffsettruncationstate() {
         struct Case {
             label: &'static str,
             current: EpochEnd,
@@ -269,6 +269,16 @@ mod tests {
             assert!(state == TruncationState { offset, completed }, "{label}");
         }
     }
+
+    /// One row per case of `getOffsetTruncationState`: the current log's
+    /// answer, the future log's epochs (epoch 1 from 0, epoch 3 from 10) and
+    /// end (15), and the truncation it makes.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/future_log/truncation.feature",
+        name = "tests: the truncation state follows kafkas getoffsettruncationstate"
+    )]
+    fn the_truncation_state_follows_kafkas_getoffsettruncationstate() {}
 
     /// A log at `<dir>/<name>` with `batches` one-record batches, each stamped
     /// with the epoch it is paired with.

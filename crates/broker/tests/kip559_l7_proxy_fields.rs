@@ -100,8 +100,11 @@ async fn bootstrap_member(p: &support::InProcess) -> BootstrappedMember {
     }
 }
 
-#[tokio::test]
-async fn join_group_response_carries_protocol_type_and_name_on_success() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip559 l7 proxy fields: join group response carries protocol type and name on success"
+)]
+async fn bdd_verify_join_group_response_carries_protocol_type_and_name_on_success() {
     let p = start().await;
     let BootstrappedMember {
         member_id: _mid,
@@ -110,8 +113,19 @@ async fn join_group_response_carries_protocol_type_and_name_on_success() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "join group response carries protocol type and name on success"
+)]
 #[tokio::test]
-async fn sync_group_response_carries_protocol_type_and_name_on_success() {
+async fn join_group_response_carries_protocol_type_and_name_on_success() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip559 l7 proxy fields: sync group response carries protocol type and name on success"
+)]
+async fn bdd_verify_sync_group_response_carries_protocol_type_and_name_on_success() {
     let p = start().await;
     let BootstrappedMember {
         member_id: mid,
@@ -150,8 +164,19 @@ async fn sync_group_response_carries_protocol_type_and_name_on_success() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "sync group response carries protocol type and name on success"
+)]
 #[tokio::test]
-async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
+async fn sync_group_response_carries_protocol_type_and_name_on_success() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip559 l7 proxy fields: join group inconsistent protocol error carries no protocol fields"
+)]
+async fn bdd_verify_join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     let p = start().await;
     // Bootstrap the group as `consumer/range`.
     let BootstrappedMember {
@@ -187,12 +212,17 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     p.broker.shutdown().await;
 }
 
-/// A `SyncGroup` that Kafka refuses carries only the error code. Kafka's
-/// `GroupCoordinatorService.syncGroup` answers every error with
-/// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
-/// `protocol_name` stay null even though the group has a recorded protocol.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "join group inconsistent protocol error carries no protocol fields"
+)]
 #[tokio::test]
-async fn sync_group_error_carries_no_protocol_fields() {
+async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kip559 l7 proxy fields: sync group error carries no protocol fields")]
+async fn bdd_verify_sync_group_error_carries_no_protocol_fields() {
     let p = start().await;
     let BootstrappedMember {
         member_id: _mid,
@@ -224,3 +254,15 @@ async fn sync_group_error_carries_no_protocol_fields() {
 
     p.broker.shutdown().await;
 }
+
+/// A `SyncGroup` that Kafka refuses carries only the error code. Kafka's
+/// `GroupCoordinatorService.syncGroup` answers every error with
+/// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
+/// `protocol_name` stay null even though the group has a recorded protocol.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "sync group error carries no protocol fields"
+)]
+#[tokio::test]
+async fn sync_group_error_carries_no_protocol_fields() {}

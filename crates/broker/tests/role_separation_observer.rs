@@ -200,8 +200,9 @@ async fn assert_settled_unfenced(cluster: &RoleSeparated) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_node_observes_and_forwards() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("role separation observer: broker only node observes and forwards")]
+async fn bdd_verify_broker_only_node_observes_and_forwards() {
     support::init_tracing();
 
     let cluster = start_role_separated(1).await;
@@ -254,6 +255,14 @@ async fn broker_only_node_observes_and_forwards() {
     cluster.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only node observes and forwards"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_node_observes_and_forwards() {}
+
 /// A restarted node and the health state its startup marked.
 struct RestartedBroker {
     handle: BrokerHandle,
@@ -288,22 +297,12 @@ async fn restart_broker_only(cfg: &BrokerConfig) -> RestartedBroker {
     }
 }
 
-/// A broker-only node that comes back after the controller has snapshotted and
-/// pruned `__cluster_metadata` past the offset it asks for.
-///
-/// The observer fetches by offset, and the controller drops the log prefix
-/// behind every KIP-630 snapshot. A restarted observer therefore asks for
-/// records that no longer exist. Answered with an empty slice it re-asks for
-/// the same gone offset on every poll: the image stays empty forever, the node
-/// never registers, and `/readyz` reports a lag it can never close — until
-/// somebody deletes the controller's checkpoints by hand.
-///
-/// So the controller answers such a fetch with the id of the snapshot that
-/// replaced those records, and the observer installs it before resuming. This
-/// test drives exactly that: a snapshot interval low enough that a handful of
-/// topics crosses it several times, then a restart.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: a broker only node recovers after the controller prunes past its fetch offset"
+)]
+async fn bdd_verify_a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset()
+{
     support::init_tracing();
 
     // Only the controller snapshots aggressively, and it keeps no log beyond
@@ -390,20 +389,33 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
     controller.shutdown().await;
 }
 
-/// A controller-only node never registers itself as a broker, so the only
-/// address it publishes is the CONTROLLER endpoint of its
-/// `ControllerRegistrationRecord`. When the heartbeat client looked the leader
-/// up as a broker instead, every tick bailed out, no heartbeat ever reached
-/// the controller, and roughly one `liveness_tick_interval` after boot the
-/// controller fenced the registration of every broker in the cluster —
-/// permanently, since nothing could ever unfence them.
+/// A broker-only node that comes back after the controller has snapshotted and
+/// pruned `__cluster_metadata` past the offset it asks for.
 ///
-/// So this holds the assertion across several liveness ticks and past
-/// `heartbeat_timeout`, rather than sampling it once: the broken behaviour
-/// takes a session expiry to show up, and a single early sample would see the
-/// seeded-alive state and pass.
+/// The observer fetches by offset, and the controller drops the log prefix
+/// behind every KIP-630 snapshot. A restarted observer therefore asks for
+/// records that no longer exist. Answered with an empty slice it re-asks for
+/// the same gone offset on every poll: the image stays empty forever, the node
+/// never registers, and `/readyz` reports a lag it can never close — until
+/// somebody deletes the controller's checkpoints by hand.
+///
+/// So the controller answers such a fetch with the id of the snapshot that
+/// replaced those records, and the observer installs it before resuming. This
+/// test drives exactly that: a snapshot interval low enough that a handful of
+/// topics crosses it several times, then a restart.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "a broker only node recovers after the controller prunes past its fetch offset"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
+async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: heartbeats keep brokers unfenced in a role separated cluster"
+)]
+async fn bdd_verify_heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
     support::init_tracing();
 
     let cluster = start_role_separated(2).await;
@@ -471,6 +483,26 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
     cluster.shutdown().await;
 }
 
+/// A controller-only node never registers itself as a broker, so the only
+/// address it publishes is the CONTROLLER endpoint of its
+/// `ControllerRegistrationRecord`. When the heartbeat client looked the leader
+/// up as a broker instead, every tick bailed out, no heartbeat ever reached
+/// the controller, and roughly one `liveness_tick_interval` after boot the
+/// controller fenced the registration of every broker in the cluster —
+/// permanently, since nothing could ever unfence them.
+///
+/// So this holds the assertion across several liveness ticks and past
+/// `heartbeat_timeout`, rather than sampling it once: the broken behaviour
+/// takes a session expiry to show up, and a single early sample would see the
+/// seeded-alive state and pass.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "heartbeats keep brokers unfenced in a role separated cluster"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {}
+
 /// `Metadata` has to name a `controller_id` the caller can resolve.
 ///
 /// In `KRaft` the field is not the quorum leader: `apache/kafka:4.3.1` answers it
@@ -515,16 +547,11 @@ async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
     }
 }
 
-/// The controller-only node opens no client listener, as Kafka's
-/// `ControllerServer` opens only the listeners that `controller.listener.names`
-/// names. The harness hands it a listener bound on its client address, and the
-/// node closes it, so a connect there is refused. Its one listener is the
-/// controller listener.
-///
-/// [`assert_metadata_names_a_reachable_controller`] asks the observers which
-/// node is the controller. No client can ask the controller-only node.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_only_node_opens_no_client_listener() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: controller only node opens no client listener"
+)]
+async fn bdd_verify_controller_only_node_opens_no_client_listener() {
     support::init_tracing();
 
     let cluster = start_role_separated(1).await;
@@ -548,11 +575,27 @@ async fn controller_only_node_opens_no_client_listener() {
     cluster.shutdown().await;
 }
 
-/// A broker-only node forwards `DescribeQuorum` to the active controller
-/// quorum leader (#392). The response reports the controller's real term,
-/// leader, and voter set.
+/// The controller-only node opens no client listener, as Kafka's
+/// `ControllerServer` opens only the listeners that `controller.listener.names`
+/// names. The harness hands it a listener bound on its client address, and the
+/// node closes it, so a connect there is refused. Its one listener is the
+/// controller listener.
+///
+/// [`assert_metadata_names_a_reachable_controller`] asks the observers which
+/// node is the controller. No client can ask the controller-only node.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "controller only node opens no client listener"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_node_forwards_describe_quorum_to_controller() {
+async fn controller_only_node_opens_no_client_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: broker only node forwards describe quorum to controller"
+)]
+async fn bdd_verify_broker_only_node_forwards_describe_quorum_to_controller() {
     support::init_tracing();
 
     let cluster = start_role_separated(1).await;
@@ -585,13 +628,22 @@ async fn broker_only_node_forwards_describe_quorum_to_controller() {
     cluster.shutdown().await;
 }
 
-/// Every broker-only node fetches `__cluster_metadata` from the controller, so
-/// the controller's `DescribeQuorum` lists each one as an observer under its
-/// node id, with the time of its last fetch. Kafka lists a broker the same way,
-/// and `kafka-metadata-quorum describe --replication` shows them under
-/// `Observer`.
+/// A broker-only node forwards `DescribeQuorum` to the active controller
+/// quorum leader (#392). The response reports the controller's real term,
+/// leader, and voter set.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only node forwards describe quorum to controller"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_nodes_are_described_as_quorum_observers() {
+async fn broker_only_node_forwards_describe_quorum_to_controller() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: broker only nodes are described as quorum observers"
+)]
+async fn bdd_verify_broker_only_nodes_are_described_as_quorum_observers() {
     support::init_tracing();
 
     let cluster = start_role_separated(2).await;
@@ -663,17 +715,24 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
     cluster.shutdown().await;
 }
 
-/// `UnregisterBroker` builds partition records from the image of the node that
-/// runs it, so Kafka runs it only on the active controller: `KafkaApis`
-/// forwards it. A broker-only node's image can trail the controller's, and a
-/// record built from a trailing image would roll back what the controller
-/// committed since.
-///
-/// The controller alone names break-glass approvers here, so a broker-only node
-/// that ran the request itself would let it through. The controller refuses it,
-/// which shows that the controller decided.
+/// Every broker-only node fetches `__cluster_metadata` from the controller, so
+/// the controller's `DescribeQuorum` lists each one as an observer under its
+/// node id, with the time of its last fetch. Kafka lists a broker the same way,
+/// and `kafka-metadata-quorum describe --replication` shows them under
+/// `Observer`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only nodes are described as quorum observers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {
+async fn broker_only_nodes_are_described_as_quorum_observers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: unregister broker sent to a broker only node is decided by the controller"
+)]
+async fn bdd_verify_unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {
     use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
 
     support::init_tracing();
@@ -717,11 +776,28 @@ async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controll
     cluster.shutdown().await;
 }
 
-/// The same request against a cluster that gates nothing is forwarded through
-/// the `Envelope` and answered by the controller, and it drops the
-/// registration from the controller's image.
+/// `UnregisterBroker` builds partition records from the image of the node that
+/// runs it, so Kafka runs it only on the active controller: `KafkaApis`
+/// forwards it. A broker-only node's image can trail the controller's, and a
+/// record built from a trailing image would roll back what the controller
+/// committed since.
+///
+/// The controller alone names break-glass approvers here, so a broker-only node
+/// that ran the request itself would let it through. The controller refuses it,
+/// which shows that the controller decided.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "unregister broker sent to a broker only node is decided by the controller"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
+async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: unregister broker sent to a broker only node reaches the controller"
+)]
+async fn bdd_verify_unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
     use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
 
     support::init_tracing();
@@ -747,6 +823,17 @@ async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
     cluster.shutdown().await;
 }
 
+/// The same request against a cluster that gates nothing is forwarded through
+/// the `Envelope` and answered by the controller, and it drops the
+/// registration from the controller's image.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "unregister broker sent to a broker only node reaches the controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {}
+
 /// The names of the entries directly in `dir`, sorted.
 fn entries(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir).map_or_default(|entries| {
@@ -769,18 +856,11 @@ fn holds_a_checkpoint(dir: &Path) -> bool {
     })
 }
 
-/// Kafka's `metadata.log.dir`, apart from the data directories, on every node.
-///
-/// This is what Kafka's `snapshot_test.py` checks. The controller keeps the
-/// `__cluster_metadata-0` log and its snapshots in its metadata directory. Its
-/// KIP-835 no-op records roll the log by `metadata.log.segment.ms`, and
-/// `metadata.max.retention.bytes` cleans it until the first segment file is
-/// gone. No partition lands in a metadata directory, and `DescribeLogDirs`
-/// reports the data directory only. A broker-only node whose directories are
-/// wiped then comes back and rebuilds its image from the controller's
-/// snapshot, because the records it would replay are gone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "role separation observer: a separate metadata log directory rolls cleans and restores a wiped node"
+)]
+async fn bdd_verify_a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {
     support::init_tracing();
 
     let cluster = start_role_separated_with(1, |index, cfg| {
@@ -899,6 +979,24 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
     restarted.shutdown().await;
     controller.shutdown().await;
 }
+
+/// Kafka's `metadata.log.dir`, apart from the data directories, on every node.
+///
+/// This is what Kafka's `snapshot_test.py` checks. The controller keeps the
+/// `__cluster_metadata-0` log and its snapshots in its metadata directory. Its
+/// KIP-835 no-op records roll the log by `metadata.log.segment.ms`, and
+/// `metadata.max.retention.bytes` cleans it until the first segment file is
+/// gone. No partition lands in a metadata directory, and `DescribeLogDirs`
+/// reports the data directory only. A broker-only node whose directories are
+/// wiped then comes back and rebuilds its image from the controller's
+/// snapshot, because the records it would replay are gone.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "a separate metadata log directory rolls cleans and restores a wiped node"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {}
 
 async fn create_topics(client: &Client, topics: &[String]) {
     for topic in topics {

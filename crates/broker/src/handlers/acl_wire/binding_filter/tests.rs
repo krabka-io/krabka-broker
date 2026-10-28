@@ -205,10 +205,11 @@ fn from_wire_refuses_unknown_on_any_axis() {
     }
 }
 
-/// The table from issue #770: Kafka's `ResourcePatternFilter.matches` over
-/// six seeded topic patterns.
-#[test]
-fn resource_pattern_matching_follows_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers acl wire binding filter tests: resource pattern matching follows kafka"
+)]
+fn bdd_verify_resource_pattern_matching_follows_kafka() {
     let seeded = PATTERN_MATCHING_FIXTURE;
     let all: &[&str] = &["foo", "*", "f", "fo", "bar", "food"];
     let cases: [PatternMatchCase; 13] = [
@@ -294,6 +295,15 @@ fn resource_pattern_matching_follows_kafka() {
         check!(got == want, "pattern {pattern_type} name {name:?}");
     }
 }
+
+/// The table from issue #770: Kafka's `ResourcePatternFilter.matches` over
+/// six seeded topic patterns.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature",
+    name = "resource pattern matching follows kafka"
+)]
+fn resource_pattern_matching_follows_kafka() {}
 
 #[test]
 fn entry_matching_takes_only_null_as_any() {

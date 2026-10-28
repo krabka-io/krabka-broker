@@ -157,11 +157,11 @@ async fn start_mtls_broker() -> StartedBroker {
     }
 }
 
-/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=krabka` is
-/// authorized as `test-client\`, the name the listener's rule maps that DN to.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance tls mtls principal mapping: jvm mtls principal mapping rules shorten the subject dn"
+)]
+async fn bdd_verify_jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
     const TOPIC: &str = "krabka-mtls-mapping-itest";
 
     let StartedBroker { broker, dir: _dir } = start_mtls_broker().await;
@@ -238,3 +238,14 @@ async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
 
     broker.shutdown().await;
 }
+
+/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=krabka` is
+/// authorized as `test-client\`, the name the listener's rule maps that DN to.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tls/mtls_principal_mapping.feature",
+    name = "jvm mtls principal mapping rules shorten the subject dn"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {}

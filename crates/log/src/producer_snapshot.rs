@@ -574,11 +574,19 @@ mod tests {
         assert_corrupt(&path, 102);
     }
 
-    #[test]
-    fn kafka_v1_snapshot_round_trips() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("producer snapshot tests: kafka v1 snapshot round trips")]
+    fn bdd_verify_kafka_v1_snapshot_round_trips() {
         let TempPath { dir: _dir, path } = sample_file();
         assert2::assert!(read(&path, Offset(102)).unwrap() == sample());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/producer_snapshot.feature",
+        name = "tests: kafka v1 snapshot round trips"
+    )]
+    fn kafka_v1_snapshot_round_trips() {}
 
     #[test]
     fn zero_producer_id_snapshot_round_trips() {
@@ -589,8 +597,9 @@ mod tests {
         assert2::assert!(read(&path, Offset(102)).unwrap() == entries);
     }
 
-    #[test]
-    fn empty_entry_uses_kafka_marker_sentinels() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("producer snapshot tests: empty entry uses kafka marker sentinels")]
+    fn bdd_verify_empty_entry_uses_kafka_marker_sentinels() {
         let entry = ProducerSnapshotEntry::empty(ProducerId(7), 0);
         assert2::assert!(
             entry
@@ -606,6 +615,13 @@ mod tests {
                 }
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/producer_snapshot.feature",
+        name = "tests: empty entry uses kafka marker sentinels"
+    )]
+    fn empty_entry_uses_kafka_marker_sentinels() {}
 
     #[test]
     fn encoding_is_ordered_and_uses_minus_one_for_no_transaction() {

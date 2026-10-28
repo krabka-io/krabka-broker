@@ -68,12 +68,11 @@ mod tests {
         want: &'static [&'static str],
     }
 
-    /// The order observed on a Kafka 4.3.1 broker: an eight-feature
-    /// `kafka-features upgrade` in which every row fails names the error of
-    /// `group.version`, and a two-row request that lists `share.version` first
-    /// still names `group.version`.
-    #[test]
-    fn feature_names_iterate_in_kafka_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers update features java order tests: feature names iterate in kafka order"
+    )]
+    fn bdd_verify_feature_names_iterate_in_kafka_order() {
         let cases: [OrderCase; 3] = [
             OrderCase {
                 keys: &[
@@ -108,6 +107,17 @@ mod tests {
             assert!(hash_map_order(keys.iter().copied()) == want, "{keys:?}");
         }
     }
+
+    /// The order observed on a Kafka 4.3.1 broker: an eight-feature
+    /// `kafka-features upgrade` in which every row fails names the error of
+    /// `group.version`, and a two-row request that lists `share.version` first
+    /// still names `group.version`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/update_features/java_order.feature",
+        name = "tests: feature names iterate in kafka order"
+    )]
+    fn feature_names_iterate_in_kafka_order() {}
 
     #[test]
     fn the_table_grows_past_three_quarters_full() {

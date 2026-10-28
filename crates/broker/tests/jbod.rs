@@ -53,8 +53,9 @@ fn count_topic_dirs(dir: &Path, topic: &str) -> usize {
     count_partition_dirs(fs::read_dir(dir).unwrap(), topic, true)
 }
 
-#[tokio::test]
-async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jbod: partitions spread across dirs and describe log dirs reports them")]
+async fn bdd_verify_partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {
     let n: i32 = 6;
     let (handle, primary, extra, addr) = start()
         .client_id(CLIENT_ID)
@@ -102,3 +103,11 @@ async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {
 
     handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod.feature",
+    name = "partitions spread across dirs and describe log dirs reports them"
+)]
+#[tokio::test]
+async fn partitions_spread_across_dirs_and_describe_log_dirs_reports_them() {}

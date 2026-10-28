@@ -316,21 +316,45 @@ mod tests {
             .collect()
     }
 
-    #[yare::parameterized(
-        untouched = { &[("0.log", b"ab")], &[("0.log", b"ab")], &[], &[] },
-        snapshot_removed = { &[("0.log", b"ab"), ("55.snapshot", b"s")], &[("0.log", b"ab")], &[], &["55.snapshot"] },
-        time_index_rebuilt = { &[("0.timeindex", b"")], &[("0.timeindex", b"entry")], &[], &["0.timeindex"] },
-        offset_index_trimmed = { &[("0.index", b"ab\0")], &[("0.index", b"ab")], &[], &["0.index"] },
-        checkpoint_rewritten = { &[("0-0.checkpoint", b"ab")], &[("0-0.checkpoint", b"ac")], &["0-0.checkpoint"], &[] },
-        segment_appended = { &[("0.log", b"ab")], &[("0.log", b"ab\0")], &["0.log"], &[] },
-        quorum_state_written = { &[], &[("quorum-state", b"{}")], &["quorum-state"], &[] },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract rollback guard tests: only what an open rebuilds may change for {example}"
     )]
-    fn only_what_an_open_rebuilds_may_change(
-        before: &[(&str, &[u8])],
-        after: &[(&str, &[u8])],
-        changed: &[&str],
-        derived: &[&str],
-    ) {
+    fn bdd_verify_only_what_an_open_rebuilds_may_change(example: String) {
+        type Example<'a> = (
+            &'a [(&'a str, &'a [u8])],
+            &'a [(&'a str, &'a [u8])],
+            &'a [&'a str],
+            &'a [&'a str],
+        );
+        let (before, after, changed, derived): Example<'_> = match example.as_str() {
+            "untouched" => (&[("0.log", b"ab")], &[("0.log", b"ab")], &[], &[]),
+            "snapshot removed" => (
+                &[("0.log", b"ab"), ("55.snapshot", b"s")],
+                &[("0.log", b"ab")],
+                &[],
+                &["55.snapshot"],
+            ),
+            "time index rebuilt" => (
+                &[("0.timeindex", b"")],
+                &[("0.timeindex", b"entry")],
+                &[],
+                &["0.timeindex"],
+            ),
+            "offset index trimmed" => (&[("0.index", b"ab\0")], &[("0.index", b"ab")], &[], &[
+                "0.index",
+            ]),
+            "checkpoint rewritten" => (
+                &[("0-0.checkpoint", b"ab")],
+                &[("0-0.checkpoint", b"ac")],
+                &["0-0.checkpoint"],
+                &[],
+            ),
+            "segment appended" => (&[("0.log", b"ab")], &[("0.log", b"ab\0")], &["0.log"], &[]),
+            "quorum state written" => (&[], &[("quorum-state", b"{}")], &["quorum-state"], &[]),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let (found, found_derived) = changed_files(&files(before), &files(after));
         check!(
             found
@@ -348,8 +372,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_directory_is_read_file_by_file() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
+        name = "tests: only what an open rebuilds may change"
+    )]
+    fn only_what_an_open_rebuilds_may_change(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract rollback guard tests: a directory is read file by file"
+    )]
+    fn bdd_verify_a_directory_is_read_file_by_file() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("p-0")).unwrap();
         fs::write(dir.path().join("p-0").join("0.log"), b"x").unwrap();
@@ -358,12 +392,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_refusal_is_kafkas_with_the_sources_range() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
+        name = "tests: a directory is read file by file"
+    )]
+    fn a_directory_is_read_file_by_file() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract rollback guard tests: the refusal is kafkas with the sources range"
+    )]
+    fn bdd_verify_the_refusal_is_kafkas_with_the_sources_range() {
         check!(
             refusal_message(LevelRange { min: 7, max: 30 })
                 == "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', \
                     featureLevel=33), but this controller only supports versions 7-30"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
+        name = "tests: the refusal is kafkas with the sources range"
+    )]
+    fn the_refusal_is_kafkas_with_the_sources_range() {}
 }

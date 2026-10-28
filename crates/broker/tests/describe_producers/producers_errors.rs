@@ -16,8 +16,11 @@ use {
     assert2::{assert, check},
 };
 
-#[tokio::test]
-async fn unknown_topic_returns_unknown_topic_or_partition() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers errors: unknown topic returns unknown topic or partition"
+)]
+async fn bdd_verify_unknown_topic_returns_unknown_topic_or_partition() {
     let p = support::start().await;
 
     let resp = p
@@ -39,8 +42,19 @@ async fn unknown_topic_returns_unknown_topic_or_partition() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
+    name = "unknown topic returns unknown topic or partition"
+)]
 #[tokio::test]
-async fn out_of_range_partition_returns_unknown_topic_or_partition() {
+async fn unknown_topic_returns_unknown_topic_or_partition() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers errors: out of range partition returns unknown topic or partition"
+)]
+async fn bdd_verify_out_of_range_partition_returns_unknown_topic_or_partition() {
     let p = support::start().await;
     create_topic(&p.client, "small").await;
 
@@ -70,8 +84,19 @@ async fn out_of_range_partition_returns_unknown_topic_or_partition() {
     p.broker.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn metadata_known_partition_not_hosted_locally_returns_not_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
+    name = "out of range partition returns unknown topic or partition"
+)]
+#[tokio::test]
+async fn out_of_range_partition_returns_unknown_topic_or_partition() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe producers producers errors: metadata known partition not hosted locally returns not leader"
+)]
+async fn bdd_verify_metadata_known_partition_not_hosted_locally_returns_not_leader() {
     let cluster = registered_cluster(2).await;
 
     let admin =
@@ -112,3 +137,11 @@ async fn metadata_known_partition_not_hosted_locally_returns_not_leader() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
+    name = "metadata known partition not hosted locally returns not leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metadata_known_partition_not_hosted_locally_returns_not_leader() {}

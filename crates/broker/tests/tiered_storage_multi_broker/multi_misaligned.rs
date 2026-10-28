@@ -191,18 +191,11 @@ fn coverage_and_redundancy(segments: &[RemoteSegment]) -> TierCoverage {
     }
 }
 
-/// The tier a new leader inherits is a set of offset ranges, not a set of
-/// segment boundaries, and this is the test that says so.
-///
-/// One replica rolls at 1 KiB and the other at 1.5 KiB, so their segments
-/// cover the same offsets with different boundaries. The elected leader
-/// produces and tiers; it is then shut down, the survivor is elected, and it
-/// produces and tiers over its own boundaries. What the store then holds must
-/// be one unbroken run of offsets with no object that merely repeats offsets
-/// another object already holds -- which is what a resume point taken from the
-/// tier's coverage produces and what a base-offset skip set does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi misaligned: a new leader resumes the copy from the tiers coverage"
+)]
+async fn bdd_verify_a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers_with_segment_sizes([
         krabka_units::kibibytes(1),
         krabka_units::bytes(1536),
@@ -425,3 +418,21 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     }
     b3.shutdown().await;
 }
+
+/// The tier a new leader inherits is a set of offset ranges, not a set of
+/// segment boundaries, and this is the test that says so.
+///
+/// One replica rolls at 1 KiB and the other at 1.5 KiB, so their segments
+/// cover the same offsets with different boundaries. The elected leader
+/// produces and tiers; it is then shut down, the survivor is elected, and it
+/// produces and tiers over its own boundaries. What the store then holds must
+/// be one unbroken run of offsets with no object that merely repeats offsets
+/// another object already holds -- which is what a resume point taken from the
+/// tier's coverage produces and what a base-offset skip set does not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_misaligned.feature",
+    name = "a new leader resumes the copy from the tiers coverage"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {}

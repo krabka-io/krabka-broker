@@ -127,8 +127,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_entry_is_flattened_onto_the_resource_it_was_printed_under() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance sasl acl output tests: every entry is flattened onto the resource it was printed under"
+    )]
+    fn bdd_verify_every_entry_is_flattened_onto_the_resource_it_was_printed_under() {
         check!(
             parse_acls(PRODUCER_LISTING)
                 == BTreeSet::from([
@@ -139,8 +142,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_resources_may_be_printed_in_any_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
+        name = "tests: every entry is flattened onto the resource it was printed under"
+    )]
+    fn every_entry_is_flattened_onto_the_resource_it_was_printed_under() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance sasl acl output tests: the resources may be printed in any order"
+    )]
+    fn bdd_verify_the_resources_may_be_printed_in_any_order() {
         let reordered: String = {
             let mut blocks: Vec<&str> = PRODUCER_LISTING.split("\n\n").collect();
             blocks.reverse();
@@ -149,8 +162,18 @@ mod tests {
         check!(parse_acls(&reordered) == parse_acls(PRODUCER_LISTING));
     }
 
-    #[test]
-    fn a_denied_host_is_read_off_the_entry_that_carries_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
+        name = "tests: the resources may be printed in any order"
+    )]
+    fn the_resources_may_be_printed_in_any_order() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance sasl acl output tests: a denied host is read off the entry that carries it"
+    )]
+    fn bdd_verify_a_denied_host_is_read_off_the_entry_that_carries_it() {
         let listing = concat!(
             "Current ACLs for resource `ResourcePattern(resourceType=TOPIC, name=orders, ",
             "patternType=PREFIXED)`: \n",
@@ -170,16 +193,43 @@ mod tests {
         );
     }
 
-    #[test]
-    fn entries_printed_before_any_resource_header_are_dropped() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
+        name = "tests: a denied host is read off the entry that carries it"
+    )]
+    fn a_denied_host_is_read_off_the_entry_that_carries_it() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance sasl acl output tests: entries printed before any resource header are dropped"
+    )]
+    fn bdd_verify_entries_printed_before_any_resource_header_are_dropped() {
         check!(
             parse_acls("\t(principal=User:alice, host=*, operation=READ, permissionType=ALLOW)\n")
                 .is_empty()
         );
     }
 
-    #[test]
-    fn an_empty_listing_is_an_empty_set() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
+        name = "tests: entries printed before any resource header are dropped"
+    )]
+    fn entries_printed_before_any_resource_header_are_dropped() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance sasl acl output tests: an empty listing is an empty set"
+    )]
+    fn bdd_verify_an_empty_listing_is_an_empty_set() {
         check!(parse_acls("").is_empty());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
+        name = "tests: an empty listing is an empty set"
+    )]
+    fn an_empty_listing_is_an_empty_set() {}
 }

@@ -118,8 +118,11 @@ fn one_drain_on(path: FetchDrainPath) -> [u64; 3] {
     FetchDrainPath::ALL.map(|p| u64::from(p == path))
 }
 
-#[tokio::test]
-async fn large_message_fetch_round_trips_byte_exact() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fetch large message sendfile: large message fetch round trips byte exact"
+)]
+async fn bdd_verify_large_message_fetch_round_trips_byte_exact() {
     let p = support::start().await;
     create_topic(&p.client, "big", 1).await;
     let tid = topic_id_for(&p.client, "big").await;
@@ -201,3 +204,11 @@ async fn large_message_fetch_round_trips_byte_exact() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_large_message_sendfile.feature",
+    name = "large message fetch round trips byte exact"
+)]
+#[tokio::test]
+async fn large_message_fetch_round_trips_byte_exact() {}

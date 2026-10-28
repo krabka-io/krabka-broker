@@ -18,16 +18,9 @@ use {
     krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
 };
 
-/// A freeze survives a controller restart.
-///
-/// The registry lives in the metadata log rather than in memory precisely so
-/// that a restart cannot thaw a cluster silently. This case restarts the only
-/// controller in the cluster and asserts the refusal is still there. A registry
-/// that lived anywhere else would pass every other case in this suite and fail
-/// this one, in the worst possible way: the topic would start accepting writes
-/// during the incident that the freeze was declared for.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_freeze_survives_a_controller_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("topic freeze durability: a freeze survives a controller restart")]
+async fn bdd_verify_a_freeze_survives_a_controller_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let (broker, client) = support::start_with_dir(dir.path()).await;
@@ -53,3 +46,19 @@ async fn a_freeze_survives_a_controller_restart() {
 
     broker.shutdown().await;
 }
+
+/// A freeze survives a controller restart.
+///
+/// The registry lives in the metadata log rather than in memory precisely so
+/// that a restart cannot thaw a cluster silently. This case restarts the only
+/// controller in the cluster and asserts the refusal is still there. A registry
+/// that lived anywhere else would pass every other case in this suite and fail
+/// this one, in the worst possible way: the topic would start accepting writes
+/// during the incident that the freeze was declared for.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/durability.feature",
+    name = "a freeze survives a controller restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_freeze_survives_a_controller_restart() {}

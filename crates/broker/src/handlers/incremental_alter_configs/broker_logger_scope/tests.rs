@@ -149,8 +149,11 @@ fn one_bad_config_leaves_the_whole_resource_unapplied() {
     assert!(levels.level("krabka_broker") == Some(LogLevel::Info));
 }
 
-#[test]
-fn refusals_carry_kafkas_own_message() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers incremental alter configs broker logger scope tests: refusals carry kafkas own message"
+)]
+fn bdd_verify_refusals_carry_kafkas_own_message() {
     let cases: Vec<Refusal<'_>> = vec![
         Refusal {
             what: "a name that is not a node id",
@@ -231,6 +234,13 @@ fn refusals_carry_kafkas_own_message() {
         check!(out.error_message.as_deref() == Some(message), "{what}");
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_logger_scope/tests.feature",
+    name = "refusals carry kafkas own message"
+)]
+fn refusals_carry_kafkas_own_message() {}
 
 #[test]
 fn the_default_filter_names_the_loggers_an_operator_reaches_for() {

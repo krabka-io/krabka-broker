@@ -878,12 +878,9 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
     }
 }
 
-/// Kafka indexes an aborted transaction in the segment holding its abort
-/// marker, in marker order (`TransactionIndex.append` requires `lastOffset` to
-/// strictly increase). The transaction's first offset is not constrained by
-/// the segment base or by the previous entry.
-#[tokio::test]
-async fn transaction_index_accepts_kafka_marker_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("verify tests: transaction index accepts kafka marker order")]
+async fn bdd_verify_transaction_index_accepts_kafka_marker_order() {
     struct MarkerOrderCase<'a> {
         name: &'a str,
         entries: &'a [TxnEntry],
@@ -948,6 +945,18 @@ async fn transaction_index_accepts_kafka_marker_order() {
         check!(verified.is_ok(), "{name}: {:?}", verified.as_ref().err());
     }
 }
+
+/// Kafka indexes an aborted transaction in the segment holding its abort
+/// marker, in marker order (`TransactionIndex.append` requires `lastOffset` to
+/// strictly increase). The transaction's first offset is not constrained by
+/// the segment base or by the previous entry.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/verify/tests.feature",
+    name = "transaction index accepts kafka marker order"
+)]
+#[tokio::test]
+async fn transaction_index_accepts_kafka_marker_order() {}
 
 #[tokio::test]
 async fn producer_snapshots_require_legal_unique_states_in_any_order() {

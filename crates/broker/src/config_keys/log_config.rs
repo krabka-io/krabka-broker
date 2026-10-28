@@ -441,10 +441,11 @@ mod tests {
         );
     }
 
-    /// The keys Kafka's `TopicConfig` carries that krabka now maps onto the
-    /// log a partition runs with.
-    #[test]
-    fn apply_maps_the_remaining_kafka_keys_onto_the_log_config() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys log config tests: apply maps the remaining kafka keys onto the log config"
+    )]
+    fn bdd_verify_apply_maps_the_remaining_kafka_keys_onto_the_log_config() {
         let overrides = maplit::btreemap! {
         SEGMENT_MS.to_owned() => "60000".to_owned(),
         INDEX_INTERVAL_BYTES.to_owned() => "8192".to_owned(),
@@ -469,6 +470,15 @@ mod tests {
             }
         );
     }
+
+    /// The keys Kafka's `TopicConfig` carries that krabka now maps onto the
+    /// log a partition runs with.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/log_config.feature",
+        name = "tests: apply maps the remaining kafka keys onto the log config"
+    )]
+    fn apply_maps_the_remaining_kafka_keys_onto_the_log_config() {}
 
     /// Kafka's `max.compaction.lag.ms` default is `Long.MAX_VALUE`, which is
     /// how an operator spells "no bound".

@@ -641,13 +641,11 @@ mod tests {
         check!(group.committed_offsets.keys().cloned().collect::<Vec<_>>() == keys(&["a"]));
     }
 
-    /// The group's own tombstones follow Kafka 4.3.1: k2 for a classic group,
-    /// and for a consumer group with no members the k6 tombstone, a k16
-    /// tombstone for each regular expression resolution the group still
-    /// holds, and the k4 and k3 tombstones of
-    /// `ConsumerGroup.createGroupTombstoneRecords`, in that order.
-    #[test]
-    fn group_tombstones_follow_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor retention tests: group tombstones follow kafka"
+    )]
+    fn bdd_verify_group_tombstones_follow_kafka() {
         let tombstone = |key: Bytes| (Some(key), None::<Bytes>);
         let ng = |key: NextGenKey| tombstone(encode_next_gen_key(&key).unwrap());
         let gid = || "g".to_owned();
@@ -708,4 +706,16 @@ mod tests {
             check!(records == expected, "{name}");
         }
     }
+
+    /// The group's own tombstones follow Kafka 4.3.1: k2 for a classic group,
+    /// and for a consumer group with no members the k6 tombstone, a k16
+    /// tombstone for each regular expression resolution the group still
+    /// holds, and the k4 and k3 tombstones of
+    /// `ConsumerGroup.createGroupTombstoneRecords`, in that order.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/retention.feature",
+        name = "tests: group tombstones follow kafka"
+    )]
+    fn group_tombstones_follow_kafka() {}
 }

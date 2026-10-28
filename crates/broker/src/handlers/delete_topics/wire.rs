@@ -202,10 +202,11 @@ mod tests {
         assert!(resp == expected_resp);
     }
 
-    /// Each code answers with Kafka's `new ApiError(error)` message, and a
-    /// success row or a whole-request error row carries none.
-    #[test]
-    fn rows_carry_kafkas_default_messages() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers delete topics wire tests: rows carry kafkas default messages"
+    )]
+    fn bdd_verify_rows_carry_kafkas_default_messages() {
         let id = WireUuid([3; 16]);
         let row = |code, message: Option<&str>| {
             krabka_macros::tagged_wire!(DeletableTopicResult {
@@ -248,6 +249,15 @@ mod tests {
         ];
         assert!(actual == expected);
     }
+
+    /// Each code answers with Kafka's `new ApiError(error)` message, and a
+    /// success row or a whole-request error row carries none.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/delete_topics/wire.feature",
+        name = "tests: rows carry kafkas default messages"
+    )]
+    fn rows_carry_kafkas_default_messages() {}
 
     /// A shuffle keeps every row, a fixed seed gives a fixed order, and
     /// different seeds reach different orders.

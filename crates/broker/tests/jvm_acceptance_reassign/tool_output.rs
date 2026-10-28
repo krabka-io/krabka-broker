@@ -237,8 +237,11 @@ fn exception_class(text: &str) -> Option<String> {
 mod tests {
     use {super::*, assert2::check};
 
-    #[test]
-    fn each_of_the_three_election_outcomes_is_read_off_its_own_line() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: each of the three election outcomes is read off its own line"
+    )]
+    fn bdd_verify_each_of_the_three_election_outcomes_is_read_off_its_own_line() {
         let text = concat!(
             "Successfully completed leader election (PREFERRED) for partitions orders-0\n",
             "Valid replica already elected for partitions orders-1, orders-eu-2\n",
@@ -269,8 +272,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_hyphenated_topic_keeps_its_hyphens() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: each of the three election outcomes is read off its own line"
+    )]
+    fn each_of_the_three_election_outcomes_is_read_off_its_own_line() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: a hyphenated topic keeps its hyphens"
+    )]
+    fn bdd_verify_a_hyphenated_topic_keeps_its_hyphens() {
         check!(
             TopicPartition::parse("orders-eu-west-12")
                 == Some(TopicPartition::new("orders-eu-west", 12))
@@ -279,8 +292,18 @@ mod tests {
         check!(TopicPartition::parse("orders-x") == None);
     }
 
-    #[test]
-    fn a_cancel_reports_the_partitions_it_cancelled() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: a hyphenated topic keeps its hyphens"
+    )]
+    fn a_hyphenated_topic_keeps_its_hyphens() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: a cancel reports the partitions it cancelled"
+    )]
+    fn bdd_verify_a_cancel_reports_the_partitions_it_cancelled() {
         check!(
             parse_cancelled(
                 "Successfully cancelled partition reassignments for: orders-0,orders-1\n"
@@ -294,10 +317,18 @@ mod tests {
         );
     }
 
-    /// The tool agrees the noun with the count, and a one-partition cancel --
-    /// which is what the container case drives -- prints the singular.
-    #[test]
-    fn a_one_partition_cancel_is_read_out_of_the_singular_sentence() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: a cancel reports the partitions it cancelled"
+    )]
+    fn a_cancel_reports_the_partitions_it_cancelled() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: a one partition cancel is read out of the singular sentence"
+    )]
+    fn bdd_verify_a_one_partition_cancel_is_read_out_of_the_singular_sentence() {
         check!(
             parse_cancelled(
                 "Successfully cancelled partition reassignment for: orders-0\n\
@@ -306,8 +337,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generate_yields_the_current_assignment_and_the_proposed_one() {
+    /// The tool agrees the noun with the count, and a one-partition cancel --
+    /// which is what the container case drives -- prints the singular.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: a one partition cancel is read out of the singular sentence"
+    )]
+    fn a_one_partition_cancel_is_read_out_of_the_singular_sentence() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: generate yields the current assignment and the proposed one"
+    )]
+    fn bdd_verify_generate_yields_the_current_assignment_and_the_proposed_one() {
         let stdout = concat!(
             "Current partition replica assignment\n",
             r#"{"version":1,"partitions":[{"topic":"orders","partition":0,"replicas":[1,2],"#,
@@ -330,8 +373,18 @@ mod tests {
         check!(parse_generate("nothing was generated") == None);
     }
 
-    #[test]
-    fn the_partitions_of_a_generated_plan_sort_the_same_however_they_were_printed() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: generate yields the current assignment and the proposed one"
+    )]
+    fn generate_yields_the_current_assignment_and_the_proposed_one() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: the partitions of a generated plan sort the same however they were printed"
+    )]
+    fn bdd_verify_the_partitions_of_a_generated_plan_sort_the_same_however_they_were_printed() {
         let one = r#"{"version":1,"partitions":[{"topic":"t","partition":1,"replicas":[2]},
              {"topic":"t","partition":0,"replicas":[1]}]}"#;
         let other = r#"{"version":1,"partitions":[{"topic":"t","partition":0,"replicas":[1]},
@@ -340,8 +393,18 @@ mod tests {
         check!(parse_assignments(one).is_some());
     }
 
-    #[test]
-    fn every_document_the_tools_read_round_trips_through_its_own_parser() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: the partitions of a generated plan sort the same however they were printed"
+    )]
+    fn the_partitions_of_a_generated_plan_sort_the_same_however_they_were_printed() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "jvm acceptance reassign tool output tests: every document the tools read round trips through its own parser"
+    )]
+    fn bdd_verify_every_document_the_tools_read_round_trips_through_its_own_parser() {
         let assignments = vec![
             Assignment {
                 partition: TopicPartition::new("orders", 0),
@@ -360,4 +423,11 @@ mod tests {
             topics_to_move_json(&["orders"]) == r#"{"topics":[{"topic":"orders"}],"version":1}"#
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
+        name = "tests: every document the tools read round trips through its own parser"
+    )]
+    fn every_document_the_tools_read_round_trips_through_its_own_parser() {}
 }

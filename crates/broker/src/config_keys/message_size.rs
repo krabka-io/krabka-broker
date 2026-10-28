@@ -44,21 +44,35 @@ mod tests {
         uuid::Uuid,
     };
 
-    #[yare::parameterized(
-        zero = { "0", true },
-        positive = { "1048588", true },
-        i32_max = { "2147483647", true },
-        negative = { "-1", false },
-        above_i32_max = { "2147483648", false },
-        non_integer = { "abc", false },
-        empty = { "", false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config keys message size tests: max message bytes matches kafkas int at least zero for {example}"
     )]
-    fn max_message_bytes_matches_kafkas_int_at_least_zero(value: &str, accepted: bool) {
+    fn bdd_verify_max_message_bytes_matches_kafkas_int_at_least_zero(example: String) {
+        type Example<'a> = (&'a str, bool);
+        let (value, accepted): Example<'_> = match example.as_str() {
+            "zero" => ("0", true),
+            "positive" => ("1048588", true),
+            "i32 max" => ("2147483647", true),
+            "negative" => ("-1", false),
+            "above i32 max" => ("2147483648", false),
+            "non integer" => ("abc", false),
+            "empty" => ("", false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(
             validate_topic_config(MAX_MESSAGE_BYTES, value).is_ok() == accepted,
             "max.message.bytes={value}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config_keys/message_size.feature",
+        name = "tests: max message bytes matches kafkas int at least zero"
+    )]
+    fn max_message_bytes_matches_kafkas_int_at_least_zero(example: String) { let _ = example; }
 
     fn image_with(value: Option<&str>) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());

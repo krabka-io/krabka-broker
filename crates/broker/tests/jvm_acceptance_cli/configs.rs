@@ -13,12 +13,9 @@ use {
     assert2::assert,
 };
 
-/// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
-/// `--describe` round-trips through `V1TopicConfig` and the supervisor
-/// reconcile push.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_alter_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli configs: kafka configs alter round trip")]
+async fn bdd_verify_kafka_configs_alter_round_trip() {
     const TOPIC: &str = "krabka-cfg-alter-itest";
 
     let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
@@ -42,18 +39,23 @@ async fn kafka_configs_alter_round_trip() {
     );
 }
 
-/// `kafka-configs --describe --all` renders the effective configuration and
-/// the provenance of every value in it (KIP-226).
-///
-/// This is the surface an operator uses to tell a dynamic override from an
-/// inherited default, and it only works if the broker types each key and
-/// returns its synonym chain. The JVM tool prints
-/// `name=value sensitive=… synonyms={SOURCE:name=value, …}`, so the three
-/// assertions below are the three cases the chain has: a topic override, a
-/// value inherited from the cluster-wide default, and a key nobody has set.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
+/// `--describe` round-trips through `V1TopicConfig` and the supervisor
+/// reconcile push.
 #[ignore = "requires Docker"]
-async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka configs alter round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_alter_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli configs: kafka configs describe all shows effective values and their sources"
+)]
+async fn bdd_verify_kafka_configs_describe_all_shows_effective_values_and_their_sources() {
     const TOPIC: &str = "krabka-cfg-describe-all-itest";
 
     let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
@@ -110,16 +112,29 @@ async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
     }
 }
 
-/// `kafka-configs --alter --add-config` over every Kafka `TopicConfig` key
-/// krabka registers, then `--describe` back.
+/// `kafka-configs --describe --all` renders the effective configuration and
+/// the provenance of every value in it (KIP-226).
 ///
-/// The JVM tool parses each value with the type the broker reports for the
-/// key, so a key krabka typed differently from Kafka fails here rather than
-/// in a client months later. One `--alter` carries the whole set, as an
-/// operator's own command would.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// This is the surface an operator uses to tell a dynamic override from an
+/// inherited default, and it only works if the broker types each key and
+/// returns its synonym chain. The JVM tool prints
+/// `name=value sensitive=… synonyms={SOURCE:name=value, …}`, so the three
+/// assertions below are the three cases the chain has: a topic override, a
+/// value inherited from the cluster-wide default, and a key nobody has set.
 #[ignore = "requires Docker"]
-async fn kafka_configs_alter_round_trips_every_registered_topic_key() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka configs describe all shows effective values and their sources"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli configs: kafka configs alter round trips every registered topic key"
+)]
+async fn bdd_verify_kafka_configs_alter_round_trips_every_registered_topic_key() {
     const TOPIC: &str = "krabka-cfg-every-key-itest";
     /// A config key and a value for it.
     struct ConfigSetting {
@@ -226,14 +241,27 @@ async fn kafka_configs_alter_round_trips_every_registered_topic_key() {
     }
 }
 
-/// `kafka-topics --create` with the override set Kafka Streams'
-/// `RepartitionTopicConfig` sends on every internal repartition topic, and
-/// the `WindowedChangelogTopicConfig` set whose `cleanup.policy` is exactly
-/// `compact,delete`. A broker that refuses either cannot host a Streams
-/// application.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-configs --alter --add-config` over every Kafka `TopicConfig` key
+/// krabka registers, then `--describe` back.
+///
+/// The JVM tool parses each value with the type the broker reports for the
+/// key, so a key krabka typed differently from Kafka fails here rather than
+/// in a client months later. One `--alter` carries the whole set, as an
+/// operator's own command would.
 #[ignore = "requires Docker"]
-async fn kafka_topics_create_accepts_the_streams_internal_topic_configs() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka configs alter round trips every registered topic key"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_alter_round_trips_every_registered_topic_key() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli configs: kafka topics create accepts the streams internal topic configs"
+)]
+async fn bdd_verify_kafka_topics_create_accepts_the_streams_internal_topic_configs() {
     /// A topic, the `--config` arguments Streams sends, and the `--describe`
     /// substring that proves the broker stored them.
     struct StreamsTopicCase {
@@ -311,13 +339,25 @@ async fn kafka_topics_create_accepts_the_streams_internal_topic_configs() {
     }
 }
 
-/// Kafka's `LogConfig.validate` refuses tiered storage on a compacted topic,
-/// and the JVM tool surfaces that as a `ConfigException` on the alter. The
-/// refusal covers `compact,delete` as well, because Kafka tests the policy
-/// list for membership.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-topics --create` with the override set Kafka Streams'
+/// `RepartitionTopicConfig` sends on every internal repartition topic, and
+/// the `WindowedChangelogTopicConfig` set whose `cleanup.policy` is exactly
+/// `compact,delete`. A broker that refuses either cannot host a Streams
+/// application.
 #[ignore = "requires Docker"]
-async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka topics create accepts the streams internal topic configs"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_create_accepts_the_streams_internal_topic_configs() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli configs: kafka configs refuses tiered storage on a compacted topic"
+)]
+async fn bdd_verify_kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
     const TOPIC: &str = "krabka-cfg-compact-tiered-itest";
 
     let (_broker, _dir) = start_host_broker().await;
@@ -367,6 +407,19 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         "alter should be refused with Kafka's message: {rendered}"
     );
 }
+
+/// Kafka's `LogConfig.validate` refuses tiered storage on a compacted topic,
+/// and the JVM tool surfaces that as a `ConfigException` on the alter. The
+/// refusal covers `compact,delete` as well, because Kafka tests the policy
+/// list for membership.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka configs refuses tiered storage on a compacted topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {}
 
 // ── the entity types `kafka-configs` reaches through the other two APIs ─────
 //
@@ -465,11 +518,11 @@ const ENTITY_CASES: &[EntityCase] = &[
     },
 ];
 
-/// `--alter --add-config` then `--describe` over each entity type, compared
-/// with Apache Kafka.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli configs: kafka configs entity types round trip as apache kafka does"
+)]
+async fn bdd_verify_kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
     // Kafka first: a key one release calls a group config and the other does
     // not fails here, on the stock broker, rather than being read as a krabka
     // bug.
@@ -524,3 +577,14 @@ async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
 
     comparison.broker.shutdown().await;
 }
+
+/// `--alter --add-config` then `--describe` over each entity type, compared
+/// with Apache Kafka.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "kafka configs entity types round trip as apache kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {}

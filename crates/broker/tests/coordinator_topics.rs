@@ -106,8 +106,11 @@ async fn start_three(configure: impl Fn(&mut BrokerConfig)) -> Cluster {
     cluster
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator topics: a cold cluster replicates the offsets topic on every broker"
+)]
+async fn bdd_verify_a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {
     let mut cluster = start_three(|_| {}).await;
     let image = cluster[0].0.controller_image_for_test();
     assert!(image.topic(OFFSETS_TOPIC).is_none());
@@ -149,8 +152,20 @@ async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {
     drop(stopped_dir);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/coordinator_topics.feature",
+    name = "a cold cluster replicates the offsets topic on every broker"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable() {
+async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator topics: a replication factor above the broker count leaves the coordinator unavailable"
+)]
+async fn bdd_verify_a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable()
+{
     let cluster = start_three(|config| config.transaction_state_replication_factor = 4).await;
     let admin = client(&cluster[0].0).await;
 
@@ -177,20 +192,19 @@ async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unav
     shutdown_cluster(cluster).await;
 }
 
-/// A broker that stops through a controlled shutdown stays registered,
-/// fenced, and Kafka's `StripedReplicaPlacer` takes a fenced broker as a last
-/// resort. A coordinator topic that is first asked for after the stop
-/// therefore still gets its configured replication factor, with the stopped
-/// broker as a replica outside the ISR.
-///
-/// This is the start of `ShareConsumerTest.test_broker_failure`: the share
-/// group asks for `__share_group_state` only after one of three brokers has
-/// stopped cleanly. The registration of that broker keeps
-/// `InControlledShutdown`, and krabka once read that flag as "still shutting
-/// down", left the broker out of the placement, and refused the topic for as
-/// long as the broker stayed down.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/coordinator_topics.feature",
+    name = "a replication factor above the broker count leaves the coordinator unavailable"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
+async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "coordinator topics: a cleanly stopped broker still counts toward the replication factor"
+)]
+async fn bdd_verify_a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
     const LED_TOPIC: &str = "led";
     let mut cluster =
         start_three(|config| config.share_coordinator.state_topic_num_partitions = 3).await;
@@ -285,3 +299,23 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
+
+/// A broker that stops through a controlled shutdown stays registered,
+/// fenced, and Kafka's `StripedReplicaPlacer` takes a fenced broker as a last
+/// resort. A coordinator topic that is first asked for after the stop
+/// therefore still gets its configured replication factor, with the stopped
+/// broker as a replica outside the ISR.
+///
+/// This is the start of `ShareConsumerTest.test_broker_failure`: the share
+/// group asks for `__share_group_state` only after one of three brokers has
+/// stopped cleanly. The registration of that broker keeps
+/// `InControlledShutdown`, and krabka once read that flag as "still shutting
+/// down", left the broker out of the placement, and refused the topic for as
+/// long as the broker stayed down.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/coordinator_topics.feature",
+    name = "a cleanly stopped broker still counts toward the replication factor"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {}

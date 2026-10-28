@@ -46,21 +46,11 @@ fn one_privileged<'a>(records: &'a [serde_json::Value], operation: &str) -> &'a 
     rows[0]
 }
 
-/// Verifies that every KFC-9 phase reaches the audit topic, and that the
-/// hash chain still runs unbroken across all of them.
-///
-/// The unit tests prove that each handler hands a `PrivilegedAction` event to
-/// the audit log. They cannot prove that the event survives the sink, the
-/// chain, and the produce into `__krabka_audit`, and a phase that reaches no
-/// audit topic is a phase an auditor cannot count.
-///
-/// The chain assertion is the second half. `krabka-audit`'s offline verifier
-/// is the reader an auditor would actually run: it walks the segment files and
-/// recomputes `SHA256(prev ‖ seq ‖ value)` for each record, with no broker in
-/// the loop. The broker is shut down first, so what the verifier reads is the
-/// durable log rather than a live writer's buffer.
-#[tokio::test]
-async fn every_kfc9_phase_writes_one_chained_audit_record() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit freeze evidence: every kfc9 phase writes one chained audit record"
+)]
+async fn bdd_verify_every_kfc9_phase_writes_one_chained_audit_record() {
     let w = run_thaw_workflow().await;
     let records = support::wait_for_audit_record(&w.alice, "the withdrawal", |j| {
         j["api"]["operation"] == "thaw_topic_freeze.consumed"
@@ -119,20 +109,32 @@ async fn every_kfc9_phase_writes_one_chained_audit_record() {
     );
 }
 
-/// Verifies the join an auditor actually runs: take the proposal id off the
-/// transition row, and it selects exactly the approvals that authorized it.
+/// Verifies that every KFC-9 phase reaches the audit topic, and that the
+/// hash chain still runs unbroken across all of them.
 ///
-/// Presence is not the property that matters here. A log holding an approve
-/// row and a transition row proves nothing unless the two can be tied
-/// together, and the proposal id is the only thing that ties them. This case
-/// starts from the transition, follows the id, and asserts that the principals
-/// it reaches are the two people who actually approved.
+/// The unit tests prove that each handler hands a `PrivilegedAction` event to
+/// the audit log. They cannot prove that the event survives the sink, the
+/// chain, and the produce into `__krabka_audit`, and a phase that reaches no
+/// audit topic is a phase an auditor cannot count.
 ///
-/// It also asserts the shape of an approval row. A two-person rule whose
-/// record names one person is not a two-person rule, so carol's approval has
-/// to name carol as the actor and bob among the counterparties.
+/// The chain assertion is the second half. `krabka-audit`'s offline verifier
+/// is the reader an auditor would actually run: it walks the segment files and
+/// recomputes `SHA256(prev ‖ seq ‖ value)` for each record, with no broker in
+/// the loop. The broker is shut down first, so what the verifier reads is the
+/// durable log rather than a live writer's buffer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/freeze_evidence.feature",
+    name = "every kfc9 phase writes one chained audit record"
+)]
 #[tokio::test]
-async fn the_proposal_id_joins_each_approval_to_the_transition_it_authorized() {
+async fn every_kfc9_phase_writes_one_chained_audit_record() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit freeze evidence: the proposal id joins each approval to the transition it authorized"
+)]
+async fn bdd_verify_the_proposal_id_joins_each_approval_to_the_transition_it_authorized() {
     let w = run_thaw_workflow().await;
     let records = support::wait_for_audit_record(&w.alice, "the thaw", |j| {
         j["api"]["operation"] == "thaw_topic_freeze.applied"
@@ -189,37 +191,31 @@ async fn the_proposal_id_joins_each_approval_to_the_transition_it_authorized() {
     w.cluster.broker.shutdown().await;
 }
 
-/// Verifies the claim the whole feature rests on: a signed freeze re-verifies
-/// from the audit topic alone, against the operator's public key, with no
-/// metadata image read and no broker asked.
+/// Verifies the join an auditor actually runs: take the proposal id off the
+/// transition row, and it selects exactly the approvals that authorized it.
 ///
-/// This is the case that makes the audit log independent evidence rather than
-/// a second copy of the broker's opinion. The record in the metadata log
-/// carries the same signature, but reading it means trusting the broker that
-/// serves it. Here the event is fetched off `__krabka_audit`, the signed bytes
-/// are rebuilt out of that event's own fields, and the signature is checked
-/// against the public key file — by an Ed25519 verifier this test drives
-/// directly, so no broker code decides the answer.
+/// Presence is not the property that matters here. A log holding an approve
+/// row and a transition row proves nothing unless the two can be tied
+/// together, and the proposal id is the only thing that ties them. This case
+/// starts from the transition, follows the id, and asserts that the principals
+/// it reaches are the two people who actually approved.
 ///
-/// # What the event does not carry
-///
-/// One of the eight signed fields does not come out of the event: the cluster
-/// id, which is a property of the cluster whose log the auditor is holding and
-/// so is theirs to know. Every other field, `set_at_ms` included, is read here
-/// out of the record itself.
-///
-/// `set_at_ms` needs its own field because the event's `time` is the moment the
-/// broker emitted the record, not the moment the operator signed, and it is the
-/// signed instant that is inside the preimage. An earlier version of this case
-/// took it from the operator's own note of what they had signed and said so,
-/// because the event did not carry it -- which meant the audit topic alone was
-/// not enough, contradicting what KFC-9 claims for it.
-///
-/// The tampering check is what keeps the verification from being vacuous: the
-/// same signature over the same record with `frozen` flipped must fail, which
-/// is the replay-a-freeze-as-a-thaw attack that KFC-9 signs that byte to stop.
+/// It also asserts the shape of an approval row. A two-person rule whose
+/// record names one person is not a two-person rule, so carol's approval has
+/// to name carol as the actor and bob among the counterparties.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/freeze_evidence.feature",
+    name = "the proposal id joins each approval to the transition it authorized"
+)]
 #[tokio::test]
-async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image() {
+async fn the_proposal_id_joins_each_approval_to_the_transition_it_authorized() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit freeze evidence: a signed freeze reverifies from the audit topic with no metadata image"
+)]
+async fn bdd_verify_a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image() {
     let w = run_thaw_workflow().await;
     let records = support::wait_for_audit_record(&w.alice, "the freeze", |j| {
         j["api"]["operation"] == "set_topic_freeze.applied"
@@ -315,3 +311,40 @@ async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image(
 
     w.cluster.broker.shutdown().await;
 }
+
+/// Verifies the claim the whole feature rests on: a signed freeze re-verifies
+/// from the audit topic alone, against the operator's public key, with no
+/// metadata image read and no broker asked.
+///
+/// This is the case that makes the audit log independent evidence rather than
+/// a second copy of the broker's opinion. The record in the metadata log
+/// carries the same signature, but reading it means trusting the broker that
+/// serves it. Here the event is fetched off `__krabka_audit`, the signed bytes
+/// are rebuilt out of that event's own fields, and the signature is checked
+/// against the public key file — by an Ed25519 verifier this test drives
+/// directly, so no broker code decides the answer.
+///
+/// # What the event does not carry
+///
+/// One of the eight signed fields does not come out of the event: the cluster
+/// id, which is a property of the cluster whose log the auditor is holding and
+/// so is theirs to know. Every other field, `set_at_ms` included, is read here
+/// out of the record itself.
+///
+/// `set_at_ms` needs its own field because the event's `time` is the moment the
+/// broker emitted the record, not the moment the operator signed, and it is the
+/// signed instant that is inside the preimage. An earlier version of this case
+/// took it from the operator's own note of what they had signed and said so,
+/// because the event did not carry it -- which meant the audit topic alone was
+/// not enough, contradicting what KFC-9 claims for it.
+///
+/// The tampering check is what keeps the verification from being vacuous: the
+/// same signature over the same record with `frozen` flipped must fail, which
+/// is the replay-a-freeze-as-a-thaw attack that KFC-9 signs that byte to stop.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/freeze_evidence.feature",
+    name = "a signed freeze reverifies from the audit topic with no metadata image"
+)]
+#[tokio::test]
+async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image() {}

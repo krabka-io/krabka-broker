@@ -17,11 +17,11 @@ use {
 const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
 const WIRE_MECH_SCRAM_SHA_512: i8 = 2;
 
-/// Test 1: seed alice's SCRAM credential directly with
-/// `submit_metadata_record_for_test`, describe with `users=None`, then assert
-/// that mechanism=2 (SCRAM-SHA-512) appears in the response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_all_users_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe user scram credentials scram describe: describe all users round trip"
+)]
+async fn bdd_verify_describe_all_users_round_trip() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[(
         "admin",
         &admin_test_password(),
@@ -71,10 +71,22 @@ async fn describe_all_users_round_trip() {
     );
 }
 
-/// Test 2: describe the user `ghost`, which does not exist, then assert that
-/// the per-user row carries `error_code = 91` (`RESOURCE_NOT_FOUND`).
+/// Test 1: seed alice's SCRAM credential directly with
+/// `submit_metadata_record_for_test`, describe with `users=None`, then assert
+/// that mechanism=2 (SCRAM-SHA-512) appears in the response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_user_scram_credentials/scram_describe.feature",
+    name = "describe all users round trip"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_unknown_user_returns_error() {
+async fn describe_all_users_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe user scram credentials scram describe: describe unknown user returns error"
+)]
+async fn bdd_verify_describe_unknown_user_returns_error() {
     let (_handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[(
         "admin",
         &admin_test_password(),
@@ -102,8 +114,21 @@ async fn describe_unknown_user_returns_error() {
     );
 }
 
+/// Test 2: describe the user `ghost`, which does not exist, then assert that
+/// the per-user row carries `error_code = 91` (`RESOURCE_NOT_FOUND`).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_user_scram_credentials/scram_describe.feature",
+    name = "describe unknown user returns error"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_duplicate_requested_user_returns_single_duplicate_resource_row() {
+async fn describe_unknown_user_returns_error() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe user scram credentials scram describe: describe duplicate requested user returns single duplicate resource row"
+)]
+async fn bdd_verify_describe_duplicate_requested_user_returns_single_duplicate_resource_row() {
     let admin_pass = format!(
         "admin-{}",
         SystemTime::now()
@@ -150,3 +175,11 @@ async fn describe_duplicate_requested_user_returns_single_duplicate_resource_row
     assert!(bob.1 == 0);
     assert!(bob.2 == vec![(WIRE_MECH_SCRAM_SHA_512, 8192)]);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_user_scram_credentials/scram_describe.feature",
+    name = "describe duplicate requested user returns single duplicate resource row"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_duplicate_requested_user_returns_single_duplicate_resource_row() {}

@@ -21,31 +21,11 @@ use {
     assert2::assert,
 };
 
-/// KIP-320 follower side, end to end. A follower whose local log has a
-/// divergent suffix beyond the leader's epoch boundary must truncate that
-/// suffix *in band*, on the leader's `diverging_epoch` Fetch response. It must
-/// never issue an `OffsetForLeaderEpoch` RPC. That path serves the `FENCED`
-/// and `UNKNOWN_LEADER_EPOCH` error codes, which this scenario never produces.
-///
-/// The test reaches determinism without racing a real unclean election:
-///   1. A 3-broker cluster, a topic with rf=3, and broker 1 as the partition
-///      leader.
-///   2. Produce `k = 8` records through the leader with acks=-1. Every replica
-///      converges to LEO 8 with checkpoint `0 -> 0`, because the produce
-///      handler stamps leader epoch 0 onto each batch.
-///   3. On a *follower*, append a divergent suffix of 5 extra records straight
-///      to its local log with `produce_records_for_test`. Those batches carry
-///      epoch -1, so they add no checkpoint entry. The follower's latest
-///      recorded epoch stays 0 while its LEO jumps to 13, so it holds records
-///      the leader does not have.
-///   4. The follower's already-running replicator fetches at offset 13 and
-///      advertises `last_fetched_epoch = 0`. The leader, at LEO 8 and latest
-///      epoch 0, computes `epoch_and_offset_for(0, 8) = (0, 8)`. The epoch-0
-///      end, 8, is below the fetch offset, 13, so the leader answers
-///      `diverging_epoch { end_offset: 8 }`. The replicator truncates to 8 and
-///      converges back to the leader.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_truncates_in_band_on_diverging_epoch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "leader epoch epoch diverge follower: follower truncates in band on diverging epoch"
+)]
+async fn bdd_verify_follower_truncates_in_band_on_diverging_epoch() {
     let _g = cluster_lock().lock().await;
     let cluster = registered_cluster(3).await;
 
@@ -136,3 +116,34 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// KIP-320 follower side, end to end. A follower whose local log has a
+/// divergent suffix beyond the leader's epoch boundary must truncate that
+/// suffix *in band*, on the leader's `diverging_epoch` Fetch response. It must
+/// never issue an `OffsetForLeaderEpoch` RPC. That path serves the `FENCED`
+/// and `UNKNOWN_LEADER_EPOCH` error codes, which this scenario never produces.
+///
+/// The test reaches determinism without racing a real unclean election:
+///   1. A 3-broker cluster, a topic with rf=3, and broker 1 as the partition
+///      leader.
+///   2. Produce `k = 8` records through the leader with acks=-1. Every replica
+///      converges to LEO 8 with checkpoint `0 -> 0`, because the produce
+///      handler stamps leader epoch 0 onto each batch.
+///   3. On a *follower*, append a divergent suffix of 5 extra records straight
+///      to its local log with `produce_records_for_test`. Those batches carry
+///      epoch -1, so they add no checkpoint entry. The follower's latest
+///      recorded epoch stays 0 while its LEO jumps to 13, so it holds records
+///      the leader does not have.
+///   4. The follower's already-running replicator fetches at offset 13 and
+///      advertises `last_fetched_epoch = 0`. The leader, at LEO 8 and latest
+///      epoch 0, computes `epoch_and_offset_for(0, 8) = (0, 8)`. The epoch-0
+///      end, 8, is below the fetch offset, 13, so the leader answers
+///      `diverging_epoch { end_offset: 8 }`. The replicator truncates to 8 and
+///      converges back to the leader.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_epoch/epoch_diverge_follower.feature",
+    name = "follower truncates in band on diverging epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn follower_truncates_in_band_on_diverging_epoch() {}

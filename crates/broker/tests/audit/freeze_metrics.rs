@@ -21,21 +21,11 @@ use {
     krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
 };
 
-/// Verifies that the KFC-9 metric families move on a real request.
-///
-/// A metric that is defined but never fed passes every unit test, and the
-/// KFC-7 suite found exactly that gap the hard way. These four series are the
-/// ones an operator alerts on, so each is watched across the request that is
-/// supposed to move it: the registry gauge up on the freeze and back down on
-/// the thaw, and a proposal walking `pending` → `approved` → `consumed`.
-///
-/// The refusal counter is the fourth, and it needs a Kafka transition rather
-/// than a private one: `DeleteTopics` on a gated broker with no approval is
-/// refused with `POLICY_VIOLATION`, bumps `break_glass_refusals`, and writes
-/// its own refused row to the audit topic. Counting the refusal and auditing
-/// it are two different promises, and this asserts both of them at once.
-#[tokio::test]
-async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit freeze metrics: the kfc9 gauges and counters move on real requests"
+)]
+async fn bdd_verify_the_kfc9_gauges_and_counters_move_on_real_requests() {
     use krabka_broker::metrics::{
         BreakGlassAction as ActionLabel, BreakGlassActionLabel, BreakGlassState,
         BreakGlassStateLabel, BrokerMetrics,
@@ -155,3 +145,24 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
 
     cluster.broker.shutdown().await;
 }
+
+/// Verifies that the KFC-9 metric families move on a real request.
+///
+/// A metric that is defined but never fed passes every unit test, and the
+/// KFC-7 suite found exactly that gap the hard way. These four series are the
+/// ones an operator alerts on, so each is watched across the request that is
+/// supposed to move it: the registry gauge up on the freeze and back down on
+/// the thaw, and a proposal walking `pending` → `approved` → `consumed`.
+///
+/// The refusal counter is the fourth, and it needs a Kafka transition rather
+/// than a private one: `DeleteTopics` on a gated broker with no approval is
+/// refused with `POLICY_VIOLATION`, bumps `break_glass_refusals`, and writes
+/// its own refused row to the audit topic. Counting the refusal and auditing
+/// it are two different promises, and this asserts both of them at once.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/freeze_metrics.feature",
+    name = "the kfc9 gauges and counters move on real requests"
+)]
+#[tokio::test]
+async fn the_kfc9_gauges_and_counters_move_on_real_requests() {}

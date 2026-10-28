@@ -437,11 +437,11 @@ mod tests {
         ]
     }
 
-    /// Every branch of the two-step decision, with the whole row list and the
-    /// keys it deletes. Topics: `t1` (4 partitions), `t2` (8 partitions),
-    /// `denied` (Read denied, 4 partitions), `ghost` (not in the metadata).
-    #[test]
-    fn build_rows_follows_kafka_order_and_codes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers offset delete rows tests: build rows follows kafka order and codes"
+    )]
+    fn bdd_verify_build_rows_follows_kafka_order_and_codes() {
         let decisions = HashMap::from([
             ("t1", AuthorizationResult::Allow),
             ("t2", AuthorizationResult::Allow),
@@ -475,4 +475,14 @@ mod tests {
             check!(removed == want_removed, "{name}");
         }
     }
+
+    /// Every branch of the two-step decision, with the whole row list and the
+    /// keys it deletes. Topics: `t1` (4 partitions), `t2` (8 partitions),
+    /// `denied` (Read denied, 4 partitions), `ghost` (not in the metadata).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/offset_delete/rows.feature",
+        name = "tests: build rows follows kafka order and codes"
+    )]
+    fn build_rows_follows_kafka_order_and_codes() {}
 }

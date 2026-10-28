@@ -278,11 +278,11 @@ mod tests {
         }
     }
 
-    /// A push round-trips to the describe response Kafka builds from the
-    /// plugin's copy: each node keeps the fields of its type, and every list
-    /// keeps its first occurrences in wire order.
-    #[test]
-    fn a_push_describes_as_kafka_stores_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams description model tests: a push describes as kafka stores it"
+    )]
+    fn bdd_verify_a_push_describes_as_kafka_stores_it() {
         let wire = push::topology_description::TopologyDescription {
             subtopologies: vec![
                 push::topology_description_subtopology::TopologyDescriptionSubtopology {
@@ -351,10 +351,21 @@ mod tests {
         assert!(described == expected);
     }
 
-    /// The pushes Kafka's converter refuses with `InvalidRequestException`,
-    /// and its messages.
-    #[test]
-    fn malformed_pushes_are_refused_with_kafkas_message() {
+    /// A push round-trips to the describe response Kafka builds from the
+    /// plugin's copy: each node keeps the fields of its type, and every list
+    /// keeps its first occurrences in wire order.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/description/model.feature",
+        name = "tests: a push describes as kafka stores it"
+    )]
+    fn a_push_describes_as_kafka_stores_it() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams description model tests: malformed pushes are refused with kafkas message"
+    )]
+    fn bdd_verify_malformed_pushes_are_refused_with_kafkas_message() {
         let subtopology = |node_type| push::topology_description::TopologyDescription {
             subtopologies: vec![
                 push::topology_description_subtopology::TopologyDescriptionSubtopology {
@@ -424,4 +435,13 @@ mod tests {
             );
         }
     }
+
+    /// The pushes Kafka's converter refuses with `InvalidRequestException`,
+    /// and its messages.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/description/model.feature",
+        name = "tests: malformed pushes are refused with kafkas message"
+    )]
+    fn malformed_pushes_are_refused_with_kafkas_message() {}
 }

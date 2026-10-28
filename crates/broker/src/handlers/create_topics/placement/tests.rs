@@ -242,10 +242,11 @@ fn manual_assignments_preserve_partition_order_and_validate_brokers() {
     assert!(assignments == vec![vec![NodeId(1), NodeId(2)], vec![NodeId(2), NodeId(1)]]);
 }
 
-/// Kafka's `createTopic` and `validateManualPartitionAssignment` refuse a
-/// manual assignment with these codes and messages, on brokers 1 and 2.
-#[test]
-fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create topics placement tests: invalid manual assignments answer kafkas codes and messages"
+)]
+fn bdd_verify_invalid_manual_assignments_answer_kafkas_codes_and_messages() {
     /// The replica list of one partition of a manual assignment.
     struct ReplicaList {
         partition_index: i32,
@@ -365,6 +366,15 @@ fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
         );
     }
 }
+
+/// Kafka's `createTopic` and `validateManualPartitionAssignment` refuse a
+/// manual assignment with these codes and messages, on brokers 1 and 2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_topics/placement/tests.feature",
+    name = "invalid manual assignments answer kafkas codes and messages"
+)]
+fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {}
 
 #[test]
 fn site_broker_views_read_the_rack_and_the_witness_role() {

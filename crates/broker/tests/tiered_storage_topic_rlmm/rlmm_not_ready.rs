@@ -18,6 +18,14 @@ use {
     tokio::time,
 };
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm not ready: copy task skips tiering while rlmm not ready"
+)]
+fn bdd_verify_copy_task_skips_tiering_while_rlmm_not_ready() {
+    run_broker_test(copy_task_skips_tiering_while_rlmm_not_ready_case());
+}
+
 /// While the topic-backed RLMM has not yet activated, the RLM copy task must
 /// not tier any segment. Bootstrap points at a dead port, so the retry loop
 /// never succeeds. The copy task calls `add_remote_log_segment_metadata`
@@ -28,10 +36,12 @@ use {
 /// The topic config and produce volume mirror
 /// [`topic_rlmm_copy_then_fetch_round_trip`] exactly, so "0 tiered objects"
 /// is genuinely discriminating. The analogous loopback test tiers ≥ 1.
-#[test]
-fn copy_task_skips_tiering_while_rlmm_not_ready() {
-    run_broker_test(copy_task_skips_tiering_while_rlmm_not_ready_case());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_not_ready.feature",
+    name = "copy task skips tiering while rlmm not ready"
+)]
+fn copy_task_skips_tiering_while_rlmm_not_ready() {}
 
 async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
     const TOPIC: &str = "tiered-not-ready-itest";

@@ -44,14 +44,24 @@ mod tests {
         krabka_units::{convert::TimeExt as _, minutes},
     };
 
-    #[test]
-    fn an_untouched_broker_runs_kafkas_defaults() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "config offset retention tests: an untouched broker runs kafkas defaults"
+    )]
+    fn bdd_verify_an_untouched_broker_runs_kafkas_defaults() {
         let config = BrokerConfig::default();
 
         check!(config.offsets_retention() == DEFAULT_OFFSETS_RETENTION);
         check!(config.offsets_retention().millis_i64() / 60_000 == 10_080);
         check!(config.offsets_retention_check_interval().millis_i64() == 600_000);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/config/offset_retention.feature",
+        name = "tests: an untouched broker runs kafkas defaults"
+    )]
+    fn an_untouched_broker_runs_kafkas_defaults() {}
 
     #[test]
     fn an_operator_value_wins_even_when_it_equals_the_default() {

@@ -246,21 +246,18 @@ fn write_all_verbatim(segment: &mut Segment, interval: ByteSize) {
     }
 }
 
-/// `.index` entries are `(last offset of the batch, position of the batch)`,
-/// and `.timeindex` entries are `(running maximum, last offset of the batch
-/// that set it)` that strictly increase in timestamp. The last offsets are 2,
-/// 3, 5, 6 and 7, and the maximum is set by the batches ending at 2, 5 and 7.
-///
-/// The first batch takes no `.index` entry: Kafka's `LogSegment.append`
-/// indexes a batch once more than `index.interval.bytes` were written since
-/// the last entry, and nothing was written before the first. The second
-/// batch's entry carries the maximum the first one set, so the time index
-/// still names the batch ending at 2.
-#[yare::parameterized(
-    encoding_append = { "encoding append", false },
-    verbatim_append = { "verbatim append", true },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "segment dump log tests: the append paths write the indexes kafka dump log verifies for {example}"
 )]
-fn the_append_paths_write_the_indexes_kafka_dump_log_verifies(label: &'static str, verbatim: bool) {
+fn bdd_verify_the_append_paths_write_the_indexes_kafka_dump_log_verifies(example: String) {
+    type Example = (&'static str, bool);
+    let (label, verbatim): Example = match example.as_str() {
+        "encoding append" => ("encoding append", false),
+        "verbatim append" => ("verbatim append", true),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let expected_time_entries = vec![time_entry(102, 2), time_entry(201, 5), time_entry(300, 7)];
     let TempSegment { dir, mut segment } = test_segment();
     if verbatim {
@@ -283,6 +280,23 @@ fn the_append_paths_write_the_indexes_kafka_dump_log_verifies(label: &'static st
         "{label}"
     );
 }
+
+/// `.index` entries are `(last offset of the batch, position of the batch)`,
+/// and `.timeindex` entries are `(running maximum, last offset of the batch
+/// that set it)` that strictly increase in timestamp. The last offsets are 2,
+/// 3, 5, 6 and 7, and the maximum is set by the batches ending at 2, 5 and 7.
+///
+/// The first batch takes no `.index` entry: Kafka's `LogSegment.append`
+/// indexes a batch once more than `index.interval.bytes` were written since
+/// the last entry, and nothing was written before the first. The second
+/// batch's entry carries the maximum the first one set, so the time index
+/// still names the batch ending at 2.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/segment/dump_log_tests.feature",
+    name = "the append paths write the indexes kafka dump log verifies"
+)]
+fn the_append_paths_write_the_indexes_kafka_dump_log_verifies(example: String) { let _ = example; }
 
 /// A sparse index takes an entry only once the batches since the last entry
 /// add up to the interval, and what it takes still verifies.

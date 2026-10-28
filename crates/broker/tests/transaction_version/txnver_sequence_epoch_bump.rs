@@ -324,8 +324,11 @@ fn epoch_bump_case(name: &'static str, topic: &'static str, setup: Setup) -> Cas
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transaction version txnver sequence epoch bump: first sequence at a new epoch gets the same answer before and after restart"
+)]
+async fn bdd_verify_first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart() {
     let cases = [
         epoch_bump_case(
             "tv2-commit-bumps-the-epoch",
@@ -359,3 +362,11 @@ async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_res
         );
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_sequence_epoch_bump.feature",
+    name = "first sequence at a new epoch gets the same answer before and after restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart() {}

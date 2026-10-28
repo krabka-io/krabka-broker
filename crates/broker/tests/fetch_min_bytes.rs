@@ -26,8 +26,11 @@ use {
     assert2::assert,
 };
 
-#[tokio::test]
-async fn a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "fetch min bytes: a fetch below its min bytes is held until max wait and then answers"
+)]
+async fn bdd_verify_a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers() {
     let broker = support::start().await;
     let bootstrap = broker.broker.listen_addr().to_string();
 
@@ -43,3 +46,11 @@ async fn a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers() {
             }
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/fetch_min_bytes.feature",
+    name = "a fetch below its min bytes is held until max wait and then answers"
+)]
+#[tokio::test]
+async fn a_fetch_below_its_min_bytes_is_held_until_max_wait_and_then_answers() {}

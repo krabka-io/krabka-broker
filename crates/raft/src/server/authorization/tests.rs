@@ -48,37 +48,63 @@ use {
 
 const MESSAGE: &str = "Cluster authorization failed.";
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "server authorization tests: each controller api needs the kafka operation for {example}"
+)]
+fn bdd_verify_each_controller_api_needs_the_kafka_operation(example: String) {
+    type Example = (i16, Option<ClusterOperation>);
+    let (key, operation): Example = match example.as_str() {
+        "fetch" => (api_key::FETCH, Some(ClusterOperation::ClusterAction)),
+        "vote" => (api_key::VOTE, Some(ClusterOperation::ClusterAction)),
+        "begin quorum epoch" => (
+            api_key::BEGIN_QUORUM_EPOCH,
+            Some(ClusterOperation::ClusterAction),
+        ),
+        "end quorum epoch" => (
+            api_key::END_QUORUM_EPOCH,
+            Some(ClusterOperation::ClusterAction),
+        ),
+        "fetch snapshot" => (
+            api_key::FETCH_SNAPSHOT,
+            Some(ClusterOperation::ClusterAction),
+        ),
+        "controller registration" => (70, Some(ClusterOperation::ClusterAction)),
+        "update raft voter" => (82, Some(ClusterOperation::ClusterAction)),
+        "assign replicas to dirs" => (73, Some(ClusterOperation::ClusterAction)),
+        "submit change" => (API_KEY_SUBMIT_CHANGE, Some(ClusterOperation::ClusterAction)),
+        "metadata fetch" => (
+            API_KEY_METADATA_FETCH,
+            Some(ClusterOperation::ClusterAction),
+        ),
+        "delegation token mutation" => (
+            API_KEY_DELEGATION_TOKEN_MUTATION,
+            Some(ClusterOperation::ClusterAction),
+        ),
+        "add raft voter" => (80, Some(ClusterOperation::Alter)),
+        "remove raft voter" => (81, Some(ClusterOperation::Alter)),
+        "describe cluster" => (60, Some(ClusterOperation::Alter)),
+        "describe quorum" => (55, Some(ClusterOperation::Describe)),
+        "api versions" => (18, None),
+        "create topics" => (19, None),
+        "envelope" => (58, None),
+        "broker registration" => (62, None),
+        "broker heartbeat" => (63, None),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    check!(required_operation(key) == operation);
+}
+
 /// Kafka's `ControllerApis` operation for each api that the controller
 /// listener answers itself, and no operation for the apis that a broker
 /// handler authorizes.
-#[yare::parameterized(
-    fetch = { api_key::FETCH, Some(ClusterOperation::ClusterAction) },
-    vote = { api_key::VOTE, Some(ClusterOperation::ClusterAction) },
-    begin_quorum_epoch = { api_key::BEGIN_QUORUM_EPOCH, Some(ClusterOperation::ClusterAction) },
-    end_quorum_epoch = { api_key::END_QUORUM_EPOCH, Some(ClusterOperation::ClusterAction) },
-    fetch_snapshot = { api_key::FETCH_SNAPSHOT, Some(ClusterOperation::ClusterAction) },
-    controller_registration = { 70, Some(ClusterOperation::ClusterAction) },
-    update_raft_voter = { 82, Some(ClusterOperation::ClusterAction) },
-    assign_replicas_to_dirs = { 73, Some(ClusterOperation::ClusterAction) },
-    submit_change = { API_KEY_SUBMIT_CHANGE, Some(ClusterOperation::ClusterAction) },
-    metadata_fetch = { API_KEY_METADATA_FETCH, Some(ClusterOperation::ClusterAction) },
-    delegation_token_mutation = {
-        API_KEY_DELEGATION_TOKEN_MUTATION,
-        Some(ClusterOperation::ClusterAction),
-    },
-    add_raft_voter = { 80, Some(ClusterOperation::Alter) },
-    remove_raft_voter = { 81, Some(ClusterOperation::Alter) },
-    describe_cluster = { 60, Some(ClusterOperation::Alter) },
-    describe_quorum = { 55, Some(ClusterOperation::Describe) },
-    api_versions = { 18, None },
-    create_topics = { 19, None },
-    envelope = { 58, None },
-    broker_registration = { 62, None },
-    broker_heartbeat = { 63, None },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/server/authorization/tests.feature",
+    name = "each controller api needs the kafka operation"
 )]
-fn each_controller_api_needs_the_kafka_operation(key: i16, operation: Option<ClusterOperation>) {
-    check!(required_operation(key) == operation);
-}
+fn each_controller_api_needs_the_kafka_operation(example: String) { let _ = example; }
 
 /// The refusal of a `SubmitChange` without `ClusterAction`.
 fn submit_change_refusal() -> Refusal {
@@ -201,11 +227,11 @@ fn fetch_request(version: i16) -> Bytes {
     body.freeze()
 }
 
-/// Each refusal is the `getErrorResponse` of its Kafka api with
-/// `CLUSTER_AUTHORIZATION_FAILED`, and the krabka-private apis refuse in
-/// their own response.
-#[test]
-fn fetch_and_quorum_refusals_are_kafka_error_responses() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "server authorization tests: fetch and quorum refusals are kafka error responses"
+)]
+fn bdd_verify_fetch_and_quorum_refusals_are_kafka_error_responses() {
     // `FetchResponse.partitionResponse`: its empty, non-null records decode
     // as an empty pre-v2 payload.
     let fetch_row = |partition_index| fetch_response::PartitionData {
@@ -300,8 +326,21 @@ fn fetch_and_quorum_refusals_are_kafka_error_responses() {
     check_refusal_cases(cases);
 }
 
-#[test]
-fn admin_and_private_refusals_are_kafka_error_responses() {
+/// Each refusal is the `getErrorResponse` of its Kafka api with
+/// `CLUSTER_AUTHORIZATION_FAILED`, and the krabka-private apis refuse in
+/// their own response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/server/authorization/tests.feature",
+    name = "fetch and quorum refusals are kafka error responses"
+)]
+fn fetch_and_quorum_refusals_are_kafka_error_responses() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "server authorization tests: admin and private refusals are kafka error responses"
+)]
+fn bdd_verify_admin_and_private_refusals_are_kafka_error_responses() {
     let private_submit = KrabkaSubmitChangeResponse {
         error_code: 31,
         leader_hint: -1,
@@ -416,6 +455,13 @@ fn admin_and_private_refusals_are_kafka_error_responses() {
     ];
     check_refusal_cases(cases);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/server/authorization/tests.feature",
+    name = "admin and private refusals are kafka error responses"
+)]
+fn admin_and_private_refusals_are_kafka_error_responses() {}
 
 /// Grants that allow exactly the listed operations.
 struct Grants(BTreeSet<&'static str>);

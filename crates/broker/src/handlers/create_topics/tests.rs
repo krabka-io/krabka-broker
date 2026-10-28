@@ -2317,14 +2317,11 @@ fn check_order_limit_cases() -> Vec<CheckOrderCase> {
     ]
 }
 
-/// Kafka's `ControllerApis.createTopics` and
-/// `ReplicationControlManager.createTopics` on a single broker that already
-/// holds topic `t`: duplicate names answer one `INVALID_REQUEST` row after the
-/// controller's rows, an existing topic answers `TOPIC_ALREADY_EXISTS` ahead
-/// of every other check, a null config answers `INVALID_CONFIG`, and a request
-/// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
-#[tokio::test]
-async fn rows_follow_kafkas_check_order_and_messages() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers create topics tests: rows follow kafkas check order and messages"
+)]
+async fn bdd_verify_rows_follow_kafkas_check_order_and_messages() {
     let mut cases = check_order_cases();
     cases.extend(check_order_limit_cases());
 
@@ -2388,6 +2385,20 @@ async fn rows_follow_kafkas_check_order_and_messages() {
     })
     .await;
 }
+
+/// Kafka's `ControllerApis.createTopics` and
+/// `ReplicationControlManager.createTopics` on a single broker that already
+/// holds topic `t`: duplicate names answer one `INVALID_REQUEST` row after the
+/// controller's rows, an existing topic answers `TOPIC_ALREADY_EXISTS` ahead
+/// of every other check, a null config answers `INVALID_CONFIG`, and a request
+/// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/create_topics/tests.feature",
+    name = "rows follow kafkas check order and messages"
+)]
+#[tokio::test]
+async fn rows_follow_kafkas_check_order_and_messages() {}
 
 /// Kafka's `createTopics` reaches `ConfigurationControlManager.validateAlterConfig`
 /// through `incrementalAlterConfig`, which refuses a config value longer than

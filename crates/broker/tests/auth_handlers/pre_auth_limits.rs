@@ -214,11 +214,11 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
 
 async fn scrape_metrics(addr: SocketAddr) -> String { http_get(addr, "/metrics", false).await }
 
-/// A size prefix over `sasl.server.max.receive.size` fails the authentication
-/// before the frame is read. The peer gets no answer, since Kafka builds none
-/// for it, and the broker counts a failed authentication.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_frame_over_the_sasl_receive_limit_fails_the_authentication() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers pre auth limits: a frame over the sasl receive limit fails the authentication"
+)]
+async fn bdd_verify_a_frame_over_the_sasl_receive_limit_fails_the_authentication() {
     let handle = start_broker(|cfg| {
         cfg.sasl_server_max_receive = krabka_units::kibibytes(1);
         cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
@@ -241,11 +241,22 @@ async fn a_frame_over_the_sasl_receive_limit_fails_the_authentication() {
     assert!(body.contains(needle), "missing {needle} in:\n{body}");
 }
 
-/// The frame limit is `sasl.server.max.receive.size` for the whole exchange
-/// and `socket.request.max.bytes` afterwards: the same 2 KiB request that fails
-/// an authentication in flight is served once the peer has authenticated.
+/// A size prefix over `sasl.server.max.receive.size` fails the authentication
+/// before the frame is read. The peer gets no answer, since Kafka builds none
+/// for it, and the broker counts a failed authentication.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/pre_auth_limits.feature",
+    name = "a frame over the sasl receive limit fails the authentication"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
+async fn a_frame_over_the_sasl_receive_limit_fails_the_authentication() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers pre auth limits: the larger request limit returns once the peer authenticated"
+)]
+async fn bdd_verify_the_larger_request_limit_returns_once_the_peer_authenticated() {
     let handle = start_broker(|cfg| {
         cfg.sasl_server_max_receive = krabka_units::kibibytes(1);
     })
@@ -324,11 +335,22 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
     handle.shutdown().await;
 }
 
-/// A failed authentication answers no sooner than
-/// `connection.failed.authentication.delay.ms`, and a zero delay answers at
-/// once. The answer still carries the failure.
+/// The frame limit is `sasl.server.max.receive.size` for the whole exchange
+/// and `socket.request.max.bytes` afterwards: the same 2 KiB request that fails
+/// an authentication in flight is served once the peer has authenticated.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/pre_auth_limits.feature",
+    name = "the larger request limit returns once the peer authenticated"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_authentication_holds_its_answer_for_the_configured_delay() {
+async fn the_larger_request_limit_returns_once_the_peer_authenticated() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers pre auth limits: a failed authentication holds its answer for the configured delay"
+)]
+async fn bdd_verify_a_failed_authentication_holds_its_answer_for_the_configured_delay() {
     let delay = Duration::from_millis(600);
     let handle = start_broker(|cfg| {
         cfg.connection_failed_authentication_delay = krabka_units::millis(600);
@@ -357,12 +379,22 @@ async fn a_failed_authentication_holds_its_answer_for_the_configured_delay() {
     handle.shutdown().await;
 }
 
-/// After one valid `ApiVersions` only a `SaslHandshake` is taken. A second
-/// `ApiVersions` closes the connection with no answer. An `ApiVersions` that
-/// was answered `UNSUPPORTED_VERSION` or `INVALID_REQUEST` left the state
-/// where it was, so the client may ask again.
+/// A failed authentication answers no sooner than
+/// `connection.failed.authentication.delay.ms`, and a zero delay answers at
+/// once. The answer still carries the failure.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/pre_auth_limits.feature",
+    name = "a failed authentication holds its answer for the configured delay"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_second_api_versions_before_the_handshake_closes_the_connection() {
+async fn a_failed_authentication_holds_its_answer_for_the_configured_delay() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers pre auth limits: a second api versions before the handshake closes the connection"
+)]
+async fn bdd_verify_a_second_api_versions_before_the_handshake_closes_the_connection() {
     let handle = start_broker(|_| {}).await;
     let addr = handle.listen_addr();
 
@@ -410,12 +442,23 @@ async fn a_second_api_versions_before_the_handshake_closes_the_connection() {
     handle.shutdown().await;
 }
 
-/// `SaslServerAuthenticator` answers the first `ApiVersions` from its own
-/// supplier, whatever cluster or node the client meant to reach. Once the
-/// connection is authenticated `KafkaApis` answers, and a stale identity asks
-/// the client to rebootstrap.
+/// After one valid `ApiVersions` only a `SaslHandshake` is taken. A second
+/// `ApiVersions` closes the connection with no answer. An `ApiVersions` that
+/// was answered `UNSUPPORTED_VERSION` or `INVALID_REQUEST` left the state
+/// where it was, so the client may ask again.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/pre_auth_limits.feature",
+    name = "a second api versions before the handshake closes the connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {
+async fn a_second_api_versions_before_the_handshake_closes_the_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "auth handlers pre auth limits: a pre auth api versions carries no rebootstrap check"
+)]
+async fn bdd_verify_a_pre_auth_api_versions_carries_no_rebootstrap_check() {
     let handle = start_broker(|cfg| {
         cfg.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
@@ -448,3 +491,15 @@ async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {
     );
     handle.shutdown().await;
 }
+
+/// `SaslServerAuthenticator` answers the first `ApiVersions` from its own
+/// supplier, whatever cluster or node the client meant to reach. Once the
+/// connection is authenticated `KafkaApis` answers, and a stale identity asks
+/// the client to rebootstrap.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/pre_auth_limits.feature",
+    name = "a pre auth api versions carries no rebootstrap check"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {}

@@ -294,13 +294,11 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
     }
 }
 
-/// Kafka answers a records field it cannot frame, or whose batch CRC does not
-/// match, with `CORRUPT_MESSAGE` (`CorruptRecordException`, which the JVM
-/// producer retries), and every other refusal with `INVALID_RECORD`.
-/// `ProduceRequest.validateRecords` frames the field before the log checks a
-/// CRC, so a second batch is `INVALID_RECORD` whatever the first one's CRC.
-#[test]
-fn an_undecodable_slice_gets_the_code_kafka_gives_it() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers produce prepare tests verbatim: an undecodable slice gets the code kafka gives it"
+)]
+fn bdd_verify_an_undecodable_slice_gets_the_code_kafka_gives_it() {
     use crate::codes::{CORRUPT_MESSAGE, INVALID_RECORD};
 
     struct Case {
@@ -385,6 +383,18 @@ fn an_undecodable_slice_gets_the_code_kafka_gives_it() {
         assert!(error_code == case.error_code, "{}", case.name);
     }
 }
+
+/// Kafka answers a records field it cannot frame, or whose batch CRC does not
+/// match, with `CORRUPT_MESSAGE` (`CorruptRecordException`, which the JVM
+/// producer retries), and every other refusal with `INVALID_RECORD`.
+/// `ProduceRequest.validateRecords` frames the field before the log checks a
+/// CRC, so a second batch is `INVALID_RECORD` whatever the first one's CRC.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/produce/prepare/tests/verbatim.feature",
+    name = "an undecodable slice gets the code kafka gives it"
+)]
+fn an_undecodable_slice_gets_the_code_kafka_gives_it() {}
 
 #[test]
 fn rejects_crc_valid_malformed_record_body() {

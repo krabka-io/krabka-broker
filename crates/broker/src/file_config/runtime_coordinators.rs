@@ -323,11 +323,11 @@ mod tests {
         Err(format!("invalid config: {message}"))
     }
 
-    /// Kafka 4.3.1's `ShareGroupConfig` and `GroupCoordinatorConfig` ranges
-    /// and `require` checks over the share keys: each `[runtime]` body gives
-    /// the applied share config or the startup error.
-    #[test]
-    fn share_group_keys_follow_kafkas_ranges_and_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config runtime coordinators tests: share group keys follow kafkas ranges and order"
+    )]
+    fn bdd_verify_share_group_keys_follow_kafkas_ranges_and_order() {
         struct Row {
             label: &'static str,
             body: &'static str,
@@ -503,6 +503,16 @@ mod tests {
         assert!(actual == expected);
     }
 
+    /// Kafka 4.3.1's `ShareGroupConfig` and `GroupCoordinatorConfig` ranges
+    /// and `require` checks over the share keys: each `[runtime]` body gives
+    /// the applied share config or the startup error.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/runtime_coordinators.feature",
+        name = "tests: share group keys follow kafkas ranges and order"
+    )]
+    fn share_group_keys_follow_kafkas_ranges_and_order() {}
+
     /// Kafka's `group.streams.min.session.timeout.ms` and its three siblings
     /// move the bounds, and the session timeout and the heartbeat interval
     /// must stay inside them, as `GroupCoordinatorConfig` requires.
@@ -590,12 +600,11 @@ mod tests {
         }
     }
 
-    /// Kafka trunk's `group.streams.rack.aware.assignment.tags`: the TOML
-    /// entries stand for the comma-joined Kafka value, an empty entry fails
-    /// `ValidList` and a repeated one fails `GroupCoordinatorConfig`, with
-    /// the empty check first as in Kafka.
-    #[test]
-    fn streams_group_rack_aware_assignment_tags_follow_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config runtime coordinators tests: streams group rack aware assignment tags follow kafka"
+    )]
+    fn bdd_verify_streams_group_rack_aware_assignment_tags_follow_kafka() {
         const EMPTY: &str = "invalid config: streams_group_rack_aware_assignment_tags: \
                              Configuration 'group.streams.rack.aware.assignment.tags' values \
                              must not be empty.";
@@ -661,4 +670,15 @@ mod tests {
         }
         assert!(actual == expected);
     }
+
+    /// Kafka trunk's `group.streams.rack.aware.assignment.tags`: the TOML
+    /// entries stand for the comma-joined Kafka value, an empty entry fails
+    /// `ValidList` and a repeated one fails `GroupCoordinatorConfig`, with
+    /// the empty check first as in Kafka.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/runtime_coordinators.feature",
+        name = "tests: streams group rack aware assignment tags follow kafka"
+    )]
+    fn streams_group_rack_aware_assignment_tags_follow_kafka() {}
 }

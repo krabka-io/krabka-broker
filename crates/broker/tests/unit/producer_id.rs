@@ -16,8 +16,9 @@ use {
     krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest,
 };
 
-#[tokio::test]
-async fn init_producer_id_returns_fresh_pid() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit producer id: init producer id returns fresh pid")]
+async fn bdd_verify_init_producer_id_returns_fresh_pid() {
     let p = support::start().await;
     // A null transactional id asks for an idempotent producer; the schema default is empty.
     let r = claim_idempotent_producer(&p.client).await;
@@ -27,8 +28,19 @@ async fn init_producer_id_returns_fresh_pid() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id returns fresh pid"
+)]
 #[tokio::test]
-async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {
+async fn init_producer_id_returns_fresh_pid() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit producer id: init producer id without coordinator bootstrap returns not coordinator"
+)]
+async fn bdd_verify_init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {
     // Without a prior FindCoordinator(TRANSACTION) call, __transaction_state
     // does not exist. Kafka's `TransactionStateManager
     // .getAndMaybeAddTransactionState` then answers NOT_COORDINATOR (16), and
@@ -51,8 +63,19 @@ async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator(
     p.broker.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id without coordinator bootstrap returns not coordinator"
+)]
+#[tokio::test]
+async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit producer id: find coordinator txn creates topic then returns local broker"
+)]
+async fn bdd_verify_find_coordinator_txn_creates_topic_then_returns_local_broker() {
     let p = support::start().await; // single-voter broker
     // Use coordinator_keys (v4+ style) so the transaction-id reaches the
     // broker on the wire. key_type=1 selects the TRANSACTION branch.
@@ -99,8 +122,19 @@ async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "find coordinator txn creates topic then returns local broker"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_with_transactional_id_returns_real_pid() {
+async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit producer id: init producer id with transactional id returns real pid"
+)]
+async fn bdd_verify_init_producer_id_with_transactional_id_returns_real_pid() {
     let p = support::start().await;
     // Bootstrap __transaction_state via FindCoordinator (key_type=1), and
     // retry until the lookup names a coordinator, as a client does.
@@ -124,8 +158,17 @@ async fn init_producer_id_with_transactional_id_returns_real_pid() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id with transactional id returns real pid"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_with_same_tid_bumps_epoch() {
+async fn init_producer_id_with_transactional_id_returns_real_pid() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit producer id: init producer id with same tid bumps epoch")]
+async fn bdd_verify_init_producer_id_with_same_tid_bumps_epoch() {
     let p = support::start().await;
     // Bootstrap __transaction_state for stable-tid, and retry until the
     // lookup names a coordinator, as a client does.
@@ -159,3 +202,11 @@ async fn init_producer_id_with_same_tid_bumps_epoch() {
     );
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id with same tid bumps epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_producer_id_with_same_tid_bumps_epoch() {}

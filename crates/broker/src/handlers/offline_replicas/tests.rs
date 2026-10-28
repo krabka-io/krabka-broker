@@ -156,8 +156,11 @@ fn check_replica_cases<E: fmt::Debug + PartialEq>(
     }
 }
 
-#[test]
-fn offline_replicas_matches_kafka_replica_state_rules() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers offline replicas tests: offline replicas matches kafka replica state rules"
+)]
+fn bdd_verify_offline_replicas_matches_kafka_replica_state_rules() {
     let (good, bad) = (dir(0x600d), dir(0xbad));
     let first_broker_without_dirs = || {
         vec![
@@ -222,6 +225,13 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
 
     check_replica_cases(cases, offline_replicas);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/offline_replicas/tests.feature",
+    name = "offline replicas matches kafka replica state rules"
+)]
+fn offline_replicas_matches_kafka_replica_state_rules() {}
 
 /// A replica on a directory its broker no longer lists online neither leads
 /// nor stays in the reported ISR -- and nothing else changes.

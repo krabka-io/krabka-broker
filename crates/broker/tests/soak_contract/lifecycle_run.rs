@@ -340,13 +340,26 @@ pub async fn checkpoint(
 mod tests {
     use {super::config_mismatches, assert2::check, std::collections::BTreeMap};
 
-    #[yare::parameterized(
-        held = { Some(Some("2")), None },
-        changed = { Some(Some("1")), Some("t min.insync.replicas is Some(\"1\"), not \"2\"") },
-        hidden = { Some(None), Some("t min.insync.replicas is None, not \"2\"") },
-        missing = { None, Some("t min.insync.replicas is not described; it was set to \"2\"") },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract lifecycle run tests: a configuration holds what was set for {example}"
     )]
-    fn a_configuration_holds_what_was_set(found: Option<Option<&str>>, mismatch: Option<&str>) {
+    fn bdd_verify_a_configuration_holds_what_was_set(example: String) {
+        type Example<'a> = (Option<Option<&'a str>>, Option<&'a str>);
+        let (found, mismatch): Example<'_> = match example.as_str() {
+            "held" => (Some(Some("2")), None),
+            "changed" => (
+                Some(Some("1")),
+                Some("t min.insync.replicas is Some(\"1\"), not \"2\""),
+            ),
+            "hidden" => (Some(None), Some("t min.insync.replicas is None, not \"2\"")),
+            "missing" => (
+                None,
+                Some("t min.insync.replicas is not described; it was set to \"2\""),
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let expected = BTreeMap::from([("min.insync.replicas".to_owned(), "2".to_owned())]);
         let found: BTreeMap<String, Option<String>> = found
             .map(|value| ("min.insync.replicas".to_owned(), value.map(str::to_owned)))
@@ -357,4 +370,11 @@ mod tests {
                 == mismatch.map(str::to_owned).into_iter().collect::<Vec<_>>()
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/lifecycle_run.feature",
+        name = "tests: a configuration holds what was set"
+    )]
+    fn a_configuration_holds_what_was_set(example: String) { let _ = example; }
 }

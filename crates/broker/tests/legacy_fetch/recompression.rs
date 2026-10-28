@@ -22,8 +22,9 @@ use {
     krabka_records_legacy::decode_message_set,
 };
 
-#[tokio::test]
-async fn fetch_v3_recompresses_zstd_as_snappy() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("legacy fetch recompression: fetch v3 recompresses zstd as snappy")]
+async fn bdd_verify_fetch_v3_recompresses_zstd_as_snappy() {
     let p = support::start_legacy().await;
 
     // 1. Create topic.
@@ -111,3 +112,11 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/recompression.feature",
+    name = "fetch v3 recompresses zstd as snappy"
+)]
+#[tokio::test]
+async fn fetch_v3_recompresses_zstd_as_snappy() {}

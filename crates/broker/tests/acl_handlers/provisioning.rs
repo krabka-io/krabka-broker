@@ -23,8 +23,11 @@ use {
     },
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_acls_super_user_can_provision_and_describe() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "acl handlers provisioning: create acls super user can provision and describe"
+)]
+async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
     let (_log_dir, handle, addr) = start_admin_with(&[("admin", "admin-secret")]).await;
 
     // Provision: Allow Read on Topic LITERAL "foo" for User:alice from *.
@@ -86,8 +89,17 @@ async fn create_acls_super_user_can_provision_and_describe() {
     check!(acl.permission_type == PERMISSION_ALLOW);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
+    name = "create acls super user can provision and describe"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_acls_non_super_user_rejected() {
+async fn create_acls_super_user_can_provision_and_describe() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers provisioning: create acls non super user rejected")]
+async fn bdd_verify_create_acls_non_super_user_rejected() {
     let log_dir = tempfile::tempdir().unwrap();
     // alice is NOT the super-user. admin is configured as super-user so
     // the compat shim stays off and the cluster-Alter gate applies.
@@ -124,6 +136,14 @@ async fn create_acls_non_super_user_rejected() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
+    name = "create acls non super user rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_acls_non_super_user_rejected() {}
+
 /// One ACL binding the broker still reports after a delete.
 #[derive(Debug, PartialEq)]
 struct SurvivingBinding {
@@ -132,8 +152,9 @@ struct SurvivingBinding {
     permission_type: i8,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_acls_removes_matching() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers provisioning: delete acls removes matching")]
+async fn bdd_verify_delete_acls_removes_matching() {
     let (_log_dir, handle, addr) = start_admin_with(&[("admin", "admin-secret")]).await;
 
     // Provision two ACLs (Read on "foo", Write on "bar").
@@ -235,3 +256,11 @@ async fn delete_acls_removes_matching() {
         surviving[0]
     );
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
+    name = "delete acls removes matching"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_acls_removes_matching() {}

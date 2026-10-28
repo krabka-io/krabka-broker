@@ -39,8 +39,11 @@ OnP9WAj0vBqSLWmYcm6N6hNz8KcCIQDDXGEYKtNkfUzKrICS2v40ybJqzyZ9cbaR\n\
 Shzd0RKUbQ==\n\
 -----END CERTIFICATE-----\n";
 
-#[test]
-fn introspection_validator_builds_without_an_externally_installed_crypto_provider() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "introspection client bootstrap: introspection validator builds without an externally installed crypto provider"
+)]
+fn bdd_verify_introspection_validator_builds_without_an_externally_installed_crypto_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
     let secret_path = dir.path().join("client-secret");
     fs::write(&secret_path, "the-secret").expect("write secret");
@@ -80,3 +83,10 @@ idp_tls_trust                    = '{ca}'
         krabka_security::OAuthBearerValidator::Introspection(_)
     ));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/introspection_client_bootstrap.feature",
+    name = "introspection validator builds without an externally installed crypto provider"
+)]
+fn introspection_validator_builds_without_an_externally_installed_crypto_provider() {}

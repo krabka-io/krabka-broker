@@ -13,8 +13,11 @@ use {
     },
 };
 
-#[test]
-fn request_constructor_keeps_release_limits_trunk_absence_and_header_boundaries() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "controller api version: request constructor keeps release limits trunk absence and header boundaries"
+)]
+fn bdd_verify_request_constructor_keeps_release_limits_trunk_absence_and_header_boundaries() {
     const RELEASED: ControllerApiVersion =
         ControllerApiVersion::for_request::<ApiVersionsRequest>();
     const TRUNK: ControllerApiVersion =
@@ -38,3 +41,10 @@ fn request_constructor_keeps_release_limits_trunk_absence_and_header_boundaries(
     assert!(NONFLEXIBLE.enabled_max(Disabled) == Some(1));
     assert!(NONFLEXIBLE.flexible_min == i16::MAX);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_api_version.feature",
+    name = "request constructor keeps release limits trunk absence and header boundaries"
+)]
+fn request_constructor_keeps_release_limits_trunk_absence_and_header_boundaries() {}

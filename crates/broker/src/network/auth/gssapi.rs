@@ -416,11 +416,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `KerberosShortNamer` on what `sspi` hands the broker: `DEFAULT`
-    /// takes the first component of a service principal, and only in the
-    /// configured realm.
-    #[test]
-    fn map_gssapi_principal_follows_kafkas_short_namer() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth gssapi tests: map gssapi principal follows kafkas short namer"
+    )]
+    fn bdd_verify_map_gssapi_principal_follows_kafkas_short_namer() {
         let config = |rules: &[&str], realm: Option<&str>| {
             gssapi_config(
                 "/unused.keytab",
@@ -483,6 +483,16 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `KerberosShortNamer` on what `sspi` hands the broker: `DEFAULT`
+    /// takes the first component of a service principal, and only in the
+    /// configured realm.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/gssapi.feature",
+        name = "tests: map gssapi principal follows kafkas short namer"
+    )]
+    fn map_gssapi_principal_follows_kafkas_short_namer() {}
 
     #[test]
     fn map_gssapi_principal_uppercases_realm_before_default_rule() {

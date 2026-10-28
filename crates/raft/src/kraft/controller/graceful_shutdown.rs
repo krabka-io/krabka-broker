@@ -78,15 +78,30 @@ impl Engine {
 mod tests {
     use {super::*, assert2::check, krabka_units::prelude::millis};
 
-    #[yare::parameterized(
-        short_test_timeout = { millis(500), Duration::from_millis(1_250) },
-        kafka_default = { millis(2_000), Duration::from_secs(5) },
-        longer_than_kafka = { millis(20_000), Duration::from_secs(5) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "kraft controller graceful shutdown tests: the window is kafkas five seconds or two and a half fetch timeouts for {example}"
     )]
-    fn the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(
-        fetch_timeout: Time,
-        window: Duration,
+    fn bdd_verify_the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(
+        example: String,
     ) {
+        type Example = (Time, Duration);
+        let (fetch_timeout, window): Example = match example.as_str() {
+            "short test timeout" => (millis(500), Duration::from_millis(1_250)),
+            "kafka default" => (millis(2_000), Duration::from_secs(5)),
+            "longer than kafka" => (millis(20_000), Duration::from_secs(5)),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(graceful_shutdown_window(fetch_timeout) == window);
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/kraft/controller/graceful_shutdown.feature",
+        name = "tests: the window is kafkas five seconds or two and a half fetch timeouts"
+    )]
+    fn the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(example: String) {
+        let _ = example;
     }
 }

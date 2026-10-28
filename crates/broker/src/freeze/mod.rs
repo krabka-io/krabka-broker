@@ -79,11 +79,21 @@ pub fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bo
 mod tests {
     use {super::*, crate::internal_topics::INTERNAL_TOPICS, assert2::check};
 
-    #[test]
-    fn a_pattern_type_names_itself_as_kafka_acls_spell_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "freeze mod tests: a pattern type names itself as kafka acls spell it"
+    )]
+    fn bdd_verify_a_pattern_type_names_itself_as_kafka_acls_spell_it() {
         check!(pattern_type_name(PatternType::Literal) == "literal");
         check!(pattern_type_name(PatternType::Prefixed) == "prefixed");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/freeze/mod.feature",
+        name = "tests: a pattern type names itself as kafka acls spell it"
+    )]
+    fn a_pattern_type_names_itself_as_kafka_acls_spell_it() {}
 
     #[test]
     fn a_target_joins_the_pattern_type_to_the_scope() {

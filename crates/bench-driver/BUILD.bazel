@@ -38,6 +38,7 @@ crate_binary(
 )
 
 crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
     # `scenario_files` loads every checked-in scenario through the driver's own
     # loader, and `report_cli` runs the report binary the way an operator does.
     # `contract_files` judges a synthetic run of every sustained-load contract,
@@ -53,10 +54,6 @@ crate_tests(
         "CARGO_BIN_EXE_krabka-soak-check": "$(rootpath :krabka-soak-check)",
     },
     lib = "bench-driver",
-    # `scenario_files` and `contract_files` are `harness = false`:
-    # libtest-mimic supplies their harness.
-    no_harness = [
-        "contract_files",
-        "scenario_files",
-    ],
+    # `contract_files` uses the libtest-mimic harness.
+    no_harness = ["contract_files"],
 )

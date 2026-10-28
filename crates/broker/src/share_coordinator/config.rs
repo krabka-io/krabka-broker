@@ -79,8 +79,9 @@ pub const CACHED_BUFFER_MAX_BYTES_DEFAULT: u32 = 1024 * 1024 + 12;
 mod tests {
     use {super::*, assert2::assert};
 
-    #[test]
-    fn defaults_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("share coordinator config tests: defaults match kafka")]
+    fn bdd_verify_defaults_match_kafka() {
         let expected = ShareCoordinatorConfig {
             state_topic_num_partitions: 50,
             state_topic_replication_factor: 3,
@@ -99,4 +100,11 @@ mod tests {
         };
         assert!(ShareCoordinatorConfig::default() == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/config.feature",
+        name = "tests: defaults match kafka"
+    )]
+    fn defaults_match_kafka() {}
 }

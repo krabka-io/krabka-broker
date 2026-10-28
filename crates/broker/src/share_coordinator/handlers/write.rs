@@ -158,11 +158,11 @@ mod tests {
         state_response(WIRE_TOPIC, partitions)
     }
 
-    /// The whole `WriteShareGroupStateResponse` for each request shape, over
-    /// one initialized key (partition 4, state epoch 17), and the stored
-    /// summary after the request.
-    #[tokio::test]
-    async fn write_state_answers_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator handlers write tests: write state answers as kafka"
+    )]
+    async fn bdd_verify_write_state_answers_as_kafka() {
         let initial = Some((17, 0, Offset(90), 0));
         // (led, request, expected response, summary of partition 4 after)
         let rows = [
@@ -240,4 +240,15 @@ mod tests {
             check!(stored == summary, "row {index}");
         }
     }
+
+    /// The whole `WriteShareGroupStateResponse` for each request shape, over
+    /// one initialized key (partition 4, state epoch 17), and the stored
+    /// summary after the request.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "tests: write state answers as kafka"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka() {}
 }

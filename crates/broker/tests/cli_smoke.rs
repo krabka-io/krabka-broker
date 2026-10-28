@@ -70,8 +70,9 @@ fn current_thread_runtime() -> Runtime {
         .expect("current-thread runtime")
 }
 
-#[test]
-fn help_mentions_cluster_id_and_advertised_listener() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: help mentions cluster id and advertised listener")]
+fn bdd_verify_help_mentions_cluster_id_and_advertised_listener() {
     let out = Command::new(broker_bin()).arg("--help").output().unwrap();
     assert!(
         out.status.success(),
@@ -89,8 +90,16 @@ fn help_mentions_cluster_id_and_advertised_listener() {
     );
 }
 
-#[test]
-fn version_returns_zero() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "help mentions cluster id and advertised listener"
+)]
+fn help_mentions_cluster_id_and_advertised_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: version returns zero")]
+fn bdd_verify_version_returns_zero() {
     let out = Command::new(broker_bin())
         .arg("--version")
         .output()
@@ -98,13 +107,16 @@ fn version_returns_zero() {
     assert!(out.status.success());
 }
 
-/// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
-/// assert that the process binds the listener declared in the file. The
-/// address comes from the file, not from a CLI flag. The file binds port 0, so
-/// no other process can take the port first, and the startup line names the
-/// port the listener got. The controller listener takes a [`free_port`].
-#[test]
-fn boots_with_config_file_listener() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "version returns zero"
+)]
+fn version_returns_zero() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: boots with config file listener")]
+fn bdd_verify_boots_with_config_file_listener() {
     use std::io::Write as _;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -150,8 +162,21 @@ protocol = "Plaintext"
     assert!(TcpStream::connect(addr).is_ok());
 }
 
-#[test]
-fn errors_when_config_file_and_listen_addr_both_set() {
+/// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
+/// assert that the process binds the listener declared in the file. The
+/// address comes from the file, not from a CLI flag. The file binds port 0, so
+/// no other process can take the port first, and the startup line names the
+/// port the listener got. The controller listener takes a [`free_port`].
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "boots with config file listener"
+)]
+fn boots_with_config_file_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: errors when config file and listen addr both set")]
+fn bdd_verify_errors_when_config_file_and_listen_addr_both_set() {
     let out = Command::new(broker_bin())
         .arg("--config-file=/tmp/nonexistent.toml")
         .arg("--listen-addr=127.0.0.1:9092")
@@ -166,11 +191,16 @@ fn errors_when_config_file_and_listen_addr_both_set() {
     );
 }
 
-/// A log directory formatted for node 1 does not start node 2. The broker
-/// exits 1 with the message of Kafka's `MetaPropertiesEnsemble.verify`, as
-/// `KafkaRaftServer.initializeLogDirs` refuses the same directory.
-#[test]
-fn refuses_a_log_dir_formatted_for_another_node() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "errors when config file and listen addr both set"
+)]
+fn errors_when_config_file_and_listen_addr_both_set() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: refuses a log dir formatted for another node")]
+fn bdd_verify_refuses_a_log_dir_formatted_for_another_node() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let log_dir = tmp.path().join("data");
     run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
@@ -215,6 +245,16 @@ fn refuses_a_log_dir_formatted_for_another_node() {
     );
     assert!(stderr.contains(&want), "{stderr}");
 }
+
+/// A log directory formatted for node 1 does not start node 2. The broker
+/// exits 1 with the message of Kafka's `MetaPropertiesEnsemble.verify`, as
+/// `KafkaRaftServer.initializeLogDirs` refuses the same directory.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "refuses a log dir formatted for another node"
+)]
+fn refuses_a_log_dir_formatted_for_another_node() {}
 
 /// The cluster id of the nodes that [`each_role_opens_only_its_own_listeners`]
 /// starts.
@@ -577,22 +617,9 @@ fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
     })
 }
 
-/// Every `process.roles` value opens the listeners of its roles and no other,
-/// as Kafka does. Kafka's `ControllerServer` opens only the listeners that
-/// `controller.listener.names` names, and `KafkaConfig` refuses a
-/// controller-only node whose `listeners` name another one. So a client cannot
-/// reach a controller-only node on the client port, and two controller-only
-/// nodes on one host do not compete for that port.
-///
-/// Each node gets a `--listen-addr` and a `--controller-listen-addr` of its
-/// own. The startup line names the listeners that the node opened. A port the
-/// node must leave closed is held by the test, so nothing else answers on it.
-///
-/// The controller-only node is the quorum of the broker-only node, which
-/// cannot start without one, so the cases run in order and every node runs
-/// until the end. The combined node is a standalone quorum of its own.
-#[test]
-fn each_role_opens_only_its_own_listeners() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("cli smoke: each role opens only its own listeners")]
+fn bdd_verify_each_role_opens_only_its_own_listeners() {
     let runtime = current_thread_runtime();
     let tmp = tempfile::tempdir().expect("tempdir");
     let cases = [
@@ -664,3 +691,24 @@ fn each_role_opens_only_its_own_listeners() {
 
     assert!(observed == expected);
 }
+
+/// Every `process.roles` value opens the listeners of its roles and no other,
+/// as Kafka does. Kafka's `ControllerServer` opens only the listeners that
+/// `controller.listener.names` names, and `KafkaConfig` refuses a
+/// controller-only node whose `listeners` name another one. So a client cannot
+/// reach a controller-only node on the client port, and two controller-only
+/// nodes on one host do not compete for that port.
+///
+/// Each node gets a `--listen-addr` and a `--controller-listen-addr` of its
+/// own. The startup line names the listeners that the node opened. A port the
+/// node must leave closed is held by the test, so nothing else answers on it.
+///
+/// The controller-only node is the quorum of the broker-only node, which
+/// cannot start without one, so the cases run in order and every node runs
+/// until the end. The combined node is a standalone quorum of its own.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "each role opens only its own listeners"
+)]
+fn each_role_opens_only_its_own_listeners() {}

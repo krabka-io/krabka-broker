@@ -215,22 +215,22 @@ mod tests {
         krabka_protocol::{Decode, owned::join_group_response},
     };
 
-    /// #791: Kafka's `GroupCoordinatorService.joinGroup` request checks with
-    /// the default `group.min.session.timeout.ms` and
-    /// `group.max.session.timeout.ms`.
-    #[yare::parameterized(
-        empty_group = { "", 10_000, Some(codes::INVALID_GROUP_ID) },
-        negative_timeout = { "g", -1, Some(codes::INVALID_SESSION_TIMEOUT) },
-        below_minimum = { "g", 5_999, Some(codes::INVALID_SESSION_TIMEOUT) },
-        at_minimum = { "g", 6_000, None },
-        at_maximum = { "g", 1_800_000, None },
-        above_maximum = { "g", 1_800_001, Some(codes::INVALID_SESSION_TIMEOUT) },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers join group tests: request checks match kafka defaults for {example}"
     )]
-    fn request_checks_match_kafka_defaults(
-        group_id: &str,
-        session_timeout_ms: i32,
-        want: Option<i16>,
-    ) {
+    fn bdd_verify_request_checks_match_kafka_defaults(example: String) {
+        type Example<'a> = (&'a str, i32, Option<i16>);
+        let (group_id, session_timeout_ms, want): Example<'_> = match example.as_str() {
+            "empty group" => ("", 10_000, Some(codes::INVALID_GROUP_ID)),
+            "negative timeout" => ("g", -1, Some(codes::INVALID_SESSION_TIMEOUT)),
+            "below minimum" => ("g", 5_999, Some(codes::INVALID_SESSION_TIMEOUT)),
+            "at minimum" => ("g", 6_000, None),
+            "at maximum" => ("g", 1_800_000, None),
+            "above maximum" => ("g", 1_800_001, Some(codes::INVALID_SESSION_TIMEOUT)),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let config = NextGenConfig::default();
         let req = JoinGroupRequest {
             group_id: group_id.into(),
@@ -243,10 +243,19 @@ mod tests {
         );
     }
 
-    /// Kafka's `JoinGroupResponse` constructor sends an empty `ProtocolName`
-    /// as null from v7 and as `""` below it; a chosen protocol passes through.
-    #[test]
-    fn protocol_name_normalised_like_kafka() {
+    /// #791: Kafka's `GroupCoordinatorService.joinGroup` request checks with
+    /// the default `group.min.session.timeout.ms` and
+    /// `group.max.session.timeout.ms`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/join_group.feature",
+        name = "tests: request checks match kafka defaults"
+    )]
+    fn request_checks_match_kafka_defaults(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers join group tests: protocol name normalised like kafka")]
+    fn bdd_verify_protocol_name_normalised_like_kafka() {
         for version in join_group_response::MIN_VERSION..=join_group_response::MAX_VERSION {
             let empty = (version < 7).then(String::new);
             for (sent, want) in [
@@ -281,6 +290,15 @@ mod tests {
             }
         }
     }
+
+    /// Kafka's `JoinGroupResponse` constructor sends an empty `ProtocolName`
+    /// as null from v7 and as `""` below it; a chosen protocol passes through.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/join_group.feature",
+        name = "tests: protocol name normalised like kafka"
+    )]
+    fn protocol_name_normalised_like_kafka() {}
 
     /// A response that names its protocol leaves `respond` unchanged.
     #[test]

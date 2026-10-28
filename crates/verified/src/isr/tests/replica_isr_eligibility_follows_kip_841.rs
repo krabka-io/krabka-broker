@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use std::vec;
 
 /// `Partition.isReplicaIsrEligible` and `isBrokerEpochIsrEligible`.
 #[yare::parameterized(
@@ -41,82 +43,96 @@ fn candidate_at(
     }
 }
 
-/// In-sync rows follow `Partition.getOutOfSyncReplicas`; out-of-sync rows
-/// follow `Partition.needsExpandIsr`.
-#[yare::parameterized(
-    leader = { "the leader stays", candidate_at(IsrMemberRole::Leader, -1, false), true },
-    reassigned_away = {
-        "a reassigned-away member leaves",
-        candidate_at(IsrMemberRole::Unassigned, 120, true),
-        false,
-    },
-    idle_at_leader_end = {
-        "an idle follower at the leader's log end stays",
-        candidate_at(IsrMemberRole::InSyncFollower, 120, false),
-        true,
-    },
-    recently_caught_up = {
-        "a follower that caught up recently stays",
-        candidate_at(IsrMemberRole::InSyncFollower, 50, true),
-        true,
-    },
-    behind_bound = {
-        "a follower behind for longer than the bound leaves",
-        candidate_at(IsrMemberRole::InSyncFollower, 119, false),
-        false,
-    },
-    never_fetched = {
-        "a follower that never fetched from this leader leaves after the bound",
-        candidate_at(IsrMemberRole::InSyncFollower, -1, false),
-        false,
-    },
-    at_high_watermark = {
-        "a follower at the high watermark joins",
-        candidate_at(IsrMemberRole::OutOfSyncFollower, 100, false),
-        true,
-    },
-    short_of_high_watermark = {
-        "a follower one short of the high watermark stays out",
-        candidate_at(IsrMemberRole::OutOfSyncFollower, 99, true),
-        false,
-    },
-    before_epoch_start = {
-        "a follower past the high watermark but before the epoch start stays out",
-        IsrCandidateFacts {
-            leader_epoch_start: Some(110),
-            ..candidate_at(IsrMemberRole::OutOfSyncFollower, 105, true)
-        },
-        false,
-    },
-    unknown_epoch_start = {
-        "a leader that does not know its epoch start admits nobody",
-        IsrCandidateFacts {
-            leader_epoch_start: None,
-            ..candidate_at(IsrMemberRole::OutOfSyncFollower, 120, true)
-        },
-        false,
-    },
-    fenced_follower = {
-        "a fenced follower at the log end stays out",
-        IsrCandidateFacts {
-            eligibility: IsrEligibilityFacts {
-                fenced: true,
-                ..ELIGIBLE
-            },
-            ..candidate_at(IsrMemberRole::OutOfSyncFollower, 120, true)
-        },
-        false,
-    },
-    out_of_sync_never_fetched = {
-        "a follower that never fetched from this leader stays out",
-        candidate_at(IsrMemberRole::OutOfSyncFollower, -1, true),
-        false,
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "isr tests replica isr eligibility follows kip 841: isr candidates follow kafkas shrink and expand rules for {example}"
 )]
-fn isr_candidates_follow_kafkas_shrink_and_expand_rules(
-    label: &str,
-    facts: IsrCandidateFacts,
-    expected: bool,
-) {
+fn bdd_verify_isr_candidates_follow_kafkas_shrink_and_expand_rules(example: String) {
+    type Example<'a> = (&'a str, IsrCandidateFacts, bool);
+    let (label, facts, expected): Example<'_> = match example.as_str() {
+        "leader" => (
+            "the leader stays",
+            candidate_at(IsrMemberRole::Leader, -1, false),
+            true,
+        ),
+        "reassigned away" => (
+            "a reassigned-away member leaves",
+            candidate_at(IsrMemberRole::Unassigned, 120, true),
+            false,
+        ),
+        "idle at leader end" => (
+            "an idle follower at the leader's log end stays",
+            candidate_at(IsrMemberRole::InSyncFollower, 120, false),
+            true,
+        ),
+        "recently caught up" => (
+            "a follower that caught up recently stays",
+            candidate_at(IsrMemberRole::InSyncFollower, 50, true),
+            true,
+        ),
+        "behind bound" => (
+            "a follower behind for longer than the bound leaves",
+            candidate_at(IsrMemberRole::InSyncFollower, 119, false),
+            false,
+        ),
+        "never fetched" => (
+            "a follower that never fetched from this leader leaves after the bound",
+            candidate_at(IsrMemberRole::InSyncFollower, -1, false),
+            false,
+        ),
+        "at high watermark" => (
+            "a follower at the high watermark joins",
+            candidate_at(IsrMemberRole::OutOfSyncFollower, 100, false),
+            true,
+        ),
+        "short of high watermark" => (
+            "a follower one short of the high watermark stays out",
+            candidate_at(IsrMemberRole::OutOfSyncFollower, 99, true),
+            false,
+        ),
+        "before epoch start" => (
+            "a follower past the high watermark but before the epoch start stays out",
+            IsrCandidateFacts {
+                leader_epoch_start: Some(110),
+                ..candidate_at(IsrMemberRole::OutOfSyncFollower, 105, true)
+            },
+            false,
+        ),
+        "unknown epoch start" => (
+            "a leader that does not know its epoch start admits nobody",
+            IsrCandidateFacts {
+                leader_epoch_start: None,
+                ..candidate_at(IsrMemberRole::OutOfSyncFollower, 120, true)
+            },
+            false,
+        ),
+        "fenced follower" => (
+            "a fenced follower at the log end stays out",
+            IsrCandidateFacts {
+                eligibility: IsrEligibilityFacts {
+                    fenced: true,
+                    ..ELIGIBLE
+                },
+                ..candidate_at(IsrMemberRole::OutOfSyncFollower, 120, true)
+            },
+            false,
+        ),
+        "out of sync never fetched" => (
+            "a follower that never fetched from this leader stays out",
+            candidate_at(IsrMemberRole::OutOfSyncFollower, -1, true),
+            false,
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     assert2::check!(isr_candidate_selected(facts) == expected, "{label}");
 }
+
+/// In-sync rows follow `Partition.getOutOfSyncReplicas`; out-of-sync rows
+/// follow `Partition.needsExpandIsr`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/isr/tests/replica_isr_eligibility_follows_kip_841.feature",
+    name = "isr candidates follow kafkas shrink and expand rules"
+)]
+fn isr_candidates_follow_kafkas_shrink_and_expand_rules(example: String) { let _ = example; }

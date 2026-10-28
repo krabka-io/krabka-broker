@@ -95,9 +95,11 @@ const VOTERS: usize = 3;
 /// plaintext listener.
 const PASSWORD: &str = "diskless-jepsen";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-#[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
-async fn three_broker_fault_schedule_preserves_the_acked_ledger() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless jepsen: three broker fault schedule preserves the acked ledger"
+)]
+async fn bdd_verify_three_broker_fault_schedule_preserves_the_acked_ledger() {
     let object_dir = TempDir::new().expect("shared object dir");
     let put_blocker = faults::block_object_puts(object_dir.path());
 
@@ -188,3 +190,12 @@ async fn three_broker_fault_schedule_preserves_the_acked_ledger() {
 
     cluster::shutdown(cluster).await;
 }
+
+#[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_jepsen.feature",
+    name = "three broker fault schedule preserves the acked ledger"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn three_broker_fault_schedule_preserves_the_acked_ledger() {}

@@ -212,11 +212,11 @@ async fn begin_and_commit_offsets(
     }
 }
 
-/// The COMMIT marker materializes the buffered txn offsets into the group's
-/// committed offsets. Before `EndTxn(commit)`, `OffsetFetch` reads `-1`. After
-/// it, `OffsetFetch` reads the committed offset.
-#[tokio::test]
-async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn offset commit materialize: txn offset commit visible via offset fetch after commit marker"
+)]
+async fn bdd_verify_txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client, TOPIC).await;
@@ -249,10 +249,22 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     p.broker.shutdown().await;
 }
 
-/// ABORT drops the buffered txn offsets. `OffsetFetch` still reads `-1` after
-/// `EndTxn(abort)`. Aborted offsets must never become committed.
+/// The COMMIT marker materializes the buffered txn offsets into the group's
+/// committed offsets. Before `EndTxn(commit)`, `OffsetFetch` reads `-1`. After
+/// it, `OffsetFetch` reads the committed offset.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "txn offset commit visible via offset fetch after commit marker"
+)]
 #[tokio::test]
-async fn txn_offset_commit_dropped_on_abort_marker() {
+async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn offset commit materialize: txn offset commit dropped on abort marker"
+)]
+async fn bdd_verify_txn_offset_commit_dropped_on_abort_marker() {
     let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client, TOPIC).await;
@@ -277,6 +289,16 @@ async fn txn_offset_commit_dropped_on_abort_marker() {
 
     p.broker.shutdown().await;
 }
+
+/// ABORT drops the buffered txn offsets. `OffsetFetch` still reads `-1` after
+/// `EndTxn(abort)`. Aborted offsets must never become committed.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "txn offset commit dropped on abort marker"
+)]
+#[tokio::test]
+async fn txn_offset_commit_dropped_on_abort_marker() {}
 
 /// The `OffsetFetch` version that carries both KIP-447's `require_stable` and
 /// the KIP-516 `groups[]` response shape this test asserts on. Pinning it
@@ -386,23 +408,18 @@ fn stable_row(offset: krabka_ids::Offset) -> OffsetFetchResponsePartitions {
     }
 }
 
-/// KIP-447: a `read_committed` EOS consumer sets `require_stable = true` and
-/// must be told to retry -- `UNSTABLE_OFFSET_COMMIT (88)` -- while its own
-/// transaction's offset commit is still waiting for a marker.
-///
-/// The group starts at offset 3 and the transaction proposes 9. Strict reads
-/// retry while it is open; after resolution a commit publishes 9 and an abort
-/// leaves 3 intact.
-#[yare::parameterized(
-    commit = { "commit", TransactionOutcome::Commit, 9 },
-    abort = { "abort", TransactionOutcome::Abort, 3 },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn offset commit materialize: require stable offset fetch tracks transaction outcome for {example}"
 )]
-#[test_macro(tokio::test)]
-async fn require_stable_offset_fetch_tracks_transaction_outcome(
-    label: &str,
-    outcome: TransactionOutcome,
-    settled_offset: i64,
-) {
+async fn bdd_verify_require_stable_offset_fetch_tracks_transaction_outcome(example: String) {
+    type Example<'a> = (&'a str, TransactionOutcome, i64);
+    let (label, outcome, settled_offset): Example<'_> = match example.as_str() {
+        "commit" => ("commit", TransactionOutcome::Commit, 9),
+        "abort" => ("abort", TransactionOutcome::Abort, 3),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client, TOPIC).await;
@@ -440,6 +457,23 @@ async fn require_stable_offset_fetch_tracks_transaction_outcome(
     );
 
     p.broker.shutdown().await;
+}
+
+/// KIP-447: a `read_committed` EOS consumer sets `require_stable = true` and
+/// must be told to retry -- `UNSTABLE_OFFSET_COMMIT (88)` -- while its own
+/// transaction's offset commit is still waiting for a marker.
+///
+/// The group starts at offset 3 and the transaction proposes 9. Strict reads
+/// retry while it is open; after resolution a commit publishes 9 and an abort
+/// leaves 3 intact.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/txn_offset_commit_materialize.feature",
+    name = "require stable offset fetch tracks transaction outcome"
+)]
+#[tokio::test]
+async fn require_stable_offset_fetch_tracks_transaction_outcome(example: String) {
+    let _ = example;
 }
 
 /// Resolve the pending offsets through `EndTxn`, retaining the full response on failure.

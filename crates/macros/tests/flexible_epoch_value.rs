@@ -72,24 +72,27 @@ struct Value {
     assignment_timestamp_ms: i64,
 }
 
-#[yare::parameterized(
-    zero_timestamp = { 7, 0, &b"\x00\x00\x00\x00\x00\x07\x00"[..] },
-    tagged_timestamp = {
-        7,
-        42,
-        &b"\x00\x00\x00\x00\x00\x07\x01\x00\x08\x00\x00\x00\x00\x00\x00\x00\x2a"[..],
-    },
-    negative_values = {
-        -1,
-        -1,
-        &b"\x00\x00\xff\xff\xff\xff\x01\x00\x08\xff\xff\xff\xff\xff\xff\xff\xff"[..],
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "flexible epoch value: keeps exact kafka bytes and every truncation error for {example}"
 )]
-fn keeps_exact_kafka_bytes_and_every_truncation_error(
-    epoch: i32,
-    timestamp: i64,
-    golden: &'static [u8],
-) {
+fn bdd_verify_keeps_exact_kafka_bytes_and_every_truncation_error(example: String) {
+    type Example = (i32, i64, &'static [u8]);
+    let (epoch, timestamp, golden): Example = match example.as_str() {
+        "zero timestamp" => (7, 0, &b"\x00\x00\x00\x00\x00\x07\x00"[..]),
+        "tagged timestamp" => (
+            7,
+            42,
+            &b"\x00\x00\x00\x00\x00\x07\x01\x00\x08\x00\x00\x00\x00\x00\x00\x00\x2a"[..],
+        ),
+        "negative values" => (
+            -1,
+            -1,
+            &b"\x00\x00\xff\xff\xff\xff\x01\x00\x08\xff\xff\xff\xff\xff\xff\xff\xff"[..],
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let value = Value {
         assignment_epoch: epoch,
         assignment_timestamp_ms: timestamp,
@@ -100,6 +103,13 @@ fn keeps_exact_kafka_bytes_and_every_truncation_error(
         assert2::assert!(Value::decode(&golden[..end]).is_err());
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/flexible_epoch_value.feature",
+    name = "keeps exact kafka bytes and every truncation error"
+)]
+fn keeps_exact_kafka_bytes_and_every_truncation_error(example: String) { let _ = example; }
 
 #[test]
 fn retains_record_specific_version_errors_and_codec_errors() {

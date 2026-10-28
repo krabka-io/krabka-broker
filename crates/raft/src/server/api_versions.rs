@@ -450,18 +450,18 @@ mod tests {
         assert2::check!(!is_disabled_version(22, 6, None, unstable));
     }
 
-    /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
-    /// a trunk key -- is neither advertised nor accepted while unstable api
-    /// versions are disabled, and is served whole when they are enabled.
-    #[yare::parameterized(
-        disabled = { UnstableApiVersions::Disabled, None, true },
-        enabled = { UnstableApiVersions::Enabled, Some((0, 0)), false },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "server api versions tests: an api kafka 4 3 1 lacks follows unstable api versions enable for {example}"
     )]
-    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable(
-        unstable: UnstableApiVersions,
-        advertised: Option<(i16, i16)>,
-        disabled: bool,
-    ) {
+    fn bdd_verify_an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable(example: String) {
+        type Example = (UnstableApiVersions, Option<(i16, i16)>, bool);
+        let (unstable, advertised, disabled): Example = match example.as_str() {
+            "disabled" => (UnstableApiVersions::Disabled, None, true),
+            "enabled" => (UnstableApiVersions::Enabled, Some((0, 0)), false),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         struct TrunkRouter;
         impl ControllerAdminRouter for TrunkRouter {
             fn api_versions(&self) -> &[ControllerApiVersion] {
@@ -490,6 +490,18 @@ mod tests {
         );
     }
 
+    /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
+    /// a trunk key -- is neither advertised nor accepted while unstable api
+    /// versions are disabled, and is served whole when they are enabled.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/server/api_versions.feature",
+        name = "tests: an api kafka 4 3 1 lacks follows unstable api versions enable"
+    )]
+    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable(example: String) {
+        let _ = example;
+    }
+
     /// The controller listener's table is strictly ascending by api key, the
     /// router's rows merged in, as Kafka's `apisForListener` `EnumSet` orders
     /// it.
@@ -503,12 +515,11 @@ mod tests {
         );
     }
 
-    /// One row per `ApiVersions` request shape: Kafka's unsupported-version
-    /// answer, the `isValid` refusals, and the full table. A request whose
-    /// version is not served carries a body that does not decode, because
-    /// Kafka does not read it.
-    #[test]
-    fn api_versions_response_runs_kafka_request_checks() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "server api versions tests: api versions response runs kafka request checks"
+    )]
+    fn bdd_verify_api_versions_response_runs_kafka_request_checks() {
         use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
         /// The answer a request must get, and the version it is encoded at.
@@ -687,6 +698,17 @@ mod tests {
         }
     }
 
+    /// One row per `ApiVersions` request shape: Kafka's unsupported-version
+    /// answer, the `isValid` refusals, and the full table. A request whose
+    /// version is not served carries a body that does not decode, because
+    /// Kafka does not read it.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/server/api_versions.feature",
+        name = "tests: api versions response runs kafka request checks"
+    )]
+    fn api_versions_response_runs_kafka_request_checks() {}
+
     /// A served version whose body does not decode fails the request, as
     /// Kafka's `RequestContext.parseRequest` does.
     #[test]
@@ -695,12 +717,11 @@ mod tests {
         assert2::assert!(super::api_versions_response(3, &[0xff], view(&image, -1)).is_err());
     }
 
-    /// #783 on the controller listener, table-driven over the issue's rows:
-    /// the supported rows follow Kafka's minimums and `alterFeatureLevel0`,
-    /// the finalized rows omit level 0 (`kraft.version` included), and the
-    /// epoch is the metadata offset the view carries.
-    #[test]
-    fn feature_fields_match_kafka_on_the_controller_listener() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "server api versions tests: feature fields match kafka on the controller listener"
+    )]
+    fn bdd_verify_feature_fields_match_kafka_on_the_controller_listener() {
         use krabka_protocol::owned::api_versions_response::{
             FinalizedFeatureKey, SupportedFeatureKey,
         };
@@ -790,22 +811,32 @@ mod tests {
         }
     }
 
-    /// #1344: before the first feature delta Kafka's controller answers from
-    /// the initial state of `FeaturesPublisher`,
-    /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
-    /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
-    /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
-    #[yare::parameterized(
-        kraft_version_0 = { 0, &[("metadata.version", METADATA_VERSION_MIN)] },
-        kraft_version_1 = {
-            1,
-            &[("kraft.version", 1), ("metadata.version", METADATA_VERSION_MIN)],
-        },
+    /// #783 on the controller listener, table-driven over the issue's rows:
+    /// the supported rows follow Kafka's minimums and `alterFeatureLevel0`,
+    /// the finalized rows omit level 0 (`kraft.version` included), and the
+    /// epoch is the metadata offset the view carries.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/server/api_versions.feature",
+        name = "tests: feature fields match kafka on the controller listener"
     )]
-    fn a_fresh_controller_advertises_kafkas_minimum_metadata_version(
-        kraft_version: u16,
-        want: &[(&str, i16)],
-    ) {
+    fn feature_fields_match_kafka_on_the_controller_listener() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "server api versions tests: a fresh controller advertises kafkas minimum metadata version for {example}"
+    )]
+    fn bdd_verify_a_fresh_controller_advertises_kafkas_minimum_metadata_version(example: String) {
+        type Example<'a> = (u16, &'a [(&'a str, i16)]);
+        let (kraft_version, want): Example<'_> = match example.as_str() {
+            "kraft version 0" => (0, &[("metadata.version", METADATA_VERSION_MIN)]),
+            "kraft version 1" => (1, &[
+                ("kraft.version", 1),
+                ("metadata.version", METADATA_VERSION_MIN),
+            ]),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         krabka_macros::finalized_feature_fixture!(finalized);
         let image = feature_image(kraft_version, &[]);
         let body = super::api_versions_response_body(4, view(&image, -1));
@@ -817,6 +848,20 @@ mod tests {
         assert2::check!(
             (resp.finalized_features, resp.finalized_features_epoch) == (want_finalized, -1)
         );
+    }
+
+    /// #1344: before the first feature delta Kafka's controller answers from
+    /// the initial state of `FeaturesPublisher`,
+    /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
+    /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
+    /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/server/api_versions.feature",
+        name = "tests: a fresh controller advertises kafkas minimum metadata version"
+    )]
+    fn a_fresh_controller_advertises_kafkas_minimum_metadata_version(example: String) {
+        let _ = example;
     }
 
     /// Kafka's `ControllerServer` builds the listener's

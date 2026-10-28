@@ -55,27 +55,41 @@ fn validate_retention_ms_boundary_cases(value: &str, want_ok: bool) {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: validate segment bytes floors at kafkas one mebibyte for {example}"
+)]
+fn bdd_verify_validate_segment_bytes_floors_at_kafkas_one_mebibyte(example: String) {
+    type Example<'a> = (&'a str, bool);
+    let (value, want_ok): Example<'_> = match example.as_str() {
+        "zero" => ("0", false),
+        "one" => ("1", false),
+        "fourteen" => ("14", false),
+        "just below floor" => ("1048575", false),
+        "floor" => ("1048576", true),
+        "above floor" => ("1073741824", true),
+        "non integer" => ("not-a-number", false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    assert2::assert!(
+        validate_topic_config(SEGMENT_BYTES, value).is_ok() == want_ok,
+        "segment.bytes={value}"
+    );
+}
+
 /// Kafka floors `segment.bytes` at one mebibyte: `LogConfig` validates the key
 /// with `atLeast(1024 * 1024)`, and `apache/kafka:4.3.1` refuses anything below
 /// it with `Invalid value 1048575 for configuration segment.bytes: Value must
 /// be at least 1048576`. A coordinator that wants a smaller segment reaches
 /// past the floor through `internal.segment.bytes`, which `defineInternal`
 /// gives no validator at all.
-#[yare::parameterized(
-    zero = { "0", false },
-    one = { "1", false },
-    fourteen = { "14", false },
-    just_below_floor = { "1048575", false },
-    floor = { "1048576", true },
-    above_floor = { "1073741824", true },
-    non_integer = { "not-a-number", false },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "validate segment bytes floors at kafkas one mebibyte"
 )]
-fn validate_segment_bytes_floors_at_kafkas_one_mebibyte(value: &str, want_ok: bool) {
-    assert2::assert!(
-        validate_topic_config(SEGMENT_BYTES, value).is_ok() == want_ok,
-        "segment.bytes={value}"
-    );
-}
+fn validate_segment_bytes_floors_at_kafkas_one_mebibyte(example: String) { let _ = example; }
 
 #[test]
 fn internal_segment_bytes_is_not_subject_to_the_topic_floor() {
@@ -84,25 +98,69 @@ fn internal_segment_bytes_is_not_subject_to_the_topic_floor() {
     assert2::assert!(validate_topic_config(INTERNAL_SEGMENT_BYTES, "1").is_ok());
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: validate retention bytes accepts every long kafka accepts for {example}"
+)]
+fn bdd_verify_validate_retention_bytes_accepts_every_long_kafka_accepts(example: String) {
+    type Example<'a> = (&'a str, bool);
+    let (value, want_ok): Example<'_> = match example.as_str() {
+        "minus one" => ("-1", true),
+        "minus two" => ("-2", true),
+        "zero" => ("0", true),
+        "positive" => ("1073741824", true),
+        "i64 min" => ("-9223372036854775808", true),
+        "i64 max" => ("9223372036854775807", true),
+        "above i64 max" => ("9223372036854775808", false),
+        "non integer" => ("abc", false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    assert2::assert!(
+        validate_topic_config(RETENTION_BYTES, value).is_ok() == want_ok,
+        "retention.bytes={value}"
+    );
+}
+
 /// `retention.bytes` is one of the few keys Kafka defines with no validator at
 /// all: `LogConfig` declares it as a bare `LONG` with a default, so every value
 /// the type holds is accepted and `LogManager`'s retention test is the plain
 /// `retentionSize < 0`. Refusing `-2` here would lose a `MirrorMaker` replay of
 /// a source topic that carries one.
-#[yare::parameterized(
-    minus_one = { "-1", true },
-    minus_two = { "-2", true },
-    zero = { "0", true },
-    positive = { "1073741824", true },
-    i64_min = { "-9223372036854775808", true },
-    i64_max = { "9223372036854775807", true },
-    above_i64_max = { "9223372036854775808", false },
-    non_integer = { "abc", false },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "validate retention bytes accepts every long kafka accepts"
 )]
-fn validate_retention_bytes_accepts_every_long_kafka_accepts(value: &str, want_ok: bool) {
+fn validate_retention_bytes_accepts_every_long_kafka_accepts(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: validate cleanup policy follows kafkas valid list for {example}"
+)]
+fn bdd_verify_validate_cleanup_policy_follows_kafkas_valid_list(example: String) {
+    type Example<'a> = (&'a str, Option<CleanupPolicy>);
+    let (value, expected): Example<'_> = match example.as_str() {
+        "delete" => ("delete", Some(CleanupPolicy::Delete)),
+        "compact" => ("compact", Some(CleanupPolicy::Compact)),
+        "compact then delete" => ("compact,delete", Some(CleanupPolicy::CompactAndDelete)),
+        "delete then compact" => ("delete,compact", Some(CleanupPolicy::CompactAndDelete)),
+        "compact then spaced delete" => ("compact, delete", Some(CleanupPolicy::CompactAndDelete)),
+        "junk" => ("junk", None),
+        "compact then junk" => ("compact,junk", None),
+        "trailing compact separator" => ("compact,", None),
+        "trailing delete separator" => ("delete,", None),
+        "duplicate delete" => ("delete,delete", None),
+        "duplicate compact" => ("compact, compact", None),
+        "empty" => ("", Some(CleanupPolicy::NoCleanup)),
+        "whitespace" => (" ", Some(CleanupPolicy::NoCleanup)),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    assert2::assert!(parse_cleanup_policy(value).ok() == expected, "{value}");
     assert2::assert!(
-        validate_topic_config(RETENTION_BYTES, value).is_ok() == want_ok,
-        "retention.bytes={value}"
+        validate_topic_config(CLEANUP_POLICY, value).is_ok() == expected.is_some(),
+        "{value}"
     );
 }
 
@@ -111,26 +169,36 @@ fn validate_retention_bytes_accepts_every_long_kafka_accepts(value: &str, want_o
 /// are all valid. Kafka Streams sends `compact,delete` on every windowed-store
 /// changelog topic. `ValidList.in` allows the empty list, which runs no
 /// cleanup, and refuses a repeated or an empty element.
-#[yare::parameterized(
-    delete = { "delete", Some(CleanupPolicy::Delete) },
-    compact = { "compact", Some(CleanupPolicy::Compact) },
-    compact_then_delete = { "compact,delete", Some(CleanupPolicy::CompactAndDelete) },
-    delete_then_compact = { "delete,compact", Some(CleanupPolicy::CompactAndDelete) },
-    compact_then_spaced_delete = { "compact, delete", Some(CleanupPolicy::CompactAndDelete) },
-    junk = { "junk", None },
-    compact_then_junk = { "compact,junk", None },
-    trailing_compact_separator = { "compact,", None },
-    trailing_delete_separator = { "delete,", None },
-    duplicate_delete = { "delete,delete", None },
-    duplicate_compact = { "compact, compact", None },
-    empty = { "", Some(CleanupPolicy::NoCleanup) },
-    whitespace = { " ", Some(CleanupPolicy::NoCleanup) },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "validate cleanup policy follows kafkas valid list"
 )]
-fn validate_cleanup_policy_follows_kafkas_valid_list(value: &str, expected: Option<CleanupPolicy>) {
-    assert2::assert!(parse_cleanup_policy(value).ok() == expected, "{value}");
+fn validate_cleanup_policy_follows_kafkas_valid_list(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: validate compression accepts kafkas six names and no others for {example}"
+)]
+fn bdd_verify_validate_compression_accepts_kafkas_six_names_and_no_others(example: String) {
+    type Example<'a> = (&'a str, bool);
+    let (value, want_ok): Example<'_> = match example.as_str() {
+        "producer" => ("producer", true),
+        "uncompressed" => ("uncompressed", true),
+        "gzip" => ("gzip", true),
+        "snappy" => ("snappy", true),
+        "lz4" => ("lz4", true),
+        "zstd" => ("zstd", true),
+        "none" => ("none", false),
+        "empty" => ("", false),
+        "uppercase gzip" => ("GZIP", false),
+        "leading space" => (" gzip", true),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     assert2::assert!(
-        validate_topic_config(CLEANUP_POLICY, value).is_ok() == expected.is_some(),
-        "{value}"
+        validate_topic_config(COMPRESSION_TYPE, value).is_ok() == want_ok,
+        "compression.type={value}"
     );
 }
 
@@ -140,24 +208,12 @@ fn validate_cleanup_policy_follows_kafkas_valid_list(value: &str, expected: Opti
 /// `apache/kafka:4.3.1` refuses it with `Invalid value none for configuration
 /// compression.type: String must be one of: uncompressed, zstd, lz4, snappy,
 /// gzip, producer`.
-#[yare::parameterized(
-    producer = { "producer", true },
-    uncompressed = { "uncompressed", true },
-    gzip = { "gzip", true },
-    snappy = { "snappy", true },
-    lz4 = { "lz4", true },
-    zstd = { "zstd", true },
-    none = { "none", false },
-    empty = { "", false },
-    uppercase_gzip = { "GZIP", false },
-    leading_space = { " gzip", true },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "validate compression accepts kafkas six names and no others"
 )]
-fn validate_compression_accepts_kafkas_six_names_and_no_others(value: &str, want_ok: bool) {
-    assert2::assert!(
-        validate_topic_config(COMPRESSION_TYPE, value).is_ok() == want_ok,
-        "compression.type={value}"
-    );
-}
+fn validate_compression_accepts_kafkas_six_names_and_no_others(example: String) { let _ = example; }
 
 #[test]
 fn validate_compression_bogus_rejected() {
@@ -194,26 +250,40 @@ fn validate_min_isr_positive_accepted() {
     assert2::assert!(validate_topic_config(MIN_INSYNC_REPLICAS, "2").is_ok());
 }
 
-/// `DescribeConfigs` reports both keys as `ConfigType::Int`, and
-/// `apache/kafka:4.3.1` refuses a value past `i32::MAX` on both:
-/// `Invalid value 2147483648 for configuration segment.bytes: Not a number
-/// of type INT`. A value the broker accepts must fit the type it advertises,
-/// so the largest accepted value is `i32::MAX`.
-#[yare::parameterized(
-    segment_bytes_max = { SEGMENT_BYTES, "2147483647", true },
-    segment_bytes_above_max = { SEGMENT_BYTES, "2147483648", false },
-    segment_bytes_i64_max = { SEGMENT_BYTES, "9223372036854775807", false },
-    min_isr_max = { MIN_INSYNC_REPLICAS, "2147483647", true },
-    min_isr_above_max = { MIN_INSYNC_REPLICAS, "2147483648", false },
-    min_isr_zero = { MIN_INSYNC_REPLICAS, "0", false },
-    min_isr_negative = { MIN_INSYNC_REPLICAS, "-1", false },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: an int key refuses what kafkas int cannot hold for {example}"
 )]
-fn an_int_key_refuses_what_kafkas_int_cannot_hold(key: &str, value: &str, want_ok: bool) {
+fn bdd_verify_an_int_key_refuses_what_kafkas_int_cannot_hold(example: String) {
+    type Example<'a> = (&'a str, &'a str, bool);
+    let (key, value, want_ok): Example<'_> = match example.as_str() {
+        "segment bytes max" => (SEGMENT_BYTES, "2147483647", true),
+        "segment bytes above max" => (SEGMENT_BYTES, "2147483648", false),
+        "segment bytes i64 max" => (SEGMENT_BYTES, "9223372036854775807", false),
+        "min isr max" => (MIN_INSYNC_REPLICAS, "2147483647", true),
+        "min isr above max" => (MIN_INSYNC_REPLICAS, "2147483648", false),
+        "min isr zero" => (MIN_INSYNC_REPLICAS, "0", false),
+        "min isr negative" => (MIN_INSYNC_REPLICAS, "-1", false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     assert2::assert!(
         validate_topic_config(key, value).is_ok() == want_ok,
         "{key}={value}"
     );
 }
+
+/// `DescribeConfigs` reports both keys as `ConfigType::Int`, and
+/// `apache/kafka:4.3.1` refuses a value past `i32::MAX` on both:
+/// `Invalid value 2147483648 for configuration segment.bytes: Not a number
+/// of type INT`. A value the broker accepts must fit the type it advertises,
+/// so the largest accepted value is `i32::MAX`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "an int key refuses what kafkas int cannot hold"
+)]
+fn an_int_key_refuses_what_kafkas_int_cannot_hold(example: String) { let _ = example; }
 
 #[test]
 fn validate_unknown_key_rejected() {
@@ -223,27 +293,30 @@ fn validate_unknown_key_rejected() {
     );
 }
 
-/// The Kafka `TopicConfig` names krabka registers, with the value Kafka's own
-/// `ConfigDef` accepts and one it refuses.
-/// The Kafka `TopicConfig` names krabka registers, with the value Kafka's own
-/// `ConfigDef` accepts and one it refuses.
-#[yare::parameterized(
-    segment_ms = { SEGMENT_MS, "60000", "0" },
-    segment_index_bytes = { SEGMENT_INDEX_BYTES, "10485760", "3" },
-    segment_jitter_ms = { SEGMENT_JITTER_MS, "0", "-1" },
-    min_compaction_lag_ms = { MIN_COMPACTION_LAG_MS, "0", "-1" },
-    max_compaction_lag_ms = { MAX_COMPACTION_LAG_MS, "9223372036854775807", "0" },
-    min_cleanable_dirty_ratio = { MIN_CLEANABLE_DIRTY_RATIO, "0.5", "2.0" },
-    file_delete_delay_ms = { FILE_DELETE_DELAY_MS, "60000", "-1" },
-    flush_messages = { FLUSH_MESSAGES, "10000", "0" },
-    flush_ms = { FLUSH_MS, "1000", "-1" },
-    index_interval_bytes = { INDEX_INTERVAL_BYTES, "4096", "-1" },
-    preallocate = { PREALLOCATE, "true", "yes" },
-    message_timestamp_type = { MESSAGE_TIMESTAMP_TYPE, "LogAppendTime", "WallClock" },
-    message_timestamp_after_max_ms = { MESSAGE_TIMESTAMP_AFTER_MAX_MS, "3600000", "-1" },
-    message_timestamp_before_max_ms = { MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "3600000", "-1" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: the remaining kafka topic config names are accepted for {example}"
 )]
-fn the_remaining_kafka_topic_config_names_are_accepted(key: &str, accepted: &str, refused: &str) {
+fn bdd_verify_the_remaining_kafka_topic_config_names_are_accepted(example: String) {
+    type Example<'a> = (&'a str, &'a str, &'a str);
+    let (key, accepted, refused): Example<'_> = match example.as_str() {
+        "segment ms" => (SEGMENT_MS, "60000", "0"),
+        "segment index bytes" => (SEGMENT_INDEX_BYTES, "10485760", "3"),
+        "segment jitter ms" => (SEGMENT_JITTER_MS, "0", "-1"),
+        "min compaction lag ms" => (MIN_COMPACTION_LAG_MS, "0", "-1"),
+        "max compaction lag ms" => (MAX_COMPACTION_LAG_MS, "9223372036854775807", "0"),
+        "min cleanable dirty ratio" => (MIN_CLEANABLE_DIRTY_RATIO, "0.5", "2.0"),
+        "file delete delay ms" => (FILE_DELETE_DELAY_MS, "60000", "-1"),
+        "flush messages" => (FLUSH_MESSAGES, "10000", "0"),
+        "flush ms" => (FLUSH_MS, "1000", "-1"),
+        "index interval bytes" => (INDEX_INTERVAL_BYTES, "4096", "-1"),
+        "preallocate" => (PREALLOCATE, "true", "yes"),
+        "message timestamp type" => (MESSAGE_TIMESTAMP_TYPE, "LogAppendTime", "WallClock"),
+        "message timestamp after max ms" => (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "3600000", "-1"),
+        "message timestamp before max ms" => (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "3600000", "-1"),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(is_recognized(key), "{key}");
     check!(
         validate_topic_config(key, accepted) == Ok(()),
@@ -254,6 +327,17 @@ fn the_remaining_kafka_topic_config_names_are_accepted(key: &str, accepted: &str
         "{key}={refused}"
     );
 }
+
+/// The Kafka `TopicConfig` names krabka registers, with the value Kafka's own
+/// `ConfigDef` accepts and one it refuses.
+/// The Kafka `TopicConfig` names krabka registers, with the value Kafka's own
+/// `ConfigDef` accepts and one it refuses.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "the remaining kafka topic config names are accepted"
+)]
+fn the_remaining_kafka_topic_config_names_are_accepted(example: String) { let _ = example; }
 
 /// Streams applications send both override sets on their internal topics.
 #[yare::parameterized(
@@ -426,9 +510,11 @@ fn a_min_compaction_lag_above_the_max_is_refused() {
     }
 }
 
-/// The refusal carries Kafka's wording, which `kafka-configs` prints verbatim.
-#[test]
-fn the_compaction_lag_conflict_carries_kafkas_message() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: the compaction lag conflict carries kafkas message"
+)]
+fn bdd_verify_the_compaction_lag_conflict_carries_kafkas_message() {
     let overrides = BTreeMap::from([
         (MIN_COMPACTION_LAG_MS.to_owned(), "60000".to_owned()),
         (MAX_COMPACTION_LAG_MS.to_owned(), "1".to_owned()),
@@ -442,6 +528,14 @@ fn the_compaction_lag_conflict_carries_kafkas_message() {
             )
     );
 }
+
+/// The refusal carries Kafka's wording, which `kafka-configs` prints verbatim.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "the compaction lag conflict carries kafkas message"
+)]
+fn the_compaction_lag_conflict_carries_kafkas_message() {}
 
 /// A tiered topic's config map: `remote.storage.enable=true` followed by `rest`.
 fn tiered_pairs<const N: usize>(rest: [ConfigPair<'static>; N]) -> Vec<ConfigPair<'static>> {
@@ -740,11 +834,11 @@ fn tier_cases() -> Vec<TierCase<'static>> {
     cases
 }
 
-/// Kafka's `LogConfig.validateTopicLogConfigValues` tiered-storage rules, run
-/// on the resulting map when `remote.storage.enable` is true. Each row is the
-/// broker's tier state, the map, and Kafka's result.
-#[test]
-fn tiered_storage_rules_follow_kafkas_log_config() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: tiered storage rules follow kafkas log config"
+)]
+fn bdd_verify_tiered_storage_rules_follow_kafkas_log_config() {
     let cases = tier_cases();
     for TierCase {
         tier_on,
@@ -766,6 +860,16 @@ fn tiered_storage_rules_follow_kafkas_log_config() {
         );
     }
 }
+
+/// Kafka's `LogConfig.validateTopicLogConfigValues` tiered-storage rules, run
+/// on the resulting map when `remote.storage.enable` is true. Each row is the
+/// broker's tier state, the map, and Kafka's result.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "tiered storage rules follow kafkas log config"
+)]
+fn tiered_storage_rules_follow_kafkas_log_config() {}
 
 /// One row of the cross-key table.
 struct CrossKeyCase {
@@ -992,48 +1096,56 @@ fn cross_key_rules_read_the_cluster_broker_defaults() {
     }
 }
 
-/// The per-key refusals of Kafka trunk's four newest topic keys, on a broker
-/// serving trunk.
-#[yare::parameterized(
-    remote_copy_lag_ms = { REMOTE_COPY_LAG_MS, "-2" },
-    remote_copy_lag_bytes = { REMOTE_COPY_LAG_BYTES, "-2" },
-    max_decompressed_message_bytes_zero = { MAX_DECOMPRESSED_MESSAGE_BYTES, "0" },
-    max_decompressed_message_bytes_too_large = {
-        MAX_DECOMPRESSED_MESSAGE_BYTES,
-        "2147483640",
-    },
-    errors_deadletterqueue_group_enable = { ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "yes" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: kafka trunks newest topic keys refuse what kafka refuses for {example}"
 )]
-fn kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses(key: &str, value: &str) {
+fn bdd_verify_kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses(example: String) {
+    type Example<'a> = (&'a str, &'a str);
+    let (key, value): Example<'_> = match example.as_str() {
+        "remote copy lag ms" => (REMOTE_COPY_LAG_MS, "-2"),
+        "remote copy lag bytes" => (REMOTE_COPY_LAG_BYTES, "-2"),
+        "max decompressed message bytes zero" => (MAX_DECOMPRESSED_MESSAGE_BYTES, "0"),
+        "max decompressed message bytes too large" => {
+            (MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483640")
+        }
+        "errors deadletterqueue group enable" => (ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "yes"),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         canonical_topic_config(key, value, UnstableApiVersions::Enabled).is_err(),
         "{key}={value}"
     );
 }
 
-/// #907's companion: Kafka 4.3.1's `LogConfig` does not define Kafka trunk's
-/// four newest topic keys, so `LogConfig.validateNames` refuses each with
-/// `Unknown topic config name`, whatever the value, on every path that
-/// validates a topic's map. `unstable.api.versions.enable` accepts them.
-#[yare::parameterized(
-    remote_copy_lag_ms = { REMOTE_COPY_LAG_MS, " 1000 ", "1000" },
-    remote_copy_lag_bytes = { REMOTE_COPY_LAG_BYTES, "-1", "-1" },
-    max_decompressed_message_bytes = {
-        MAX_DECOMPRESSED_MESSAGE_BYTES,
-        "2147483639",
-        "2147483639",
-    },
-    errors_deadletterqueue_group_enable = {
-        ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
-        "TRUE",
-        "true",
-    },
+/// The per-key refusals of Kafka trunk's four newest topic keys, on a broker
+/// serving trunk.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "kafka trunks newest topic keys refuse what kafka refuses"
 )]
-fn kafka_trunks_newest_topic_keys_need_unstable_api_versions(
-    key: &str,
-    value: &str,
-    canonical: &str,
-) {
+fn kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: kafka trunks newest topic keys need unstable api versions for {example}"
+)]
+fn bdd_verify_kafka_trunks_newest_topic_keys_need_unstable_api_versions(example: String) {
+    type Example<'a> = (&'a str, &'a str, &'a str);
+    let (key, value, canonical): Example<'_> = match example.as_str() {
+        "remote copy lag ms" => (REMOTE_COPY_LAG_MS, " 1000 ", "1000"),
+        "remote copy lag bytes" => (REMOTE_COPY_LAG_BYTES, "-1", "-1"),
+        "max decompressed message bytes" => {
+            (MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483639", "2147483639")
+        }
+        "errors deadletterqueue group enable" => {
+            (ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "TRUE", "true")
+        }
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let unknown = format!("Unknown topic config name: {key}");
     check!(
         canonical_topic_config(key, value, UnstableApiVersions::Disabled) == Err(unknown.clone()),
@@ -1067,12 +1179,22 @@ fn kafka_trunks_newest_topic_keys_need_unstable_api_versions(
     );
 }
 
-/// Under Kafka 4.3.1 the broker keys `log.remote.copy.lag.ms` and
-/// `log.remote.copy.lag.bytes` are not `KafkaConfig` keys, so
-/// `extractLogConfigMap` carries no default for the topic keys from them, and
-/// a cluster value of either reaches no topic's effective defaults.
-#[test]
-fn trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {
+/// #907's companion: Kafka 4.3.1's `LogConfig` does not define Kafka trunk's
+/// four newest topic keys, so `LogConfig.validateNames` refuses each with
+/// `Unknown topic config name`, whatever the value, on every path that
+/// validates a topic's map. `unstable.api.versions.enable` accepts them.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "kafka trunks newest topic keys need unstable api versions"
+)]
+fn kafka_trunks_newest_topic_keys_need_unstable_api_versions(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: trunk topic keys take no cluster default under kafka 4 3 1"
+)]
+fn bdd_verify_trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
         krabka_metadata::BrokerConfigRecord {
@@ -1090,6 +1212,17 @@ fn trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {
             == Some("5000")
     );
 }
+
+/// Under Kafka 4.3.1 the broker keys `log.remote.copy.lag.ms` and
+/// `log.remote.copy.lag.bytes` are not `KafkaConfig` keys, so
+/// `extractLogConfigMap` carries no default for the topic keys from them, and
+/// a cluster value of either reaches no topic's effective defaults.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "trunk topic keys take no cluster default under kafka 4 3 1"
+)]
+fn trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {}
 
 /// A `compact,delete` topic is a compacted topic for every cross-key rule, so
 /// KFC-1's exclusion covers it too.
@@ -1257,34 +1390,32 @@ fn the_disable_refusal_names_both_ways_out() {
     );
 }
 
-/// Kafka's `ConfigDef.parseType` trims a value, reads a boolean in any case,
-/// reads a `DOUBLE` with `Double.parseDouble`, and checks a throttled replica
-/// list with `ThrottledReplicaListValidator`'s regex. Each row is Kafka's
-/// result, and an accepted row carries the canonical value krabka stores,
-/// which is `ConfigDef.convertToString` of the parsed value.
-#[yare::parameterized(
-    uppercase_boolean = { PREALLOCATE, "TRUE", Some("true") },
-    whitespace_boolean = { REMOTE_LOG_COPY_DISABLE, " false ", Some("false") },
-    invalid_boolean = { PREALLOCATE, "yes", None },
-    trimmed_long = { RETENTION_MS, " 1000 ", Some("1000") },
-    trimmed_int = { SEGMENT_BYTES, "1048576 ", Some("1048576") },
-    trimmed_enum = { COMPRESSION_TYPE, " gzip", Some("gzip") },
-    double_suffix = { MIN_CLEANABLE_DIRTY_RATIO, "0.5d", Some("0.5") },
-    integral_double = { MIN_CLEANABLE_DIRTY_RATIO, "1", Some("1.0") },
-    spaced_cleanup_list = { CLEANUP_POLICY, " compact , delete ", Some("compact,delete") },
-    empty_cleanup_list = { CLEANUP_POLICY, " ", Some("") },
-    blank_leader_throttle = { LEADER_THROTTLED_REPLICAS_KEY, " ", Some("") },
-    wildcard_leader_throttle = { LEADER_THROTTLED_REPLICAS_KEY, " * ", Some("*") },
-    leader_throttle_list = { LEADER_THROTTLED_REPLICAS_KEY, "0:1,,1:2", Some("0:1,,1:2") },
-    negative_leader_throttle = { LEADER_THROTTLED_REPLICAS_KEY, "-1:1", None },
-    signed_leader_throttle = { LEADER_THROTTLED_REPLICAS_KEY, "+0:1", None },
-    spaced_follower_throttle = { FOLLOWER_THROTTLED_REPLICAS_KEY, "0 : 1", None },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: values are parsed the way kafkas config def parses them for {example}"
 )]
-fn values_are_parsed_the_way_kafkas_config_def_parses_them(
-    key: &str,
-    value: &str,
-    canonical: Option<&str>,
-) {
+fn bdd_verify_values_are_parsed_the_way_kafkas_config_def_parses_them(example: String) {
+    type Example<'a> = (&'a str, &'a str, Option<&'a str>);
+    let (key, value, canonical): Example<'_> = match example.as_str() {
+        "uppercase boolean" => (PREALLOCATE, "TRUE", Some("true")),
+        "whitespace boolean" => (REMOTE_LOG_COPY_DISABLE, " false ", Some("false")),
+        "invalid boolean" => (PREALLOCATE, "yes", None),
+        "trimmed long" => (RETENTION_MS, " 1000 ", Some("1000")),
+        "trimmed int" => (SEGMENT_BYTES, "1048576 ", Some("1048576")),
+        "trimmed enum" => (COMPRESSION_TYPE, " gzip", Some("gzip")),
+        "double suffix" => (MIN_CLEANABLE_DIRTY_RATIO, "0.5d", Some("0.5")),
+        "integral double" => (MIN_CLEANABLE_DIRTY_RATIO, "1", Some("1.0")),
+        "spaced cleanup list" => (CLEANUP_POLICY, " compact , delete ", Some("compact,delete")),
+        "empty cleanup list" => (CLEANUP_POLICY, " ", Some("")),
+        "blank leader throttle" => (LEADER_THROTTLED_REPLICAS_KEY, " ", Some("")),
+        "wildcard leader throttle" => (LEADER_THROTTLED_REPLICAS_KEY, " * ", Some("*")),
+        "leader throttle list" => (LEADER_THROTTLED_REPLICAS_KEY, "0:1,,1:2", Some("0:1,,1:2")),
+        "negative leader throttle" => (LEADER_THROTTLED_REPLICAS_KEY, "-1:1", None),
+        "signed leader throttle" => (LEADER_THROTTLED_REPLICAS_KEY, "+0:1", None),
+        "spaced follower throttle" => (FOLLOWER_THROTTLED_REPLICAS_KEY, "0 : 1", None),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         canonical_topic_config(key, value, UnstableApiVersions::Disabled)
             .ok()
@@ -1293,6 +1424,18 @@ fn values_are_parsed_the_way_kafkas_config_def_parses_them(
         "{key}={value:?}"
     );
 }
+
+/// Kafka's `ConfigDef.parseType` trims a value, reads a boolean in any case,
+/// reads a `DOUBLE` with `Double.parseDouble`, and checks a throttled replica
+/// list with `ThrottledReplicaListValidator`'s regex. Each row is Kafka's
+/// result, and an accepted row carries the canonical value krabka stores,
+/// which is `ConfigDef.convertToString` of the parsed value.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "values are parsed the way kafkas config def parses them"
+)]
+fn values_are_parsed_the_way_kafkas_config_def_parses_them(example: String) { let _ = example; }
 
 /// `apply_to_log_config` reads a stored value with the parser validation uses,
 /// so a value validation accepts is never read back as its default.
@@ -1312,83 +1455,97 @@ fn the_log_config_reader_parses_what_validation_accepts() {
     check!(applied.cleanup_policy == CleanupPolicy::NoCleanup);
 }
 
-/// Each refusal is Kafka's own `ConfigException` text: `Unknown topic config
-/// name: <key>`, or `Invalid value <parsed value> for configuration <key>:
-/// <validator message>`.
-#[yare::parameterized(
-    unknown_key = { "foo", "1", "Unknown topic config name: foo" },
-    negative_max_message_bytes = {
-        "max.message.bytes",
-        "-1",
-        "Invalid value -1 for configuration max.message.bytes: Value must be at least 0",
-    },
-    lz4_level_too_high = {
-        "compression.lz4.level",
-        "18",
-        "Invalid value 18 for configuration compression.lz4.level: Value must be no more than 17",
-    },
-    gzip_level_zero = {
-        "compression.gzip.level",
-        "0",
-        "Invalid value 0 for configuration compression.gzip.level: Value must be between 1 and 9 or equal to -1",
-    },
-    non_integer_retention_ms = {
-        RETENTION_MS,
-        "abc",
-        "Invalid value abc for configuration retention.ms: Not a number of type LONG",
-    },
-    segment_bytes_int_overflow = {
-        SEGMENT_BYTES,
-        "2147483648",
-        "Invalid value 2147483648 for configuration segment.bytes: Not a number of type INT",
-    },
-    invalid_boolean = {
-        PREALLOCATE,
-        "yes",
-        "Invalid value yes for configuration preallocate: Expected value to be either true or false",
-    },
-    invalid_compression_type = {
-        COMPRESSION_TYPE,
-        "none",
-        "Invalid value none for configuration compression.type: String must be one of: uncompressed, zstd, lz4, snappy, gzip, producer",
-    },
-    invalid_timestamp_type = {
-        MESSAGE_TIMESTAMP_TYPE,
-        "x",
-        "Invalid value x for configuration message.timestamp.type: String must be one of: CreateTime, LogAppendTime",
-    },
-    invalid_cleanup_policy = {
-        CLEANUP_POLICY,
-        "foo",
-        "Invalid value foo for configuration cleanup.policy: String must be one of: compact, delete",
-    },
-    duplicate_cleanup_policy = {
-        CLEANUP_POLICY,
-        "delete,delete",
-        "Configuration 'cleanup.policy' values must not be duplicated.",
-    },
-    empty_cleanup_policy_item = {
-        CLEANUP_POLICY,
-        "delete,",
-        "Configuration 'cleanup.policy' values must not be empty.",
-    },
-    dirty_ratio_too_high = {
-        MIN_CLEANABLE_DIRTY_RATIO,
-        "2",
-        "Invalid value 2.0 for configuration min.cleanable.dirty.ratio: Value must be no more than 1",
-    },
-    invalid_follower_throttle = {
-        FOLLOWER_THROTTLED_REPLICAS_KEY,
-        "0 : 1",
-        "Invalid value [0 : 1] for configuration follower.replication.throttled.replicas: follower.replication.throttled.replicas must be the literal '*' or a list of replicas in the following format: [partitionId]:[brokerId],[partitionId]:[brokerId],...",
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys validation tests: refusals carry kafkas config exception text for {example}"
 )]
-fn refusals_carry_kafkas_config_exception_text(key: &str, value: &str, message: &str) {
+fn bdd_verify_refusals_carry_kafkas_config_exception_text(example: String) {
+    type Example<'a> = (&'a str, &'a str, &'a str);
+    let (key, value, message): Example<'_> = match example.as_str() {
+        "unknown key" => ("foo", "1", "Unknown topic config name: foo"),
+        "negative max message bytes" => (
+            "max.message.bytes",
+            "-1",
+            "Invalid value -1 for configuration max.message.bytes: Value must be at least 0",
+        ),
+        "lz4 level too high" => (
+            "compression.lz4.level",
+            "18",
+            "Invalid value 18 for configuration compression.lz4.level: Value must be no more than 17",
+        ),
+        "gzip level zero" => (
+            "compression.gzip.level",
+            "0",
+            "Invalid value 0 for configuration compression.gzip.level: Value must be between 1 and 9 or equal to -1",
+        ),
+        "non integer retention ms" => (
+            RETENTION_MS,
+            "abc",
+            "Invalid value abc for configuration retention.ms: Not a number of type LONG",
+        ),
+        "segment bytes int overflow" => (
+            SEGMENT_BYTES,
+            "2147483648",
+            "Invalid value 2147483648 for configuration segment.bytes: Not a number of type INT",
+        ),
+        "invalid boolean" => (
+            PREALLOCATE,
+            "yes",
+            "Invalid value yes for configuration preallocate: Expected value to be either true or false",
+        ),
+        "invalid compression type" => (
+            COMPRESSION_TYPE,
+            "none",
+            "Invalid value none for configuration compression.type: String must be one of: uncompressed, zstd, lz4, snappy, gzip, producer",
+        ),
+        "invalid timestamp type" => (
+            MESSAGE_TIMESTAMP_TYPE,
+            "x",
+            "Invalid value x for configuration message.timestamp.type: String must be one of: CreateTime, LogAppendTime",
+        ),
+        "invalid cleanup policy" => (
+            CLEANUP_POLICY,
+            "foo",
+            "Invalid value foo for configuration cleanup.policy: String must be one of: compact, delete",
+        ),
+        "duplicate cleanup policy" => (
+            CLEANUP_POLICY,
+            "delete,delete",
+            "Configuration 'cleanup.policy' values must not be duplicated.",
+        ),
+        "empty cleanup policy item" => (
+            CLEANUP_POLICY,
+            "delete,",
+            "Configuration 'cleanup.policy' values must not be empty.",
+        ),
+        "dirty ratio too high" => (
+            MIN_CLEANABLE_DIRTY_RATIO,
+            "2",
+            "Invalid value 2.0 for configuration min.cleanable.dirty.ratio: Value must be no more than 1",
+        ),
+        "invalid follower throttle" => (
+            FOLLOWER_THROTTLED_REPLICAS_KEY,
+            "0 : 1",
+            "Invalid value [0 : 1] for configuration follower.replication.throttled.replicas: follower.replication.throttled.replicas must be the literal '*' or a list of replicas in the following format: [partitionId]:[brokerId],[partitionId]:[brokerId],...",
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         validate_topic_config(key, value) == Err(message.to_owned()),
         "{key}={value}"
     );
 }
+
+/// Each refusal is Kafka's own `ConfigException` text: `Unknown topic config
+/// name: <key>`, or `Invalid value <parsed value> for configuration <key>:
+/// <validator message>`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/validation/tests.feature",
+    name = "refusals carry kafkas config exception text"
+)]
+fn refusals_carry_kafkas_config_exception_text(example: String) { let _ = example; }
 
 /// Kafka's `ConfigurationControlManager.validateAlterConfig` refuses a value
 /// longer than `Short.MAX_VALUE` with `INVALID_CONFIG` before it validates any

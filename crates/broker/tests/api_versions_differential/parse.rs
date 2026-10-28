@@ -187,8 +187,11 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         }
     }
 
-    #[test]
-    fn reads_every_row_kind_of_a_single_broker_block() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential parse tests: reads every row kind of a single broker block"
+    )]
+    fn bdd_verify_reads_every_row_kind_of_a_single_broker_block() {
         let parsed = parse_single_broker(BLOCK).expect("block parses");
         assert!(
             parsed
@@ -202,8 +205,18 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         );
     }
 
-    #[test]
-    fn advertised_keeps_the_version_ranges() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/parse.feature",
+        name = "tests: reads every row kind of a single broker block"
+    )]
+    fn reads_every_row_kind_of_a_single_broker_block() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential parse tests: advertised keeps the version ranges"
+    )]
+    fn bdd_verify_advertised_keeps_the_version_ranges() {
         let parsed = parse_single_broker(BLOCK).expect("block parses");
         assert!(
             advertised(&parsed)
@@ -242,16 +255,36 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         );
     }
 
-    #[test]
-    fn rows_come_back_sorted_by_api_key() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/parse.feature",
+        name = "tests: advertised keeps the version ranges"
+    )]
+    fn advertised_keeps_the_version_ranges() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential parse tests: rows come back sorted by api key"
+    )]
+    fn bdd_verify_rows_come_back_sorted_by_api_key() {
         let out =
             "n:1 (id: 1) -> (\n\tFetch(1): 0 to 1 [usable: 1],\n\tProduce(0): 0 [usable: 0]\n)\n";
         let parsed = parse_single_broker(out).expect("block parses");
         assert!(parsed == vec![row(Some("Produce"), 0, 0, 0), row(Some("Fetch"), 1, 0, 1)]);
     }
 
-    #[test]
-    fn rejects_outputs_that_are_not_one_broker() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/parse.feature",
+        name = "tests: rows come back sorted by api key"
+    )]
+    fn rows_come_back_sorted_by_api_key() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential parse tests: rejects outputs that are not one broker"
+    )]
+    fn bdd_verify_rejects_outputs_that_are_not_one_broker() {
         let no_block = "Error while executing broker api versions command\n";
         assert!(parse_single_broker(no_block) == Err(ParseError::NoBrokerBlock));
 
@@ -259,8 +292,18 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         assert!(parse_single_broker(&two_blocks) == Err(ParseError::ManyBrokerBlocks(2)));
     }
 
-    #[test]
-    fn rejects_a_row_whose_range_does_not_parse() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/parse.feature",
+        name = "tests: rejects outputs that are not one broker"
+    )]
+    fn rejects_outputs_that_are_not_one_broker() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential parse tests: rejects a row whose range does not parse"
+    )]
+    fn bdd_verify_rejects_a_row_whose_range_does_not_parse() {
         let out = "n:1 (id: 1) -> (\n\tProduce(0): 3 to twelve [usable: 12]\n)\n";
         assert!(
             parse_single_broker(out)
@@ -269,4 +312,11 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
                 ))
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/parse.feature",
+        name = "tests: rejects a row whose range does not parse"
+    )]
+    fn rejects_a_row_whose_range_does_not_parse() {}
 }

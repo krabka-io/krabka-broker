@@ -171,12 +171,11 @@ async fn full_join(
     second_join(client, group_id, &member_id, protocol_type, protocols).await
 }
 
-/// Members A and B propose disjoint protocol lists: `range` only against
-/// `cooperative-sticky` only. Kafka's `supportsProtocols` gate turns away
-/// the member that joins second with `INCONSISTENT_GROUP_PROTOCOL (23)`, and
-/// the group rebalances without it, so the other member completes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_intersection_returns_inconsistent_group_protocol() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "group protocol negotiation: empty intersection returns inconsistent group protocol"
+)]
+async fn bdd_verify_empty_intersection_returns_inconsistent_group_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-empty-intersection";
 
@@ -205,12 +204,21 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
     );
 }
 
-/// Three members. A and B vote first for `cooperative-sticky`, and C votes
-/// first for `range`. Both names are in every member's list, so the
-/// intersection is `{cooperative-sticky, range}`. `cooperative-sticky` wins by
-/// 2 votes to 1.
+/// Members A and B propose disjoint protocol lists: `range` only against
+/// `cooperative-sticky` only. Kafka's `supportsProtocols` gate turns away
+/// the member that joins second with `INCONSISTENT_GROUP_PROTOCOL (23)`, and
+/// the group rebalances without it, so the other member completes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_protocol_negotiation.feature",
+    name = "empty intersection returns inconsistent group protocol"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn vote_picks_cooperative_when_majority() {
+async fn empty_intersection_returns_inconsistent_group_protocol() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("group protocol negotiation: vote picks cooperative when majority")]
+async fn bdd_verify_vote_picks_cooperative_when_majority() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-vote-cooperative";
 
@@ -249,11 +257,21 @@ async fn vote_picks_cooperative_when_majority() {
     }
 }
 
-/// Two members, with one vote each, and both names in the intersection. The
-/// tie must break lexicographically. `'c' < 'r'`, so `cooperative-sticky`
-/// wins.
+/// Three members. A and B vote first for `cooperative-sticky`, and C votes
+/// first for `range`. Both names are in every member's list, so the
+/// intersection is `{cooperative-sticky, range}`. `cooperative-sticky` wins by
+/// 2 votes to 1.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_protocol_negotiation.feature",
+    name = "vote picks cooperative when majority"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn vote_ties_broken_lexicographically() {
+async fn vote_picks_cooperative_when_majority() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("group protocol negotiation: vote ties broken lexicographically")]
+async fn bdd_verify_vote_ties_broken_lexicographically() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-tie";
 
@@ -287,11 +305,20 @@ async fn vote_ties_broken_lexicographically() {
     }
 }
 
-/// A single member that proposes `[range]` lands on `range`. This is the
-/// simple check that the negotiation primitive still handles the simplest
-/// case.
+/// Two members, with one vote each, and both names in the intersection. The
+/// tie must break lexicographically. `'c' < 'r'`, so `cooperative-sticky`
+/// wins.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_protocol_negotiation.feature",
+    name = "vote ties broken lexicographically"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_member_picks_its_first_protocol() {
+async fn vote_ties_broken_lexicographically() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("group protocol negotiation: single member picks its first protocol")]
+async fn bdd_verify_single_member_picks_its_first_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let client = connect_client(&bootstrap, "single-member").await;
     let resp = full_join(&client, "cg-single", "consumer", &[ProposedProtocol::new(
@@ -310,12 +337,20 @@ async fn single_member_picks_its_first_protocol() {
     );
 }
 
-/// Member A establishes the group with `protocol_type = "consumer"`. Member B
-/// then joins with `protocol_type = "stream"`. The broker must reject B with
-/// `INCONSISTENT_GROUP_PROTOCOL` before B enters the rebalance. The
-/// type-mismatch check runs on the second-round join.
+/// A single member that proposes `[range]` lands on `range`. This is the
+/// simple check that the negotiation primitive still handles the simplest
+/// case.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_protocol_negotiation.feature",
+    name = "single member picks its first protocol"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn protocol_type_mismatch_rejected() {
+async fn single_member_picks_its_first_protocol() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("group protocol negotiation: protocol type mismatch rejected")]
+async fn bdd_verify_protocol_type_mismatch_rejected() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let client_a = connect_client(&bootstrap, "member-a").await;
     let client_b = connect_client(&bootstrap, "member-b").await;
@@ -358,6 +393,18 @@ async fn protocol_type_mismatch_rejected() {
         "member B with protocol_type=stream must hit INCONSISTENT_GROUP_PROTOCOL on a consumer group, got {resp_b:?}"
     );
 }
+
+/// Member A establishes the group with `protocol_type = "consumer"`. Member B
+/// then joins with `protocol_type = "stream"`. The broker must reject B with
+/// `INCONSISTENT_GROUP_PROTOCOL` before B enters the rebalance. The
+/// type-mismatch check runs on the second-round join.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/group_protocol_negotiation.feature",
+    name = "protocol type mismatch rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn protocol_type_mismatch_rejected() {}
 
 type Protocols = &'static [ProposedProtocol<'static>];
 

@@ -899,11 +899,11 @@ mod tests {
         );
     }
 
-    /// A flag RE2J does not have is answered with the message Kafka builds
-    /// from RE2J's own `PatternSyntaxException.getDescription`, so a client
-    /// that reads `error_message` sees the same text either broker produced.
-    #[test]
-    fn an_re2j_unsupported_flag_carries_kafkas_message() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified actor member state tests: an re2j unsupported flag carries kafkas message"
+    )]
+    fn bdd_verify_an_re2j_unsupported_flag_carries_kafkas_message() {
         check!(
             check_subscribed_topic_regex("(?x)abc")
                 == Err(
@@ -913,6 +913,16 @@ mod tests {
                 )
         );
     }
+
+    /// A flag RE2J does not have is answered with the message Kafka builds
+    /// from RE2J's own `PatternSyntaxException.getDescription`, so a client
+    /// that reads `error_message` sees the same text either broker produced.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/member_state.feature",
+        name = "tests: an re2j unsupported flag carries kafkas message"
+    )]
+    fn an_re2j_unsupported_flag_carries_kafkas_message() {}
 
     /// The one behavioral difference the Unicode choice leaves — `\d` matching
     /// a non-ASCII digit — cannot be observed through a subscription, because

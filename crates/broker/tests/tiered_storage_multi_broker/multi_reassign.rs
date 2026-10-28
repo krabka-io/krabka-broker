@@ -142,30 +142,11 @@ async fn reassign_to(controller: &Client, replicas: Vec<i32>) {
     );
 }
 
-/// A replica added to a tiered partition inherits the archive by reference,
-/// not by copy.
-///
-/// Broker 1 archives 400 records over many 1 KiB segments and evicts every one
-/// of them locally, so its log begins far above zero and everything below that
-/// exists only in the shared object store. Broker 3 is then added as a
-/// replica. It starts from an empty log at offset 0, which is squarely inside
-/// the band the leader keeps only in the tier.
-///
-/// What it must do is restart at the leader's local log start and replicate
-/// forward from there.
-///
-/// The measurement that says so is the cumulative
-/// `replication_bytes_in` counter on the new replica: it has to stay below the
-/// size of the archive. That is the one number a later eviction cannot
-/// flatter, and it is exactly what fails when the leader serves the follower
-/// out of the tier instead -- the replica then pulls every archived byte over
-/// the wire and drops it again on its next local-retention tick, so its disk
-/// and its log start end up looking just as they do here. The disk and
-/// log-start checks below hold the rest of the shape: the replica's log begins
-/// at or above the leader's local log start and its files are bounded by local
-/// retention.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi reassign: a replica added to a tiered partition does not pull the archive"
+)]
+async fn bdd_verify_a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
     let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers_with_segment_sizes([
         krabka_units::kibibytes(1),
         krabka_units::kibibytes(1),
@@ -309,3 +290,33 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
     b2.shutdown().await;
     b3.shutdown().await;
 }
+
+/// A replica added to a tiered partition inherits the archive by reference,
+/// not by copy.
+///
+/// Broker 1 archives 400 records over many 1 KiB segments and evicts every one
+/// of them locally, so its log begins far above zero and everything below that
+/// exists only in the shared object store. Broker 3 is then added as a
+/// replica. It starts from an empty log at offset 0, which is squarely inside
+/// the band the leader keeps only in the tier.
+///
+/// What it must do is restart at the leader's local log start and replicate
+/// forward from there.
+///
+/// The measurement that says so is the cumulative
+/// `replication_bytes_in` counter on the new replica: it has to stay below the
+/// size of the archive. That is the one number a later eviction cannot
+/// flatter, and it is exactly what fails when the leader serves the follower
+/// out of the tier instead -- the replica then pulls every archived byte over
+/// the wire and drops it again on its next local-retention tick, so its disk
+/// and its log start end up looking just as they do here. The disk and
+/// log-start checks below hold the rest of the shape: the replica's log begins
+/// at or above the leader's local log start and its files are bounded by local
+/// retention.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_reassign.feature",
+    name = "a replica added to a tiered partition does not pull the archive"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {}

@@ -19,19 +19,9 @@ use {
     krabka_broker::codes,
 };
 
-/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
-///
-/// Scenario:
-/// 1. Kill broker 1, the preferred replica. Broker 3 keeps the raft quorum
-///    (2/3).
-/// 2. Broker 2 becomes partition leader through the automatic on-broker-dead
-///    path.
-/// 3. Revive broker 1 with Rejoin. It catches up on replication and expands
-///    back into the ISR.
-/// 4. Send `ElectLeaders Preferred` with `election_type=0` over the wire.
-/// 5. Assert per-partition `error_code` = 0. Poll until leader == 1 again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preferred_election_via_wire_returns_success() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("elect leaders preferred: preferred election via wire returns success")]
+async fn bdd_verify_preferred_election_via_wire_returns_success() {
     let _g = cluster_lock().lock().await;
 
     let mut cluster = registered_cluster(3).await;
@@ -142,21 +132,30 @@ async fn preferred_election_via_wire_returns_success() {
     drop(dead_dir);
 }
 
-/// KIP-460: a request that names no topics asks about every partition, and
-/// Kafka answers it only with the partitions it acted on --
-/// `ReplicationControlManager.electLeaders` drops every `ELECTION_NOT_NEEDED`
-/// row in that shape because "we do not return partitions which already have
-/// the desired leader". Returning them makes
-/// `kafka-leader-election --all-topic-partitions` on a healthy cluster print a
-/// "valid replica already elected" line for every partition, internal topics
-/// included, where Apache Kafka prints nothing at all.
+/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
 ///
-/// The named shape is unaffected: a client that asked about one partition is
-/// told what happened to it, code 84 included. Both halves are checked here,
-/// against the same untouched cluster, so a change that filtered too much
-/// would fail on the second.
+/// Scenario:
+/// 1. Kill broker 1, the preferred replica. Broker 3 keeps the raft quorum
+///    (2/3).
+/// 2. Broker 2 becomes partition leader through the automatic on-broker-dead
+///    path.
+/// 3. Revive broker 1 with Rejoin. It catches up on replication and expands
+///    back into the ISR.
+/// 4. Send `ElectLeaders Preferred` with `election_type=0` over the wire.
+/// 5. Assert per-partition `error_code` = 0. Poll until leader == 1 again.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/elect_leaders/preferred.feature",
+    name = "preferred election via wire returns success"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {
+async fn preferred_election_via_wire_returns_success() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "elect leaders preferred: electing every partition omits the ones already on their preferred leader"
+)]
+async fn bdd_verify_electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {
     let _g = cluster_lock().lock().await;
 
     let cluster = registered_cluster(3).await;
@@ -194,3 +193,24 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
         "a named partition must still report ELECTION_NOT_NEEDED, got {named:?}"
     );
 }
+
+/// KIP-460: a request that names no topics asks about every partition, and
+/// Kafka answers it only with the partitions it acted on --
+/// `ReplicationControlManager.electLeaders` drops every `ELECTION_NOT_NEEDED`
+/// row in that shape because "we do not return partitions which already have
+/// the desired leader". Returning them makes
+/// `kafka-leader-election --all-topic-partitions` on a healthy cluster print a
+/// "valid replica already elected" line for every partition, internal topics
+/// included, where Apache Kafka prints nothing at all.
+///
+/// The named shape is unaffected: a client that asked about one partition is
+/// told what happened to it, code 84 included. Both halves are checked here,
+/// against the same untouched cluster, so a change that filtered too much
+/// would fail on the second.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/elect_leaders/preferred.feature",
+    name = "electing every partition omits the ones already on their preferred leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {}

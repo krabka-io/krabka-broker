@@ -18,23 +18,9 @@ use {
     tokio::net::TcpSocket,
 };
 
-/// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
-///
-/// The cluster sets `auto_leader_rebalance_enable = true`,
-/// and `leader_imbalance_check_interval = krabka_units::secs(1)`.
-///
-/// Scenario:
-/// 1. Create an rf=2 topic over the wire. With 3 registered brokers,
-///    round-robin assigns `replicas = [1, 2]`, so broker 1 is the preferred
-///    leader.
-/// 2. Shut broker 1 down. Broker 2 becomes partition leader.
-/// 3. Revive broker 1 with Rejoin. It catches up into the ISR.
-/// 4. The background rebalance ticker runs with interval=1s and threshold=0%.
-///    It fires within about 2 ticks and submits `ElectLeaders Preferred`
-///    internally.
-/// 5. Within 15s, broker 1 must be the partition leader again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn auto_rebalance_restores_preferred_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("elect leaders auto rebalance: auto rebalance restores preferred leader")]
+async fn bdd_verify_auto_rebalance_restores_preferred_leader() {
     let _g = cluster_lock().lock().await;
 
     support::init_tracing();
@@ -184,6 +170,29 @@ async fn auto_rebalance_restores_preferred_leader() {
     drop(dir1);
     drop(dir2);
 }
+
+/// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
+///
+/// The cluster sets `auto_leader_rebalance_enable = true`,
+/// and `leader_imbalance_check_interval = krabka_units::secs(1)`.
+///
+/// Scenario:
+/// 1. Create an rf=2 topic over the wire. With 3 registered brokers,
+///    round-robin assigns `replicas = [1, 2]`, so broker 1 is the preferred
+///    leader.
+/// 2. Shut broker 1 down. Broker 2 becomes partition leader.
+/// 3. Revive broker 1 with Rejoin. It catches up into the ISR.
+/// 4. The background rebalance ticker runs with interval=1s and threshold=0%.
+///    It fires within about 2 ticks and submits `ElectLeaders Preferred`
+///    internally.
+/// 5. Within 15s, broker 1 must be the partition leader again.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/elect_leaders/auto_rebalance.feature",
+    name = "auto rebalance restores preferred leader"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auto_rebalance_restores_preferred_leader() {}
 
 /// Binds `addr` again, without listening on it, as soon as the broker that
 /// listened there has shut down.

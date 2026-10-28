@@ -119,8 +119,11 @@ fn hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-#[test]
-fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "value codecs: share state derives keep the kafka scalar array and tag order"
+)]
+fn bdd_verify_share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
     let snapshot = SnapshotValue {
         snapshot_epoch: 0,
         state_epoch: 1,
@@ -162,6 +165,13 @@ fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {
     }
     assert!(Update::decode(&hex("0001")) == Err("unsupported share-state value version"));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/value_codecs.feature",
+    name = "share state derives keep the kafka scalar array and tag order"
+)]
+fn share_state_derives_keep_the_kafka_scalar_array_and_tag_order() {}
 
 fn write_items(buf: &mut BytesMut, items: &[i32]) {
     buf.put_u8(u8::try_from(items.len() + 1).unwrap());

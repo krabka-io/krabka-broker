@@ -202,12 +202,9 @@ fn sorted(mut acls: Vec<AclEntry>) -> Vec<AclEntry> {
     acls
 }
 
-/// The table from issue #771: Kafka's `AclControlManager.deleteAcls` lists and
-/// removes exactly the ACLs `AclBindingFilter.matches` selects. `MATCH` takes
-/// every binding that applies to the named resource, and an empty string is a
-/// value, not a wildcard.
-#[tokio::test]
-async fn handle_deletes_exactly_what_kafka_matches() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("handlers delete acls tests: handle deletes exactly what kafka matches")]
+async fn bdd_verify_handle_deletes_exactly_what_kafka_matches() {
     /// A case name, the filter, and the ACLs it must delete.
     struct DeleteCase {
         name: &'static str,
@@ -341,6 +338,18 @@ async fn handle_deletes_exactly_what_kafka_matches() {
     }
     broker_handle.shutdown().await;
 }
+
+/// The table from issue #771: Kafka's `AclControlManager.deleteAcls` lists and
+/// removes exactly the ACLs `AclBindingFilter.matches` selects. `MATCH` takes
+/// every binding that applies to the named resource, and an empty string is a
+/// value, not a wildcard.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/delete_acls/tests.feature",
+    name = "handle deletes exactly what kafka matches"
+)]
+#[tokio::test]
+async fn handle_deletes_exactly_what_kafka_matches() {}
 
 /// Kafka's `AclControlManager.deleteAcls` matches every filter against the
 /// same ACL set, so both filters list the shared ACL, and it is removed.

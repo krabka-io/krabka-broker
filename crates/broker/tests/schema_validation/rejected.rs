@@ -20,8 +20,11 @@ struct RejectedCase {
     value: Bytes,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn records_that_fail_validation_are_rejected_and_not_appended() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation rejected: records that fail validation are rejected and not appended"
+)]
+async fn bdd_verify_records_that_fail_validation_are_rejected_and_not_appended() {
     let (_registry, broker, client, _dir, id) = mock_topic_fixture("validated", VALIDATED).await;
 
     let cases = vec![
@@ -88,8 +91,19 @@ async fn records_that_fail_validation_are_rejected_and_not_appended() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/rejected.feature",
+    name = "records that fail validation are rejected and not appended"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unvalidated_topic_accepts_what_a_validated_one_rejects() {
+async fn records_that_fail_validation_are_rejected_and_not_appended() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation rejected: an unvalidated topic accepts what a validated one rejects"
+)]
+async fn bdd_verify_an_unvalidated_topic_accepts_what_a_validated_one_rejects() {
     let registry = registry().await;
     let (broker, client, _dir) = boot(&registry.uri()).await;
     let control = create_topic()
@@ -114,8 +128,19 @@ async fn an_unvalidated_topic_accepts_what_a_validated_one_rejects() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/rejected.feature",
+    name = "an unvalidated topic accepts what a validated one rejects"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_rejected_record_is_named_by_its_index_in_the_batch() {
+async fn an_unvalidated_topic_accepts_what_a_validated_one_rejects() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation rejected: the rejected record is named by its index in the batch"
+)]
+async fn bdd_verify_the_rejected_record_is_named_by_its_index_in_the_batch() {
     let (_registry, broker, client, _dir, id) = mock_topic_fixture("validated", VALIDATED).await;
 
     // Record 0 is fine; record 1 is not. The batch is rejected whole — its own
@@ -142,3 +167,11 @@ async fn the_rejected_record_is_named_by_its_index_in_the_batch() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/rejected.feature",
+    name = "the rejected record is named by its index in the batch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_rejected_record_is_named_by_its_index_in_the_batch() {}

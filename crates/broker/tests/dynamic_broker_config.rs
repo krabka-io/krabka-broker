@@ -216,13 +216,11 @@ fn accepted(resource_name: String) -> AlterConfigsResourceResponse {
     }
 }
 
-/// `max.connections` and `max.connections.per.ip` set to 2, on either
-/// resource, refuse a third connection while two are held, and deleting the
-/// config serves it again. Kafka's `ConnectionQuotas.updateBrokerMaxConnections`
-/// and `updateMaxConnectionsPerIp` apply both at once. The cap is 2 rather
-/// than 1 so the alter that deletes it can still connect.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connection_cap_applies_and_lifts_without_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: connection cap applies and lifts without restart"
+)]
+async fn bdd_verify_connection_cap_applies_and_lifts_without_restart() {
     let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let cases = [
         ("max.connections", Scope::ClusterDefault),
@@ -263,11 +261,24 @@ async fn connection_cap_applies_and_lifts_without_restart() {
     }
 }
 
-/// A per-broker value wins over the cluster default, as Kafka's
-/// `DynamicBrokerConfig` layers `DYNAMIC_BROKER_CONFIG` over
-/// `DYNAMIC_DEFAULT_BROKER_CONFIG`.
+/// `max.connections` and `max.connections.per.ip` set to 2, on either
+/// resource, refuse a third connection while two are held, and deleting the
+/// config serves it again. Kafka's `ConnectionQuotas.updateBrokerMaxConnections`
+/// and `updateMaxConnectionsPerIp` apply both at once. The cap is 2 rather
+/// than 1 so the alter that deletes it can still connect.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "connection cap applies and lifts without restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_broker_connection_cap_overrides_the_cluster_default() {
+async fn connection_cap_applies_and_lifts_without_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: per broker connection cap overrides the cluster default"
+)]
+async fn bdd_verify_per_broker_connection_cap_overrides_the_cluster_default() {
     let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
 
@@ -305,11 +316,22 @@ async fn per_broker_connection_cap_overrides_the_cluster_default() {
     drop(held);
 }
 
-/// A dynamic cap the operator never set leaves the static one in force: a
-/// broker started with `max.connections.per.ip = 1` still refuses a second
-/// connection after a dynamic change to the other cap.
+/// A per-broker value wins over the cluster default, as Kafka's
+/// `DynamicBrokerConfig` layers `DYNAMIC_BROKER_CONFIG` over
+/// `DYNAMIC_DEFAULT_BROKER_CONFIG`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per broker connection cap overrides the cluster default"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn static_connection_cap_holds_without_a_dynamic_value() {
+async fn per_broker_connection_cap_overrides_the_cluster_default() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: static connection cap holds without a dynamic value"
+)]
+async fn bdd_verify_static_connection_cap_holds_without_a_dynamic_value() {
     let (_handle, _dir, addr) = start_plaintext_configured(|config| {
         config.max_connections_per_ip = 1;
     })
@@ -335,11 +357,22 @@ async fn static_connection_cap_holds_without_a_dynamic_value() {
     drop(held);
 }
 
-/// Kafka's `DynamicBrokerConfig.validateConfigs` refusals, on the wire: each
-/// answers `INVALID_REQUEST` (42) with Kafka's message, `validate_only` or
-/// not, and none of them is stored.
+/// A dynamic cap the operator never set leaves the static one in force: a
+/// broker started with `max.connections.per.ip = 1` still refuses a second
+/// connection after a dynamic change to the other cap.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "static connection cap holds without a dynamic value"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invalid_broker_config_changes_are_refused_with_kafkas_errors() {
+async fn static_connection_cap_holds_without_a_dynamic_value() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: invalid broker config changes are refused with kafkas errors"
+)]
+async fn bdd_verify_invalid_broker_config_changes_are_refused_with_kafkas_errors() {
     let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
     let cases = [
@@ -417,10 +450,20 @@ async fn invalid_broker_config_changes_are_refused_with_kafkas_errors() {
     drop(held);
 }
 
-/// `validate_only` answers as the alter would and changes nothing: the cap it
-/// validated never applies.
+/// Kafka's `DynamicBrokerConfig.validateConfigs` refusals, on the wire: each
+/// answers `INVALID_REQUEST` (42) with Kafka's message, `validate_only` or
+/// not, and none of them is stored.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "invalid broker config changes are refused with kafkas errors"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn validate_only_broker_change_has_no_effect() {
+async fn invalid_broker_config_changes_are_refused_with_kafkas_errors() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic broker config: validate only broker change has no effect")]
+async fn bdd_verify_validate_only_broker_change_has_no_effect() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let row = alter_broker()
         .addr(addr)
@@ -448,15 +491,21 @@ async fn validate_only_broker_change_has_no_effect() {
     );
 }
 
-/// `DescribeConfigs` withholds a dynamic `PASSWORD` value, as Kafka's
-/// `KafkaConfig.maybeSensitive` does: the value is null, `is_sensitive` is
-/// set, and the type is `PASSWORD`. A non-sensitive dynamic value is
-/// reported with its source. Kafka's `ConfigHelper.createBrokerConfigEntry`
-/// reads `read_only` as `!ALL_DYNAMIC_CONFIGS.contains(name)` on the exact
-/// name, so a listener-prefixed key reports `read_only` although it was just
-/// altered.
+/// `validate_only` answers as the alter would and changes nothing: the cap it
+/// validated never applies.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "validate only broker change has no effect"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_reports_dynamic_values_and_redacts_passwords() {
+async fn validate_only_broker_change_has_no_effect() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: describe reports dynamic values and redacts passwords"
+)]
+async fn bdd_verify_describe_reports_dynamic_values_and_redacts_passwords() {
     let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let this_broker = Scope::ThisBroker.resource_name(handle.node_id());
     let password = "listener.name.plaintext.ssl.keystore.password";
@@ -537,6 +586,21 @@ async fn describe_reports_dynamic_values_and_redacts_passwords() {
     }
 }
 
+/// `DescribeConfigs` withholds a dynamic `PASSWORD` value, as Kafka's
+/// `KafkaConfig.maybeSensitive` does: the value is null, `is_sensitive` is
+/// set, and the type is `PASSWORD`. A non-sensitive dynamic value is
+/// reported with its source. Kafka's `ConfigHelper.createBrokerConfigEntry`
+/// reads `read_only` as `!ALL_DYNAMIC_CONFIGS.contains(name)` on the exact
+/// name, so a listener-prefixed key reports `read_only` although it was just
+/// altered.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "describe reports dynamic values and redacts passwords"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_reports_dynamic_values_and_redacts_passwords() {}
+
 /// Alter the cluster-default `BROKER` resource and check the alter was
 /// accepted.
 async fn alter_cluster_default(
@@ -564,13 +628,9 @@ async fn third_served_after_two(addr: SocketAddr, source: Option<IpAddr>, served
     reached
 }
 
-/// The controller listener of a combined node takes the same dynamic caps,
-/// as Kafka's `DynamicBrokerConfig.addReconfigurables(controller)` registers
-/// the controller's `SocketServer`. The node's own raft and forwarding
-/// connections reach that listener from 127.0.0.1, so the probes come from
-/// 127.0.0.2 and the per-IP cap counts them alone.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_ip_cap_applies_to_the_controller_listener() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic broker config: per ip cap applies to the controller listener")]
+async fn bdd_verify_per_ip_cap_applies_to_the_controller_listener() {
     let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let controller = handle.controller_addr();
     let source = Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
@@ -598,12 +658,24 @@ async fn per_ip_cap_applies_to_the_controller_listener() {
     );
 }
 
-/// `max.connections.per.ip=0` is stored, as Kafka's controller validates
-/// only `atLeast(0)`, but not applied: `KafkaConfig.validateValues` allows 0
-/// only beside `max.connections.per.ip.overrides`, so Kafka's broker keeps
-/// its previous config. Applying it would refuse every client.
+/// The controller listener of a combined node takes the same dynamic caps,
+/// as Kafka's `DynamicBrokerConfig.addReconfigurables(controller)` registers
+/// the controller's `SocketServer`. The node's own raft and forwarding
+/// connections reach that listener from 127.0.0.1, so the probes come from
+/// 127.0.0.2 and the per-IP cap counts them alone.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per ip cap applies to the controller listener"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
+async fn per_ip_cap_applies_to_the_controller_listener() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: zero per ip cap without overrides is stored but not applied"
+)]
+async fn bdd_verify_zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     alter_cluster_default(addr, vec![(
         "max.connections.per.ip",
@@ -623,14 +695,24 @@ async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
     drop(held);
 }
 
+/// `max.connections.per.ip=0` is stored, as Kafka's controller validates
+/// only `atLeast(0)`, but not applied: `KafkaConfig.validateValues` allows 0
+/// only beside `max.connections.per.ip.overrides`, so Kafka's broker keeps
+/// its previous config. Applying it would refuse every client.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "zero per ip cap without overrides is stored but not applied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {}
+
 /// The loopback address the override tests treat as a second client.
 const OTHER_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
-/// `max.connections.per.ip.overrides` gives 127.0.0.1 its own cap beside a
-/// default of 0, which Kafka allows only with overrides: 127.0.0.1 gets two
-/// connections and 127.0.0.2 none. Deleting both restores the static caps.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_ip_overrides_apply_and_lift_without_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic broker config: per ip overrides apply and lift without restart")]
+async fn bdd_verify_per_ip_overrides_apply_and_lift_without_restart() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     alter_cluster_default(addr, vec![
         ("max.connections.per.ip", ConfigOperation::Set, Some("0")),
@@ -665,11 +747,20 @@ async fn per_ip_overrides_apply_and_lift_without_restart() {
     drop(held);
 }
 
-/// `listener.name.plaintext.max.connections`, which Kafka allows on the
-/// cluster default, caps the listener on its own, below an unlimited
-/// broker-wide `max.connections`.
+/// `max.connections.per.ip.overrides` gives 127.0.0.1 its own cap beside a
+/// default of 0, which Kafka allows only with overrides: 127.0.0.1 gets two
+/// connections and 127.0.0.2 none. Deleting both restores the static caps.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "per ip overrides apply and lift without restart"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn listener_cap_applies_and_lifts_without_restart() {
+async fn per_ip_overrides_apply_and_lift_without_restart() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("dynamic broker config: listener cap applies and lifts without restart")]
+async fn bdd_verify_listener_cap_applies_and_lifts_without_restart() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let key = "listener.name.plaintext.max.connections";
     alter_cluster_default(addr, vec![(key, ConfigOperation::Set, Some("2"))]).await;
@@ -685,6 +776,17 @@ async fn listener_cap_applies_and_lifts_without_restart() {
     );
 }
 
+/// `listener.name.plaintext.max.connections`, which Kafka allows on the
+/// cluster default, caps the listener on its own, below an unlimited
+/// broker-wide `max.connections`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "listener cap applies and lifts without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn listener_cap_applies_and_lifts_without_restart() {}
+
 /// How long three connections, opened one after another, take to be served.
 async fn three_connections(addr: SocketAddr) -> Duration {
     let start = Instant::now();
@@ -694,12 +796,11 @@ async fn three_connections(addr: SocketAddr) -> Duration {
     start.elapsed()
 }
 
-/// A creation rate of 1 per second, broker-wide or for the listener, holds
-/// the acceptor between connections: three connections take at least a
-/// second and a half where they took milliseconds. The bound is a lower one,
-/// which a slow runner only makes easier to meet.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn creation_rate_holds_the_acceptor_without_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic broker config: creation rate holds the acceptor without restart"
+)]
+async fn bdd_verify_creation_rate_holds_the_acceptor_without_restart() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     for key in [
         "max.connection.creation.rate",
@@ -716,3 +817,15 @@ async fn creation_rate_holds_the_acceptor_without_restart() {
         alter_cluster_default(addr, vec![(key, ConfigOperation::Delete, None)]).await;
     }
 }
+
+/// A creation rate of 1 per second, broker-wide or for the listener, holds
+/// the acceptor between connections: three connections take at least a
+/// second and a half where they took milliseconds. The bound is a lower one,
+/// which a slow runner only makes easier to meet.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_broker_config.feature",
+    name = "creation rate holds the acceptor without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn creation_rate_holds_the_acceptor_without_restart() {}

@@ -1499,14 +1499,11 @@ mod tests {
         LogInDir { log, dir }
     }
 
-    /// A read that throws answers its own partition's row, the one Kafka's
-    /// `ReplicaManager.readFromLog.read` gives that exception, and an I/O
-    /// failure takes the partition's log dir offline so the next fetch is
-    /// refused at the gate instead of failing the same read again. Only the
-    /// `IOException` flips the dir: retention racing a read and a panic in
-    /// the read task are not a disk fault.
-    #[tokio::test]
-    async fn a_failed_read_answers_the_row_kafka_gives_its_error() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers fetch read tests: a failed read answers the row kafka gives its error"
+    )]
+    async fn bdd_verify_a_failed_read_answers_the_row_kafka_gives_its_error() {
         struct Case {
             name: &'static str,
             error: BrokerError,
@@ -1569,6 +1566,20 @@ mod tests {
             );
         }
     }
+
+    /// A read that throws answers its own partition's row, the one Kafka's
+    /// `ReplicaManager.readFromLog.read` gives that exception, and an I/O
+    /// failure takes the partition's log dir offline so the next fetch is
+    /// refused at the gate instead of failing the same read again. Only the
+    /// `IOException` flips the dir: retention racing a read and a panic in
+    /// the read task are not a disk fault.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/fetch/read.feature",
+        name = "tests: a failed read answers the row kafka gives its error"
+    )]
+    #[tokio::test]
+    async fn a_failed_read_answers_the_row_kafka_gives_its_error() {}
 
     /// Retention or `DeleteRecords` can move the log start between `plan_read`
     /// and the second log lock. The read then fails with `OffsetTooLow`, and

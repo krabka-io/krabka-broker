@@ -546,38 +546,67 @@ mod tests {
         tokio::time,
     };
 
-    #[yare::parameterized(
-        mebibytes = { "512.3MiB", Some(537_185_484) },
-        gibibytes = { "1.5GiB", Some(1_610_612_736) },
-        kibibytes = { "4KiB", Some(4_096) },
-        kilobytes = { "12kB", Some(12_000) },
-        upper_kilobytes = { "1.2KB", Some(1_200) },
-        megabytes = { "3.25MB", Some(3_250_000) },
-        bytes = { "0B", Some(0) },
-        bare_number = { "17", Some(17) },
-        padded = { " 2GiB ", Some(2_147_483_648) },
-        no_number = { "MiB", None },
-        unknown_unit = { "3 parsecs", None },
-        two_points = { "1.2.3MiB", None },
-        placeholder = { "--", None },
-    )]
-    fn a_size_reads_in_bytes(text: &str, bytes: Option<u64>) {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract telemetry tests: a size reads in bytes for {example}")]
+    fn bdd_verify_a_size_reads_in_bytes(example: String) {
+        type Example<'a> = (&'a str, Option<u64>);
+        let (text, bytes): Example<'_> = match example.as_str() {
+            "mebibytes" => ("512.3MiB", Some(537_185_484)),
+            "gibibytes" => ("1.5GiB", Some(1_610_612_736)),
+            "kibibytes" => ("4KiB", Some(4_096)),
+            "kilobytes" => ("12kB", Some(12_000)),
+            "upper kilobytes" => ("1.2KB", Some(1_200)),
+            "megabytes" => ("3.25MB", Some(3_250_000)),
+            "bytes" => ("0B", Some(0)),
+            "bare number" => ("17", Some(17)),
+            "padded" => (" 2GiB ", Some(2_147_483_648)),
+            "no number" => ("MiB", None),
+            "unknown unit" => ("3 parsecs", None),
+            "two points" => ("1.2.3MiB", None),
+            "placeholder" => ("--", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(parse_size(text) == bytes);
     }
 
-    #[yare::parameterized(
-        plain = { "12.34%", Some(12.34) },
-        over_one_core = { "250.00%", Some(250.0) },
-        zero = { "0.00%", Some(0.0) },
-        placeholder = { "--", None },
-        no_sign = { "12.34", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a size reads in bytes"
     )]
-    fn a_percentage_reads_as_a_number(text: &str, percent: Option<f64>) {
+    fn a_size_reads_in_bytes(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: a percentage reads as a number for {example}"
+    )]
+    fn bdd_verify_a_percentage_reads_as_a_number(example: String) {
+        type Example<'a> = (&'a str, Option<f64>);
+        let (text, percent): Example<'_> = match example.as_str() {
+            "plain" => ("12.34%", Some(12.34)),
+            "over one core" => ("250.00%", Some(250.0)),
+            "zero" => ("0.00%", Some(0.0)),
+            "placeholder" => ("--", None),
+            "no sign" => ("12.34", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(parse_percent(text) == percent);
     }
 
-    #[test]
-    fn docker_stats_reads_by_container_name() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a percentage reads as a number"
+    )]
+    fn a_percentage_reads_as_a_number(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: docker stats reads by container name"
+    )]
+    fn bdd_verify_docker_stats_reads_by_container_name() {
         let output = concat!(
             r#"{"BlockIO":"0B / 0B","CPUPerc":"12.34%","Container":"k1","ID":"a","MemPerc":"3.2%","MemUsage":"512MiB / 15.6GiB","Name":"k1","NetIO":"1kB / 2kB","PIDs":"40"}"#,
             "\n",
@@ -594,6 +623,13 @@ mod tests {
         ]);
         check!(parse_stats(output) == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: docker stats reads by container name"
+    )]
+    fn docker_stats_reads_by_container_name() {}
 
     const BODY: &str = "\
 # HELP krabka_broker_active_controller 1 if this broker is the raft (controller) leader.
@@ -615,8 +651,9 @@ krabka_broker_under_min_isr_partition_count 0
 krabka_broker_offline_partitions_count 0
 ";
 
-    #[test]
-    fn a_body_reads_as_controller_progress() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("soak contract telemetry tests: a body reads as controller progress")]
+    fn bdd_verify_a_body_reads_as_controller_progress() {
         check!(
             progress(BODY)
                 == Progress {
@@ -637,33 +674,84 @@ krabka_broker_offline_partitions_count 0
         );
     }
 
-    #[test]
-    fn a_body_without_the_series_reads_as_unknown() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a body reads as controller progress"
+    )]
+    fn a_body_reads_as_controller_progress() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: a body without the series reads as unknown"
+    )]
+    fn bdd_verify_a_body_without_the_series_reads_as_unknown() {
         check!(progress("# nothing here\n") == Progress::default());
     }
 
-    #[yare::parameterized(
-        integer = { "m 42\n", Some(42) },
-        negative = { "m -1\n", Some(-1) },
-        float = { "m 2.6\n", Some(3) },
-        labelled = { "m{a=\"b\"} 9\n", Some(9) },
-        prefix_only = { "m_other 9\n", None },
-        comment = { "# m 9\n", None },
-        not_a_number = { "m NaN\n", None },
-        absent = { "", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a body without the series reads as unknown"
     )]
-    fn a_gauge_is_its_first_sample(body: &str, value: Option<i64>) {
+    fn a_body_without_the_series_reads_as_unknown() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: a gauge is its first sample for {example}"
+    )]
+    fn bdd_verify_a_gauge_is_its_first_sample(example: String) {
+        type Example<'a> = (&'a str, Option<i64>);
+        let (body, value): Example<'_> = match example.as_str() {
+            "integer" => ("m 42\n", Some(42)),
+            "negative" => ("m -1\n", Some(-1)),
+            "float" => ("m 2.6\n", Some(3)),
+            "labelled" => ("m{a=\"b\"} 9\n", Some(9)),
+            "prefix only" => ("m_other 9\n", None),
+            "comment" => ("# m 9\n", None),
+            "not a number" => ("m NaN\n", None),
+            "absent" => ("", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(gauge(body, "m") == value);
     }
 
-    #[yare::parameterized(
-        follower = { "krabka_broker_raft_current_state{state=\"leader\"} 0\nkrabka_broker_raft_current_state{state=\"follower\"} 1\n", Some("follower") },
-        none_set = { "krabka_broker_raft_current_state{state=\"leader\"} 0\n", None },
-        broker_only = { "krabka_broker_active_controller 0\n", None },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a gauge is its first sample"
     )]
-    fn the_raft_state_is_the_label_that_reads_one(body: &str, state: Option<&str>) {
+    fn a_gauge_is_its_first_sample(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: the raft state is the label that reads one for {example}"
+    )]
+    fn bdd_verify_the_raft_state_is_the_label_that_reads_one(example: String) {
+        type Example<'a> = (&'a str, Option<&'a str>);
+        let (body, state): Example<'_> = match example.as_str() {
+            "follower" => (
+                "krabka_broker_raft_current_state{state=\"leader\"} 0\nkrabka_broker_raft_current_state{state=\"follower\"} 1\n",
+                Some("follower"),
+            ),
+            "none set" => (
+                "krabka_broker_raft_current_state{state=\"leader\"} 0\n",
+                None,
+            ),
+            "broker only" => ("krabka_broker_active_controller 0\n", None),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         check!(raft_state(body).as_deref() == state);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: the raft state is the label that reads one"
+    )]
+    fn the_raft_state_is_the_label_that_reads_one(example: String) { let _ = example; }
 
     struct At {
         tick: u64,
@@ -697,8 +785,11 @@ krabka_broker_offline_partitions_count 0
         }
     }
 
-    #[test]
-    fn rows_fold_into_peaks_gaps_and_controller_changes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: rows fold into peaks gaps and controller changes"
+    )]
+    fn bdd_verify_rows_fold_into_peaks_gaps_and_controller_changes() {
         let at = |tick, node, memory, disk, lag, changes, controller| At {
             tick,
             node,
@@ -754,8 +845,18 @@ krabka_broker_offline_partitions_count 0
         check!(summary.lines()[0].contains("6 rows over 3 samples, 1 unanswered"));
     }
 
-    #[test]
-    fn lag_before_the_first_record_is_not_counted() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: rows fold into peaks gaps and controller changes"
+    )]
+    fn rows_fold_into_peaks_gaps_and_controller_changes() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: lag before the first record is not counted"
+    )]
+    fn bdd_verify_lag_before_the_first_record_is_not_counted() {
         let mut first = row(
             &At {
                 tick: 0,
@@ -774,8 +875,18 @@ krabka_broker_offline_partitions_count 0
         check!(summarize(&[first]).nodes[&1].max_metadata_lag_ms == None);
     }
 
-    #[tokio::test]
-    async fn an_unanswering_node_still_gets_a_row_for_every_sample() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: lag before the first record is not counted"
+    )]
+    fn lag_before_the_first_record_is_not_counted() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: an unanswering node still gets a row for every sample"
+    )]
+    async fn bdd_verify_an_unanswering_node_still_gets_a_row_for_every_sample() {
         let evidence = tempfile::tempdir().expect("an evidence directory");
         let root = tempfile::tempdir().expect("a data directory");
         fs::write(root.path().join("segment"), [0u8; 10]).expect("write a segment");
@@ -821,8 +932,19 @@ krabka_broker_offline_partitions_count 0
         check!(first.get("progress").is_none());
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: an unanswering node still gets a row for every sample"
+    )]
     #[tokio::test]
-    async fn a_cluster_of_no_nodes_starts_and_stops() {
+    async fn an_unanswering_node_still_gets_a_row_for_every_sample() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "soak contract telemetry tests: a cluster of no nodes starts and stops"
+    )]
+    async fn bdd_verify_a_cluster_of_no_nodes_starts_and_stops() {
         let evidence = tempfile::tempdir().expect("an evidence directory");
         let telemetry = Telemetry::start(
             Arc::new(Nodes::new(Vec::new())),
@@ -832,4 +954,12 @@ krabka_broker_offline_partitions_count 0
         check!(telemetry.stop().await == TelemetrySummary::default());
         check!(evidence.path().join("telemetry.jsonl").exists());
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+        name = "tests: a cluster of no nodes starts and stops"
+    )]
+    #[tokio::test]
+    async fn a_cluster_of_no_nodes_starts_and_stops() {}
 }

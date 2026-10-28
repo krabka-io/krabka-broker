@@ -26,31 +26,9 @@ use {
     krabka_client_producer::{EndTransactionError, ProducerError},
 };
 
-/// Producer B with the same `transactional_id` fences Producer A. Every
-/// `Transaction::commit` producer A attempts from then on must fail with
-/// `ProducerError::FencedProducer`, whether the coordinator has just told it
-/// so or told it earlier.
-///
-/// Kafka's `KafkaProducer.commitTransaction` javadoc names two different
-/// fenced outcomes: `ProducerFencedException`, "another producer with the
-/// same transactional.id is active", and the separate
-/// `InvalidProducerEpochException`, "the producer has attempted to produce
-/// with an old epoch to the partition leader". Only the second comes from a
-/// `Produce` the commit's own flush sends. Producer A's record here is
-/// acknowledged before producer B fences it, so the commit below flushes
-/// nothing and takes the first path: `TransactionManager.beginCommit` calls
-/// `maybeFailWithError`, finds no error recorded yet, and sends `EndTxn`.
-/// `TransactionManager$EndTxnHandler.handleResponse` maps both codes the
-/// coordinator can answer an `EndTxn` with for this case, `PRODUCER_FENCED`
-/// (90) and the legacy `INVALID_PRODUCER_EPOCH` (47), to a fatal
-/// `ProducerFencedException` (`fatalError(Errors.PRODUCER_FENCED.exception())`),
-/// never to the produce-only exception.
-///
-/// A second commit attempt on the same guard finds that fatal error already
-/// recorded. `maybeFailWithError` raises it again immediately, with no
-/// second `EndTxn`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fenced_producer_cannot_commit() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("transactions txn fencing: fenced producer cannot commit")]
+async fn bdd_verify_fenced_producer_cannot_commit() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "tf").await;
 
@@ -94,6 +72,37 @@ async fn fenced_producer_cannot_commit() {
     broker.shutdown().await;
 }
 
+/// Producer B with the same `transactional_id` fences Producer A. Every
+/// `Transaction::commit` producer A attempts from then on must fail with
+/// `ProducerError::FencedProducer`, whether the coordinator has just told it
+/// so or told it earlier.
+///
+/// Kafka's `KafkaProducer.commitTransaction` javadoc names two different
+/// fenced outcomes: `ProducerFencedException`, "another producer with the
+/// same transactional.id is active", and the separate
+/// `InvalidProducerEpochException`, "the producer has attempted to produce
+/// with an old epoch to the partition leader". Only the second comes from a
+/// `Produce` the commit's own flush sends. Producer A's record here is
+/// acknowledged before producer B fences it, so the commit below flushes
+/// nothing and takes the first path: `TransactionManager.beginCommit` calls
+/// `maybeFailWithError`, finds no error recorded yet, and sends `EndTxn`.
+/// `TransactionManager$EndTxnHandler.handleResponse` maps both codes the
+/// coordinator can answer an `EndTxn` with for this case, `PRODUCER_FENCED`
+/// (90) and the legacy `INVALID_PRODUCER_EPOCH` (47), to a fatal
+/// `ProducerFencedException` (`fatalError(Errors.PRODUCER_FENCED.exception())`),
+/// never to the produce-only exception.
+///
+/// A second commit attempt on the same guard finds that fatal error already
+/// recorded. `maybeFailWithError` raises it again immediately, with no
+/// second `EndTxn`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "fenced producer cannot commit"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fenced_producer_cannot_commit() {}
+
 /// One `InitProducerId` of the KIP-360 table below, named by the identity it
 /// supplies.
 struct Case {
@@ -114,13 +123,11 @@ struct IdentityOffset {
 
 fn shift(id: i64, epoch: i16) -> IdentityOffset { IdentityOffset { id, epoch } }
 
-/// KIP-360: `InitProducerId` answers a caller that names a producer identity
-/// the coordinator does not hold with `PRODUCER_FENCED` (90), before it
-/// re-initialises anything. A caller that names no identity at all — every
-/// request below v3, and every first initialisation — is admitted, which is
-/// what lets a replacement producer take a transactional id over.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_fences_a_stale_producer_identity() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn fencing: init producer id fences a stale producer identity"
+)]
+async fn bdd_verify_init_producer_id_fences_a_stale_producer_identity() {
     let (broker, bootstrap, _dir) = boot_single().await;
     let client = connect_client(bootstrap.clone(), None).await;
 
@@ -209,13 +216,24 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
     broker.shutdown().await;
 }
 
-/// The broker fences a classic-group `TxnOffsetCommit` when it carries a stale
-/// generation (`ILLEGAL_GENERATION`) or an unknown member
-/// (`UNKNOWN_MEMBER_ID`), and accepts it when the metadata matches the live
-/// group. The test uses raw `TxnOffsetCommitRequest` values, which give it
-/// precise control over the metadata.
+/// KIP-360: `InitProducerId` answers a caller that names a producer identity
+/// the coordinator does not hold with `PRODUCER_FENCED` (90), before it
+/// re-initialises anything. A caller that names no identity at all — every
+/// request below v3, and every first initialisation — is admitted, which is
+/// what lets a replacement producer take a transactional id over.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "init producer id fences a stale producer identity"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn txn_offset_commit_fences_classic_generation_and_member() {
+async fn init_producer_id_fences_a_stale_producer_identity() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn fencing: txn offset commit fences classic generation and member"
+)]
+async fn bdd_verify_txn_offset_commit_fences_classic_generation_and_member() {
     use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
 
     let (broker, bootstrap, _dir) = boot_single().await;
@@ -292,14 +310,24 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
     broker.shutdown().await;
 }
 
-/// The broker fences a KIP-848 next-gen "consumer"-protocol `TxnOffsetCommit`
-/// that carries a member epoch other than the member's, and accepts it at the
-/// current epoch. The member epoch travels in the
-/// `generation_id_or_member_epoch` field. At v6, the version the client
-/// negotiates under `unstable.api.versions.enable`, Kafka trunk's `validateTransactionalOffsetCommit` passes the group's
-/// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
+/// The broker fences a classic-group `TxnOffsetCommit` when it carries a stale
+/// generation (`ILLEGAL_GENERATION`) or an unknown member
+/// (`UNKNOWN_MEMBER_ID`), and accepts it when the metadata matches the live
+/// group. The test uses raw `TxnOffsetCommitRequest` values, which give it
+/// precise control over the metadata.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "txn offset commit fences classic generation and member"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn txn_offset_commit_fences_next_gen_member_epoch() {
+async fn txn_offset_commit_fences_classic_generation_and_member() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "transactions txn fencing: txn offset commit fences next gen member epoch"
+)]
+async fn bdd_verify_txn_offset_commit_fences_next_gen_member_epoch() {
     use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
 
     let (broker, bootstrap, _dir) = boot_single_trunk().await;
@@ -353,3 +381,17 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
 
     broker.shutdown().await;
 }
+
+/// The broker fences a KIP-848 next-gen "consumer"-protocol `TxnOffsetCommit`
+/// that carries a member epoch other than the member's, and accepts it at the
+/// current epoch. The member epoch travels in the
+/// `generation_id_or_member_epoch` field. At v6, the version the client
+/// negotiates under `unstable.api.versions.enable`, Kafka trunk's `validateTransactionalOffsetCommit` passes the group's
+/// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "txn offset commit fences next gen member epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn txn_offset_commit_fences_next_gen_member_epoch() {}

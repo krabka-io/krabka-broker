@@ -530,11 +530,11 @@ mod tests {
         check!(record == expected);
     }
 
-    /// Kafka's `ConfigurationControlManager` merge and
-    /// `ControllerConfigurationValidator` order for a `TOPIC` resource. Each
-    /// row is the stored overrides, the operations, and the whole outcome.
-    #[test]
-    fn topic_operations_follow_kafkas_merge_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs topic scope tests: topic operations follow kafkas merge rules"
+    )]
+    fn bdd_verify_topic_operations_follow_kafkas_merge_rules() {
         let op = |key: &str, operation: i8, value: &str| AlterableConfig {
             name: key.into(),
             config_operation: operation,
@@ -632,4 +632,14 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's `ConfigurationControlManager` merge and
+    /// `ControllerConfigurationValidator` order for a `TOPIC` resource. Each
+    /// row is the stored overrides, the operations, and the whole outcome.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/topic_scope.feature",
+        name = "tests: topic operations follow kafkas merge rules"
+    )]
+    fn topic_operations_follow_kafkas_merge_rules() {}
 }

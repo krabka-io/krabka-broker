@@ -338,11 +338,9 @@ mod tests {
         fs::write(path, raw.as_bytes()).unwrap();
     }
 
-    /// The exact 34-byte wire layout of one aborted-transaction record:
-    /// a big-endian i16 version of 0, then `producer_id`, `first_offset`,
-    /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
-    #[test]
-    fn append_writes_the_exact_kafka_wire_layout() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("txn index tests: append writes the exact kafka wire layout")]
+    fn bdd_verify_append_writes_the_exact_kafka_wire_layout() {
         let entry = aborted_txn()
             .bounds(Offset(5)..=Offset(9))
             .stable(10)
@@ -364,10 +362,21 @@ mod tests {
         assert2::assert!(bytes == expected);
     }
 
-    /// Three aborted transactions produce a file whose length is exactly
-    /// `3 * 34` and whose decoded entries round-trip exactly.
-    #[test]
-    fn three_entries_round_trip_at_the_exact_kafka_entry_size() {
+    /// The exact 34-byte wire layout of one aborted-transaction record:
+    /// a big-endian i16 version of 0, then `producer_id`, `first_offset`,
+    /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn_index.feature",
+        name = "tests: append writes the exact kafka wire layout"
+    )]
+    fn append_writes_the_exact_kafka_wire_layout() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn index tests: three entries round trip at the exact kafka entry size"
+    )]
+    fn bdd_verify_three_entries_round_trip_at_the_exact_kafka_entry_size() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
         let entries = [
@@ -394,6 +403,15 @@ mod tests {
         let reopened = TxnIndex::open(path).unwrap();
         assert2::assert!(reopened.entries() == entries);
     }
+
+    /// Three aborted transactions produce a file whose length is exactly
+    /// `3 * 34` and whose decoded entries round-trip exactly.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn_index.feature",
+        name = "tests: three entries round trip at the exact kafka entry size"
+    )]
+    fn three_entries_round_trip_at_the_exact_kafka_entry_size() {}
 
     /// A record whose version prefix is not 0 is refused on open.
     #[test]

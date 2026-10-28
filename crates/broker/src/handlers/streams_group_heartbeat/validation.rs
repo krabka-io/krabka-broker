@@ -375,12 +375,11 @@ mod tests {
         ]
     }
 
-    /// Each row is a request and the error that Kafka's
-    /// `GroupCoordinatorService` gives it, or `None` for a valid request. The
-    /// rows name an instance id in one place, and trunk accepts that, so they
-    /// run with `unstable.api.versions.enable` on.
-    #[test]
-    fn request_checks_follow_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers streams group heartbeat validation tests: request checks follow kafka"
+    )]
+    fn bdd_verify_request_checks_follow_kafka() {
         for Row {
             name,
             request,
@@ -393,6 +392,17 @@ mod tests {
             );
         }
     }
+
+    /// Each row is a request and the error that Kafka's
+    /// `GroupCoordinatorService` gives it, or `None` for a valid request. The
+    /// rows name an instance id in one place, and trunk accepts that, so they
+    /// run with `unstable.api.versions.enable` on.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/streams_group_heartbeat/validation.feature",
+        name = "tests: request checks follow kafka"
+    )]
+    fn request_checks_follow_kafka() {}
 
     /// Kafka 4.3.1's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
     /// refuses, in this order, an instance id, task offsets, task end offsets,

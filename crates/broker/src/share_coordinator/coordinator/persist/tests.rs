@@ -26,10 +26,11 @@ use {
     tempfile::tempdir,
 };
 
-/// Kafka's `handleOperationException` codes for each append failure,
-/// with the message of the error before the mapping.
-#[test]
-fn append_errors_answer_as_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share coordinator coordinator persist tests: append errors answer as kafka"
+)]
+fn bdd_verify_append_errors_answer_as_kafka() {
     let rows = [
         (
             AppendError::NeedsReplay(PartitionIndex(3)),
@@ -59,6 +60,15 @@ fn append_errors_answer_as_kafka() {
         );
     }
 }
+
+/// Kafka's `handleOperationException` codes for each append failure,
+/// with the message of the error before the mapping.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/share_coordinator/coordinator/persist/tests.feature",
+    name = "append errors answer as kafka"
+)]
+fn append_errors_answer_as_kafka() {}
 
 /// A coordinator with one state partition, open locally, and its term at
 /// leader epoch 0. The write timeout is `timeout`.

@@ -260,13 +260,11 @@ mod tests {
         }
     }
 
-    /// Every way a PLAIN credential can be refused answers with
-    /// `PlainSaslServer`'s message. An unknown user and a wrong password share
-    /// one message, so a peer cannot tell them apart, and none of the refusals
-    /// authenticates the connection -- including an authorization id that
-    /// asks to act as another user.
-    #[test]
-    fn every_plain_refusal_answers_kafkas_message() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth plain tests: every plain refusal answers kafkas message"
+    )]
+    fn bdd_verify_every_plain_refusal_answers_kafkas_message() {
         const INVALID: &str = "Authentication failed: Invalid username or password";
         /// One refused PLAIN payload and the message it must be answered with.
         struct Refusal<'a> {
@@ -345,6 +343,18 @@ mod tests {
         }
     }
 
+    /// Every way a PLAIN credential can be refused answers with
+    /// `PlainSaslServer`'s message. An unknown user and a wrong password share
+    /// one message, so a peer cannot tell them apart, and none of the refusals
+    /// authenticates the connection -- including an authorization id that
+    /// asks to act as another user.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/plain.feature",
+        name = "tests: every plain refusal answers kafkas message"
+    )]
+    fn every_plain_refusal_answers_kafkas_message() {}
+
     /// The decoder replaces malformed input exactly as JDK 21's
     /// `new String(bytes, StandardCharsets.UTF_8)` does. Each expected value
     /// was printed by that constructor on JDK 21. An encoded surrogate is the
@@ -378,19 +388,19 @@ mod tests {
         assert2::assert!(java_utf8_lossy(bytes) == expected);
     }
 
-    /// Kafka compares the decoded username, password and authorization id,
-    /// so malformed bytes match a configured name or password that holds the
-    /// U+FFFD they decode to.
-    #[yare::parameterized(
-        username = { b"\0\xFFeve\0secret", "\u{FFFD}eve", "secret" },
-        password = { b"\0eve\0se\xED\xA0\x80cret", "eve", "se\u{FFFD}cret" },
-        authzid = { b"\xC0eve\0\xFFeve\0secret", "\u{FFFD}eve", "secret" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "network auth plain tests: malformed bytes match what kafka decodes them to for {example}"
     )]
-    fn malformed_bytes_match_what_kafka_decodes_them_to(
-        bytes: &'static [u8],
-        user: &str,
-        password: &str,
-    ) {
+    fn bdd_verify_malformed_bytes_match_what_kafka_decodes_them_to(example: String) {
+        type Example<'a> = (&'static [u8], &'a str, &'a str);
+        let (bytes, user, password): Example<'_> = match example.as_str() {
+            "username" => (b"\0\xFFeve\0secret", "\u{FFFD}eve", "secret"),
+            "password" => (b"\0eve\0se\xED\xA0\x80cret", "eve", "se\u{FFFD}cret"),
+            "authzid" => (b"\xC0eve\0\xFFeve\0secret", "\u{FFFD}eve", "secret"),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let credentials = HashMap::from([(user.to_owned(), password.to_owned())]);
         let req = SaslAuthenticateRequest {
             auth_bytes: bytes::Bytes::from_static(bytes),
@@ -401,6 +411,16 @@ mod tests {
         assert_success_authenticate_response(&resp, b"", 0);
         assert2::assert!(auth.principal().map(|p| p.name.as_str()) == Some(user));
     }
+
+    /// Kafka compares the decoded username, password and authorization id,
+    /// so malformed bytes match a configured name or password that holds the
+    /// U+FFFD they decode to.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/network/auth/plain.feature",
+        name = "tests: malformed bytes match what kafka decodes them to"
+    )]
+    fn malformed_bytes_match_what_kafka_decodes_them_to(example: String) { let _ = example; }
 
     /// An authorization id equal to the username is accepted.
     #[test]

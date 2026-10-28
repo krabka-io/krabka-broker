@@ -80,8 +80,11 @@ async fn produce_legacy(
     resp.responses[0].partition_responses[0].error_code
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_v1_message_set_is_upconverted_and_round_trips() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce legacy upconvert: produce v1 message set is upconverted and round trips"
+)]
+async fn bdd_verify_produce_v1_message_set_is_upconverted_and_round_trips() {
     let p = support::start().await;
     create_topic(&p.client, "legacy", 1).await;
     let topic_id = topic_id_for(&p, "legacy").await;
@@ -134,8 +137,19 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_legacy_upconvert.feature",
+    name = "produce v1 message set is upconverted and round trips"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_malformed_legacy_bytes_returns_invalid_record() {
+async fn produce_v1_message_set_is_upconverted_and_round_trips() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce legacy upconvert: produce malformed legacy bytes returns invalid record"
+)]
+async fn bdd_verify_produce_malformed_legacy_bytes_returns_invalid_record() {
     let p = support::start().await;
     create_topic(&p.client, "bad", 1).await;
     let topic_id = topic_id_for(&p, "bad").await;
@@ -155,3 +169,11 @@ async fn produce_malformed_legacy_bytes_returns_invalid_record() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_legacy_upconvert.feature",
+    name = "produce malformed legacy bytes returns invalid record"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_malformed_legacy_bytes_returns_invalid_record() {}

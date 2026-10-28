@@ -377,12 +377,11 @@ protocol = "Plaintext"
         file.apply_to(&mut existing_cfg).unwrap();
         assert!(existing_cfg.log_dir == PathBuf::from("/var/lib/krabka/cli"));
     }
-    /// `metadata_log_dir` is Kafka's `metadata.log.dir`: the file sets it
-    /// unless `--metadata-log-dir` already did, and unset it leaves the
-    /// metadata log in `log_dir`, the first entry of `log.dirs`. A separate
-    /// metadata directory is not a data directory.
-    #[test]
-    fn metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "file config apply tests: metadata log dir resolves like kafkas metadata log dir"
+    )]
+    fn bdd_verify_metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {
         use {crate::config::BrokerConfig, std::path::PathBuf};
 
         // (what, file, flag, metadata dir, data dirs)
@@ -433,6 +432,17 @@ protocol = "Plaintext"
             );
         }
     }
+
+    /// `metadata_log_dir` is Kafka's `metadata.log.dir`: the file sets it
+    /// unless `--metadata-log-dir` already did, and unset it leaves the
+    /// metadata log in `log_dir`, the first entry of `log.dirs`. A separate
+    /// metadata directory is not a data directory.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/apply.feature",
+        name = "tests: metadata log dir resolves like kafkas metadata log dir"
+    )]
+    fn metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {}
 
     #[test]
     fn apply_to_extra_log_dirs_fills_empty_but_preserves_existing() {

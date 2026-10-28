@@ -313,13 +313,11 @@ async fn initialize_when_loaded(client: &Client, topic_id: uuid::Uuid) -> Answer
     panic!("the share coordinator did not load __share_group_state-0");
 }
 
-/// While a follower of `__share_group_state-0` is down but still in its ISR,
-/// no share-state record commits. The coordinator then answers no request
-/// with success: each one times out as Kafka's coordinator write does, and
-/// the share-partition leader gets `COORDINATOR_NOT_AVAILABLE`, which it
-/// retries.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_share_state_request_is_answered_only_when_committed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "share state commit: a share state request is answered only when committed"
+)]
+async fn bdd_verify_a_share_state_request_is_answered_only_when_committed() {
     let mut cluster = start_three().await;
     let lookup = client(&cluster[0].0).await;
     let topic_id = create_orders(&lookup).await;
@@ -359,3 +357,16 @@ async fn a_share_state_request_is_answered_only_when_committed() {
     shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
+
+/// While a follower of `__share_group_state-0` is down but still in its ISR,
+/// no share-state record commits. The coordinator then answers no request
+/// with success: each one times out as Kafka's coordinator write does, and
+/// the share-partition leader gets `COORDINATOR_NOT_AVAILABLE`, which it
+/// retries.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_state_commit.feature",
+    name = "a share state request is answered only when committed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_share_state_request_is_answered_only_when_committed() {}

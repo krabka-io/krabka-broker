@@ -80,8 +80,11 @@ async fn drill(args: &[&str]) -> String {
     run(cli, time::sleep(LOAD)).await.unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "soak drill: the drill reads back every record a surviving source acknowledged"
+)]
+async fn bdd_verify_the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
     let _ = aws_lc_rs::default_provider().install_default();
     let security = manifest_dir().join("tests/fixtures/security");
     let secured: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
@@ -216,3 +219,11 @@ async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
         );
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/soak_drill.feature",
+    name = "the drill reads back every record a surviving source acknowledged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {}

@@ -14,12 +14,9 @@ use {
     krabka_protocol::owned::list_groups_request::ListGroupsRequest,
 };
 
-/// `kafka-share-groups.sh --list` sends `ListGroups` (`api_key` 16) with
-/// `types_filter = ["share"]`. A live share group must appear in that response
-/// tagged `group_type == "share"`, and must NOT appear when the request filters
-/// on `["consumer"]`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_groups_includes_share_group() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("share groups share group listing: list groups includes share group")]
+async fn bdd_verify_list_groups_includes_share_group() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t7", 2).await;
@@ -66,3 +63,15 @@ async fn list_groups_includes_share_group() {
         row.group_type
     );
 }
+
+/// `kafka-share-groups.sh --list` sends `ListGroups` (`api_key` 16) with
+/// `types_filter = ["share"]`. A live share group must appear in that response
+/// tagged `group_type == "share"`, and must NOT appear when the request filters
+/// on `["consumer"]`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_listing.feature",
+    name = "list groups includes share group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_groups_includes_share_group() {}

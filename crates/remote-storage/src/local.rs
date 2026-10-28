@@ -352,15 +352,22 @@ mod tests {
         check_sample_indexes(&rsm, &md);
     }
 
-    #[yare::parameterized(
-        log = { ".log" },
-        offset_index = { ".index" },
-        time_index = { ".timeindex" },
-        snapshot = { ".snapshot" },
-        leader_epoch_checkpoint = { ".leader_epoch_checkpoint" },
-        transaction_index = { ".txnindex" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "local tests: copied files use kafka local tiered storage layout for {example}"
     )]
-    fn copied_files_use_kafka_local_tiered_storage_layout(suffix: &str) {
+    fn bdd_verify_copied_files_use_kafka_local_tiered_storage_layout(example: String) {
+        type Example<'a> = (&'a str,);
+        let (suffix,): Example<'_> = match example.as_str() {
+            "log" => (".log",),
+            "offset index" => (".index",),
+            "time index" => (".timeindex",),
+            "snapshot" => (".snapshot",),
+            "leader epoch checkpoint" => (".leader_epoch_checkpoint",),
+            "transaction index" => (".txnindex",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let LocalFixture { remote, .. } = copied_store(TransactionIndex::Present);
 
         let partition = remote.path().join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
@@ -373,6 +380,13 @@ mod tests {
             "missing Kafka layout artifact {suffix}"
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/local.feature",
+        name = "tests: copied files use kafka local tiered storage layout"
+    )]
+    fn copied_files_use_kafka_local_tiered_storage_layout(example: String) { let _ = example; }
 
     #[test]
     fn missing_optional_txn_index_is_not_found() {

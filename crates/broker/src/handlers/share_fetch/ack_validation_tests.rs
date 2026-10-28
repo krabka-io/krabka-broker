@@ -364,8 +364,11 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-#[tokio::test]
-async fn acknowledge_checks_run_in_kafka_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers share fetch ack validation tests: acknowledge checks run in kafka order"
+)]
+async fn bdd_verify_acknowledge_checks_run_in_kafka_order() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let topic_id = create_topic(&broker).await;
     produce(&broker).await;
@@ -442,6 +445,14 @@ async fn acknowledge_checks_run_in_kafka_order() {
     assert!(actual == expected);
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/share_fetch/ack_validation_tests.feature",
+    name = "acknowledge checks run in kafka order"
+)]
+#[tokio::test]
+async fn acknowledge_checks_run_in_kafka_order() {}
 
 /// A denied topic row without acknowledgements in a request without any
 /// acknowledgement answers only the fetch error.

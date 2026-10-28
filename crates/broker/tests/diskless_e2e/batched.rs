@@ -257,8 +257,11 @@ async fn high_watermarks(cluster: &DisklessCluster) -> BTreeMap<i32, i64> {
     ends
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "diskless e2e batched: the krabka consumer reads every batched record from earliest"
+)]
+async fn bdd_verify_the_krabka_consumer_reads_every_batched_record_from_earliest() {
     let cluster = trimming_cluster().await;
     let topic_id = create_topic(&cluster).await;
     let acknowledged = {
@@ -326,8 +329,17 @@ async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {
     cluster.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/batched.feature",
+    name = "the krabka consumer reads every batched record from earliest"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_restarted_under_load_rejoins_the_isr() {
+async fn the_krabka_consumer_reads_every_batched_record_from_earliest() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("diskless e2e batched: a follower restarted under load rejoins the isr")]
+async fn bdd_verify_a_follower_restarted_under_load_rejoins_the_isr() {
     let mut cluster = trimming_cluster().await;
     create_topic(&cluster).await;
     let leader = partition_leader(&cluster, 0);
@@ -397,6 +409,14 @@ async fn a_follower_restarted_under_load_rejoins_the_isr() {
     load.await.expect("the load task");
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/diskless_e2e/batched.feature",
+    name = "a follower restarted under load rejoins the isr"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_restarted_under_load_rejoins_the_isr() {}
 
 /// Let the load run for a few flush ticks.
 async fn produce_settle() { time::sleep(Duration::from_secs(3)).await; }

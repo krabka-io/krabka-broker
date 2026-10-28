@@ -16,9 +16,9 @@ use {
 // complete the kernel-level handshake but the broker never reads them,
 // and the Java AdminClient times out. A multi-thread runtime puts the
 // broker on a separate worker so the test's blocking calls don't starve it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_topics_describe_smokes_metadata() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli topics: kafka topics describe smokes metadata")]
+async fn bdd_verify_kafka_topics_describe_smokes_metadata() {
     let (broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
@@ -56,12 +56,18 @@ async fn kafka_topics_describe_smokes_metadata() {
     broker.shutdown().await;
 }
 
-/// `kafka-topics --alter --topic t --partitions 3` then `--describe`
-/// shows 3 partitions. Exercises `CreatePartitions` (`api_key` 37) +
-/// `V1Topic` partition-count update.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn kafka_topics_alter_partitions() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "kafka topics describe smokes metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_describe_smokes_metadata() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli topics: kafka topics alter partitions")]
+async fn bdd_verify_kafka_topics_alter_partitions() {
     const TOPIC: &str = "krabka-alter-parts-itest";
 
     let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
@@ -92,18 +98,21 @@ async fn kafka_topics_alter_partitions() {
     );
 }
 
-/// `kafka-topics --create`, `--list` (present), `--delete`, `--list` (gone).
-///
-/// The epic's criterion says create/describe/**delete**, and the only
-/// `--delete` any container suite ran was
-/// `jvm_acceptance_freeze/break_glass_delete.rs`, which asserts the two-person
-/// rule REFUSES one. A refusal does not evidence that the ordinary path works,
-/// so this pins the success case: `DeleteTopics` (`api_key` 20) over the broker
-/// listener, with `--list` on both sides so the assertion is the topic's
-/// disappearance rather than the tool's exit status.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-topics --alter --topic t --partitions 3` then `--describe`
+/// shows 3 partitions. Exercises `CreatePartitions` (`api_key` 37) +
+/// `V1Topic` partition-count update.
 #[ignore = "requires Docker"]
-async fn kafka_topics_delete_removes_the_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "kafka topics alter partitions"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_alter_partitions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance cli topics: kafka topics delete removes the topic")]
+async fn bdd_verify_kafka_topics_delete_removes_the_topic() {
     let (broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
@@ -158,15 +167,29 @@ async fn kafka_topics_delete_removes_the_topic() {
     broker.shutdown().await;
 }
 
-/// `kafka-topics --create --config cleanup.policy=compact,delete`, then
-/// `--describe` and `kafka-configs --describe`.
+/// `kafka-topics --create`, `--list` (present), `--delete`, `--list` (gone).
 ///
-/// Kafka types `cleanup.policy` as a LIST, and Kafka Streams' windowed-store
-/// changelogs carry exactly this value, so the broker has to accept the list,
-/// store it as written, and echo it back through both tools.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// The epic's criterion says create/describe/**delete**, and the only
+/// `--delete` any container suite ran was
+/// `jvm_acceptance_freeze/break_glass_delete.rs`, which asserts the two-person
+/// rule REFUSES one. A refusal does not evidence that the ordinary path works,
+/// so this pins the success case: `DeleteTopics` (`api_key` 20) over the broker
+/// listener, with `--list` on both sides so the assertion is the topic's
+/// disappearance rather than the tool's exit status.
 #[ignore = "requires Docker"]
-async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "kafka topics delete removes the topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_delete_removes_the_topic() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance cli topics: kafka topics create accepts a compact and delete cleanup policy"
+)]
+async fn bdd_verify_kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
     const TOPIC: &str = "krabka-compact-delete-itest";
 
     let (broker, _dir) = start_host_broker().await;
@@ -219,3 +242,18 @@ async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
 
     broker.shutdown().await;
 }
+
+/// `kafka-topics --create --config cleanup.policy=compact,delete`, then
+/// `--describe` and `kafka-configs --describe`.
+///
+/// Kafka types `cleanup.policy` as a LIST, and Kafka Streams' windowed-store
+/// changelogs carry exactly this value, so the broker has to accept the list,
+/// store it as written, and echo it back through both tools.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/topics.feature",
+    name = "kafka topics create accepts a compact and delete cleanup policy"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {}

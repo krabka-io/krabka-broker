@@ -157,11 +157,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `ClientMetricsConfigs.validate` on the merged map, with the
-    /// codes `ConfigurationControlManager.validateAlterConfig` maps its
-    /// exceptions to.
-    #[test]
-    fn refusals_match_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs client metrics scope tests: refusals match kafka"
+    )]
+    fn bdd_verify_refusals_match_kafka() {
         let illegal = |entry: &str| {
             refused(
                 codes::INVALID_CONFIG,
@@ -281,6 +281,16 @@ mod tests {
             check!(to_submit.is_empty(), "{key} op {op} = {value:?}");
         }
     }
+
+    /// Kafka's `ClientMetricsConfigs.validate` on the merged map, with the
+    /// codes `ConfigurationControlManager.validateAlterConfig` maps its
+    /// exceptions to.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/client_metrics_scope.feature",
+        name = "tests: refusals match kafka"
+    )]
+    fn refusals_match_kafka() {}
 
     /// Accepted alterations stage the whole merged map, and one that changes
     /// nothing stages no record, as Kafka writes a `ConfigRecord` only for a

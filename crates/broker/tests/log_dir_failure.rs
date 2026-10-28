@@ -279,8 +279,9 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
         .expect("the leader acknowledges the record");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("log dir failure: a follower whose log directory fails leaves the isr")]
+async fn bdd_verify_a_follower_whose_log_directory_fails_leaves_the_isr() {
     support::init_tracing();
     let cluster = start_cluster().await;
     // Each broker's audit partition fills its first log directory, so the
@@ -400,3 +401,11 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     drop(read_only);
     cluster.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/log_dir_failure.feature",
+    name = "a follower whose log directory fails leaves the isr"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_whose_log_directory_fails_leaves_the_isr() {}

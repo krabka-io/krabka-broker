@@ -1,9 +1,10 @@
 use {super::*, assert2::assert};
 
-/// Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`, in
-/// its order of checks.
-#[test]
-fn a_verify_only_answer_follows_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn coordinator produce verification tests: a verify only answer follows kafka"
+)]
+fn bdd_verify_a_verify_only_answer_follows_kafka() {
     let producer = ProducerId(7);
     let cases = [
         (
@@ -101,6 +102,15 @@ fn a_verify_only_answer_follows_kafka() {
         );
     }
 }
+
+/// Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`, in
+/// its order of checks.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/coordinator/produce_verification/tests.feature",
+    name = "a verify only answer follows kafka"
+)]
+fn a_verify_only_answer_follows_kafka() {}
 
 /// `transaction.partition.verification.enable` is a dynamic broker config
 /// with a static layer: the broker's own dynamic value beats the cluster-wide

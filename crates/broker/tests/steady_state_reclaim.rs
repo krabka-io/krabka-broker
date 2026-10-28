@@ -189,12 +189,11 @@ async fn second_half_rise(settings: Settings) -> Rise {
     }
 }
 
-/// At Kafka's defaults a steady committer and a steady no-op writer each
-/// climb by a half's writes from one half to the next. At the soak's roll,
-/// snapshot and retention settings, both directories rise by less than a
-/// quarter of that.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "steady state reclaim: the soak settings reclaim what kafkas defaults let climb"
+)]
+async fn bdd_verify_the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
     let defaults = second_half_rise(Settings::KafkaDefaults).await;
     let soak = second_half_rise(Settings::Soak).await;
 
@@ -218,3 +217,15 @@ async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
         );
     }
 }
+
+/// At Kafka's defaults a steady committer and a steady no-op writer each
+/// climb by a half's writes from one half to the next. At the soak's roll,
+/// snapshot and retention settings, both directories rise by less than a
+/// quarter of that.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/steady_state_reclaim.feature",
+    name = "the soak settings reclaim what kafkas defaults let climb"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {}

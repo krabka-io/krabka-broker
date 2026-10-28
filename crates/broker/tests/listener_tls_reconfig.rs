@@ -196,12 +196,9 @@ fn accepted(resource: String) -> AlterConfigsResourceResponse {
     }
 }
 
-/// A renewed keystore with the same DN and SANs is served to the next
-/// handshake; the same path with new contents is read again on the next
-/// alter of it; deleting the key returns the listener to its static
-/// certificate.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_renewed_keystore_is_served_without_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("listener tls reconfig: a renewed keystore is served without restart")]
+async fn bdd_verify_a_renewed_keystore_is_served_without_restart() {
     let broker = TlsBroker::start().await;
     assert!(broker.serves(&broker.served).await);
 
@@ -247,6 +244,18 @@ async fn a_renewed_keystore_is_served_without_restart() {
     assert!(broker.eventually_serves(&broker.served).await);
 }
 
+/// A renewed keystore with the same DN and SANs is served to the next
+/// handshake; the same path with new contents is read again on the next
+/// alter of it; deleting the key returns the listener to its static
+/// certificate.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/listener_tls_reconfig.feature",
+    name = "a renewed keystore is served without restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_renewed_keystore_is_served_without_restart() {}
+
 /// The refusal of a listener SSL change whose `SslFactory` failure is
 /// `cause`, as Kafka's `ConfigAdminManager` answers it.
 fn refusal(resource: String, cause: &str) -> AlterConfigsResourceResponse {
@@ -261,12 +270,11 @@ fn refusal(resource: String, cause: &str) -> AlterConfigsResourceResponse {
     }
 }
 
-/// A keystore that changes the DN, drops a SAN, is not PEM or does not load
-/// is refused with `INVALID_REQUEST`, `validate_only` or not, and the
-/// listener keeps serving its certificate. A valid one under `validate_only`
-/// is accepted and not applied.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_incompatible_keystore_is_refused_and_validate_only_applies_nothing() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "listener tls reconfig: an incompatible keystore is refused and validate only applies nothing"
+)]
+async fn bdd_verify_an_incompatible_keystore_is_refused_and_validate_only_applies_nothing() {
     let broker = TlsBroker::start().await;
     let elsewhere = broker.keystore("elsewhere.pem", &Identity::new("elsewhere", &["localhost"]));
     let narrower = broker.keystore(
@@ -341,3 +349,15 @@ async fn an_incompatible_keystore_is_refused_and_validate_only_applies_nothing()
     assert!(broker.serves(&broker.served).await);
     assert!(!broker.serves(&renewed).await);
 }
+
+/// A keystore that changes the DN, drops a SAN, is not PEM or does not load
+/// is refused with `INVALID_REQUEST`, `validate_only` or not, and the
+/// listener keeps serving its certificate. A valid one under `validate_only`
+/// is accepted and not applied.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/listener_tls_reconfig.feature",
+    name = "an incompatible keystore is refused and validate only applies nothing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_incompatible_keystore_is_refused_and_validate_only_applies_nothing() {}

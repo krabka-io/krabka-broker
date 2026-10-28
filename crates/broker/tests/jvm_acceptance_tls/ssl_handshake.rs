@@ -17,23 +17,9 @@ use {
     std::process::Stdio,
 };
 
-/// End-to-end TLS handshake check against an `SSL`-only listener. The test
-/// drives `kafka-broker-api-versions` from inside the cp-kafka container
-/// with a JKS truststore that holds the broker's dev cert. It verifies that
-/// the JVM client completes the TLS handshake and exchanges an
-/// `ApiVersions` request over the encrypted channel.
-///
-/// The test turns off hostname verification with
-/// `ssl.endpoint.identification.algorithm=`, because the CN of the dev cert
-/// is `krabka-dev`, not `host.docker.internal`. The dev cert is a
-/// self-signed ECDSA P-256 end-entity, regenerated from the original
-/// ED25519 + CA:TRUE fixture. cp-kafka:6.1.1 ships Java 11, whose
-/// `SunJSSE` does not advertise `ed25519` signature schemes during the TLS
-/// handshake, so the JVM client would reject ED25519 server certs with
-/// `NoSignatureSchemesInCommon`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_ssl_handshake_succeeds() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance tls ssl handshake: jvm ssl handshake succeeds")]
+async fn bdd_verify_jvm_ssl_handshake_succeeds() {
     let (broker, _dir) = start_ssl_broker().await;
     nc_check_connectivity();
 
@@ -76,3 +62,26 @@ async fn jvm_ssl_handshake_succeeds() {
 
     broker.shutdown().await;
 }
+
+/// End-to-end TLS handshake check against an `SSL`-only listener. The test
+/// drives `kafka-broker-api-versions` from inside the cp-kafka container
+/// with a JKS truststore that holds the broker's dev cert. It verifies that
+/// the JVM client completes the TLS handshake and exchanges an
+/// `ApiVersions` request over the encrypted channel.
+///
+/// The test turns off hostname verification with
+/// `ssl.endpoint.identification.algorithm=`, because the CN of the dev cert
+/// is `krabka-dev`, not `host.docker.internal`. The dev cert is a
+/// self-signed ECDSA P-256 end-entity, regenerated from the original
+/// ED25519 + CA:TRUE fixture. cp-kafka:6.1.1 ships Java 11, whose
+/// `SunJSSE` does not advertise `ed25519` signature schemes during the TLS
+/// handshake, so the JVM client would reject ED25519 server certs with
+/// `NoSignatureSchemesInCommon`.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tls/ssl_handshake.feature",
+    name = "jvm ssl handshake succeeds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_ssl_handshake_succeeds() {}

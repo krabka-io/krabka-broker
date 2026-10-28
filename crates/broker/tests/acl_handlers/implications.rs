@@ -7,15 +7,37 @@ use {
     assert2::assert,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn implication_metadata_describes_after_read_acl() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "acl handlers implications: implication metadata describes after read acl"
+)]
+async fn bdd_verify_implication_metadata_describes_after_read_acl() {
     metadata_implication(krabka_metadata::AclOperation::Read).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/implications.feature",
+    name = "implication metadata describes after read acl"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn implication_metadata_describes_after_write_acl() {
+async fn implication_metadata_describes_after_read_acl() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "acl handlers implications: implication metadata describes after write acl"
+)]
+async fn bdd_verify_implication_metadata_describes_after_write_acl() {
     metadata_implication(krabka_metadata::AclOperation::Write).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/implications.feature",
+    name = "implication metadata describes after write acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn implication_metadata_describes_after_write_acl() {}
 
 async fn metadata_implication(operation: krabka_metadata::AclOperation) {
     // Read and Write each imply Describe without a separate Describe ACL.

@@ -161,21 +161,38 @@ fn message_duplication() -> ScenarioTrace {
 mod tests {
     use super::*;
 
-    #[test]
-    fn returns_three_traces() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim curated tests: returns three traces")]
+    fn bdd_verify_returns_three_traces() {
         let traces = scenarios();
         assert2::assert!(traces.len() == 3);
     }
 
-    #[test]
-    fn every_trace_has_steps() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/curated.feature",
+        name = "tests: returns three traces"
+    )]
+    fn returns_three_traces() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim curated tests: every trace has steps")]
+    fn bdd_verify_every_trace_has_steps() {
         for trace in scenarios() {
             assert2::assert!(!trace.steps.is_empty());
         }
     }
 
-    #[test]
-    fn split_brain_ends_with_exactly_one_leader() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/curated.feature",
+        name = "tests: every trace has steps"
+    )]
+    fn every_trace_has_steps() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("sim curated tests: split brain ends with exactly one leader")]
+    fn bdd_verify_split_brain_ends_with_exactly_one_leader() {
         let traces = scenarios();
         let split = traces
             .iter()
@@ -185,4 +202,11 @@ mod tests {
         let leaders = last.roles.iter().filter(|r| r.role == "Leader").count();
         assert2::assert!(leaders == 1);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/sim/curated.feature",
+        name = "tests: split brain ends with exactly one leader"
+    )]
+    fn split_brain_ends_with_exactly_one_leader() {}
 }

@@ -568,11 +568,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `ConfigAdminManager.preprocess` shape checks, which answer
-    /// before any authorization. Each row is a request's resources and the
-    /// outcome for each.
-    #[test]
-    fn the_request_shape_is_checked_the_way_kafka_preprocesses_it() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs tests: the request shape is checked the way kafka preprocesses it"
+    )]
+    fn bdd_verify_the_request_shape_is_checked_the_way_kafka_preprocesses_it() {
         let resource =
             |resource_type: i8, name: &str, configs: Vec<AlterableConfig>| AlterConfigsResource {
                 resource_type,
@@ -625,4 +625,14 @@ mod tests {
             check!(got == want);
         }
     }
+
+    /// Kafka's `ConfigAdminManager.preprocess` shape checks, which answer
+    /// before any authorization. Each row is a request's resources and the
+    /// outcome for each.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs.feature",
+        name = "tests: the request shape is checked the way kafka preprocesses it"
+    )]
+    fn the_request_shape_is_checked_the_way_kafka_preprocesses_it() {}
 }

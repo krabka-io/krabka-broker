@@ -209,8 +209,11 @@ mod tests {
         BTreeMap::from([("0".to_owned(), partitions.to_vec())])
     }
 
-    #[test]
-    fn target_assignment_member_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence assignment tests: target assignment member bytes match kafka schema"
+    )]
+    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
         let v = StreamsGroupTargetAssignmentMemberValue {
             active: active_tasks(&[1]),
             standby: BTreeMap::new(),
@@ -227,6 +230,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
+        name = "tests: target assignment member bytes match kafka schema"
+    )]
+    fn target_assignment_member_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_member_round_trip() {
@@ -253,8 +263,11 @@ mod tests {
         assert!(StreamsGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn current_member_assignment_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence assignment tests: current member assignment bytes match kafka schema"
+    )]
+    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
         let v = StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
@@ -271,6 +284,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
+        name = "tests: current member assignment bytes match kafka schema"
+    )]
+    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     #[test]
     fn current_member_assignment_round_trip() {
@@ -304,12 +324,11 @@ mod tests {
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
     }
 
-    /// The `TaskIds` of the current assignment carries `AssignmentEpochs` as
-    /// tagged field 0, a compact `[]int32`, as Kafka 4.3.1's
-    /// `toTaskIdsWithEpochs` writes it for every active entry, and without it
-    /// as `toTaskIds` writes the standby and warmup entries.
-    #[test]
-    fn current_member_assignment_epochs_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence assignment tests: current member assignment epochs match kafka schema"
+    )]
+    fn bdd_verify_current_member_assignment_epochs_match_kafka_schema() {
         let v = StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
@@ -349,8 +368,22 @@ mod tests {
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&want).unwrap() == v);
     }
 
-    #[test]
-    fn wire_state_matches_kafkas_stream_member_discriminants() {
+    /// The `TaskIds` of the current assignment carries `AssignmentEpochs` as
+    /// tagged field 0, a compact `[]int32`, as Kafka 4.3.1's
+    /// `toTaskIdsWithEpochs` writes it for every active entry, and without it
+    /// as `toTaskIds` writes the standby and warmup entries.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
+        name = "tests: current member assignment epochs match kafka schema"
+    )]
+    fn current_member_assignment_epochs_match_kafka_schema() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence assignment tests: wire state matches kafkas stream member discriminants"
+    )]
+    fn bdd_verify_wire_state_matches_kafkas_stream_member_discriminants() {
         // org.apache.kafka.coordinator.group.streams.MemberState.
         assert!(StreamsMemberWireState::Stable as i8 == 1);
         assert!(StreamsMemberWireState::UnrevokedTasks as i8 == 2);
@@ -358,15 +391,36 @@ mod tests {
         assert!(StreamsMemberWireState::from_i8(0).is_err());
     }
 
-    #[yare::parameterized(
-        stable = { StreamsMemberAssignmentState::Stable },
-        unrevoked_tasks = { StreamsMemberAssignmentState::UnrevokedTasks },
-        unreleased_tasks = { StreamsMemberAssignmentState::UnreleasedTasks },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
+        name = "tests: wire state matches kafkas stream member discriminants"
     )]
-    fn wire_state_matches_kafkas_streams_member_state(state: StreamsMemberAssignmentState) {
+    fn wire_state_matches_kafkas_stream_member_discriminants() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams persistence assignment tests: wire state matches kafkas streams member state for {example}"
+    )]
+    fn bdd_verify_wire_state_matches_kafkas_streams_member_state(example: String) {
+        type Example = (StreamsMemberAssignmentState,);
+        let (state,): Example = match example.as_str() {
+            "stable" => (StreamsMemberAssignmentState::Stable,),
+            "unrevoked tasks" => (StreamsMemberAssignmentState::UnrevokedTasks,),
+            "unreleased tasks" => (StreamsMemberAssignmentState::UnreleasedTasks,),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let wire = StreamsMemberWireState::from(state);
         assert2::assert!(StreamsMemberAssignmentState::from(wire) == state);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
+        name = "tests: wire state matches kafkas streams member state"
+    )]
+    fn wire_state_matches_kafkas_streams_member_state(example: String) { let _ = example; }
 
     #[test]
     fn task_map_multi_subtopology_empty_partitions_round_trip() {

@@ -179,13 +179,12 @@ async fn batch_base_offsets(
     logs
 }
 
-/// The `clean_bounce` case of the system test. The leader appends a batch,
-/// every follower replicates it, and then the leader stops with a controlled
-/// shutdown before the producer reads the answer. The producer sends the batch
-/// again to the new leader. The new leader must answer with the offset of the
-/// first append and must not append the batch a second time.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication idempotent failover: a leader elected by a controlled shutdown answers a replicated retry as a duplicate"
+)]
+async fn bdd_verify_a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate()
+ {
     let _g = cluster_lock().lock().await;
     let mut cluster = registered_cluster(3).await;
 
@@ -258,12 +257,24 @@ async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as
     shutdown_cluster(cluster).await;
 }
 
-/// A broker that leads, follows, and leads again. While it follows, it
-/// replicates a batch that another leader appended. When it leads again, a
-/// retry of that batch is a duplicate, and the next batch follows it in
-/// sequence: it is not out of order against the sequence of the first term.
+/// The `clean_bounce` case of the system test. The leader appends a batch,
+/// every follower replicates it, and then the leader stops with a controlled
+/// shutdown before the producer reads the answer. The producer sends the batch
+/// again to the new leader. The new leader must answer with the offset of the
+/// first append and must not append the batch a second time.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication/idempotent_failover.feature",
+    name = "a leader elected by a controlled shutdown answers a replicated retry as a duplicate"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_elected_again_continues_from_the_batches_it_replicated() {
+async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "replication idempotent failover: a leader elected again continues from the batches it replicated"
+)]
+async fn bdd_verify_a_leader_elected_again_continues_from_the_batches_it_replicated() {
     let _g = cluster_lock().lock().await;
     let cluster = registered_cluster(3).await;
     let topic = "idempotent-reelection";
@@ -296,3 +307,15 @@ async fn a_leader_elected_again_continues_from_the_batches_it_replicated() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// A broker that leads, follows, and leads again. While it follows, it
+/// replicates a batch that another leader appended. When it leads again, a
+/// retry of that batch is a duplicate, and the next batch follows it in
+/// sequence: it is not out of order against the sequence of the first term.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/replication/idempotent_failover.feature",
+    name = "a leader elected again continues from the batches it replicated"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_leader_elected_again_continues_from_the_batches_it_replicated() {}

@@ -232,10 +232,11 @@ fn jvm_log_end_offset(partition: i32) -> i64 {
     jvm_parse_offset(line)
 }
 
-/// A JVM consumer reads across barrier markers and never sees one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires docker"]
-async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm barrier markers: a jvm consumer reads across barrier markers unchanged"
+)]
+async fn bdd_verify_a_jvm_consumer_reads_across_barrier_markers_unchanged() {
     // One state partition at replication factor one, because this is a single
     // node: the 50-at-factor-3 default leaves the partition this group hashes
     // to without a leader, and the coordinator then refuses every request.
@@ -321,3 +322,13 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
         }
     }
 }
+
+/// A JVM consumer reads across barrier markers and never sees one.
+#[ignore = "requires docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_barrier_markers.feature",
+    name = "a jvm consumer reads across barrier markers unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {}

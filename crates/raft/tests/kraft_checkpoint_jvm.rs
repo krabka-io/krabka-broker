@@ -58,9 +58,9 @@ fn committed_log_timestamp(dir: &Path) -> i64 {
         .expect("the committed batch has a create-time")
 }
 
-#[test]
-#[ignore = "requires Docker"]
-fn jvm_dump_log_parses_engine_snapshot() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft checkpoint jvm: jvm dump log parses engine snapshot")]
+fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
     let cid = Uuid::new_v4();
     let mut image = MetadataImage::new(cid);
     // RegisterBroker (apiKey 0).
@@ -238,3 +238,11 @@ fn jvm_dump_log_parses_engine_snapshot() {
         "metadata shell did not load the snapshot: {shell_text}"
     );
 }
+
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_checkpoint_jvm.feature",
+    name = "jvm dump log parses engine snapshot"
+)]
+fn jvm_dump_log_parses_engine_snapshot() {}

@@ -333,8 +333,11 @@ mod tests {
             .call()
     }
 
-    #[test]
-    fn join_covers_both_tables_and_labels_each_key() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: join covers both tables and labels each key"
+    )]
+    fn bdd_verify_join_covers_both_tables_and_labels_each_key() {
         let krabka = vec![api(3, 0, 13), api(1, 4, 17), api(80, 0, 1)];
         let kafka = vec![api(3, 0, 13), api(1, 4, 18), api(88, 0, 0)];
         assert!(
@@ -379,10 +382,18 @@ mod tests {
         );
     }
 
-    /// A key is recorded in one table or the other, never both, and every
-    /// recorded sentence says something.
-    #[test]
-    fn every_recorded_intent_is_non_empty_and_keyed_once() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: join covers both tables and labels each key"
+    )]
+    fn join_covers_both_tables_and_labels_each_key() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: every recorded intent is non empty and keyed once"
+    )]
+    fn bdd_verify_every_recorded_intent_is_non_empty_and_keyed_once() {
         let all: Vec<&RecordedIntent<'_>> = RANGE_DIVERGENCE_INTENTS
             .iter()
             .chain(SERVED_RANGE_DIVERGENCES)
@@ -395,10 +406,20 @@ mod tests {
         );
     }
 
-    /// #863: a key that advertises the oracle's own range, recorded as served
-    /// wider, still carries the reason.
-    #[test]
-    fn a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {
+    /// A key is recorded in one table or the other, never both, and every
+    /// recorded sentence says something.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: every recorded intent is non empty and keyed once"
+    )]
+    fn every_recorded_intent_is_non_empty_and_keyed_once() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: a served range divergence is recorded on a matching advertised range"
+    )]
+    fn bdd_verify_a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {
         let report = build("oracle:1.2.3", &[api(0, 0, 13)], &[api(0, 0, 13)]);
         assert!(
             report.apis
@@ -413,39 +434,74 @@ mod tests {
         );
     }
 
+    /// #863: a key that advertises the oracle's own range, recorded as served
+    /// wider, still carries the reason.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: a served range divergence is recorded on a matching advertised range"
+    )]
+    fn a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: a served range divergence whose advertised range moves panics"
+    )]
+    fn bdd_verify_a_served_range_divergence_whose_advertised_range_moves_panics() {
+        let _ = build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
+    }
+
     /// A served-range entry describes a key whose advertised range matches;
     /// once it does not, the sentence is about something else.
-    #[test]
     #[should_panic(expected = "no longer does")]
-    fn a_served_range_divergence_whose_advertised_range_moves_panics() {
-        let _ = build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: a served range divergence whose advertised range moves panics"
+    )]
+    fn a_served_range_divergence_whose_advertised_range_moves_panics() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: an unrecorded range divergence panics"
+    )]
+    fn bdd_verify_an_unrecorded_range_divergence_panics() {
+        let _ = build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
     }
 
     /// A range that starts differing with nothing written for it fails the
     /// differential suite rather than landing in the checked-in file.
-    #[test]
     #[should_panic(expected = "no intent is recorded")]
-    fn an_unrecorded_range_divergence_panics() {
-        let _ = build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: an unrecorded range divergence panics"
+    )]
+    fn an_unrecorded_range_divergence_panics() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: the recorded tables admit no range divergence"
+    )]
+    fn bdd_verify_the_recorded_tables_admit_no_range_divergence() {
+        let _ = DivergenceReport::build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
     }
 
     /// #784: with nothing recorded, any range divergence at all fails the
     /// suite, since krabka's default table is Kafka 4.3.1's.
-    #[test]
     #[should_panic(expected = "no intent is recorded")]
-    fn the_recorded_tables_admit_no_range_divergence() {
-        let _ = DivergenceReport::build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
-    }
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: the recorded tables admit no range divergence"
+    )]
+    fn the_recorded_tables_admit_no_range_divergence() {}
 
-    /// The checked-in fixture is byte-for-byte what [`DivergenceReport::store`]
-    /// writes for the report it decodes to.
-    ///
-    /// The differential suite needs Docker, so the file is sometimes edited by
-    /// hand between regenerations. This is what keeps such an edit from
-    /// producing a file the next regeneration would reformat, which would show
-    /// up as noise in the diff that is meant to be the change under review.
-    #[test]
-    fn the_checked_in_report_is_exactly_what_store_writes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: the checked in report is exactly what store writes"
+    )]
+    fn bdd_verify_the_checked_in_report_is_exactly_what_store_writes() {
         // `include_str!` reads the fixture at compile time, which is what
         // `compile_data` in //crates/broker:BUILD.bazel makes available.
         // Keeping `CARGO_MANIFEST_DIR` for a runtime read instead would embed
@@ -464,12 +520,36 @@ mod tests {
         assert!(fs::read_to_string(&rewritten).expect("read rewritten") == CHECKED_IN);
     }
 
-    #[test]
-    fn report_round_trips_through_json() {
+    /// The checked-in fixture is byte-for-byte what [`DivergenceReport::store`]
+    /// writes for the report it decodes to.
+    ///
+    /// The differential suite needs Docker, so the file is sometimes edited by
+    /// hand between regenerations. This is what keeps such an edit from
+    /// producing a file the next regeneration would reformat, which would show
+    /// up as noise in the diff that is meant to be the change under review.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: the checked in report is exactly what store writes"
+    )]
+    fn the_checked_in_report_is_exactly_what_store_writes() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "api versions differential divergence tests: report round trips through json"
+    )]
+    fn bdd_verify_report_round_trips_through_json() {
         let report = build("oracle:1.2.3", &[api(1, 0, 18)], &[api(1, 4, 18)]);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("nested").join("divergence.json");
         report.store(&path);
         assert!(DivergenceReport::load(&path) == report);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/tests/api_versions_differential/divergence.feature",
+        name = "tests: report round trips through json"
+    )]
+    fn report_round_trips_through_json() {}
 }

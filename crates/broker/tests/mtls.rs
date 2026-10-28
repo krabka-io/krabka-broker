@@ -95,8 +95,9 @@ fn client_config_with_pinned_server_and_client_cert(
     Arc::new(cfg)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("mtls: mtls principal is cert dn and super user bypass works")]
+async fn bdd_verify_mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // Provider registration is shared with auth_handlers.rs; tolerate
     // an earlier installer.
     let _ = aws_lc_rs::default_provider().install_default();
@@ -144,19 +145,17 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     handle.shutdown().await;
 }
 
-/// A presented certificate whose Subject DN matches no
-/// `ssl.principal.mapping.rules` rule must close the connection.
-///
-/// Kafka's `SslPrincipalMapper.getName` throws `NoMatchingRule` there and the
-/// channel never builds. The two ways this could regress are both privilege
-/// promotions: admitting the peer under its raw DN, or falling through to
-/// `ANONYMOUS`. Either would turn an operator's exhaustive rule list into a
-/// door that anyone holding a CA-signed cert walks through.
-///
-/// The client is set up exactly as the passing test above -- same fixture
-/// cert, same DN in `super_users` -- so the only difference is the rule list.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "mtls principal is cert dn and super user bypass works"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unmappable_certificate_dn_closes_the_connection() {
+async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("mtls: an unmappable certificate dn closes the connection")]
+async fn bdd_verify_an_unmappable_certificate_dn_closes_the_connection() {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let MtlsFixture {
@@ -198,17 +197,28 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
     handle.shutdown().await;
 }
 
-/// A TLS listener that does not require a client certificate still has to
-/// serve the peer that presents none.
+/// A presented certificate whose Subject DN matches no
+/// `ssl.principal.mapping.rules` rule must close the connection.
 ///
-/// This is the other half of the refusal above: `peer_cert_principal` returns
-/// `Ok(None)` here -- the `ANONYMOUS` session -- and `Err(())` there, and the
-/// two must not collapse into one another. If "no certificate" started
-/// closing the connection, every `ClientAuthMode::Optional` listener would
-/// stop serving plain TLS clients; the refusal test above holds the opposite
-/// direction, so between them the branch cannot be flattened either way.
+/// Kafka's `SslPrincipalMapper.getName` throws `NoMatchingRule` there and the
+/// channel never builds. The two ways this could regress are both privilege
+/// promotions: admitting the peer under its raw DN, or falling through to
+/// `ANONYMOUS`. Either would turn an operator's exhaustive rule list into a
+/// door that anyone holding a CA-signed cert walks through.
+///
+/// The client is set up exactly as the passing test above -- same fixture
+/// cert, same DN in `super_users` -- so the only difference is the rule list.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "an unmappable certificate dn closes the connection"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
+async fn an_unmappable_certificate_dn_closes_the_connection() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("mtls: a connection with no certificate is served rather than closed")]
+async fn bdd_verify_a_connection_with_no_certificate_is_served_rather_than_closed() {
     let _ = aws_lc_rs::default_provider().install_default();
 
     let MtlsBroker {
@@ -248,6 +258,23 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
 
     handle.shutdown().await;
 }
+
+/// A TLS listener that does not require a client certificate still has to
+/// serve the peer that presents none.
+///
+/// This is the other half of the refusal above: `peer_cert_principal` returns
+/// `Ok(None)` here -- the `ANONYMOUS` session -- and `Err(())` there, and the
+/// two must not collapse into one another. If "no certificate" started
+/// closing the connection, every `ClientAuthMode::Optional` listener would
+/// stop serving plain TLS clients; the refusal test above holds the opposite
+/// direction, so between them the branch cannot be flattened either way.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/mtls.feature",
+    name = "a connection with no certificate is served rather than closed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_with_no_certificate_is_served_rather_than_closed() {}
 
 async fn timed_create_topics<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,

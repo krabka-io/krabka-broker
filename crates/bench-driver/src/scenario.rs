@@ -518,8 +518,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stack_broker_pod_regex_distinguishes_stacks() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: stack broker pod regex distinguishes stacks")]
+    fn bdd_verify_stack_broker_pod_regex_distinguishes_stacks() {
         assert2::assert!(Stack::Krabka.broker_pod_regex() == "^demo-broker");
         assert2::assert!(Stack::Kafka.broker_pod_regex() == "^demo-kafka-");
         // The krabka prefix must match BOTH the single-pool e2e naming and the
@@ -529,36 +530,76 @@ mod tests {
         assert2::assert!("demo-broker-0-0".starts_with(p));
     }
 
-    #[yare::parameterized(
-        none = { Acks::None, krabka_client_producer::Acks::Zero },
-        leader = { Acks::Leader, krabka_client_producer::Acks::One },
-        all = { Acks::All, krabka_client_producer::Acks::All },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: stack broker pod regex distinguishes stacks"
     )]
-    fn acks_map_to_producer_enum(acks: Acks, want: krabka_client_producer::Acks) {
+    fn stack_broker_pod_regex_distinguishes_stacks() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: acks map to producer enum for {example}")]
+    fn bdd_verify_acks_map_to_producer_enum(example: String) {
+        type Example = (Acks, krabka_client_producer::Acks);
+        let (acks, want): Example = match example.as_str() {
+            "none" => (Acks::None, krabka_client_producer::Acks::Zero),
+            "leader" => (Acks::Leader, krabka_client_producer::Acks::One),
+            "all" => (Acks::All, krabka_client_producer::Acks::All),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(acks.into_producer() == want);
     }
 
-    #[yare::parameterized(
-        none = { Compression::None, krabka_client_producer::Compression::None },
-        gzip = { Compression::Gzip, krabka_client_producer::Compression::Gzip },
-        snappy = { Compression::Snappy, krabka_client_producer::Compression::Snappy },
-        lz4 = { Compression::Lz4, krabka_client_producer::Compression::Lz4 },
-        zstd = { Compression::Zstd, krabka_client_producer::Compression::Zstd },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: acks map to producer enum"
     )]
-    fn compression_maps_to_producer_enum(
-        compression: Compression,
-        want: krabka_client_producer::Compression,
-    ) {
+    fn acks_map_to_producer_enum(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: compression maps to producer enum for {example}")]
+    fn bdd_verify_compression_maps_to_producer_enum(example: String) {
+        type Example = (Compression, krabka_client_producer::Compression);
+        let (compression, want): Example = match example.as_str() {
+            "none" => (Compression::None, krabka_client_producer::Compression::None),
+            "gzip" => (Compression::Gzip, krabka_client_producer::Compression::Gzip),
+            "snappy" => (
+                Compression::Snappy,
+                krabka_client_producer::Compression::Snappy,
+            ),
+            "lz4" => (Compression::Lz4, krabka_client_producer::Compression::Lz4),
+            "zstd" => (Compression::Zstd, krabka_client_producer::Compression::Zstd),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(compression.into_producer() == want);
     }
 
-    #[test]
-    fn compression_default_is_none() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: compression maps to producer enum"
+    )]
+    fn compression_maps_to_producer_enum(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: compression default is none")]
+    fn bdd_verify_compression_default_is_none() {
         assert2::assert!(Compression::default() == Compression::None);
     }
 
-    #[test]
-    fn scenario_yaml_reads_the_operator_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: compression default is none"
+    )]
+    fn compression_default_is_none() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: scenario yaml reads the operator form")]
+    fn bdd_verify_scenario_yaml_reads_the_operator_form() {
         let y = "
 name: small-msg-saturate
 mode_tag: ci
@@ -584,6 +625,13 @@ warmup: 10s
         check!(matches!(s.mode, LoadMode::Saturate));
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml reads the operator form"
+    )]
+    fn scenario_yaml_reads_the_operator_form() {}
+
     fn check_default_batch_timing(s: &Scenario) {
         check!(s.key_size == ByteSize::ZERO);
         check!(s.linger == millis(5));
@@ -592,8 +640,9 @@ warmup: 10s
         check!(s.warmup == secs(10));
     }
 
-    #[test]
-    fn scenario_yaml_defaults_every_omitted_field() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: scenario yaml defaults every omitted field")]
+    fn bdd_verify_scenario_yaml_defaults_every_omitted_field() {
         let y = "
 name: bare
 mode:
@@ -605,8 +654,16 @@ mode:
         check!(s.failover == None);
     }
 
-    #[test]
-    fn scenario_yaml_rejects_a_size_without_a_unit() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml defaults every omitted field"
+    )]
+    fn scenario_yaml_defaults_every_omitted_field() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: scenario yaml rejects a size without a unit")]
+    fn bdd_verify_scenario_yaml_rejects_a_size_without_a_unit() {
         let y = "
 name: unitless
 msg_size: 100
@@ -617,28 +674,41 @@ mode:
         check!(error.to_string().contains("missing unit"));
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml rejects a size without a unit"
+    )]
+    fn scenario_yaml_rejects_a_size_without_a_unit() {}
+
     /// A minimal `saturate` scenario with `extra` appended, so one field's bound
     /// can be exercised against an otherwise-runnable file.
     fn parse_saturate_with(extra: &str) -> Result<Scenario, serde_saphyr::Error> {
         serde_saphyr::from_str(&format!("name: bounds\nmode:\n  kind: saturate\n{extra}\n"))
     }
 
-    #[yare::parameterized(
-        negative_message_size = { "msg_size: -1B", "a positive size" },
-        zero_message_size = { "msg_size: 0", "a positive size" },
-        negative_key_size = { "key_size: -1B", "a size of zero or more" },
-        negative_batch_size = { "batch_size: -16KiB", "a positive size" },
-        zero_batch_size = { "batch_size: 0", "a positive size" },
-        negative_linger = { "linger: -5ms", "an extent of zero or more" },
-        negative_duration = { "duration: -60s", "a positive extent" },
-        zero_duration = { "duration: 0", "a positive extent" },
-        negative_warmup = { "warmup: -10s", "an extent of zero or more" },
-        negative_failover_kill_after = {
-            "failover:\n  kill_after: -4s",
-            "an extent of zero or more",
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "scenario tests: scenario yaml rejects unrunnable magnitudes for {example}"
     )]
-    fn scenario_yaml_rejects_unrunnable_magnitudes(field: &str, requirement: &str) {
+    fn bdd_verify_scenario_yaml_rejects_unrunnable_magnitudes(example: String) {
+        type Example<'a> = (&'a str, &'a str);
+        let (field, requirement): Example<'_> = match example.as_str() {
+            "negative message size" => ("msg_size: -1B", "a positive size"),
+            "zero message size" => ("msg_size: 0", "a positive size"),
+            "negative key size" => ("key_size: -1B", "a size of zero or more"),
+            "negative batch size" => ("batch_size: -16KiB", "a positive size"),
+            "zero batch size" => ("batch_size: 0", "a positive size"),
+            "negative linger" => ("linger: -5ms", "an extent of zero or more"),
+            "negative duration" => ("duration: -60s", "a positive extent"),
+            "zero duration" => ("duration: 0", "a positive extent"),
+            "negative warmup" => ("warmup: -10s", "an extent of zero or more"),
+            "negative failover kill after" => {
+                ("failover:\n  kill_after: -4s", "an extent of zero or more")
+            }
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // The human forms accept a sign, so every field that used to be an
         // unsigned primitive has to say so itself.
         let error = parse_saturate_with(field)
@@ -646,11 +716,25 @@ mode:
         check!(error.to_string().contains(requirement), "{field:?}");
     }
 
-    #[yare::parameterized(
-        negative = { "\"-1/s\"" },
-        zero = { "\"0\"" },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml rejects unrunnable magnitudes"
     )]
-    fn scenario_yaml_rejects_an_unrunnable_fixed_rate(rate: &str) {
+    fn scenario_yaml_rejects_unrunnable_magnitudes(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "scenario tests: scenario yaml rejects an unrunnable fixed rate for {example}"
+    )]
+    fn bdd_verify_scenario_yaml_rejects_an_unrunnable_fixed_rate(example: String) {
+        type Example<'a> = (&'a str,);
+        let (rate,): Example<'_> = match example.as_str() {
+            "negative" => ("\"-1/s\"",),
+            "zero" => ("\"0\"",),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // Quoted because `LoadMode` is internally tagged: serde buffers the
         // variant's fields before handing them on, and a buffered YAML `0` is an
         // integer rather than the scalar text the human form reads.
@@ -660,8 +744,16 @@ mode:
         check!(error.to_string().contains("a positive rate"), "{rate}");
     }
 
-    #[test]
-    fn scenario_yaml_admits_zero_where_zero_is_runnable() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml rejects an unrunnable fixed rate"
+    )]
+    fn scenario_yaml_rejects_an_unrunnable_fixed_rate(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: scenario yaml admits zero where zero is runnable")]
+    fn bdd_verify_scenario_yaml_admits_zero_where_zero_is_runnable() {
         let s =
             parse_saturate_with("key_size: 0\nlinger: 0\nwarmup: 0\nfailover:\n  kill_after: 0")
                 .expect("keyless records, no linger, no warmup, and an immediate kill all run");
@@ -671,8 +763,16 @@ mode:
         check!(s.failover.map(|failover| failover.kill_after) == Some(Time::ZERO));
     }
 
-    #[test]
-    fn fixed_rate_yaml_parses_an_event_rate() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml admits zero where zero is runnable"
+    )]
+    fn scenario_yaml_admits_zero_where_zero_is_runnable() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: fixed rate yaml parses an event rate")]
+    fn bdd_verify_fixed_rate_yaml_parses_an_event_rate() {
         let y = "
 name: fixed-rate
 mode:
@@ -688,8 +788,16 @@ mode:
         );
     }
 
-    #[test]
-    fn failover_yaml_parses_a_kill_offset() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: fixed rate yaml parses an event rate"
+    )]
+    fn fixed_rate_yaml_parses_an_event_rate() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: failover yaml parses a kill offset")]
+    fn bdd_verify_failover_yaml_parses_a_kill_offset() {
         let y = "
 name: failover
 mode:
@@ -707,8 +815,16 @@ failover:
         );
     }
 
-    #[test]
-    fn scenario_yaml_round_trips_through_the_human_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: failover yaml parses a kill offset"
+    )]
+    fn failover_yaml_parses_a_kill_offset() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: scenario yaml round trips through the human form")]
+    fn bdd_verify_scenario_yaml_round_trips_through_the_human_form() {
         let yaml = serde_saphyr::to_string(&scenario()).expect("encode");
         // Operator-facing fields carry their unit rather than a bare float.
         for needle in ["msg_size: 4KiB", "linger: 5ms", "rate: 20000/s"] {
@@ -718,16 +834,34 @@ failover:
         check!(back == scenario());
     }
 
-    #[test]
-    fn run_output_json_round_trips() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: scenario yaml round trips through the human form"
+    )]
+    fn scenario_yaml_round_trips_through_the_human_form() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: run output json round trips")]
+    fn bdd_verify_run_output_json_round_trips() {
         let out = run_output();
         let json = serde_json::to_string(&out).expect("encode");
         let back: RunOutput = serde_json::from_str(&json).expect("decode");
         check!(back == out);
     }
 
-    #[test]
-    fn run_output_json_encodes_measurements_as_exact_integers() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: run output json round trips"
+    )]
+    fn run_output_json_round_trips() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "scenario tests: run output json encodes measurements as exact integers"
+    )]
+    fn bdd_verify_run_output_json_encodes_measurements_as_exact_integers() {
         let json = serde_json::to_value(run_output()).expect("encode");
         check!(json["producer_latency"]["p99"] == serde_json::json!(4_250_000));
         check!(json["throughput"]["bytes_in"] == serde_json::json!(2_516_582_400_u64));
@@ -737,8 +871,16 @@ failover:
         check!(json["startup"] == serde_json::json!(1234));
     }
 
-    #[test]
-    fn absent_optional_resource_fields_decode_as_none() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: run output json encodes measurements as exact integers"
+    )]
+    fn run_output_json_encodes_measurements_as_exact_integers() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scenario tests: absent optional resource fields decode as none")]
+    fn bdd_verify_absent_optional_resource_fields_decode_as_none() {
         let mut out = run_output();
         out.resource.jvm_heap_used = None;
         out.resource.jvm_nonheap_used = None;
@@ -750,6 +892,13 @@ failover:
         let back: RunOutput = serde_json::from_str(&json).expect("decode");
         check!(back == out);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scenario.feature",
+        name = "tests: absent optional resource fields decode as none"
+    )]
+    fn absent_optional_resource_fields_decode_as_none() {}
 }
 
 #[cfg(test)]

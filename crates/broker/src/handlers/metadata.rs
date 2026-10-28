@@ -742,12 +742,9 @@ mod tests {
         }
     }
 
-    /// `MetadataResponse.ClusterId` reports Kafka's base64 `Uuid` form, not
-    /// `java.util.UUID`'s hyphenated form (#1042). The expected string is what
-    /// `org.apache.kafka.common.Uuid(0x0102030405060708L, 0x090a0b0c0d0e0f10L)
-    /// .toString()` produces for the same 16 bytes.
-    #[tokio::test]
-    async fn reports_cluster_id_in_kafka_base64_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("handlers metadata tests: reports cluster id in kafka base64 form")]
+    async fn bdd_verify_reports_cluster_id_in_kafka_base64_form() {
         let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, p, peer, ctx);
@@ -762,4 +759,16 @@ mod tests {
         assert!(resp.cluster_id.as_deref() == Some("AQIDBAUGBwgJCgsMDQ4PEA"));
         broker_handle.shutdown().await;
     }
+
+    /// `MetadataResponse.ClusterId` reports Kafka's base64 `Uuid` form, not
+    /// `java.util.UUID`'s hyphenated form (#1042). The expected string is what
+    /// `org.apache.kafka.common.Uuid(0x0102030405060708L, 0x090a0b0c0d0e0f10L)
+    /// .toString()` produces for the same 16 bytes.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/metadata.feature",
+        name = "tests: reports cluster id in kafka base64 form"
+    )]
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form() {}
 }

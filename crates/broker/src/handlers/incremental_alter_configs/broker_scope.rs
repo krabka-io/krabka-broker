@@ -322,10 +322,11 @@ mod tests {
         }
     }
 
-    /// Each row is a resource name, the stored state, the operations, and the
-    /// whole expected outcome: the staged records, or the error.
-    #[test]
-    fn broker_resources_follow_kafkas_dynamic_config_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs broker scope tests: broker resources follow kafkas dynamic config rules"
+    )]
+    fn bdd_verify_broker_resources_follow_kafkas_dynamic_config_rules() {
         let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
         let rate = LEADER_THROTTLED_RATE_KEY;
         let min_isr = config_keys::MIN_INSYNC_REPLICAS;
@@ -518,6 +519,15 @@ mod tests {
         check_broker_record_cases(cases, BrokerConfigMutationSetup::default());
     }
 
+    /// Each row is a resource name, the stored state, the operations, and the
+    /// whole expected outcome: the staged records, or the error.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_scope.feature",
+        name = "tests: broker resources follow kafkas dynamic config rules"
+    )]
+    fn broker_resources_follow_kafkas_dynamic_config_rules() {}
+
     /// Kafka stores the string the client sent
     /// (`ConfigurationControlManager.incrementalAlterConfigResource` takes the
     /// operation's value as it is, and `DynamicConfig.Broker.validate` drops
@@ -578,13 +588,11 @@ mod tests {
         }
     }
 
-    /// KIP-1066 `cordoned.log.dirs`, with each refusal a live
-    /// `apache/kafka:4.3.1` gave `kafka-configs --alter` on a broker with
-    /// `log.dirs=/tmp/d1,/tmp/d2`: a per-broker key, a `LIST` that APPEND and
-    /// SUBTRACT act on, a value checked against this node's `log.dirs`, and a
-    /// write the controller refuses below `metadata.version` `4.3-IV0`.
-    #[test]
-    fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs broker scope tests: cordoned log dirs follows kafkas dynamic config rules"
+    )]
+    fn bdd_verify_cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
         const KEY: &str = CORDONED_LOG_DIRS;
         let log_dirs = [PathBuf::from("/tmp/d1"), PathBuf::from("/tmp/d2")];
         let at_level = |level: i16, configs: &[StoredConfig<'_>]| {
@@ -692,4 +700,16 @@ mod tests {
             ..Default::default()
         });
     }
+
+    /// KIP-1066 `cordoned.log.dirs`, with each refusal a live
+    /// `apache/kafka:4.3.1` gave `kafka-configs --alter` on a broker with
+    /// `log.dirs=/tmp/d1,/tmp/d2`: a per-broker key, a `LIST` that APPEND and
+    /// SUBTRACT act on, a value checked against this node's `log.dirs`, and a
+    /// write the controller refuses below `metadata.version` `4.3-IV0`.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_scope.feature",
+        name = "tests: cordoned log dirs follows kafkas dynamic config rules"
+    )]
+    fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {}
 }

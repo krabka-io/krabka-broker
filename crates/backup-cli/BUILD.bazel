@@ -14,4 +14,7 @@ crate_binary(
     lib = ":backup-cli",
 )
 
-crate_tests(lib = "backup-cli")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "backup-cli",
+)

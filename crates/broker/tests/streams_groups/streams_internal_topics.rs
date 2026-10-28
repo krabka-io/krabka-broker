@@ -20,12 +20,11 @@ use {
     tokio::time,
 };
 
-/// A stateful subtopology, that is, one with a state-changelog topic, drives
-/// the broker to auto-create the changelog internal topic. Once that topic
-/// exists, the member converges with no `MISSING_INTERNAL_TOPICS` status, which
-/// is status code 3.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stateful_member_triggers_internal_topic_creation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams groups streams internal topics: stateful member triggers internal topic creation"
+)]
+async fn bdd_verify_stateful_member_triggers_internal_topic_creation() {
     let (broker, bootstrap, _dir) = boot().await;
     let client = connect(&bootstrap).await;
     finalize_streams_version(&client).await;
@@ -111,3 +110,15 @@ async fn stateful_member_triggers_internal_topic_creation() {
         changelog_rec.partitions
     );
 }
+
+/// A stateful subtopology, that is, one with a state-changelog topic, drives
+/// the broker to auto-create the changelog internal topic. Once that topic
+/// exists, the member converges with no `MISSING_INTERNAL_TOPICS` status, which
+/// is status code 3.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_internal_topics.feature",
+    name = "stateful member triggers internal topic creation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stateful_member_triggers_internal_topic_creation() {}

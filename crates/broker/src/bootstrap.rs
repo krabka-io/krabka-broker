@@ -558,10 +558,9 @@ mod tests {
         }
     }
 
-    /// The broker reads the `meta.properties` that Kafka writes, in the form
-    /// of each Java version, and the hand-written form of a test fixture.
-    #[test]
-    fn reads_the_file_kafka_writes() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("bootstrap tests: reads the file kafka writes")]
+    fn bdd_verify_reads_the_file_kafka_writes() {
         let cases = [
             ("Java 21 and later", KAFKA_WRITTEN),
             (
@@ -592,6 +591,15 @@ mod tests {
             );
         }
     }
+
+    /// The broker reads the `meta.properties` that Kafka writes, in the form
+    /// of each Java version, and the hand-written form of a test fixture.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/bootstrap.feature",
+        name = "tests: reads the file kafka writes"
+    )]
+    fn reads_the_file_kafka_writes() {}
 
     /// A directory without the file, or a file without a directory id, has
     /// no directory id to read.
@@ -635,10 +643,9 @@ mod tests {
         refusal: Option<&'static str>,
     }
 
-    /// Kafka's `initializeLogDirs` checks, with krabka's two additions: a
-    /// configured cluster id, and a data directory added after the format.
-    #[test]
-    fn initialize_log_dirs_applies_kafkas_checks() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("bootstrap tests: initialize log dirs applies kafkas checks")]
+    fn bdd_verify_initialize_log_dirs_applies_kafkas_checks() {
         const NODE_2: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n\
                               directory.id=AAAAAAAAAAAAAAAAAAABAA\n";
         const NODE_2_DATA: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n\
@@ -806,6 +813,15 @@ mod tests {
             check!(got.map_err(|e| e.to_string()) == Err(want), "{what}");
         }
     }
+
+    /// Kafka's `initializeLogDirs` checks, with krabka's two additions: a
+    /// configured cluster id, and a data directory added after the format.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/bootstrap.feature",
+        name = "tests: initialize log dirs applies kafkas checks"
+    )]
+    fn initialize_log_dirs_applies_kafkas_checks() {}
 
     fn write_records_file(dir: &Path, bytes: &[u8]) {
         fs::write(dir.join(BOOTSTRAP_RECORDS_FILE), bytes).unwrap();

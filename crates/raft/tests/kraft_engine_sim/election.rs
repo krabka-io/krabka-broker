@@ -13,9 +13,9 @@ use {
     std::time::Duration,
 };
 
-/// 1. Three engines elect exactly one leader and agree on the epoch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_engines_elect_one_leader() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft engine sim election: three engines elect one leader")]
+async fn bdd_verify_three_engines_elect_one_leader() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(100);
 
@@ -40,17 +40,20 @@ async fn three_engines_elect_one_leader() {
     }
 }
 
-/// 1b. A bare majority, exactly 2 of a 3-voter set, elects a stable leader even
-///     with UNIFORM election timeouts and in-process lockstep.
-///
-///     This guards the split-vote livelock fix. Without per-node, per-epoch
-///     election-timeout jitter, the two closely-synchronized voters both become
-///     candidates every round, self-vote, and never reach a majority, because
-///     the third voter is down. They then churn for tens of seconds. The
-///     `start_n_node`-style topologies with all voters up never exercised this.
-///     The mixed JVM and Krabka quorum did, because the JVM boots slowly.
+/// 1. Three engines elect exactly one leader and agree on the epoch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
+    name = "three engines elect one leader"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
+async fn three_engines_elect_one_leader() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim election: bare majority two of three elects with uniform timeouts"
+)]
+async fn bdd_verify_bare_majority_two_of_three_elects_with_uniform_timeouts() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(150);
 
@@ -84,3 +87,20 @@ async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
     // The data directories outlive the engines that wrote to them.
     drop(dirs);
 }
+
+/// 1b. A bare majority, exactly 2 of a 3-voter set, elects a stable leader even
+///     with UNIFORM election timeouts and in-process lockstep.
+///
+///     This guards the split-vote livelock fix. Without per-node, per-epoch
+///     election-timeout jitter, the two closely-synchronized voters both become
+///     candidates every round, self-vote, and never reach a majority, because
+///     the third voter is down. They then churn for tens of seconds. The
+///     `start_n_node`-style topologies with all voters up never exercised this.
+///     The mixed JVM and Krabka quorum did, because the JVM boots slowly.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
+    name = "bare majority two of three elects with uniform timeouts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {}

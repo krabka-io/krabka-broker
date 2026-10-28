@@ -159,8 +159,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn state_partition_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified share persistence partition metadata tests: state partition metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_state_partition_metadata_bytes_match_kafka_schema() {
         let v = ShareGroupStatePartitionMetadataValue {
             initializing: vec![],
             initialized: vec![initialized(1, "orders", vec![0])],
@@ -185,6 +188,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/persistence/partition_metadata.feature",
+        name = "tests: state partition metadata bytes match kafka schema"
+    )]
+    fn state_partition_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn state_partition_metadata_round_trip() {

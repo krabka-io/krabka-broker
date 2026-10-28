@@ -323,17 +323,11 @@ fn krabka_topic_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// The regression test for the `MirrorMaker` 2 defect: every key Kafka 4.3.1
-/// carries has to survive krabka's alter validator with a value Kafka's own
-/// validator accepts.
-///
-/// Before `compression.gzip.level`, `compression.lz4.level`,
-/// `compression.zstd.level` and `internal.segment.bytes` were added, this
-/// failed with an unknown-key refusal on each of them -- the same refusal
-/// `MirrorMaker` surfaced as `InvalidConfigurationException: unrecognized config
-/// key`.
-#[test]
-fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: every kafka 4 3 1 topic config is accepted by the alter path"
+)]
+fn bdd_verify_every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
     for row in KAFKA_TOPIC_CONFIGS {
         check!(
             validate_topic_config(row.name, row.sample) == Ok(()),
@@ -344,11 +338,27 @@ fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
     }
 }
 
-/// Kafka trunk's topic keys follow `unstable.api.versions.enable`: refused
-/// with Kafka 4.3.1's `LogConfig.validateNames` text without it, accepted with
-/// it.
-#[test]
-fn kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {
+/// The regression test for the `MirrorMaker` 2 defect: every key Kafka 4.3.1
+/// carries has to survive krabka's alter validator with a value Kafka's own
+/// validator accepts.
+///
+/// Before `compression.gzip.level`, `compression.lz4.level`,
+/// `compression.zstd.level` and `internal.segment.bytes` were added, this
+/// failed with an unknown-key refusal on each of them -- the same refusal
+/// `MirrorMaker` surfaced as `InvalidConfigurationException: unrecognized config
+/// key`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "every kafka 4 3 1 topic config is accepted by the alter path"
+)]
+fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: kafka trunk topic configs are accepted only under unstable api versions"
+)]
+fn bdd_verify_kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {
     for row in KAFKA_TRUNK_TOPIC_CONFIGS {
         check!(
             canonical_topic_config(row.name, row.sample, UnstableApiVersions::Disabled)
@@ -365,13 +375,21 @@ fn kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {
     }
 }
 
-/// `MirrorMaker` sends the source topic's whole config set as one
-/// `IncrementalAlterConfigs`, so one unknown key loses every other key with
-/// it. The whole-map validator is the surface that call lands on: a 4.3.1
-/// set replays onto a default broker, and a trunk set only onto one with
-/// `unstable.api.versions.enable`.
-#[test]
-fn a_whole_kafka_config_set_replays_in_one_alter() {
+/// Kafka trunk's topic keys follow `unstable.api.versions.enable`: refused
+/// with Kafka 4.3.1's `LogConfig.validateNames` text without it, accepted with
+/// it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "kafka trunk topic configs are accepted only under unstable api versions"
+)]
+fn kafka_trunk_topic_configs_are_accepted_only_under_unstable_api_versions() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: a whole kafka config set replays in one alter"
+)]
+fn bdd_verify_a_whole_kafka_config_set_replays_in_one_alter() {
     let released: BTreeMap<String, String> = KAFKA_TOPIC_CONFIGS
         .iter()
         .map(|row| (row.name.to_owned(), row.sample.to_owned()))
@@ -394,10 +412,23 @@ fn a_whole_kafka_config_set_replays_in_one_alter() {
     assert!(validate_topic_config_map(&trunk).is_err());
 }
 
-/// Both directions of the diff at once. A Kafka key krabka lacks fails on the
-/// left; a krabka key nobody classified fails on the right.
-#[test]
-fn the_topic_key_sets_differ_only_by_the_rosters_below() {
+/// `MirrorMaker` sends the source topic's whole config set as one
+/// `IncrementalAlterConfigs`, so one unknown key loses every other key with
+/// it. The whole-map validator is the surface that call lands on: a 4.3.1
+/// set replays onto a default broker, and a trunk set only onto one with
+/// `unstable.api.versions.enable`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "a whole kafka config set replays in one alter"
+)]
+fn a_whole_kafka_config_set_replays_in_one_alter() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: the topic key sets differ only by the rosters below"
+)]
+fn bdd_verify_the_topic_key_sets_differ_only_by_the_rosters_below() {
     let krabka: Vec<&str> = krabka_topic_keys();
     let kafka: Vec<&str> = kafka_rosters().map(|row| row.name).collect();
 
@@ -419,11 +450,18 @@ fn the_topic_key_sets_differ_only_by_the_rosters_below() {
     );
 }
 
-/// The type byte and default a Kafka key reports have to be Kafka's own: the
-/// JVM `AdminClient` parses `ConfigEntry.value()` with the type the broker
-/// hands back, and `kafka-configs --describe --all` prints the default.
-#[test]
-fn kafka_topic_key_types_and_defaults_match() {
+#[cfg(test)]
+/// Both directions of the diff at once. A Kafka key krabka lacks fails on the
+/// left; a krabka key nobody classified fails on the right.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "the topic key sets differ only by the rosters below"
+)]
+fn the_topic_key_sets_differ_only_by_the_rosters_below() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config keys kafka parity: kafka topic key types and defaults match")]
+fn bdd_verify_kafka_topic_key_types_and_defaults_match() {
     for row in kafka_rosters() {
         let Some(krabka_row) = registry::lookup(ConfigScope::Topic, row.name) else {
             // `the_topic_key_sets_differ_only_by_the_rosters_below` reports a
@@ -443,11 +481,21 @@ fn kafka_topic_key_types_and_defaults_match() {
     }
 }
 
-/// A divergence stops being one once it is closed, and the row here has to go
-/// with it. Without this, a fixed default would leave a row claiming a
-/// difference that no longer exists.
-#[test]
-fn every_recorded_divergence_is_still_a_divergence() {
+/// The type byte and default a Kafka key reports have to be Kafka's own: the
+/// JVM `AdminClient` parses `ConfigEntry.value()` with the type the broker
+/// hands back, and `kafka-configs --describe --all` prints the default.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "kafka topic key types and defaults match"
+)]
+fn kafka_topic_key_types_and_defaults_match() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: every recorded divergence is still a divergence"
+)]
+fn bdd_verify_every_recorded_divergence_is_still_a_divergence() {
     for Divergence {
         name,
         krabka_default,
@@ -461,13 +509,19 @@ fn every_recorded_divergence_is_still_a_divergence() {
     }
 }
 
-/// Every Kafka key is on the generated reference page and in
-/// `DescribeConfigs`' typed metadata, which is the same projection of the
-/// registry. A key the validator accepts but the page never mentions would
-/// leave an operator reading `kafka-configs --describe` one story and the
-/// alter refusal another.
-#[test]
-fn every_kafka_topic_key_is_documented() {
+#[cfg(test)]
+/// A divergence stops being one once it is closed, and the row here has to go
+/// with it. Without this, a fixed default would leave a row claiming a
+/// difference that no longer exists.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "every recorded divergence is still a divergence"
+)]
+fn every_recorded_divergence_is_still_a_divergence() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("config keys kafka parity: every kafka topic key is documented")]
+fn bdd_verify_every_kafka_topic_key_is_documented() {
     let documented: Vec<&str> = topic_config_docs().iter().map(|doc| doc.key).collect();
 
     for row in kafka_rosters() {
@@ -475,26 +529,73 @@ fn every_kafka_topic_key_is_documented() {
     }
 }
 
-/// Matching Kafka's key set is not the same as accepting anything. Each value
-/// below was refused by `LogConfig.validate` on the 4.3.1 jar, with the
-/// message quoted beside it, and krabka refuses it too.
-#[yare::parameterized(
-    message_downconversion_enable = { "message.downconversion.enable", "true" },
-    made_up_key = { "totally.made.up", "1" },
-    gzip_level_zero = { "compression.gzip.level", "0" },
-    lz4_level_too_high = { "compression.lz4.level", "18" },
-    lz4_level_zero = { "compression.lz4.level", "0" },
-    zstd_level_too_low = { "compression.zstd.level", "-131073" },
-    zstd_level_too_high = { "compression.zstd.level", "23" },
-    negative_max_message_bytes = { "max.message.bytes", "-1" },
-    segment_bytes_below_floor = { "segment.bytes", "1048575" },
-    segment_bytes_zero = { "segment.bytes", "0" },
-    compression_none = { "compression.type", "none" },
+/// Every Kafka key is on the generated reference page and in
+/// `DescribeConfigs`' typed metadata, which is the same projection of the
+/// registry. A key the validator accepts but the page never mentions would
+/// leave an operator reading `kafka-configs --describe` one story and the
+/// alter refusal another.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "every kafka topic key is documented"
 )]
-fn kafka_refuses_what_krabka_refuses(name: &str, value: &str) {
+fn every_kafka_topic_key_is_documented() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: kafka refuses what krabka refuses for {example}"
+)]
+fn bdd_verify_kafka_refuses_what_krabka_refuses(example: String) {
+    type Example<'a> = (&'a str, &'a str);
+    let (name, value): Example<'_> = match example.as_str() {
+        "message downconversion enable" => ("message.downconversion.enable", "true"),
+        "made up key" => ("totally.made.up", "1"),
+        "gzip level zero" => ("compression.gzip.level", "0"),
+        "lz4 level too high" => ("compression.lz4.level", "18"),
+        "lz4 level zero" => ("compression.lz4.level", "0"),
+        "zstd level too low" => ("compression.zstd.level", "-131073"),
+        "zstd level too high" => ("compression.zstd.level", "23"),
+        "negative max message bytes" => ("max.message.bytes", "-1"),
+        "segment bytes below floor" => ("segment.bytes", "1048575"),
+        "segment bytes zero" => ("segment.bytes", "0"),
+        "compression none" => ("compression.type", "none"),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         validate_topic_config(name, value).is_err(),
         "{name}={value} must be refused"
+    );
+}
+
+/// Matching Kafka's key set is not the same as accepting anything. Each value
+/// below was refused by `LogConfig.validate` on the 4.3.1 jar, with the
+/// message quoted beside it, and krabka refuses it too.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "kafka refuses what krabka refuses"
+)]
+fn kafka_refuses_what_krabka_refuses(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: a key kafka gives no validator accepts every value of its type for {example}"
+)]
+fn bdd_verify_a_key_kafka_gives_no_validator_accepts_every_value_of_its_type(example: String) {
+    type Example<'a> = (&'a str,);
+    let (value,): Example<'_> = match example.as_str() {
+        "i64 min" => ("-9223372036854775808",),
+        "minus two" => ("-2",),
+        "minus one" => ("-1",),
+        "zero" => ("0",),
+        "i64 max" => ("9223372036854775807",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
+    check!(
+        validate_topic_config("retention.bytes", value) == Ok(()),
+        "retention.bytes={value}"
     );
 }
 
@@ -503,41 +604,60 @@ fn kafka_refuses_what_krabka_refuses(name: &str, value: &str) {
 /// accepts every value the type holds -- `-2` included, which `retention.ms`
 /// next to it refuses. A `MirrorMaker` replay of a source topic carrying one
 /// has to survive here, so krabka may not invent a floor Kafka does not have.
-#[yare::parameterized(
-    i64_min = { "-9223372036854775808" },
-    minus_two = { "-2" },
-    minus_one = { "-1" },
-    zero = { "0" },
-    i64_max = { "9223372036854775807" },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "a key kafka gives no validator accepts every value of its type"
 )]
-fn a_key_kafka_gives_no_validator_accepts_every_value_of_its_type(value: &str) {
-    check!(
-        validate_topic_config("retention.bytes", value) == Ok(()),
-        "retention.bytes={value}"
-    );
+fn a_key_kafka_gives_no_validator_accepts_every_value_of_its_type(example: String) {
+    let _ = example;
 }
 
-#[test]
-fn retention_bytes_refuses_a_value_kafka_long_cannot_hold() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: retention bytes refuses a value kafka long cannot hold"
+)]
+fn bdd_verify_retention_bytes_refuses_a_value_kafka_long_cannot_hold() {
     check!(
         validate_topic_config("retention.bytes", "9223372036854775808").is_err(),
         "a value Kafka's LONG cannot hold is still refused"
     );
 }
 
-/// The levels Kafka's own validators accept at each end of their range.
-#[yare::parameterized(
-    gzip_unlimited = { "compression.gzip.level", "-1" },
-    gzip_minimum = { "compression.gzip.level", "1" },
-    gzip_maximum = { "compression.gzip.level", "9" },
-    lz4_minimum = { "compression.lz4.level", "1" },
-    lz4_maximum = { "compression.lz4.level", "17" },
-    zstd_minimum = { "compression.zstd.level", "-131072" },
-    zstd_maximum = { "compression.zstd.level", "22" },
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "retention bytes refuses a value kafka long cannot hold"
 )]
-fn codec_levels_accept_the_bounds_kafka_accepts(name: &str, value: &str) {
+fn retention_bytes_refuses_a_value_kafka_long_cannot_hold() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "config keys kafka parity: codec levels accept the bounds kafka accepts for {example}"
+)]
+fn bdd_verify_codec_levels_accept_the_bounds_kafka_accepts(example: String) {
+    type Example<'a> = (&'a str, &'a str);
+    let (name, value): Example<'_> = match example.as_str() {
+        "gzip unlimited" => ("compression.gzip.level", "-1"),
+        "gzip minimum" => ("compression.gzip.level", "1"),
+        "gzip maximum" => ("compression.gzip.level", "9"),
+        "lz4 minimum" => ("compression.lz4.level", "1"),
+        "lz4 maximum" => ("compression.lz4.level", "17"),
+        "zstd minimum" => ("compression.zstd.level", "-131072"),
+        "zstd maximum" => ("compression.zstd.level", "22"),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(
         validate_topic_config(name, value) == Ok(()),
         "{name}={value}"
     );
 }
+
+/// The levels Kafka's own validators accept at each end of their range.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/config_keys/kafka_parity.feature",
+    name = "codec levels accept the bounds kafka accepts"
+)]
+fn codec_levels_accept_the_bounds_kafka_accepts(example: String) { let _ = example; }

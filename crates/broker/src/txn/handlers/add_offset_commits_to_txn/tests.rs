@@ -50,9 +50,11 @@ fn the_response_carries_the_error_code() {
     }
 }
 
-/// Kafka `TransactionCoordinator.handleAddPartitionsToTransaction`.
-#[test]
-fn the_decision_follows_kafka_order() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn handlers add offset commits to txn tests: the decision follows kafka order"
+)]
+fn bdd_verify_the_decision_follows_kafka_order() {
     let mut staged = entry(TxnState::Ongoing, &[]);
     staged.next_producer_id = ProducerId(8);
     staged.next_producer_epoch = 0;
@@ -129,6 +131,14 @@ fn the_decision_follows_kafka_order() {
         );
     }
 }
+
+/// Kafka `TransactionCoordinator.handleAddPartitionsToTransaction`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/handlers/add_offset_commits_to_txn/tests.feature",
+    name = "the decision follows kafka order"
+)]
+fn the_decision_follows_kafka_order() {}
 
 /// Kafka `TransactionMetadata.prepareAddPartitions` sets the start time only
 /// when a transaction starts (#850).
@@ -210,10 +220,11 @@ fn coordinator_with_log(directory: &Path) -> LoggedCoordinator {
     }
 }
 
-/// The coordinator answers each case with Kafka's code, and appends only when
-/// the partition set or the state changes (#889).
-#[tokio::test]
-async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn handlers add offset commits to txn tests: add offsets answers kafka codes and appends only a change"
+)]
+async fn bdd_verify_add_offsets_answers_kafka_codes_and_appends_only_a_change() {
     struct Case {
         name: &'static str,
         transactional_id: &'static str,
@@ -321,6 +332,16 @@ async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {
     }
     assert!(actual == expected);
 }
+
+/// The coordinator answers each case with Kafka's code, and appends only when
+/// the partition set or the state changes (#889).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/handlers/add_offset_commits_to_txn/tests.feature",
+    name = "add offsets answers kafka codes and appends only a change"
+)]
+#[tokio::test]
+async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {}
 
 /// Regression: a caller that already holds the entry handle from before this
 /// append, such as `AddPartitionsToTxn`'s `register_partitions` queued on the

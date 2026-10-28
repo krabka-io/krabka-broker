@@ -186,9 +186,9 @@ fn run_gssapi_tool(tool_args: &[&str]) -> Output {
 // `Command::output()` calls per `docker run`. On a single-threaded runtime
 // those block the only worker, which also drives the broker accept loop, and
 // the Java client times out. (Same caveat as `jvm_acceptance.rs`.)
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker + the KDC fixture (docker compose up) + KRB5_CONFIG/SSPI_KDC_URL"]
-async fn cp_kafka_gssapi_client_round_trip() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("gssapi e2e: cp kafka gssapi client round trip")]
+async fn bdd_verify_cp_kafka_gssapi_client_round_trip() {
     const TOPIC: &str = "krabka-gssapi-itest";
 
     let HostGssapiBroker { broker, dir: _dir } = start_host_gssapi_broker().await;
@@ -270,3 +270,12 @@ async fn cp_kafka_gssapi_client_round_trip() {
 
     broker.shutdown().await;
 }
+
+#[ignore = "requires Docker + the KDC fixture (docker compose up) + KRB5_CONFIG/SSPI_KDC_URL"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/gssapi_e2e.feature",
+    name = "cp kafka gssapi client round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cp_kafka_gssapi_client_round_trip() {}

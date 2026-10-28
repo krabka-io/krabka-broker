@@ -189,35 +189,73 @@ mod tests {
         assert!(TxnState::CompleteCommit.can_transition_to(TxnState::Empty));
     }
 
-    #[yare::parameterized(
-        empty = { TxnState::Empty },
-        ongoing = { TxnState::Ongoing },
-        prepare_commit = { TxnState::PrepareCommit },
-        prepare_abort = { TxnState::PrepareAbort },
-        complete_commit = { TxnState::CompleteCommit },
-        complete_abort = { TxnState::CompleteAbort },
-        dead = { TxnState::Dead },
-    )]
-    fn kafka_status_round_trips_all_states(state: TxnState) {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("txn state tests: kafka status round trips all states for {example}")]
+    fn bdd_verify_kafka_status_round_trips_all_states(example: String) {
+        type Example = (TxnState,);
+        let (state,): Example = match example.as_str() {
+            "empty" => (TxnState::Empty,),
+            "ongoing" => (TxnState::Ongoing,),
+            "prepare commit" => (TxnState::PrepareCommit,),
+            "prepare abort" => (TxnState::PrepareAbort,),
+            "complete commit" => (TxnState::CompleteCommit,),
+            "complete abort" => (TxnState::CompleteAbort,),
+            "dead" => (TxnState::Dead,),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(TxnState::from_kafka_status(state.to_kafka_status()) == Some(state));
     }
 
-    #[yare::parameterized(
-        ongoing = { TxnState::Ongoing, 1 },
-        empty = { TxnState::Empty, 0 },
-        dead = { TxnState::Dead, 6 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/state.feature",
+        name = "tests: kafka status round trips all states"
     )]
-    fn kafka_status_values_match_kafka(state: TxnState, want: i8) {
+    fn kafka_status_round_trips_all_states(example: String) { let _ = example; }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("txn state tests: kafka status values match kafka for {example}")]
+    fn bdd_verify_kafka_status_values_match_kafka(example: String) {
+        type Example = (TxnState, i8);
+        let (state, want): Example = match example.as_str() {
+            "ongoing" => (TxnState::Ongoing, 1),
+            "empty" => (TxnState::Empty, 0),
+            "dead" => (TxnState::Dead, 6),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // Empirically pinned: cp-kafka 4.0 Ongoing record had TransactionStatus=1.
         assert2::assert!(state.to_kafka_status() == want, "{state:?}");
     }
 
-    // PrepareEpochFence (7) and out-of-range are not modeled.
-    #[yare::parameterized(
-        prepare_epoch_fence = { 7 },
-        below_range = { -1 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/state.feature",
+        name = "tests: kafka status values match kafka"
     )]
-    fn kafka_status_values_outside_model_are_absent(status: i8) {
+    fn kafka_status_values_match_kafka(example: String) { let _ = example; }
+
+    // PrepareEpochFence (7) and out-of-range are not modeled.
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "txn state tests: kafka status values outside model are absent for {example}"
+    )]
+    fn bdd_verify_kafka_status_values_outside_model_are_absent(example: String) {
+        type Example = (i8,);
+        let (status,): Example = match example.as_str() {
+            "prepare epoch fence" => (7,),
+            "below range" => (-1,),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         assert2::assert!(TxnState::from_kafka_status(status).is_none(), "{status}");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/txn/state.feature",
+        name = "tests: kafka status values outside model are absent"
+    )]
+    fn kafka_status_values_outside_model_are_absent(example: String) { let _ = example; }
 }

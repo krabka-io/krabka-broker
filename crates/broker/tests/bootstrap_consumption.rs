@@ -64,8 +64,9 @@ async fn run_krabka_format(log_dir: &Path, add_scram: &str) {
     assert!(code == 0, "krabka-format exited {code}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bootstrap_records_provisions_scram_user() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("bootstrap consumption: bootstrap records provisions scram user")]
+async fn bdd_verify_bootstrap_records_provisions_scram_user() {
     // The broker installs the rustls crypto provider in `Broker::start`,
     // but the SCRAM client side of this test also performs PBKDF2 / SHA
     // through the same provider. Install it defensively so the test is
@@ -103,8 +104,17 @@ async fn bootstrap_records_provisions_scram_user() {
     );
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "bootstrap records provisions scram user"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn corrupt_bootstrap_refuses_start() {
+async fn bootstrap_records_provisions_scram_user() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("bootstrap consumption: corrupt bootstrap refuses start")]
+async fn bdd_verify_corrupt_bootstrap_refuses_start() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("bootstrap.records.bin"),
@@ -127,8 +137,17 @@ async fn corrupt_bootstrap_refuses_start() {
     }
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "corrupt bootstrap refuses start"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bootstrap_absent_legacy_path() {
+async fn corrupt_bootstrap_refuses_start() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("bootstrap consumption: bootstrap absent legacy path")]
+async fn bdd_verify_bootstrap_absent_legacy_path() {
     // No bootstrap.records.bin written. Existing fresh-bootstrap behavior
     // unchanged — single-broker cluster comes up.
     let dir = tempfile::tempdir().unwrap();
@@ -136,6 +155,14 @@ async fn bootstrap_absent_legacy_path() {
     let handle = Broker::start(cfg).await.expect("broker must start");
     handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_consumption.feature",
+    name = "bootstrap absent legacy path"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_absent_legacy_path() {}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers copied verbatim from `tests/auth_handlers.rs`.

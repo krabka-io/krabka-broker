@@ -410,45 +410,49 @@ mod authorize_by_resource_type {
         }
     }
 
-    #[yare::parameterized(
-        literal_denies_same_name = {
-            "orders",
-            PatternType::Literal,
-            "orders",
-            AuthorizationResult::Deny,
-        },
-        prefix_denies_within_range = {
-            "orders",
-            PatternType::Prefixed,
-            "ord",
-            AuthorizationResult::Deny,
-        },
-        prefix_denies_outside_range = {
-            "orders",
-            PatternType::Prefixed,
-            "orders-",
-            AuthorizationResult::Allow,
-        },
-        wildcard_grant_literal_deny = {
-            "*",
-            PatternType::Literal,
-            "hardcode",
-            AuthorizationResult::Allow,
-        },
-        wildcard_grant_prefix_deny = {
-            "*",
-            PatternType::Prefixed,
-            "hard",
-            AuthorizationResult::Allow,
-        },
-        wildcard_denies_wildcard = { "*", PatternType::Literal, "*", AuthorizationResult::Deny },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "simple tests authorize by resource type: literal and wildcard grants follow kafka pattern dominance for {example}"
     )]
-    fn literal_and_wildcard_grants_follow_kafka_pattern_dominance(
-        grant: &'static str,
-        denied_pattern: PatternType,
-        denied_name: &'static str,
-        expected: AuthorizationResult,
-    ) {
+    fn bdd_verify_literal_and_wildcard_grants_follow_kafka_pattern_dominance(example: String) {
+        type Example = (&'static str, PatternType, &'static str, AuthorizationResult);
+        let (grant, denied_pattern, denied_name, expected): Example = match example.as_str() {
+            "literal denies same name" => (
+                "orders",
+                PatternType::Literal,
+                "orders",
+                AuthorizationResult::Deny,
+            ),
+            "prefix denies within range" => (
+                "orders",
+                PatternType::Prefixed,
+                "ord",
+                AuthorizationResult::Deny,
+            ),
+            "prefix denies outside range" => (
+                "orders",
+                PatternType::Prefixed,
+                "orders-",
+                AuthorizationResult::Allow,
+            ),
+            "wildcard grant literal deny" => (
+                "*",
+                PatternType::Literal,
+                "hardcode",
+                AuthorizationResult::Allow,
+            ),
+            "wildcard grant prefix deny" => (
+                "*",
+                PatternType::Prefixed,
+                "hard",
+                AuthorizationResult::Allow,
+            ),
+            "wildcard denies wildcard" => {
+                ("*", PatternType::Literal, "*", AuthorizationResult::Deny)
+            }
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let image = acl_image([
             topic_acl().op(AclOperation::Write).name(grant).call(),
             topic_acl()
@@ -459,6 +463,15 @@ mod authorize_by_resource_type {
                 .call(),
         ]);
         check_resource_type_access(&image, ResourceType::Topic, AclOperation::Write, expected);
+    }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/simple/tests.feature",
+        name = "authorize by resource type: literal and wildcard grants follow kafka pattern dominance"
+    )]
+    fn literal_and_wildcard_grants_follow_kafka_pattern_dominance(example: String) {
+        let _ = example;
     }
 
     #[yare::parameterized(

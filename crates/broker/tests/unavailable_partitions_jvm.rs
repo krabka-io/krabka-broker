@@ -542,11 +542,11 @@ impl Drop for OracleCluster {
 
 // ---------------------------------------------------------------------- suite
 
-/// One cluster of each kind, the same two commands against both, the same rule
-/// applied to both answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn both_health_filters_print_a_partition_on_a_failed_log_dir() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unavailable partitions jvm: both health filters print a partition on a failed log dir"
+)]
+async fn bdd_verify_both_health_filters_print_a_partition_on_a_failed_log_dir() {
     // Kafka first: if the rule below is wrong about Kafka, this is where the
     // suite says so, before krabka is blamed for missing it.
     let oracle = task::spawn_blocking(OracleCluster::start)
@@ -559,3 +559,14 @@ async fn both_health_filters_print_a_partition_on_a_failed_log_dir() {
 
     krabka.shutdown().await;
 }
+
+/// One cluster of each kind, the same two commands against both, the same rule
+/// applied to both answers.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unavailable_partitions_jvm.feature",
+    name = "both health filters print a partition on a failed log dir"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn both_health_filters_print_a_partition_on_a_failed_log_dir() {}

@@ -89,8 +89,9 @@ fn timestamped_batch(entries: &[TimestampedValue<'_>]) -> RecordBatch {
     batch
 }
 
-#[tokio::test]
-async fn list_offsets_by_timestamp_local() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("integration: list offsets by timestamp local")]
+async fn bdd_verify_list_offsets_by_timestamp_local() {
     let p = support::start().await;
 
     p.client
@@ -156,8 +157,17 @@ async fn list_offsets_by_timestamp_local() {
     assert!(r.topics[0].partitions[0].timestamp == 300);
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/integration.feature",
+    name = "list offsets by timestamp local"
+)]
 #[tokio::test]
-async fn end_to_end_create_produce_fetch_delete() {
+async fn list_offsets_by_timestamp_local() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("integration: end to end create produce fetch delete")]
+async fn bdd_verify_end_to_end_create_produce_fetch_delete() {
     let p = support::start().await;
 
     // 1. ApiVersions.
@@ -231,8 +241,19 @@ async fn end_to_end_create_produce_fetch_delete() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/integration.feature",
+    name = "end to end create produce fetch delete"
+)]
 #[tokio::test]
-async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
+async fn end_to_end_create_produce_fetch_delete() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "integration: produce acks zero sends no frame and keeps connection usable"
+)]
+async fn bdd_verify_produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let p = support::start().await;
     let create = p
         .client
@@ -310,8 +331,17 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/integration.feature",
+    name = "produce acks zero sends no frame and keeps connection usable"
+)]
 #[tokio::test]
-async fn second_open_recovers_partitions_from_disk() {
+async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("integration: second open recovers partitions from disk")]
+async fn bdd_verify_second_open_recovers_partitions_from_disk() {
     let dir = tempfile::tempdir().unwrap();
     {
         let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -346,3 +376,11 @@ async fn second_open_recovers_partitions_from_disk() {
     assert!(t.partitions.len() == 2);
     handle.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/integration.feature",
+    name = "second open recovers partitions from disk"
+)]
+#[tokio::test]
+async fn second_open_recovers_partitions_from_disk() {}

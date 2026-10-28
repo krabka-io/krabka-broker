@@ -15,37 +15,11 @@ use {
     krabka_broker::{codes, coordinator::AUDIT_TOPIC},
 };
 
-/// Verifies that the authorizer-decorator path denies an unauthorized
-/// operation.
-///
-/// This test asserts that:
-///   1. The broker denies a `CreateTopics` request with
-///      `TOPIC_AUTHORIZATION_FAILED` -- a deny-all authorizer denies the
-///      cluster-wide `Create` shortcut, then denies the per-topic `Create`
-///      fallback too (#698's per-topic fallback), so this is the same error
-///      Kafka's `ControllerApis.createTopics` answers for a denied topic row,
-///      not the whole-request `CLUSTER_AUTHORIZATION_FAILED` a pre-#698
-///      broker answered when the cluster shortcut alone was ever checked.
-///   2. The broker stays healthy and does not crash.
-///
-/// This test does NOT assert that the broker emitted an `AuthorizationDenied`
-/// audit record to the audit topic.
-///
-/// The full end-to-end path, which sends a denied request and then observes
-/// the `AuthorizationDenied` record in the audit topic through the same
-/// client, is impractical for these reasons:
-///   - The test client connects anonymously, with the principal
-///     `"ANONYMOUS"`.
-///   - `SimpleAclAuthorizer` with no ACLs and no super-users denies every
-///     request, including the `Fetch` that reads the audit topic back.
-///   - There is no plaintext SASL path that would give the anonymous reader a
-///     higher principal without SCRAM credentials.
-///
-/// The unit test `deny_decision_emits_audit_record` in
-/// `crates/broker/src/audit_authorizer.rs` already proves the audit emit on a
-/// deny.
-#[tokio::test]
-async fn denied_operation_returns_topic_authorization_failed() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "audit denied operations: denied operation returns topic authorization failed"
+)]
+async fn bdd_verify_denied_operation_returns_topic_authorization_failed() {
     // Start a broker with a deny-all authorizer.
     let p = Box::pin(support::start_with_deny_all_authz()).await;
 
@@ -89,3 +63,40 @@ async fn denied_operation_returns_topic_authorization_failed() {
 
     p.broker.shutdown().await;
 }
+
+/// Verifies that the authorizer-decorator path denies an unauthorized
+/// operation.
+///
+/// This test asserts that:
+///   1. The broker denies a `CreateTopics` request with
+///      `TOPIC_AUTHORIZATION_FAILED` -- a deny-all authorizer denies the
+///      cluster-wide `Create` shortcut, then denies the per-topic `Create`
+///      fallback too (#698's per-topic fallback), so this is the same error
+///      Kafka's `ControllerApis.createTopics` answers for a denied topic row,
+///      not the whole-request `CLUSTER_AUTHORIZATION_FAILED` a pre-#698
+///      broker answered when the cluster shortcut alone was ever checked.
+///   2. The broker stays healthy and does not crash.
+///
+/// This test does NOT assert that the broker emitted an `AuthorizationDenied`
+/// audit record to the audit topic.
+///
+/// The full end-to-end path, which sends a denied request and then observes
+/// the `AuthorizationDenied` record in the audit topic through the same
+/// client, is impractical for these reasons:
+///   - The test client connects anonymously, with the principal
+///     `"ANONYMOUS"`.
+///   - `SimpleAclAuthorizer` with no ACLs and no super-users denies every
+///     request, including the `Fetch` that reads the audit topic back.
+///   - There is no plaintext SASL path that would give the anonymous reader a
+///     higher principal without SCRAM credentials.
+///
+/// The unit test `deny_decision_emits_audit_record` in
+/// `crates/broker/src/audit_authorizer.rs` already proves the audit emit on a
+/// deny.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/audit/denied_operations.feature",
+    name = "denied operation returns topic authorization failed"
+)]
+#[tokio::test]
+async fn denied_operation_returns_topic_authorization_failed() {}

@@ -24,29 +24,11 @@ use {
 
 const CONTESTED_CONTAINER: &str = "krabka-kip996-contested";
 
-/// KIP-996 CONTESTED-ELECTION ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
-///
-/// Two Krabka voters, ids 1 and 2, and one `mirror.gcr.io/apache/kafka:4.0.0`
-/// voter, id 3, form a static 3-voter quorum. After the test kills the Krabka
-/// leader, only one Krabka voter and the JVM voter survive. The surviving
-/// Krabka candidate can then reach a majority only if the JVM grants both its
-/// PRE-VOTE and its real vote.
-///
-/// The old `PRE_VOTE_ECHO_TAG` shortcut broke this path, because it dropped a
-/// JVM pre-vote grant.
-///
-/// The JVM is tuned to release the dead leader quickly but to self-nominate
-/// slowly, so the surviving Krabka node wins. Recovery to a new Krabka leader
-/// at a higher epoch is the proof.
-///
-/// Run:
-/// ```text
-/// cargo test -p krabka-broker --test jvm_static_quorum_spike \
-///   contested_election_krabka_counts_jvm_prevote -- --ignored --nocapture
-/// ```
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + a published controller port"]
-async fn contested_election_krabka_counts_jvm_prevote() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm static quorum spike contested election: contested election krabka counts jvm prevote"
+)]
+async fn bdd_verify_contested_election_krabka_counts_jvm_prevote() {
     support::init_tracing();
     docker_rm(CONTESTED_CONTAINER);
 
@@ -219,6 +201,35 @@ async fn contested_election_krabka_counts_jvm_prevote() {
         "JVM controller fatal-faulted during the contested election; see /tmp/jvm_contested.log"
     );
 }
+
+/// KIP-996 CONTESTED-ELECTION ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
+///
+/// Two Krabka voters, ids 1 and 2, and one `mirror.gcr.io/apache/kafka:4.0.0`
+/// voter, id 3, form a static 3-voter quorum. After the test kills the Krabka
+/// leader, only one Krabka voter and the JVM voter survive. The surviving
+/// Krabka candidate can then reach a majority only if the JVM grants both its
+/// PRE-VOTE and its real vote.
+///
+/// The old `PRE_VOTE_ECHO_TAG` shortcut broke this path, because it dropped a
+/// JVM pre-vote grant.
+///
+/// The JVM is tuned to release the dead leader quickly but to self-nominate
+/// slowly, so the surviving Krabka node wins. Recovery to a new Krabka leader
+/// at a higher epoch is the proof.
+///
+/// Run:
+/// ```text
+/// cargo test -p krabka-broker --test jvm_static_quorum_spike \
+///   contested_election_krabka_counts_jvm_prevote -- --ignored --nocapture
+/// ```
+#[ignore = "requires Docker + a published controller port"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_static_quorum_spike/contested_election.feature",
+    name = "contested election krabka counts jvm prevote"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn contested_election_krabka_counts_jvm_prevote() {}
 
 fn capture_contested_jvm_logs() -> bool {
     // Capture JVM logs for diagnosis regardless of outcome.

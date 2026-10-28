@@ -90,14 +90,22 @@ fn metric_value(body: &str, name: &str) -> Option<f64> {
     })
 }
 
-#[test]
-fn prometheus_value_parser_ignores_help_and_other_metrics() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jbod enospc: prometheus value parser ignores help and other metrics")]
+fn bdd_verify_prometheus_value_parser_ignores_help_and_other_metrics() {
     let body = "# HELP krabka_broker_offline_log_dirs count\n\
                 another_metric 9\n\
                 krabka_broker_offline_log_dirs 1\n";
     assert!(metric_value(body, "krabka_broker_offline_log_dirs") == Some(1.0));
     assert!(metric_value(body, "missing") == None);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_enospc.feature",
+    name = "prometheus value parser ignores help and other metrics"
+)]
+fn prometheus_value_parser_ignores_help_and_other_metrics() {}
 
 struct TinyFs {
     volume: String,
@@ -719,9 +727,11 @@ async fn wait_keys(cluster: &Cluster, partitions: &[i32], expected: &BTreeSet<St
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker and //packaging:image"]
-async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jbod enospc: real enospc moves leadership and preserves acked records across restart"
+)]
+async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_across_restart() {
     let cluster = Cluster::start();
     let bootstrap = cluster.bootstrap();
     create_topic(&bootstrap).await;
@@ -846,6 +856,15 @@ async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart
     wait_isr(&bootstrap, healthy, 3).await;
     wait_keys(&cluster, &[doomed, healthy], &acked).await;
 }
+
+#[ignore = "requires Docker and //packaging:image"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jbod_enospc.feature",
+    name = "real enospc moves leadership and preserves acked records across restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart() {}
 
 async fn fill_partition(
     producer: &Producer,

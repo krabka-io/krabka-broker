@@ -388,16 +388,11 @@ struct Case {
     min_insync_replicas: MinimumInsyncReplicas,
 }
 
-/// The active controller writes the bootstrap records once, as the first
-/// metadata batch of the log, on a dynamic quorum, on a static quorum of
-/// isolated controllers, and on a combined node. When the bootstrap records
-/// enable ELR, the same batch ends with the cluster-level
-/// `min.insync.replicas` at the controller's static value, as Kafka's
-/// `ActivationRecordsGenerator.recordsForEmptyLog` writes it, and
-/// `DescribeConfigs` reports it as Kafka does. No broker writes a second copy,
-/// and every node's image takes the records.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_active_controller_writes_the_bootstrap_records_once() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "bootstrap activation: the active controller writes the bootstrap records once"
+)]
+async fn bdd_verify_the_active_controller_writes_the_bootstrap_records_once() {
     support::init_tracing();
     let cases = [
         Case {
@@ -459,6 +454,22 @@ async fn the_active_controller_writes_the_bootstrap_records_once() {
         run_case(case).await;
     }
 }
+
+/// The active controller writes the bootstrap records once, as the first
+/// metadata batch of the log, on a dynamic quorum, on a static quorum of
+/// isolated controllers, and on a combined node. When the bootstrap records
+/// enable ELR, the same batch ends with the cluster-level
+/// `min.insync.replicas` at the controller's static value, as Kafka's
+/// `ActivationRecordsGenerator.recordsForEmptyLog` writes it, and
+/// `DescribeConfigs` reports it as Kafka does. No broker writes a second copy,
+/// and every node's image takes the records.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/bootstrap_activation.feature",
+    name = "the active controller writes the bootstrap records once"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_active_controller_writes_the_bootstrap_records_once() {}
 
 async fn run_case(case: Case) {
     let Case {

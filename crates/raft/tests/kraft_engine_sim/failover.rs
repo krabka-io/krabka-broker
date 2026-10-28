@@ -121,10 +121,9 @@ async fn await_quorum_state<F>(
     }
 }
 
-/// 3. After a kill of the leader, the remaining two re-elect a single new
-///    leader, and a `submit_change` to the new leader commits.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn leader_failure_reelects() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft engine sim failover: leader failure reelects")]
+async fn bdd_verify_leader_failure_reelects() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(300);
 
@@ -170,22 +169,19 @@ async fn leader_failure_reelects() {
     }
 }
 
-/// 3b. The same leader is killed and reopened over its own data dir five times
-///     in a row, and the quorum must converge on one leader after every round.
-///
-///     This is the acceptance for an ex-leader that comes back. Leadership is
-///     volatile, so the reopened node loads `leader_id == None` while its two
-///     followers still believe it leads. It must not answer their Fetches as if
-///     it did. When it did, each answer scored as a live fetch, their watchdogs
-///     never expired, they held their stale leader belief, and a KIP-996
-///     pre-vote only grants when the voter follows no leader. Nothing could
-///     ever win a pre-vote and the cluster stayed leaderless.
-///
-///     Wall-clock, not `start_paused`: the engines are real spawned tasks and
-///     `await_single_leader` polls them with `yield_now`, so the runtime is
-///     never idle and virtual time would never auto-advance.
+/// 3. After a kill of the leader, the remaining two re-elect a single new
+///    leader, and a `submit_change` to the new leader commits.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "leader failure reelects"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn repeated_leader_restart_reelects() {
+async fn leader_failure_reelects() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("kraft engine sim failover: repeated leader restart reelects")]
+async fn bdd_verify_repeated_leader_restart_reelects() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(301);
     let dirs = start_cluster(&net, &ids, cid);
@@ -206,23 +202,33 @@ async fn repeated_leader_restart_reelects() {
     }
 }
 
-/// 3c. A leader that the network isolates must resign instead of holding an
-///     epoch it can no longer serve, and must rejoin as a follower once the
-///     partition heals.
+/// 3b. The same leader is killed and reopened over its own data dir five times
+///     in a row, and the quorum must converge on one leader after every round.
 ///
-///     Nothing else can tell it. The majority side elects at a higher epoch, but
-///     the isolated node receives none of that traffic, and under KIP-996 the
-///     new round's pre-votes never reach it either -- so with no check-quorum it
-///     keeps answering `DescribeQuorum`, Metadata and `BrokerHeartbeat` as the
-///     leader of the old epoch for as long as the partition lasts. The
-///     `election_safety` model property cannot see this: the two leaders hold
-///     different epochs.
+///     This is the acceptance for an ex-leader that comes back. Leadership is
+///     volatile, so the reopened node loads `leader_id == None` while its two
+///     followers still believe it leads. It must not answer their Fetches as if
+///     it did. When it did, each answer scored as a live fetch, their watchdogs
+///     never expired, they held their stale leader belief, and a KIP-996
+///     pre-vote only grants when the voter follows no leader. Nothing could
+///     ever win a pre-vote and the cluster stayed leaderless.
 ///
-///     The isolated node keeps running, which is what separates this from the
-///     kill above: its whole state machine ticks on, and the only thing that
-///     changes is that no voter's Fetch arrives.
+///     Wall-clock, not `start_paused`: the engines are real spawned tasks and
+///     `await_single_leader` polls them with `yield_now`, so the runtime is
+///     never idle and virtual time would never auto-advance.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "repeated leader restart reelects"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isolated_leader_resigns_and_rejoins_after_heal() {
+async fn repeated_leader_restart_reelects() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim failover: isolated leader resigns and rejoins after heal"
+)]
+async fn bdd_verify_isolated_leader_resigns_and_rejoins_after_heal() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(302);
     let ElectedCluster {
@@ -274,30 +280,47 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
     }
 }
 
-/// 3e. Two survivors whose fetch timers run in lockstep elect a new leader
-///     within one fetch timeout and a few election timeouts of a leader kill
-///     (#1477).
+/// 3c. A leader that the network isolates must resign instead of holding an
+///     epoch it can no longer serve, and must rejoin as a follower once the
+///     partition heals.
 ///
-///     Both followers last heard from the leader in the same Fetch round, so
-///     their fetch timers expire together. Each wins the other's pre-vote, both
-///     stand, and the binding vote splits. Kafka retries a split vote one
-///     randomized election timeout later, `controller.quorum.election.timeout.ms`
-///     plus up to as much again, which is far shorter than the fetch timeout.
-///     When the election timer ran on the fetch timeout, the retry came one to
-///     two fetch timeouts after the split, so a crashed controller's
-///     leadership took up to three fetch timeouts to move.
-#[yare::parameterized(
-    first = { 940 },
-    second = { 941 },
-    third = { 942 },
-    fourth = { 943 },
-    fifth = { 944 },
-    sixth = { 945 },
+///     Nothing else can tell it. The majority side elects at a higher epoch, but
+///     the isolated node receives none of that traffic, and under KIP-996 the
+///     new round's pre-votes never reach it either -- so with no check-quorum it
+///     keeps answering `DescribeQuorum`, Metadata and `BrokerHeartbeat` as the
+///     leader of the old epoch for as long as the partition lasts. The
+///     `election_safety` model property cannot see this: the two leaders hold
+///     different epochs.
+///
+///     The isolated node keeps running, which is what separates this from the
+///     kill above: its whole state machine ticks on, and the only thing that
+///     changes is that no voter's Fetch arrives.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "isolated leader resigns and rejoins after heal"
 )]
-#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 4))]
-async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
-    cluster: u128,
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn isolated_leader_resigns_and_rejoins_after_heal() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft engine sim failover: lockstep survivors elect within a fetch timeout and a few election timeouts for {example}"
+)]
+async fn bdd_verify_lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
+    example: String,
 ) {
+    type Example = (u128,);
+    let (cluster,): Example = match example.as_str() {
+        "first" => (940,),
+        "second" => (941,),
+        "third" => (942,),
+        "fourth" => (943,),
+        "fifth" => (944,),
+        "sixth" => (945,),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let fetch_timeout = prelude::millis(1_500);
     let election_timeout = prelude::millis(150);
     let (net, ids) = three_voter_network();
@@ -331,4 +354,28 @@ async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_time
     for id in survivors {
         net.get(id).unwrap().shutdown().await;
     }
+}
+
+/// 3e. Two survivors whose fetch timers run in lockstep elect a new leader
+///     within one fetch timeout and a few election timeouts of a leader kill
+///     (#1477).
+///
+///     Both followers last heard from the leader in the same Fetch round, so
+///     their fetch timers expire together. Each wins the other's pre-vote, both
+///     stand, and the binding vote splits. Kafka retries a split vote one
+///     randomized election timeout later, `controller.quorum.election.timeout.ms`
+///     plus up to as much again, which is far shorter than the fetch timeout.
+///     When the election timer ran on the fetch timeout, the retry came one to
+///     two fetch timeouts after the split, so a crashed controller's
+///     leadership took up to three fetch timeouts to move.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "lockstep survivors elect within a fetch timeout and a few election timeouts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
+    example: String,
+) {
+    let _ = example;
 }

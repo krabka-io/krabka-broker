@@ -21,8 +21,9 @@ use {
     krabka_protocol::owned::list_offsets_request::ListOffsetsRequest,
 };
 
-#[tokio::test]
-async fn produce_assigns_base_offsets() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit produce fetch: produce assigns base offsets")]
+async fn bdd_verify_produce_assigns_base_offsets() {
     let p = support::start().await;
     create_topic(&p, "prod", 1).await;
     let topic_id = topic_id_for(&p.client, "prod").await;
@@ -52,12 +53,19 @@ async fn produce_assigns_base_offsets() {
     p.broker.shutdown().await;
 }
 
-/// The test client negotiates Produce v13, which carries only the topic id.
-/// A request with no id names no topic, so Kafka's
-/// `KafkaApis.handleProduceRequest` answers `UNKNOWN_TOPIC_ID` (100). The name
-/// path and its `UNKNOWN_TOPIC_OR_PARTITION` (3) belong to v12 and earlier.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce assigns base offsets"
+)]
 #[tokio::test]
-async fn produce_without_a_topic_id_returns_unknown_topic_id() {
+async fn produce_assigns_base_offsets() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "unit produce fetch: produce without a topic id returns unknown topic id"
+)]
+async fn bdd_verify_produce_without_a_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     let req = batch_request(one_record_batch(1), SinglePartitionProduceSetup {
         topic: ("nope").into(),
@@ -68,8 +76,21 @@ async fn produce_without_a_topic_id_returns_unknown_topic_id() {
     p.broker.shutdown().await;
 }
 
+/// The test client negotiates Produce v13, which carries only the topic id.
+/// A request with no id names no topic, so Kafka's
+/// `KafkaApis.handleProduceRequest` answers `UNKNOWN_TOPIC_ID` (100). The name
+/// path and its `UNKNOWN_TOPIC_OR_PARTITION` (3) belong to v12 and earlier.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce without a topic id returns unknown topic id"
+)]
 #[tokio::test]
-async fn produce_then_fetch_round_trip() {
+async fn produce_without_a_topic_id_returns_unknown_topic_id() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit produce fetch: produce then fetch round trip")]
+async fn bdd_verify_produce_then_fetch_round_trip() {
     let p = support::start().await;
     create_topic(&p, "round", 1).await;
     let topic_id = topic_id_for(&p.client, "round").await;
@@ -94,8 +115,17 @@ async fn produce_then_fetch_round_trip() {
     p.broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "produce then fetch round trip"
+)]
 #[tokio::test]
-async fn list_offsets_earliest_and_latest() {
+async fn produce_then_fetch_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("unit produce fetch: list offsets earliest and latest")]
+async fn bdd_verify_list_offsets_earliest_and_latest() {
     let p = support::start().await;
     create_topic(&p, "empty", 1).await;
 
@@ -113,3 +143,11 @@ async fn list_offsets_earliest_and_latest() {
 
     p.broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/produce_fetch.feature",
+    name = "list offsets earliest and latest"
+)]
+#[tokio::test]
+async fn list_offsets_earliest_and_latest() {}

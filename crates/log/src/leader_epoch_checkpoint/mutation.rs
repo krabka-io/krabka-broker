@@ -264,60 +264,59 @@ mod tests {
         );
     }
 
-    /// One row per `LeaderEpochFileCache.assign` outcome, each checked in
-    /// memory and after a reopen of the persisted file.
-    #[yare::parameterized(
-        first = { "first entry", &[][..], 2, 6, &[entry(2, 6)][..] },
-        appends = {
-            "new epoch after the log end appends",
-            &[entry(0, 0), entry(2, 6)][..],
-            3,
-            9,
-            &[entry(0, 0), entry(2, 6), entry(3, 9)][..],
-        },
-        later_same_epoch = {
-            "latest epoch at a later offset is a no-op",
-            &[entry(2, 6)][..],
-            2,
-            7,
-            &[entry(2, 6)][..],
-        },
-        same_offset = {
-            "latest epoch at its own offset is a no-op",
-            &[entry(2, 6)][..],
-            2,
-            6,
-            &[entry(2, 6)][..],
-        },
-        earlier_offset = {
-            "latest epoch at an earlier offset moves its start",
-            &[entry(1, 0), entry(2, 6)][..],
-            2,
-            5,
-            &[entry(1, 0), entry(2, 5)][..],
-        },
-        same_start_new_epoch = {
-            "newer epoch at the same start replaces an unwritten epoch",
-            &[entry(1, 0), entry(2, 6)][..],
-            3,
-            6,
-            &[entry(1, 0), entry(3, 6)][..],
-        },
-        older_epoch = {
-            "older epoch drops every entry it does not strictly follow",
-            &[entry(1, 0), entry(2, 6), entry(3, 8)][..],
-            2,
-            7,
-            &[entry(1, 0), entry(2, 7)][..],
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "leader epoch checkpoint mutation tests: assign follows kafka leader epoch file cache assign for {example}"
     )]
-    fn assign_follows_kafka_leader_epoch_file_cache_assign(
-        name: &str,
-        recorded: &[EpochEntry],
-        epoch: i32,
-        start: i64,
-        expected: &[EpochEntry],
-    ) {
+    fn bdd_verify_assign_follows_kafka_leader_epoch_file_cache_assign(example: String) {
+        type Example<'a> = (&'a str, &'a [EpochEntry], i32, i64, &'a [EpochEntry]);
+        let (name, recorded, epoch, start, expected): Example<'_> = match example.as_str() {
+            "first" => ("first entry", &[][..], 2, 6, &[entry(2, 6)][..]),
+            "appends" => (
+                "new epoch after the log end appends",
+                &[entry(0, 0), entry(2, 6)][..],
+                3,
+                9,
+                &[entry(0, 0), entry(2, 6), entry(3, 9)][..],
+            ),
+            "later same epoch" => (
+                "latest epoch at a later offset is a no-op",
+                &[entry(2, 6)][..],
+                2,
+                7,
+                &[entry(2, 6)][..],
+            ),
+            "same offset" => (
+                "latest epoch at its own offset is a no-op",
+                &[entry(2, 6)][..],
+                2,
+                6,
+                &[entry(2, 6)][..],
+            ),
+            "earlier offset" => (
+                "latest epoch at an earlier offset moves its start",
+                &[entry(1, 0), entry(2, 6)][..],
+                2,
+                5,
+                &[entry(1, 0), entry(2, 5)][..],
+            ),
+            "same start new epoch" => (
+                "newer epoch at the same start replaces an unwritten epoch",
+                &[entry(1, 0), entry(2, 6)][..],
+                3,
+                6,
+                &[entry(1, 0), entry(3, 6)][..],
+            ),
+            "older epoch" => (
+                "older epoch drops every entry it does not strictly follow",
+                &[entry(1, 0), entry(2, 6), entry(3, 8)][..],
+                2,
+                7,
+                &[entry(1, 0), entry(2, 7)][..],
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let TempCheckpoint {
             dir: _d,
             checkpoint: mut c,
@@ -325,6 +324,15 @@ mod tests {
         c.assign(LeaderEpoch(epoch), Offset(start)).unwrap();
         check_persisted(&c, expected, name);
     }
+
+    /// One row per `LeaderEpochFileCache.assign` outcome, each checked in
+    /// memory and after a reopen of the persisted file.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/leader_epoch_checkpoint/mutation.feature",
+        name = "tests: assign follows kafka leader epoch file cache assign"
+    )]
+    fn assign_follows_kafka_leader_epoch_file_cache_assign(example: String) { let _ = example; }
 
     #[yare::parameterized(
         negative_epoch = { -1, 5 },
@@ -355,54 +363,65 @@ mod tests {
         assert2::assert!(reopened.latest_epoch() == Some(LeaderEpoch(1)));
     }
 
-    /// One row per `LeaderEpochFileCache.truncateFromStart` outcome, over the
-    /// history `(0, 5) (1, 10) (2, 15)`, each checked in memory and after a
-    /// reopen of the persisted file.
-    #[yare::parameterized(
-        empty_cache = { "an empty cache stays empty", &[][..], 7, &[][..] },
-        below = {
-            "a start below every entry changes nothing",
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-            4,
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-        },
-        on_first = {
-            "a start on the first entry keeps it",
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-            5,
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-        },
-        inside_first = {
-            "a start inside the first epoch raises its start",
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-            8,
-            &[entry(0, 8), entry(1, 10), entry(2, 15)][..],
-        },
-        on_later = {
-            "a start on a later entry drops every earlier one",
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-            10,
-            &[entry(1, 10), entry(2, 15)][..],
-        },
-        past_all = {
-            "a start past every entry keeps the latest epoch at the start",
-            &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
-            17,
-            &[entry(2, 17)][..],
-        },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "leader epoch checkpoint mutation tests: truncate from start follows kafka leader epoch file cache for {example}"
     )]
-    fn truncate_from_start_follows_kafka_leader_epoch_file_cache(
-        name: &str,
-        recorded: &[EpochEntry],
-        start: i64,
-        expected: &[EpochEntry],
-    ) {
+    fn bdd_verify_truncate_from_start_follows_kafka_leader_epoch_file_cache(example: String) {
+        type Example<'a> = (&'a str, &'a [EpochEntry], i64, &'a [EpochEntry]);
+        let (name, recorded, start, expected): Example<'_> = match example.as_str() {
+            "empty cache" => ("an empty cache stays empty", &[][..], 7, &[][..]),
+            "below" => (
+                "a start below every entry changes nothing",
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+                4,
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+            ),
+            "on first" => (
+                "a start on the first entry keeps it",
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+                5,
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+            ),
+            "inside first" => (
+                "a start inside the first epoch raises its start",
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+                8,
+                &[entry(0, 8), entry(1, 10), entry(2, 15)][..],
+            ),
+            "on later" => (
+                "a start on a later entry drops every earlier one",
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+                10,
+                &[entry(1, 10), entry(2, 15)][..],
+            ),
+            "past all" => (
+                "a start past every entry keeps the latest epoch at the start",
+                &[entry(0, 5), entry(1, 10), entry(2, 15)][..],
+                17,
+                &[entry(2, 17)][..],
+            ),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         let TempCheckpoint {
             dir: _d,
             checkpoint: mut c,
         } = checkpoint(recorded);
         c.truncate_from_start(Offset(start)).unwrap();
         check_persisted(&c, expected, name);
+    }
+
+    /// One row per `LeaderEpochFileCache.truncateFromStart` outcome, over the
+    /// history `(0, 5) (1, 10) (2, 15)`, each checked in memory and after a
+    /// reopen of the persisted file.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/leader_epoch_checkpoint/mutation.feature",
+        name = "tests: truncate from start follows kafka leader epoch file cache"
+    )]
+    fn truncate_from_start_follows_kafka_leader_epoch_file_cache(example: String) {
+        let _ = example;
     }
 
     #[test]

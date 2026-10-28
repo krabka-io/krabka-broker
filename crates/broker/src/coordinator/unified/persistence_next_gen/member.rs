@@ -204,8 +204,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn member_metadata_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen member tests: member metadata bytes match kafka schema"
+    )]
+    fn bdd_verify_member_metadata_bytes_match_kafka_schema() {
         let want = wire_bytes(&[
             "0000",                   // value version 0
             "036931",                 // InstanceId, compact string
@@ -220,6 +223,13 @@ mod tests {
         ]);
         assert!(&native().encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/member.feature",
+        name = "tests: member metadata bytes match kafka schema"
+    )]
+    fn member_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn member_metadata_roundtrip() {
@@ -241,8 +251,11 @@ mod tests {
         assert!(MemberMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[test]
-    fn classic_sub_state_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen member tests: classic sub state bytes match kafka schema"
+    )]
+    fn bdd_verify_classic_sub_state_bytes_match_kafka_schema() {
         let v = MemberMetadataValue {
             classic: Some(ClassicMemberMetadata {
                 session_timeout_ms: 2,
@@ -271,6 +284,13 @@ mod tests {
         ]);
         assert!(&v.encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/member.feature",
+        name = "tests: classic sub state bytes match kafka schema"
+    )]
+    fn classic_sub_state_bytes_match_kafka_schema() {}
 
     #[test]
     fn member_metadata_round_trips_classic_block() {

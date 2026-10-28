@@ -47,8 +47,11 @@ async fn fetch_with_epoch(
         .expect("fetch")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fenced_leader_epoch_truncates_zombie_writes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "leader epoch epoch fencing: fenced leader epoch truncates zombie writes"
+)]
+async fn bdd_verify_fenced_leader_epoch_truncates_zombie_writes() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "fence").await;
 
@@ -76,8 +79,17 @@ async fn fenced_leader_epoch_truncates_zombie_writes() {
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_epoch/epoch_fencing.feature",
+    name = "fenced leader epoch truncates zombie writes"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unknown_leader_epoch_on_metadata_lag() {
+async fn fenced_leader_epoch_truncates_zombie_writes() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("leader epoch epoch fencing: unknown leader epoch on metadata lag")]
+async fn bdd_verify_unknown_leader_epoch_on_metadata_lag() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "unknown").await;
     let client = connect_client(bootstrap.clone(), None).await;
@@ -91,3 +103,11 @@ async fn unknown_leader_epoch_on_metadata_lag() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_epoch/epoch_fencing.feature",
+    name = "unknown leader epoch on metadata lag"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_leader_epoch_on_metadata_lag() {}

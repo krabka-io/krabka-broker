@@ -283,13 +283,23 @@ pub mod tests {
 
     pub fn audit_channel() -> (Arc<AuditLog>, krabka_audit::AuditReceiver) { AuditLog::new(8) }
 
-    #[test]
-    fn a_connection_principal_takes_its_kafka_string_form() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "break glass handlers mod tests: a connection principal takes its kafka string form"
+    )]
+    fn bdd_verify_a_connection_principal_takes_its_kafka_string_form() {
         let p = principal("alice");
         let peer = peer();
 
         check!(principal_name(&context(&p, &peer)) == "User:alice");
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/break_glass/handlers/mod.feature",
+        name = "tests: a connection principal takes its kafka string form"
+    )]
+    fn a_connection_principal_takes_its_kafka_string_form() {}
 
     #[test]
     fn a_proposal_id_round_trips_through_its_wire_form() {

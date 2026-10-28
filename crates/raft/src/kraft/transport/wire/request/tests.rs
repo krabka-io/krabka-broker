@@ -109,8 +109,11 @@ fn vote_request_preserves_legitimate_node_zero() {
     assert2::assert!(decode_vote(&req.encode()) == Some(req));
 }
 
-#[test]
-fn vote_decode_accepts_kafka_base64_cluster_id() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft transport wire request tests: vote decode accepts kafka base64 cluster id"
+)]
+fn bdd_verify_vote_decode_accepts_kafka_base64_cluster_id() {
     let cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
     let mut request = raw_vote_request();
     request.cluster_id = Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
@@ -124,6 +127,13 @@ fn vote_decode_accepts_kafka_base64_cluster_id() {
     };
     assert2::assert!(decoded == Some(cluster_id));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/transport/wire/request/tests.feature",
+    name = "vote decode accepts kafka base64 cluster id"
+)]
+fn vote_decode_accepts_kafka_base64_cluster_id() {}
 
 #[test]
 fn vote_encode_rejects_values_above_signed_wire_maximum() {
@@ -233,12 +243,11 @@ fn begin_end_round_trip() {
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
 
-/// The requests are Kafka's `RaftUtil.singletonBeginQuorumEpochRequest` and
-/// `singletonEndQuorumEpochRequest`: the cluster id, the recipient voter key
-/// and the leader's endpoints for `BeginQuorumEpoch`, and the successors in
-/// both of `EndQuorumEpoch`'s lists.
-#[test]
-fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kraft transport wire request tests: encoded begin and end requests are kafkas singleton requests"
+)]
+fn bdd_verify_encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
     use krabka_protocol::{
         Decode,
         owned::{begin_quorum_epoch_request as bqe, end_quorum_epoch_request as eqe},
@@ -306,6 +315,17 @@ fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
     let raw_v0 = EndQuorumEpochRequest::decode(&mut &v0[..], 0).expect("decode v0");
     assert2::check!(raw_v0 == expected_end(0));
 }
+
+/// The requests are Kafka's `RaftUtil.singletonBeginQuorumEpochRequest` and
+/// `singletonEndQuorumEpochRequest`: the cluster id, the recipient voter key
+/// and the leader's endpoints for `BeginQuorumEpoch`, and the successors in
+/// both of `EndQuorumEpoch`'s lists.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/kraft/transport/wire/request/tests.feature",
+    name = "encoded begin and end requests are kafkas singleton requests"
+)]
+fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {}
 
 #[test]
 fn fetch_request_round_trips() {

@@ -20,21 +20,9 @@ use {
     tokio::task,
 };
 
-/// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
-///
-/// The test drives the modern `kafka-acls.sh` flag set (cp-kafka:7.5.0,
-/// Kafka 3.5+) against the Rust broker's `CreateAcls (30)`,
-/// `DescribeAcls (29)`, and `DeleteAcls (31)` handlers. Admin authenticates
-/// as PLAIN super-user, so the super-user short-circuit in `authorize()`
-/// bypasses its `Cluster Alter` and `Cluster Describe` checks.
-///
-/// Sequence:
-/// 1. `--add` an Allow Read on `Topic LITERAL "foo"` for `User:alice`.
-/// 2. `--list --topic foo` must show that binding.
-/// 3. `--remove --force` removes it. `--list --topic foo` must be empty.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_kafka_acls_provision_via_cli() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance sasl acl cli: jvm kafka acls provision via cli")]
+async fn bdd_verify_jvm_kafka_acls_provision_via_cli() {
     let (broker, _dir) =
         start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await;
     nc_check_connectivity();
@@ -118,6 +106,27 @@ async fn jvm_kafka_acls_provision_via_cli() {
 
     broker.shutdown().await;
 }
+
+/// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
+///
+/// The test drives the modern `kafka-acls.sh` flag set (cp-kafka:7.5.0,
+/// Kafka 3.5+) against the Rust broker's `CreateAcls (30)`,
+/// `DescribeAcls (29)`, and `DeleteAcls (31)` handlers. Admin authenticates
+/// as PLAIN super-user, so the super-user short-circuit in `authorize()`
+/// bypasses its `Cluster Alter` and `Cluster Describe` checks.
+///
+/// Sequence:
+/// 1. `--add` an Allow Read on `Topic LITERAL "foo"` for `User:alice`.
+/// 2. `--list --topic foo` must show that binding.
+/// 3. `--remove --force` removes it. `--list --topic foo` must be empty.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_cli.feature",
+    name = "jvm kafka acls provision via cli"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_kafka_acls_provision_via_cli() {}
 
 // ── the `kafka-acls` shorthands, against the stock broker ───────────────────
 //
@@ -395,11 +404,11 @@ fn expected_bindings(case: &ShorthandCase) -> BTreeSet<AclBinding> {
         .collect()
 }
 
-/// Every `kafka-acls` shorthand expands to the same binding set on krabka as
-/// on Apache Kafka, and `--list --principal` reports exactly that set.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm acceptance sasl acl cli: acl shorthands expand as apache kafka expands them"
+)]
+async fn bdd_verify_acl_shorthands_expand_as_apache_kafka_expands_them() {
     // Kafka first. Every expectation below is a claim about somebody else's
     // client, and this is where a wrong one is reported as such.
     let oracle = task::spawn_blocking(|| {
@@ -494,3 +503,14 @@ async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
 
     broker.shutdown().await;
 }
+
+/// Every `kafka-acls` shorthand expands to the same binding set on krabka as
+/// on Apache Kafka, and `--list --principal` reports exactly that set.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_cli.feature",
+    name = "acl shorthands expand as apache kafka expands them"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acl_shorthands_expand_as_apache_kafka_expands_them() {}

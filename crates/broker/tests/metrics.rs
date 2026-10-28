@@ -156,8 +156,9 @@ async fn wait_until_absent(addr: SocketAddr, needle: &str) -> String {
         .await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rejected_client_labels_leave_the_metrics_body() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics: rejected client labels leave the metrics body")]
+async fn bdd_verify_rejected_client_labels_leave_the_metrics_body() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
@@ -185,8 +186,17 @@ async fn rejected_client_labels_leave_the_metrics_body() {
     handle.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "rejected client labels leave the metrics body"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
+async fn rejected_client_labels_leave_the_metrics_body() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics: metrics endpoint serves openmetrics and counters tick")]
+async fn bdd_verify_metrics_endpoint_serves_openmetrics_and_counters_tick() {
     let log_dir = tempfile::tempdir().unwrap();
     let cfg = metrics_config(log_dir.path().to_path_buf());
 
@@ -302,11 +312,17 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
     handle.shutdown().await;
 }
 
-/// Confirms that the per-partition counters appear next to the topic-level
-/// ones, and that the disk-scanner gauge reports non-zero values for
-/// materialized partitions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "metrics endpoint serves openmetrics and counters tick"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn partition_level_metrics_and_disk_gauge_render() {
+async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("metrics: partition level metrics and disk gauge render")]
+async fn bdd_verify_partition_level_metrics_and_disk_gauge_render() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = metrics_config(log_dir.path().to_path_buf());
     // Enable the disk scanner with a 1s tick so the gauge gets a
@@ -391,3 +407,14 @@ async fn partition_level_metrics_and_disk_gauge_render() {
 
     let _ = time::timeout(Duration::from_secs(10), handle.shutdown()).await;
 }
+
+/// Confirms that the per-partition counters appear next to the topic-level
+/// ones, and that the disk-scanner gauge reports non-zero values for
+/// materialized partitions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/metrics.feature",
+    name = "partition level metrics and disk gauge render"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn partition_level_metrics_and_disk_gauge_render() {}

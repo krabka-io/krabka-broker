@@ -224,29 +224,11 @@ fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
     support::jvm_finalized_level(describe_stdout, feature)
 }
 
-/// Both admin write tools an operator drives by hand, aimed at a broker-only
-/// node in a role-separated cluster.
-///
-/// One test, one cluster, both tools: two three-node clusters plus their CLI
-/// containers contend badly enough on a loaded machine that a broker misses
-/// its heartbeat window, and the failure then looks like a routing bug rather
-/// than the resource shortage it is.
-///
-/// - `kafka-configs --alter` sends `IncrementalAlterConfigs` (44). The alter
-///   must succeed, `--describe` must read the new value back, and the *other*
-///   broker-only node — the one that did not serve the write — must replicate
-///   it, which is what proves the write really went through the controller
-///   rather than being answered locally.
-/// - `kafka-features downgrade` then `upgrade` sends `UpdateFeatures` (57) in
-///   both directions, the api key whose forwarding the deleted
-///   `jvm_kip320_divergence` retry loop used to paper over.
-///
-/// Both keys are `forwardable` in Kafka's own table, so a JVM broker in this
-/// position wraps them in a KIP-590 `Envelope`. A node with no forwarding path
-/// of any kind answers `NOT_CONTROLLER` and every command here fails.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn admin_write_tools_reach_the_controller_from_a_broker_only_node() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm role separated admin: admin write tools reach the controller from a broker only node"
+)]
+async fn bdd_verify_admin_write_tools_reach_the_controller_from_a_broker_only_node() {
     const TOPIC: &str = "role-separated-admin";
 
     let cluster = Box::pin(start_role_separated()).await;
@@ -337,3 +319,32 @@ async fn admin_write_tools_reach_the_controller_from_a_broker_only_node() {
         );
     }
 }
+
+/// Both admin write tools an operator drives by hand, aimed at a broker-only
+/// node in a role-separated cluster.
+///
+/// One test, one cluster, both tools: two three-node clusters plus their CLI
+/// containers contend badly enough on a loaded machine that a broker misses
+/// its heartbeat window, and the failure then looks like a routing bug rather
+/// than the resource shortage it is.
+///
+/// - `kafka-configs --alter` sends `IncrementalAlterConfigs` (44). The alter
+///   must succeed, `--describe` must read the new value back, and the *other*
+///   broker-only node — the one that did not serve the write — must replicate
+///   it, which is what proves the write really went through the controller
+///   rather than being answered locally.
+/// - `kafka-features downgrade` then `upgrade` sends `UpdateFeatures` (57) in
+///   both directions, the api key whose forwarding the deleted
+///   `jvm_kip320_divergence` retry loop used to paper over.
+///
+/// Both keys are `forwardable` in Kafka's own table, so a JVM broker in this
+/// position wraps them in a KIP-590 `Envelope`. A node with no forwarding path
+/// of any kind answers `NOT_CONTROLLER` and every command here fails.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_role_separated_admin.feature",
+    name = "admin write tools reach the controller from a broker only node"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admin_write_tools_reach_the_controller_from_a_broker_only_node() {}

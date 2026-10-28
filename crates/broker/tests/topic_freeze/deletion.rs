@@ -52,16 +52,11 @@ async fn delete_topic(client: &Client, topic: &str) -> i16 {
     response.responses[0].error_code
 }
 
-/// A freeze refuses both paths that take data out of the topic.
-///
-/// A freeze that stopped new writes and let a trim through would be worse than
-/// no freeze at all: an operator who froze a topic for a disaster-recovery
-/// promotion needs the frozen prefix byte-identical between sites, and both of
-/// these paths destroy exactly that. The break-glass workflow is deliberately
-/// off on this broker, so nothing but the freeze can produce the refusal, and
-/// the control topic proves both paths still work when nothing is frozen.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "topic freeze deletion: delete records and delete topics refuse on a frozen topic"
+)]
+async fn bdd_verify_delete_records_and_delete_topics_refuse_on_a_frozen_topic() {
     let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
     for _ in 0..2 {
         check!(produce(&p.client, "orders", frozen).await.error_code == codes::NONE);
@@ -84,3 +79,19 @@ async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic() {
 
     p.broker.shutdown().await;
 }
+
+/// A freeze refuses both paths that take data out of the topic.
+///
+/// A freeze that stopped new writes and let a trim through would be worse than
+/// no freeze at all: an operator who froze a topic for a disaster-recovery
+/// promotion needs the frozen prefix byte-identical between sites, and both of
+/// these paths destroy exactly that. The break-glass workflow is deliberately
+/// off on this broker, so nothing but the freeze can produce the refusal, and
+/// the control topic proves both paths still work when nothing is frozen.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/deletion.feature",
+    name = "delete records and delete topics refuse on a frozen topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic() {}

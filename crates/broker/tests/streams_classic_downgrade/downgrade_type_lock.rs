@@ -23,15 +23,11 @@ use {
     tokio::time,
 };
 
-/// A streams group with a LIVE member refuses every classic `JoinGroup`, static
-/// or dynamic, and stays Streams-typed with its member.
-///
-/// Kafka 4.3.1's `classicGroupJoin` accepts a streams group only when it is
-/// empty, and answers any other with `INCONSISTENT_GROUP_PROTOCOL` (23) and
-/// the unknown member id, before the `MEMBER_ID_REQUIRED` exchange and before
-/// it looks at the instance id (`testClassicGroupJoinWithNonEmptyStreamsGroup`).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn streams_group_with_live_member_rejects_classic_join() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic downgrade downgrade type lock: streams group with live member rejects classic join"
+)]
+async fn bdd_verify_streams_group_with_live_member_rejects_classic_join() {
     let (broker, bootstrap, _dir) = boot().await;
     let streams_client = connect(&bootstrap).await;
     let classic_client = connect(&bootstrap).await;
@@ -88,11 +84,26 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     broker.wait_until_streams_group_member_count("g2", 1).await;
 }
 
-/// After a classic-to-streams conversion, `ListGroups` reports
-/// the converted group as `streams`. The classic path can NOT delete it while
-/// the streams group has a live member.
+/// A streams group with a LIVE member refuses every classic `JoinGroup`, static
+/// or dynamic, and stays Streams-typed with its member.
+///
+/// Kafka 4.3.1's `classicGroupJoin` accepts a streams group only when it is
+/// empty, and answers any other with `INCONSISTENT_GROUP_PROTOCOL` (23) and
+/// the unknown member id, before the `MEMBER_ID_REQUIRED` exchange and before
+/// it looks at the instance id (`testClassicGroupJoinWithNonEmptyStreamsGroup`).
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_type_lock.feature",
+    name = "streams group with live member rejects classic join"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn converted_group_admin_views_respect_type_lock() {
+async fn streams_group_with_live_member_rejects_classic_join() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "streams classic downgrade downgrade type lock: converted group admin views respect type lock"
+)]
+async fn bdd_verify_converted_group_admin_views_respect_type_lock() {
     let (broker, bootstrap, _dir) = boot().await;
     let (classic_client, streams_client) = (connect(&bootstrap).await, connect(&bootstrap).await);
 
@@ -158,3 +169,14 @@ async fn converted_group_admin_views_respect_type_lock() {
         "the streams group must survive the rejected delete"
     );
 }
+
+/// After a classic-to-streams conversion, `ListGroups` reports
+/// the converted group as `streams`. The classic path can NOT delete it while
+/// the streams group has a live member.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_type_lock.feature",
+    name = "converted group admin views respect type lock"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn converted_group_admin_views_respect_type_lock() {}

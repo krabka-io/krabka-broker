@@ -34,8 +34,11 @@ fn target_dir_opposite_to_partition_0<'a>(
     }
 }
 
-#[tokio::test]
-async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs moves: alter replica log dirs moves partitions to target dir"
+)]
+async fn bdd_verify_alter_replica_log_dirs_moves_partitions_to_target_dir() {
     let n: i32 = 2;
     let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).partitions(n).call().await;
 
@@ -99,13 +102,19 @@ async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {
     handle.shutdown().await;
 }
 
-/// Produce a few batches, move the partition to the other dir, then
-/// consume and verify that every produced record survives. This test
-/// exercises the `catch_up` batch-copy path in `future_log.rs`. The
-/// empty-log move hits zero-batch catch-up, which does not run the
-/// `append_at` loop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn alter_replica_log_dirs_preserves_records_across_move() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/moves.feature",
+    name = "alter replica log dirs moves partitions to target dir"
+)]
+#[tokio::test]
+async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs moves: alter replica log dirs preserves records across move"
+)]
+async fn bdd_verify_alter_replica_log_dirs_preserves_records_across_move() {
     let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).call().await;
 
     let bootstrap = addr.to_string();
@@ -167,3 +176,16 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
     consumer.close().await.unwrap();
     handle.shutdown().await;
 }
+
+/// Produce a few batches, move the partition to the other dir, then
+/// consume and verify that every produced record survives. This test
+/// exercises the `catch_up` batch-copy path in `future_log.rs`. The
+/// empty-log move hits zero-batch catch-up, which does not run the
+/// `append_at` loop.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/moves.feature",
+    name = "alter replica log dirs preserves records across move"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn alter_replica_log_dirs_preserves_records_across_move() {}

@@ -154,17 +154,11 @@ fn kafka_tool(tool: &str, args: &[&str]) -> String {
     stdout
 }
 
-/// `kafka-configs --bootstrap-controller --entity-type brokers`: `--alter`
-/// writes a dynamic config through `IncrementalAlterConfigs` (44) and
-/// `--describe` reads it back through `DescribeConfigs` (32), both over the
-/// controller listener with no broker endpoint configured anywhere.
-///
-/// The KIP-73 replication throttle is the config under test because krabka
-/// takes that one per broker; the cluster-wide keys would name a different
-/// resource and exercise the same two api keys.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm bootstrap controller: kafka configs bootstrap controller round trips a dynamic broker config"
+)]
+async fn bdd_verify_kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config() {
     const THROTTLE: &str = "leader.replication.throttled.rate=1048576";
 
     let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
@@ -193,14 +187,28 @@ async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config(
     broker.shutdown().await;
 }
 
-/// `kafka-acls --bootstrap-controller` end to end: `--add`, `--list`,
-/// `--remove`, then `--list` again. That is `CreateAcls` (30), `DescribeAcls`
-/// (29) and `DeleteAcls` (31) routed over the controller listener, which is
-/// the add/read/delete lifecycle KIP-919 exists to keep available when no
-/// broker is reachable.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-configs --bootstrap-controller --entity-type brokers`: `--alter`
+/// writes a dynamic config through `IncrementalAlterConfigs` (44) and
+/// `--describe` reads it back through `DescribeConfigs` (32), both over the
+/// controller listener with no broker endpoint configured anywhere.
+///
+/// The KIP-73 replication throttle is the config under test because krabka
+/// takes that one per broker; the cluster-wide keys would name a different
+/// resource and exercise the same two api keys.
 #[ignore = "requires Docker"]
-async fn kafka_acls_bootstrap_controller_add_list_remove() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "kafka configs bootstrap controller round trips a dynamic broker config"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_bootstrap_controller_round_trips_a_dynamic_broker_config() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm bootstrap controller: kafka acls bootstrap controller add list remove"
+)]
+async fn bdd_verify_kafka_acls_bootstrap_controller_add_list_remove() {
     const TOPIC: &str = "controller-acl-topic";
 
     let StartedBroker { broker, dir: _dir } = start_host_broker_with(|config| {
@@ -246,12 +254,25 @@ async fn kafka_acls_bootstrap_controller_add_list_remove() {
     broker.shutdown().await;
 }
 
-/// `kafka-reassign-partitions --bootstrap-controller --list` reaches
-/// `ListPartitionReassignments` (46) on the controller listener and reports an
-/// empty set rather than a disconnect.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-acls --bootstrap-controller` end to end: `--add`, `--list`,
+/// `--remove`, then `--list` again. That is `CreateAcls` (30), `DescribeAcls`
+/// (29) and `DeleteAcls` (31) routed over the controller listener, which is
+/// the add/read/delete lifecycle KIP-919 exists to keep available when no
+/// broker is reachable.
 #[ignore = "requires Docker"]
-async fn kafka_reassign_partitions_bootstrap_controller_lists() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "kafka acls bootstrap controller add list remove"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_acls_bootstrap_controller_add_list_remove() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm bootstrap controller: kafka reassign partitions bootstrap controller lists"
+)]
+async fn bdd_verify_kafka_reassign_partitions_bootstrap_controller_lists() {
     let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
 
     let listed = kafka_tool("kafka-reassign-partitions", &["--list"]);
@@ -263,15 +284,23 @@ async fn kafka_reassign_partitions_bootstrap_controller_lists() {
     broker.shutdown().await;
 }
 
-/// `kafka-topics` carries no `--bootstrap-controller` option in the pinned
-/// oracle image, which is why the topic lifecycle is proved on the controller
-/// listener by `controller_admin_surface` rather than by this suite. Pinning
-/// it here keeps the reason checkable rather than a comment: if a later Kafka
-/// grows the option, this case fails and the suite gains a real end-to-end
-/// topic test.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-reassign-partitions --bootstrap-controller --list` reaches
+/// `ListPartitionReassignments` (46) on the controller listener and reports an
+/// empty set rather than a disconnect.
 #[ignore = "requires Docker"]
-async fn kafka_topics_has_no_bootstrap_controller_option() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "kafka reassign partitions bootstrap controller lists"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_reassign_partitions_bootstrap_controller_lists() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm bootstrap controller: kafka topics has no bootstrap controller option"
+)]
+async fn bdd_verify_kafka_topics_has_no_bootstrap_controller_option() {
     let output = Command::new("docker")
         .args([
             "run",
@@ -296,18 +325,26 @@ async fn kafka_topics_has_no_bootstrap_controller_option() {
     );
 }
 
-/// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
-/// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
-/// routed over the controller listener.
-///
-/// KIP-919 names feature management as a thing an operator must be able to do
-/// with no broker reachable -- a cluster whose brokers will not start because
-/// of a finalized feature level is exactly when this matters, and it is the
-/// only tool of the three offering `--bootstrap-controller` that had no
-/// container test driving it that way.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// `kafka-topics` carries no `--bootstrap-controller` option in the pinned
+/// oracle image, which is why the topic lifecycle is proved on the controller
+/// listener by `controller_admin_surface` rather than by this suite. Pinning
+/// it here keeps the reason checkable rather than a comment: if a later Kafka
+/// grows the option, this case fails and the suite gains a real end-to-end
+/// topic test.
 #[ignore = "requires Docker"]
-async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "kafka topics has no bootstrap controller option"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_has_no_bootstrap_controller_option() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "jvm bootstrap controller: kafka features bootstrap controller describes and downgrades"
+)]
+async fn bdd_verify_kafka_features_bootstrap_controller_describes_and_downgrades() {
     let StartedBroker { broker, dir: _dir } = start_host_broker_with(|_| {}).await;
 
     let described = kafka_tool("kafka-features", &["describe"]);
@@ -332,3 +369,21 @@ async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
     );
     broker.shutdown().await;
 }
+
+/// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
+/// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
+/// routed over the controller listener.
+///
+/// KIP-919 names feature management as a thing an operator must be able to do
+/// with no broker reachable -- a cluster whose brokers will not start because
+/// of a finalized feature level is exactly when this matters, and it is the
+/// only tool of the three offering `--bootstrap-controller` that had no
+/// container test driving it that way.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_bootstrap_controller.feature",
+    name = "kafka features bootstrap controller describes and downgrades"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_features_bootstrap_controller_describes_and_downgrades() {}

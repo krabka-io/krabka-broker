@@ -172,8 +172,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn errors_follow_kafka_precedence() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("scram tests: errors follow kafka precedence")]
+    fn bdd_verify_errors_follow_kafka_precedence() {
         let mut facts = valid_upsert();
         facts.prior = ScramPriorState::Rejected;
         facts.authorized = false;
@@ -208,6 +209,13 @@ mod tests {
             scram_alteration_decision(facts) == ScramAlterationDecision::TooManyIterations
         );
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/scram.feature",
+        name = "tests: errors follow kafka precedence"
+    )]
+    fn errors_follow_kafka_precedence() {}
 
     #[test]
     fn accepts_only_supported_complete_rows() {

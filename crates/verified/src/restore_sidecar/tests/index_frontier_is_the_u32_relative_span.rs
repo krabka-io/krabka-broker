@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::vec;
 use {super::*, crate::log_index::IndexEntry};
 
 #[yare::parameterized(
@@ -70,30 +72,45 @@ fn offset_and_time_index_entries_are_strict_and_bounded() {
     check!(!restore_time_index_entry_valid(None, 10, 5, 4));
 }
 
-#[yare::parameterized(
-    one_abort = { vec![txn(7, 100, 102)], SEGMENT, true },
-    sequential_aborts = { vec![txn(7, 100, 102), txn(8, 103, 104)], SEGMENT, true },
-    interleaved_abort_marker_order = { vec![txn(2, 105, 108), txn(1, 100, 110)], SEGMENT, true },
-    transaction_spans_segment_roll = {
-        vec![txn(1_000, 0, 3)],
-        RestoreSegmentExtent { base_offset: 3, last_offset: 4 },
-        true,
-    },
-    marker_order_regresses = { vec![txn(1, 100, 110), txn(2, 105, 108)], SEGMENT, false },
-    repeated_marker = { vec![txn(1, 100, 104), txn(2, 101, 104)], SEGMENT, false },
-    marker_before_segment = { vec![txn(7, 90, 99)], SEGMENT, false },
-    marker_past_segment = { vec![txn(7, 100, 111)], SEGMENT, false },
-    start_after_marker = { vec![txn(7, 105, 104)], SEGMENT, false },
-    negative_start = { vec![txn(7, -1, 104)], SEGMENT, false },
-    negative_producer = { vec![txn(-1, 100, 102)], SEGMENT, false },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "restore sidecar tests index frontier is the u32 relative span: transaction index follows kafka marker order for {example}"
 )]
-fn transaction_index_follows_kafka_marker_order(
-    entries: Vec<RestoreAbortedTxn>,
-    segment: RestoreSegmentExtent,
-    expected: bool,
-) {
+fn bdd_verify_transaction_index_follows_kafka_marker_order(example: String) {
+    type Example = (Vec<RestoreAbortedTxn>, RestoreSegmentExtent, bool);
+    let (entries, segment, expected): Example = match example.as_str() {
+        "one abort" => (vec![txn(7, 100, 102)], SEGMENT, true),
+        "sequential aborts" => (vec![txn(7, 100, 102), txn(8, 103, 104)], SEGMENT, true),
+        "interleaved abort marker order" => {
+            (vec![txn(2, 105, 108), txn(1, 100, 110)], SEGMENT, true)
+        }
+        "transaction spans segment roll" => (
+            vec![txn(1_000, 0, 3)],
+            RestoreSegmentExtent {
+                base_offset: 3,
+                last_offset: 4,
+            },
+            true,
+        ),
+        "marker order regresses" => (vec![txn(1, 100, 110), txn(2, 105, 108)], SEGMENT, false),
+        "repeated marker" => (vec![txn(1, 100, 104), txn(2, 101, 104)], SEGMENT, false),
+        "marker before segment" => (vec![txn(7, 90, 99)], SEGMENT, false),
+        "marker past segment" => (vec![txn(7, 100, 111)], SEGMENT, false),
+        "start after marker" => (vec![txn(7, 105, 104)], SEGMENT, false),
+        "negative start" => (vec![txn(7, -1, 104)], SEGMENT, false),
+        "negative producer" => (vec![txn(-1, 100, 102)], SEGMENT, false),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     check!(txn_index_valid(&entries, segment) == expected);
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/restore_sidecar/tests/index_frontier_is_the_u32_relative_span.feature",
+    name = "transaction index follows kafka marker order"
+)]
+fn transaction_index_follows_kafka_marker_order(example: String) { let _ = example; }
 
 #[test]
 fn leader_epoch_entries_are_strict_and_bounded() {

@@ -16,11 +16,11 @@ use {
     krabka_protocol::{owned::create_topics_request::CreatableTopicConfig, records::HEADER_LEN},
 };
 
-/// A producer-LZ4-compressed v2 batch whose DECOMPRESSED form is large
-/// (~100 KiB) takes the verbatim path. The broker validates it, retains the
-/// Lz4 codec with no recompression, and round-trips the data on Fetch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lz4_batch_passes_through_and_roundtrips() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough passthrough: lz4 batch passes through and roundtrips"
+)]
+async fn bdd_verify_lz4_batch_passes_through_and_roundtrips() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "lz4t").await;
 
@@ -61,14 +61,22 @@ async fn lz4_batch_passes_through_and_roundtrips() {
     broker.shutdown().await;
 }
 
-/// An UNCOMPRESSED v2 batch takes the verbatim path and round-trips
-/// byte-identically. The CRC-covered region (bytes 21..) of the stored bytes
-/// equals the producer's wire bytes exactly. The broker patches only
-/// `base_offset` and `partition_leader_epoch`, which both sit before the CRC
-/// region. The test re-encodes the fetched batch and compares. For an
-/// uncompressed batch the re-encode is deterministic and byte-exact.
+/// A producer-LZ4-compressed v2 batch whose DECOMPRESSED form is large
+/// (~100 KiB) takes the verbatim path. The broker validates it, retains the
+/// Lz4 codec with no recompression, and round-trips the data on Fetch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "lz4 batch passes through and roundtrips"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn uncompressed_batch_roundtrips_byte_identically() {
+async fn lz4_batch_passes_through_and_roundtrips() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough passthrough: uncompressed batch roundtrips byte identically"
+)]
+async fn bdd_verify_uncompressed_batch_roundtrips_byte_identically() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "raw").await;
 
@@ -101,13 +109,25 @@ async fn uncompressed_batch_roundtrips_byte_identically() {
     broker.shutdown().await;
 }
 
-/// A topic configured with a concrete `compression.type` that differs from
-/// the producer's codec forces broker-side recompression, which is the OWNED
-/// path. The stored batch must carry the TOPIC's codec, and the data must still
-/// be correct. This pins the verbatim predicate's recompression gate to the
-/// owned fallback.
+/// An UNCOMPRESSED v2 batch takes the verbatim path and round-trips
+/// byte-identically. The CRC-covered region (bytes 21..) of the stored bytes
+/// equals the producer's wire bytes exactly. The broker patches only
+/// `base_offset` and `partition_leader_epoch`, which both sit before the CRC
+/// region. The test re-encodes the fetched batch and compares. For an
+/// uncompressed batch the re-encode is deterministic and byte-exact.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "uncompressed batch roundtrips byte identically"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recompression_config_takes_owned_path() {
+async fn uncompressed_batch_roundtrips_byte_identically() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "produce verbatim passthrough passthrough: recompression config takes owned path"
+)]
+async fn bdd_verify_recompression_config_takes_owned_path() {
     let (broker, bootstrap, _dir) = boot().await;
     // Topic forces zstd; producer sends lz4 → must recompress (owned path).
     create_topic_with_configs(&broker, &bootstrap, "recmp", vec![CreatableTopicConfig {
@@ -139,3 +159,16 @@ async fn recompression_config_takes_owned_path() {
 
     broker.shutdown().await;
 }
+
+/// A topic configured with a concrete `compression.type` that differs from
+/// the producer's codec forces broker-side recompression, which is the OWNED
+/// path. The stored batch must carry the TOPIC's codec, and the data must still
+/// be correct. This pins the verbatim predicate's recompression gate to the
+/// owned fallback.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature",
+    name = "recompression config takes owned path"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recompression_config_takes_owned_path() {}

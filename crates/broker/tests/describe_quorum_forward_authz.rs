@@ -68,12 +68,11 @@ impl Authorizer for ClusterActionForEveryoneDescribeForAlice {
 
 use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
-/// A caller holding `Describe` succeeds even when the node it asks is not the
-/// active controller and has to forward the request: the forward carries
-/// alice's own principal, which this test's authorizer grants `Describe`,
-/// not the inter-broker identity, which it explicitly does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe quorum forward authz: a describe authorized caller succeeds through a forwarding follower"
+)]
+async fn bdd_verify_a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
     let cluster = start_n_node_with(2, |_, cfg: &mut BrokerConfig| {
         // Replace the default plaintext data listener with SASL/PLAIN, bound
         // to the same address `start_n_node_with` already reserved, so alice
@@ -121,3 +120,15 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
 
     shutdown_cluster(cluster).await;
 }
+
+/// A caller holding `Describe` succeeds even when the node it asks is not the
+/// active controller and has to forward the request: the forward carries
+/// alice's own principal, which this test's authorizer grants `Describe`,
+/// not the inter-broker identity, which it explicitly does not.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_quorum_forward_authz.feature",
+    name = "a describe authorized caller succeeds through a forwarding follower"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {}

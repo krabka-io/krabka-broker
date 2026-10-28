@@ -417,11 +417,11 @@ mod tests {
         check!(record == expected);
     }
 
-    /// `ControllerConfigurationValidator.validateTopicName` runs before the
-    /// configs, and the existence check after them, each with Kafka's code
-    /// and message.
-    #[test]
-    fn topic_names_are_checked_in_kafkas_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter configs topic configs tests: topic names are checked in kafkas order"
+    )]
+    fn bdd_verify_topic_names_are_checked_in_kafkas_order() {
         let image = image_with_topic("orders");
         let cases = [
             (
@@ -467,4 +467,14 @@ mod tests {
             );
         }
     }
+
+    /// `ControllerConfigurationValidator.validateTopicName` runs before the
+    /// configs, and the existence check after them, each with Kafka's code
+    /// and message.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_configs/topic_configs.feature",
+        name = "tests: topic names are checked in kafkas order"
+    )]
+    fn topic_names_are_checked_in_kafkas_order() {}
 }

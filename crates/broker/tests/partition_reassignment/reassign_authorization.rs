@@ -16,14 +16,9 @@ use {
     assert2::assert,
 };
 
-/// Test 4: alice, who authenticated over SASL/PLAIN and holds no ACLs, sends
-/// `AlterPartitionReassignments` and must receive
-/// `CLUSTER_AUTHORIZATION_FAILED (31)` on each partition.
-///
-/// The test seeds a dummy ACL first, to disable the compat shim. That shim
-/// allows everything when `image.acls` is empty.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_super_user_denied() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("partition reassignment reassign authorization: non super user denied")]
+async fn bdd_verify_non_super_user_denied() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
@@ -86,3 +81,17 @@ async fn non_super_user_denied() {
         "expected CLUSTER_AUTHORIZATION_FAILED (31) for alice; got {resp:?}"
     );
 }
+
+/// Test 4: alice, who authenticated over SASL/PLAIN and holds no ACLs, sends
+/// `AlterPartitionReassignments` and must receive
+/// `CLUSTER_AUTHORIZATION_FAILED (31)` on each partition.
+///
+/// The test seeds a dummy ACL first, to disable the compat shim. That shim
+/// allows everything when `image.acls` is empty.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_authorization.feature",
+    name = "non super user denied"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_super_user_denied() {}

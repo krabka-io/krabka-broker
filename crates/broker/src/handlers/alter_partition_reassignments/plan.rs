@@ -550,12 +550,11 @@ mod tests {
         expected: RowError,
     }
 
-    /// Kafka's replica arithmetic for a start: the target order, a reorder, a
-    /// new target over an in-flight reassignment, and a completion in the same
-    /// record when `maybeCompleteReassignment` allows it. The fixture leader
-    /// epoch is 5 and the partition epoch 11.
-    #[test]
-    fn a_start_writes_kafkas_replica_list() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition reassignments plan tests: a start writes kafkas replica list"
+    )]
+    fn bdd_verify_a_start_writes_kafkas_replica_list() {
         let cases: [StartCase<'_>; 11] = [
             StartCase {
                 label: "a reorder writes the new order",
@@ -757,11 +756,22 @@ mod tests {
         }
     }
 
-    /// Kafka's `PartitionReassignmentRevert`: a cancel drops the adding
-    /// replicas, keeps the removing ones, and needs the topic to allow an
-    /// unclean election when the ISR held only adding replicas.
-    #[test]
-    fn a_cancel_reverts_like_kafka() {
+    /// Kafka's replica arithmetic for a start: the target order, a reorder, a
+    /// new target over an in-flight reassignment, and a completion in the same
+    /// record when `maybeCompleteReassignment` allows it. The fixture leader
+    /// epoch is 5 and the partition epoch 11.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition_reassignments/plan.feature",
+        name = "tests: a start writes kafkas replica list"
+    )]
+    fn a_start_writes_kafkas_replica_list() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition reassignments plan tests: a cancel reverts like kafka"
+    )]
+    fn bdd_verify_a_cancel_reverts_like_kafka() {
         let unclean_message = "Unable to revert partition assignment for foo:0 because it would \
                                require an unclean leader election.";
         let cases: [CancelCase<'_>; 6] = [
@@ -841,9 +851,21 @@ mod tests {
         }
     }
 
-    /// Kafka's validation codes and messages for a row.
-    #[test]
-    fn a_rejected_row_answers_kafkas_code_and_message() {
+    /// Kafka's `PartitionReassignmentRevert`: a cancel drops the adding
+    /// replicas, keeps the removing ones, and needs the topic to allow an
+    /// unclean election when the ISR held only adding replicas.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition_reassignments/plan.feature",
+        name = "tests: a cancel reverts like kafka"
+    )]
+    fn a_cancel_reverts_like_kafka() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter partition reassignments plan tests: a rejected row answers kafkas code and message"
+    )]
+    fn bdd_verify_a_rejected_row_answers_kafkas_code_and_message() {
         let cases: [RejectCase<'_>; 9] = [
             RejectCase {
                 label: "an unknown topic",
@@ -979,6 +1001,14 @@ mod tests {
             check!(planned == Err(expected), "case {label}");
         }
     }
+
+    /// Kafka's validation codes and messages for a row.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_partition_reassignments/plan.feature",
+        name = "tests: a rejected row answers kafkas code and message"
+    )]
+    fn a_rejected_row_answers_kafkas_code_and_message() {}
 
     #[test]
     fn the_replication_factor_check_counts_the_set_the_partition_is_headed_for() {

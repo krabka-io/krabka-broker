@@ -183,8 +183,9 @@ mod tests {
         assert!(built.max_timestamp == 1_724_500_000_000);
     }
 
-    #[test]
-    fn the_key_is_the_kafka_control_layout() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("barrier marker tests: the key is the kafka control layout")]
+    fn bdd_verify_the_key_is_the_kafka_control_layout() {
         let built = batch();
         let key = built.records[0].key.as_ref().expect("marker has a key");
         let mut expected = Vec::new();
@@ -192,6 +193,13 @@ mod tests {
         put_i16(&mut expected, 1000);
         assert!(&key[..] == &expected[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/barrier/marker.feature",
+        name = "tests: the key is the kafka control layout"
+    )]
+    fn the_key_is_the_kafka_control_layout() {}
 
     /// The builder here and the classifier in `krabka-log` each encode the
     /// control-record key themselves. This test is the seam between them: it

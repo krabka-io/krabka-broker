@@ -200,13 +200,11 @@ mod tests {
         })
     }
 
-    /// Each transition writes the `BrokerRegistrationChangeRecord` Kafka's
-    /// `handleBrokerFenced`, `handleBrokerUnfenced` or
-    /// `handleBrokerInControlledShutdown` writes, at the registration's epoch
-    /// and with only its own field set, and nothing when the registration
-    /// already agrees. Replaying the record moves only that flag.
-    #[test]
-    fn a_registration_change_is_kafkas_change_record() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "heartbeat fencing tests: a registration change is kafkas change record"
+    )]
+    fn bdd_verify_a_registration_change_is_kafkas_change_record() {
         let shutting_down = BrokerRegistrationRecord {
             in_controlled_shutdown: true,
             ..registration(1, false)
@@ -276,6 +274,18 @@ mod tests {
             assert!(image.broker(NodeId(1)) == Some(&after), "{name}");
         }
     }
+
+    /// Each transition writes the `BrokerRegistrationChangeRecord` Kafka's
+    /// `handleBrokerFenced`, `handleBrokerUnfenced` or
+    /// `handleBrokerInControlledShutdown` writes, at the registration's epoch
+    /// and with only its own field set, and nothing when the registration
+    /// already agrees. Replaying the record moves only that flag.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/heartbeat/fencing.feature",
+        name = "tests: a registration change is kafkas change record"
+    )]
+    fn a_registration_change_is_kafkas_change_record() {}
 
     /// Kafka's `ClusterControlManager.replayRegistrationChange` refuses a
     /// change for any epoch but the registration's: a change built before the

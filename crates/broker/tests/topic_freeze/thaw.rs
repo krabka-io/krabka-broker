@@ -64,17 +64,9 @@ async fn approve(client: &Client, proposal_id: uuid::Uuid) -> i32 {
     response.approvals_held
 }
 
-/// A thaw lifts the freeze and the topic takes writes again.
-///
-/// The reverse direction has to be proved as its own case, because a freeze
-/// that could not be lifted would be a broken cluster rather than a safe one,
-/// and none of the refusal cases in this suite can tell a working thaw from a
-/// registry entry that nothing removes. It runs over SASL because the
-/// two-person rule needs three distinct principals -- a proposer who may not
-/// approve, and two approvers -- and every connection on a plaintext listener
-/// is the same anonymous principal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_thaw_restores_writes() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("topic freeze thaw: a thaw restores writes")]
+async fn bdd_verify_a_thaw_restores_writes() {
     let keys = tempfile::tempdir().expect("tempdir");
     let logs = tempfile::tempdir().expect("tempdir");
     let key = support::mint_operator_key(keys.path(), "alice-yubi", "User:alice");
@@ -129,3 +121,20 @@ async fn a_thaw_restores_writes() {
     check!(produce_outcome(&broker, &alice, CONTROL, control).await == accepted(1));
     broker.shutdown().await;
 }
+
+/// A thaw lifts the freeze and the topic takes writes again.
+///
+/// The reverse direction has to be proved as its own case, because a freeze
+/// that could not be lifted would be a broken cluster rather than a safe one,
+/// and none of the refusal cases in this suite can tell a working thaw from a
+/// registry entry that nothing removes. It runs over SASL because the
+/// two-person rule needs three distinct principals -- a proposer who may not
+/// approve, and two approvers -- and every connection on a plaintext listener
+/// is the same anonymous principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/thaw.feature",
+    name = "a thaw restores writes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thaw_restores_writes() {}

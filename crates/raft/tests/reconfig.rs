@@ -13,8 +13,9 @@ mod voter_fixture;
 
 fn voter(id: u64) -> Voter { voter_fixture::voter(id, uuid::Uuid::from_u128(id.into())) }
 
-#[test]
-fn voter_changes_preserve_exact_request_identity() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("reconfig: voter changes preserve exact request identity")]
+fn bdd_verify_voter_changes_preserve_exact_request_identity() {
     let add = VoterChange::Add(AddVoter {
         voter: voter(2),
         ack_when_committed: false,
@@ -32,3 +33,10 @@ fn voter_changes_preserve_exact_request_identity() {
     assert2::assert!(let VoterChange::Update(update_request) = update);
     assert2::assert!(update_request.voter.directory_id == uuid::Uuid::from_u128(2));
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/reconfig.feature",
+    name = "voter changes preserve exact request identity"
+)]
+fn voter_changes_preserve_exact_request_identity() {}

@@ -15,8 +15,9 @@ use {
     krabka_protocol::owned::create_acls_request::CreateAclsRequest,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_super_user_both_can_provision() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("acl handlers super users: multi super user both can provision")]
+async fn bdd_verify_multi_super_user_both_can_provision() {
     let log_dir = tempfile::tempdir().unwrap();
     // Two super-users: admin + ops-bot. alice has PLAIN creds but is NOT
     // in the super-users set, so her CreateAcls must hit the cluster gate.
@@ -93,3 +94,11 @@ async fn multi_super_user_both_can_provision() {
         );
     }
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/super_users.feature",
+    name = "multi super user both can provision"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_super_user_both_can_provision() {}

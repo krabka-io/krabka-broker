@@ -370,14 +370,11 @@ fn topic_row_cases() -> Vec<Case> {
     ]
 }
 
-/// Kafka's `handleTopicMetadataRequest`: `Describe` first, then cluster
-/// `Create`, then topic `Create`, for a missing topic that the request asks to
-/// auto-create on a broker whose `auto.create.topics.enable` holds, and no
-/// auto-creation at all on one where it does not; rows ordered described, denied `Create`, denied `Describe`;
-/// one row per distinct name; and the topic authorized operations on every
-/// described row, the rows for missing topics included.
-#[tokio::test]
-async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "handlers metadata authorization tests: topic rows follow kafka authorization and auto creation"
+)]
+async fn bdd_verify_topic_rows_follow_kafka_authorization_and_auto_creation() {
     use Expect::{Existing, Row};
     let enabled = start(true).await;
     let disabled = start(false).await;
@@ -427,6 +424,20 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
     enabled.broker.shutdown().await;
     disabled.broker.shutdown().await;
 }
+
+/// Kafka's `handleTopicMetadataRequest`: `Describe` first, then cluster
+/// `Create`, then topic `Create`, for a missing topic that the request asks to
+/// auto-create on a broker whose `auto.create.topics.enable` holds, and no
+/// auto-creation at all on one where it does not; rows ordered described, denied `Create`, denied `Describe`;
+/// one row per distinct name; and the topic authorized operations on every
+/// described row, the rows for missing topics included.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/handlers/metadata/authorization_tests.feature",
+    name = "topic rows follow kafka authorization and auto creation"
+)]
+#[tokio::test]
+async fn topic_rows_follow_kafka_authorization_and_auto_creation() {}
 
 /// KIP-430 `cluster_authorized_operations`: Kafka answers 0 when `Describe`
 /// on the cluster is denied, whatever else the principal holds, and the bit

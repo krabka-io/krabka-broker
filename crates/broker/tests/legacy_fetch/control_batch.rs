@@ -19,16 +19,9 @@ use {
     },
 };
 
-/// Control batches, that is txn markers, have no representation in the v0 and
-/// v1 `MessageSet` format, so a down-converted Fetch response must drop them.
-///
-/// The test commits a real transaction, fetches from its marker offset at v3,
-/// and confirms that the partition comes back with an empty record set and no
-/// error.
-/// This drives the `Ok(None)` arm of the Fetch handler's down-conversion loop
-/// without violating Kafka's rule that clients cannot produce control batches.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_v3_drops_control_batch() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("legacy fetch control batch: fetch v3 drops control batch")]
+async fn bdd_verify_fetch_v3_drops_control_batch() {
     let p = support::start_legacy().await;
     create_topic(&p.client, "legacy_fetch_ctrl").await;
     // The producer does not retry COORDINATOR_NOT_AVAILABLE from
@@ -88,3 +81,19 @@ async fn fetch_v3_drops_control_batch() {
     .unwrap();
     p.broker.shutdown().await;
 }
+
+/// Control batches, that is txn markers, have no representation in the v0 and
+/// v1 `MessageSet` format, so a down-converted Fetch response must drop them.
+///
+/// The test commits a real transaction, fetches from its marker offset at v3,
+/// and confirms that the partition comes back with an empty record set and no
+/// error.
+/// This drives the `Ok(None)` arm of the Fetch handler's down-conversion loop
+/// without violating Kafka's rule that clients cannot produce control batches.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/control_batch.feature",
+    name = "fetch v3 drops control batch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_v3_drops_control_batch() {}

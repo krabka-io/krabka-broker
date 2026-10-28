@@ -46,8 +46,9 @@ fn write_dev_pem(dir: &Path) -> PemPaths {
     PemPaths { cert: cp, key: kp }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tls_listener_accepts_tls_handshake_only() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers tls: tls listener accepts tls handshake only")]
+async fn bdd_verify_tls_listener_accepts_tls_handshake_only() {
     let TlsFixture {
         log_dir,
         pem_dir: _pem_dir,
@@ -94,24 +95,17 @@ async fn tls_listener_accepts_tls_handshake_only() {
     handle.shutdown().await;
 }
 
-/// Every configured listener should appear as a `BrokerEndpoint` on this
-/// broker's self-registration record, and the projection should survive a
-/// Metadata round-trip end-to-end. The Kafka v9+ Metadata wire response
-/// carries a single `host:port` per broker, because the codec has no
-/// `endpoints[]` array on `MetadataResponseBroker`. So this test asserts:
-///
-/// 1. The on-disk registration record stored in [`krabka_metadata::MetadataImage`]
-///    carries one [`krabka_metadata::BrokerEndpoint`] per [`krabka_broker::config::ListenerSpec`].
-/// 2. A `MetadataRequest::v12` round-trip over the PLAINTEXT listener
-///    returns at least one broker entry whose `host:port` matches one of
-///    the configured advertised endpoints.
-///
-/// The two-listener config uses PLAINTEXT and SSL. The SSL listener uses the
-/// dev cert, so `BrokerConfig::validate` accepts it. We dial only the
-/// PLAINTEXT listener, because the goal here is the metadata projection and
-/// not TLS termination. `tls_listener_accepts_*` covers TLS termination.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/tls.feature",
+    name = "tls listener accepts tls handshake only"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_response_carries_listener_endpoints() {
+async fn tls_listener_accepts_tls_handshake_only() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("auth handlers tls: metadata response carries listener endpoints")]
+async fn bdd_verify_metadata_response_carries_listener_endpoints() {
     let TlsFixture {
         log_dir,
         pem_dir: _pem_dir,
@@ -192,6 +186,30 @@ async fn metadata_response_carries_listener_endpoints() {
 
     handle.shutdown().await;
 }
+
+/// Every configured listener should appear as a `BrokerEndpoint` on this
+/// broker's self-registration record, and the projection should survive a
+/// Metadata round-trip end-to-end. The Kafka v9+ Metadata wire response
+/// carries a single `host:port` per broker, because the codec has no
+/// `endpoints[]` array on `MetadataResponseBroker`. So this test asserts:
+///
+/// 1. The on-disk registration record stored in [`krabka_metadata::MetadataImage`]
+///    carries one [`krabka_metadata::BrokerEndpoint`] per [`krabka_broker::config::ListenerSpec`].
+/// 2. A `MetadataRequest::v12` round-trip over the PLAINTEXT listener
+///    returns at least one broker entry whose `host:port` matches one of
+///    the configured advertised endpoints.
+///
+/// The two-listener config uses PLAINTEXT and SSL. The SSL listener uses the
+/// dev cert, so `BrokerConfig::validate` accepts it. We dial only the
+/// PLAINTEXT listener, because the goal here is the metadata projection and
+/// not TLS termination. `tls_listener_accepts_*` covers TLS termination.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/tls.feature",
+    name = "metadata response carries listener endpoints"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_response_carries_listener_endpoints() {}
 
 /// A log directory, the directory holding the dev PEM files, and their paths.
 struct TlsFixture {

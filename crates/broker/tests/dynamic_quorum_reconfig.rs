@@ -214,8 +214,11 @@ fn voter_change(result: Result<(), AdminError>, applied: i16) -> Result<(), Stri
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic quorum reconfig: brokers and controllers find a standalone quorum through bootstrap servers"
+)]
+async fn bdd_verify_brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {
     support::init_tracing();
     let (client_addrs, controller_addrs, clients, controllers) =
         support::bind_and_hold_ports(4).await;
@@ -351,17 +354,19 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
     drop((first_dir, second_dir));
 }
 
-/// A controller bound to a wildcard address, as the system test starts every
-/// controller with `--controller-listen-addr 0.0.0.0:9592`, advertises this
-/// machine's host name in the voter set, as Kafka advertises the canonical
-/// host name of a wildcard controller listener.
-///
-/// It once advertised `127.0.0.1` there. The leader's `UpdateRaftVoter`
-/// committed that address over the one `--controller-listener` gave the
-/// format, and a broker on another machine then sent every heartbeat to its
-/// own loopback address: it stayed fenced and never finished starting.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_quorum_reconfig.feature",
+    name = "brokers and controllers find a standalone quorum through bootstrap servers"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
+async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "dynamic quorum reconfig: a wildcard controller advertises the host name in the voter set"
+)]
+async fn bdd_verify_a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
     support::init_tracing();
     let controller = TcpListener::bind("0.0.0.0:0").await.expect("bind");
     let controller_addr = controller.local_addr().expect("bound address");
@@ -418,3 +423,20 @@ async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
     }
     controller.shutdown().await;
 }
+
+/// A controller bound to a wildcard address, as the system test starts every
+/// controller with `--controller-listen-addr 0.0.0.0:9592`, advertises this
+/// machine's host name in the voter set, as Kafka advertises the canonical
+/// host name of a wildcard controller listener.
+///
+/// It once advertised `127.0.0.1` there. The leader's `UpdateRaftVoter`
+/// committed that address over the one `--controller-listener` gave the
+/// format, and a broker on another machine then sent every heartbeat to its
+/// own loopback address: it stayed fenced and never finished starting.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/dynamic_quorum_reconfig.feature",
+    name = "a wildcard controller advertises the host name in the voter set"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {}

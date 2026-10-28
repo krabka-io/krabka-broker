@@ -39,17 +39,18 @@ enum FetchTopicShape {
     All,
 }
 
-#[yare::parameterized(
-    listed_topic = { "g1", "o_topic", 42, FetchTopicShape::Listed },
-    fetch_all = { "g3", "fa_topic", 7, FetchTopicShape::All },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip516 offsets: offset commit and fetch by topic id round trip for {example}"
 )]
-#[test_macro(tokio::test)]
-async fn offset_commit_and_fetch_by_topic_id_round_trip(
-    group_id: &str,
-    topic_name: &str,
-    committed_offset: i64,
-    shape: FetchTopicShape,
-) {
+async fn bdd_verify_offset_commit_and_fetch_by_topic_id_round_trip(example: String) {
+    type Example<'a> = (&'a str, &'a str, i64, FetchTopicShape);
+    let (group_id, topic_name, committed_offset, shape): Example<'_> = match example.as_str() {
+        "listed topic" => ("g1", "o_topic", 42, FetchTopicShape::Listed),
+        "fetch all" => ("g3", "fa_topic", 7, FetchTopicShape::All),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     let p = start().await;
     p.client
         .send(create_topic_request(
@@ -102,11 +103,19 @@ async fn offset_commit_and_fetch_by_topic_id_round_trip(
     check!(t.topic_id == id); // id echoed
 }
 
-/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
-/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
-/// id.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_offsets.feature",
+    name = "offset commit and fetch by topic id round trip"
+)]
 #[tokio::test]
-async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
+async fn offset_commit_and_fetch_by_topic_id_round_trip(example: String) { let _ = example; }
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip516 offsets: offset fetch unresolved topic id returns unknown topic id"
+)]
+async fn bdd_verify_offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
     /// Kafka's `UNKNOWN_TOPIC_ID` error code.
     const UNKNOWN_TOPIC_ID: i16 = 100;
 
@@ -148,13 +157,22 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
     assert!(actual == expected);
 }
 
-/// `OffsetCommit` v10 with a known `topic_id` and a `topic_id` that does not
-/// resolve. The known topic commits and answers 0. The other row commits
-/// nothing and answers `UNKNOWN_TOPIC_ID` with its id echoed. The zero id is
-/// such an id. Kafka's `OffsetCommitResponse.Builder` puts the refused row
-/// ahead of the committed row.
+/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
+/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
+/// id.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_offsets.feature",
+    name = "offset fetch unresolved topic id returns unknown topic id"
+)]
 #[tokio::test]
-async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
+async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "kip516 offsets: offset commit unresolved topic id returns unknown topic id"
+)]
+async fn bdd_verify_offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
     let p = start().await;
     p.client
         .send(create_topic_request(
@@ -210,3 +228,16 @@ async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
     }
     assert!(actual == expected);
 }
+
+/// `OffsetCommit` v10 with a known `topic_id` and a `topic_id` that does not
+/// resolve. The known topic commits and answers 0. The other row commits
+/// nothing and answers `UNKNOWN_TOPIC_ID` with its id echoed. The zero id is
+/// such an id. Kafka's `OffsetCommitResponse.Builder` puts the refused row
+/// ahead of the committed row.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_offsets.feature",
+    name = "offset commit unresolved topic id returns unknown topic id"
+)]
+#[tokio::test]
+async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {}

@@ -980,10 +980,11 @@ mod tests {
         ]
     }
 
-    /// Kafka's `InternalTopicManager.configureTopics`. Each row is a topology
-    /// and an image, and the whole configured topology or error it gives.
-    #[test]
-    fn configure_topics_follows_kafka_internal_topic_manager() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified streams topology configured tests: configure topics follows kafka internal topic manager"
+    )]
+    fn bdd_verify_configure_topics_follows_kafka_internal_topic_manager() {
         let rows = [copartition_coercion(), writer_partition_count()]
             .into_iter()
             .chain(status_rows())
@@ -998,6 +999,15 @@ mod tests {
             check!(configure_topics(&topology, &image) == expected, "{name}");
         }
     }
+
+    /// Kafka's `InternalTopicManager.configureTopics`. Each row is a topology
+    /// and an image, and the whole configured topology or error it gives.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/streams/topology/configured.feature",
+        name = "tests: configure topics follows kafka internal topic manager"
+    )]
+    fn configure_topics_follows_kafka_internal_topic_manager() {}
 
     #[test]
     fn configure_topics_error_codes_and_messages() {

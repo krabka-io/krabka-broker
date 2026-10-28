@@ -111,29 +111,40 @@ async fn exit_code_for_each_argv(extra: &[&str], want: i32) {
     assert2::check!(got == want, "exit {got}, want {want}");
 }
 
-/// `Formatter.run` resolves the release and the feature names before it
-/// reconciles `kraft.version` with the quorum flags, and it reconciles the mode
-/// before it checks that the feature defines the level. So the first error a
-/// command line with several wrong things reports is fixed.
-#[yare::parameterized(
-    unknown_release_first = {
-        &["--release-version", "9.9-IV0", "--feature", "kraft.version=9"],
-        "krabka format: Unknown metadata.version '9.9-IV0'.",
-    },
-    unknown_feature_first = {
-        &["--feature", "nope.version=1", "--feature", "kraft.version=9"],
-        "krabka format: Unsupported feature: nope.version.",
-    },
-    mode_conflict_first = {
-        &["--feature", "kraft.version=9"],
-        "krabka format: kraft.version=9 requires --standalone,",
-    },
-    undefined_kraft_level = {
-        &["--no-initial-controllers", "--feature", "kraft.version=9"],
-        "krabka format: No feature:kraft.version with feature level 9",
-    },
-)]
-fn the_first_error_follows_kafkas_order(extra: &[&str], want: &str) {
+#[cfg(test)]
+#[rstest_bdd_macros::then("format tests: the first error follows kafkas order for {example}")]
+fn bdd_verify_the_first_error_follows_kafkas_order(example: String) {
+    type Example<'a> = (&'a [&'a str], &'a str);
+    let (extra, want): Example<'_> = match example.as_str() {
+        "unknown release first" => (
+            &[
+                "--release-version",
+                "9.9-IV0",
+                "--feature",
+                "kraft.version=9",
+            ],
+            "krabka format: Unknown metadata.version '9.9-IV0'.",
+        ),
+        "unknown feature first" => (
+            &[
+                "--feature",
+                "nope.version=1",
+                "--feature",
+                "kraft.version=9",
+            ],
+            "krabka format: Unsupported feature: nope.version.",
+        ),
+        "mode conflict first" => (
+            &["--feature", "kraft.version=9"],
+            "krabka format: kraft.version=9 requires --standalone,",
+        ),
+        "undefined kraft level" => (
+            &["--no-initial-controllers", "--feature", "kraft.version=9"],
+            "krabka format: No feature:kraft.version with feature level 9",
+        ),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     use clap::Parser as _;
 
     let FreshArgv { dir: _tmp, argv } = fresh_argv(extra);
@@ -144,6 +155,17 @@ fn the_first_error_follows_kafkas_order(extra: &[&str], want: &str) {
     assert2::check!(code == EXIT_INVALID_FEATURE, "exit {code}");
     assert2::check!(message.starts_with(want), "{message}");
 }
+
+/// `Formatter.run` resolves the release and the feature names before it
+/// reconciles `kraft.version` with the quorum flags, and it reconciles the mode
+/// before it checks that the feature defines the level. So the first error a
+/// command line with several wrong things reports is fixed.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/format/tests.feature",
+    name = "the first error follows kafkas order"
+)]
+fn the_first_error_follows_kafkas_order(example: String) { let _ = example; }
 
 /// The exit code of a run, and the directory it formatted.
 struct FormatRun {
@@ -516,20 +538,23 @@ fn plan_of(argv: Vec<String>) -> Result<Plan, Failure> {
     plan(Cli::try_parse_from(argv).expect("parse").args, Vec::new())
 }
 
-/// The run writes the metadata log directory first and then each `--log-dir`
-/// in the order given, every path once. Only the metadata log directory is a
-/// metadata directory, of the kind the quorum flags select. Each directory
-/// gets its own id.
-#[yare::parameterized(
-    default_first_log_dir = { "the first --log-dir by default" },
-    separate_metadata_dir = { "a separate metadata log directory" },
-    metadata_is_log_dir = { "a metadata log directory that is also a log directory" },
-    metadata_is_only_log_dir = { "a metadata log directory that is the only log directory" },
-    duplicate_log_dir = { "a log directory named twice" },
-    voter = { "a voter" },
-    non_voting_controller = { "a dynamic controller that is not a voter" },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "format tests: the metadata log directory leads the directory set for {example}"
 )]
-fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
+fn bdd_verify_the_metadata_log_directory_leads_the_directory_set(example: String) {
+    type Example<'a> = (&'a str,);
+    let (scenario,): Example<'_> = match example.as_str() {
+        "default first log dir" => ("the first --log-dir by default",),
+        "separate metadata dir" => ("a separate metadata log directory",),
+        "metadata is log dir" => ("a metadata log directory that is also a log directory",),
+        "metadata is only log dir" => ("a metadata log directory that is the only log directory",),
+        "duplicate log dir" => ("a log directory named twice",),
+        "voter" => ("a voter",),
+        "non voting controller" => ("a dynamic controller that is not a voter",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     use DirectoryKind::{Data, DynamicMetadata, DynamicMetadataVoter, StaticMetadata};
 
     // (what, --metadata-log-dir, --log-dir entries, quorum flags, the targets)
@@ -682,6 +707,17 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
     check!(ids.len() == plan.targets.len(), "{}: {ids:?}", case.what);
 }
 
+#[cfg(test)]
+/// The run writes the metadata log directory first and then each `--log-dir`
+/// in the order given, every path once. Only the metadata log directory is a
+/// metadata directory, of the kind the quorum flags select. Each directory
+/// gets its own id.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/format/tests.feature",
+    name = "the metadata log directory leads the directory set"
+)]
+fn the_metadata_log_directory_leads_the_directory_set(example: String) { let _ = example; }
+
 /// `--directory-id` and the local `--initial-controllers` entry name the id of
 /// the metadata log directory, also when `--metadata-log-dir` puts it apart
 /// from the log directories. A data directory gets another id.
@@ -744,21 +780,22 @@ krabka_macros::directory_tree_fixture!(
     })
 );
 
-/// Only the metadata log directory gets the bootstrap files, and with a
-/// dynamic format the offset-zero checkpoint in `__cluster_metadata-0`, as
-/// Kafka trunk writes its bootstrap snapshot only into a metadata directory.
-/// A data directory gets `meta.properties` and nothing else. The set shares
-/// one cluster id and one node id, and each directory has its own id.
-#[yare::parameterized(
-    static_separate_metadata = { "static, a separate metadata log directory" },
-    dynamic_separate_metadata = { "standalone, a separate metadata log directory" },
-    dynamic_first_log_dir = { "standalone, the first --log-dir" },
-    dynamic_metadata_is_log_dir = {
-        "standalone, a metadata log directory that is also a log directory",
-    },
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "format tests: only the metadata log directory gets the bootstrap files for {example}"
 )]
-#[test_macro(tokio::test)]
-async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str) {
+async fn bdd_verify_only_the_metadata_log_directory_gets_the_bootstrap_files(example: String) {
+    type Example<'a> = (&'a str,);
+    let (scenario,): Example<'_> = match example.as_str() {
+        "static separate metadata" => ("static, a separate metadata log directory",),
+        "dynamic separate metadata" => ("standalone, a separate metadata log directory",),
+        "dynamic first log dir" => ("standalone, the first --log-dir",),
+        "dynamic metadata is log dir" => {
+            ("standalone, a metadata log directory that is also a log directory",)
+        }
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     const META: &[&str] = &[META_PROPERTIES];
     const STATIC: &[&str] = &["bootstrap.json", "bootstrap.records.bin", META_PROPERTIES];
     const DYNAMIC: &[&str] = &[
@@ -892,15 +929,34 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str
     );
 }
 
-/// The run stops on an unreadable `meta.properties` in the metadata log
-/// directory, and names that directory, wherever `--metadata-log-dir` puts
-/// it. An unreadable data directory is skipped, and the rest are formatted.
-#[yare::parameterized(
-    unreadable_first_log_dir = { "the first --log-dir" },
-    unreadable_separate_metadata_dir = { "a separate metadata log directory" },
-    unreadable_data_dir = { "a data directory" },
+#[cfg(test)]
+/// Only the metadata log directory gets the bootstrap files, and with a
+/// dynamic format the offset-zero checkpoint in `__cluster_metadata-0`, as
+/// Kafka trunk writes its bootstrap snapshot only into a metadata directory.
+/// A data directory gets `meta.properties` and nothing else. The set shares
+/// one cluster id and one node id, and each directory has its own id.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/format/tests.feature",
+    name = "only the metadata log directory gets the bootstrap files"
 )]
-fn an_unreadable_metadata_log_directory_is_named(scenario: &str) {
+#[tokio::test]
+async fn only_the_metadata_log_directory_gets_the_bootstrap_files(example: String) {
+    let _ = example;
+}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "format tests: an unreadable metadata log directory is named for {example}"
+)]
+fn bdd_verify_an_unreadable_metadata_log_directory_is_named(example: String) {
+    type Example<'a> = (&'a str,);
+    let (scenario,): Example<'_> = match example.as_str() {
+        "unreadable first log dir" => ("the first --log-dir",),
+        "unreadable separate metadata dir" => ("a separate metadata log directory",),
+        "unreadable data dir" => ("a data directory",),
+        _ => panic!("unknown BDD example: {example}"),
+    };
+
     /// The target and the error directories of a plan.
     #[derive(Debug, PartialEq, Eq)]
     struct PlannedDirs<Dir> {
@@ -1001,6 +1057,16 @@ fn an_unreadable_metadata_log_directory_is_named(scenario: &str) {
         });
     check!(got == want, "{what}");
 }
+
+#[cfg(test)]
+/// The run stops on an unreadable `meta.properties` in the metadata log
+/// directory, and names that directory, wherever `--metadata-log-dir` puts
+/// it. An unreadable data directory is skipped, and the rest are formatted.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/format/tests.feature",
+    name = "an unreadable metadata log directory is named"
+)]
+fn an_unreadable_metadata_log_directory_is_named(example: String) { let _ = example; }
 
 /// A formatted directory of another node refuses the run, `--ignore-formatted`
 /// or not, with Kafka's message: `Formatter.doFormat` verifies the set against

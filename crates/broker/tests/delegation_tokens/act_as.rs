@@ -30,19 +30,11 @@ use {
 // oracles for that wire path.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Spec §3.1 test 1.
-///
-/// Super-user `admin` mints a delegation token owned by `alice`, through
-/// act-as. The test verifies that:
-///   - the request succeeds (`error_code = 0`)
-///   - the response `principal_*` holds the OWNER, `User:alice`
-///   - the response `token_requester_*` holds the CALLER, `User:admin`
-///   - a second SCRAM-token-authed connection carries
-///     `authenticated_via_token = true`. A second Create proves it by
-///     returning `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64), which fires
-///     only on token-authed sessions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn act_as_super_user_mints_token_owned_by_target() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation tokens act as: act as super user mints token owned by target"
+)]
+async fn bdd_verify_act_as_super_user_mints_token_owned_by_target() {
     let (handle, _dir, addr) = start_admin_alice().await;
 
     let result: Result<(), String> = async {
@@ -128,15 +120,30 @@ async fn act_as_super_user_mints_token_owned_by_target() {
     }
 }
 
-/// Spec §3.1 test 2.
+/// Spec §3.1 test 1.
 ///
-/// Non-super-user `alice` tries to act as another user and requests a token
-/// owned by `bob`. The broker must reject it with
-/// `DELEGATION_TOKEN_AUTHORIZATION_FAILED` (65). This is the authorization
-/// gate for act-as. Without it, any authenticated user could mint tokens that
-/// impersonate any other user.
+/// Super-user `admin` mints a delegation token owned by `alice`, through
+/// act-as. The test verifies that:
+///   - the request succeeds (`error_code = 0`)
+///   - the response `principal_*` holds the OWNER, `User:alice`
+///   - the response `token_requester_*` holds the CALLER, `User:admin`
+///   - a second SCRAM-token-authed connection carries
+///     `authenticated_via_token = true`. A second Create proves it by
+///     returning `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64), which fires
+///     only on token-authed sessions.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/act_as.feature",
+    name = "act as super user mints token owned by target"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn act_as_non_super_user_rejected_with_authorization_failed() {
+async fn act_as_super_user_mints_token_owned_by_target() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "delegation tokens act as: act as non super user rejected with authorization failed"
+)]
+async fn bdd_verify_act_as_non_super_user_rejected_with_authorization_failed() {
     let (handle, _dir, addr) = start_broker_with_super_users(&[("alice", "alice-pw")], &[]).await;
 
     let result: Result<(), String> = async {
@@ -171,3 +178,18 @@ async fn act_as_non_super_user_rejected_with_authorization_failed() {
         panic!("act-as non-super-user reject test failed: {msg}");
     }
 }
+
+/// Spec §3.1 test 2.
+///
+/// Non-super-user `alice` tries to act as another user and requests a token
+/// owned by `bob`. The broker must reject it with
+/// `DELEGATION_TOKEN_AUTHORIZATION_FAILED` (65). This is the authorization
+/// gate for act-as. Without it, any authenticated user could mint tokens that
+/// impersonate any other user.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/delegation_tokens/act_as.feature",
+    name = "act as non super user rejected with authorization failed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn act_as_non_super_user_rejected_with_authorization_failed() {}

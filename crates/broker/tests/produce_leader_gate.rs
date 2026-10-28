@@ -202,8 +202,9 @@ async fn rf3_produce_to_a_follower_is_refused(
     rf3_leader
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_to_non_leader_is_rejected() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("produce leader gate: produce to non leader is rejected")]
+async fn bdd_verify_produce_to_non_leader_is_rejected() {
     let _g = cluster_lock().lock().await;
     let cluster = registered_cluster(3).await;
 
@@ -391,3 +392,11 @@ async fn produce_to_non_leader_is_rejected() {
 
     shutdown_cluster(cluster).await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/produce_leader_gate.feature",
+    name = "produce to non leader is rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn produce_to_non_leader_is_rejected() {}

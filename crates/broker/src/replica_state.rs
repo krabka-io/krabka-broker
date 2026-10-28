@@ -763,12 +763,9 @@ mod tests {
         assert!(s.recompute_hw_for_leader_append(o(100)) == o(30));
     }
 
-    /// Kafka's `Replica.updateFetchStateOrThrow`, fetch by fetch, for
-    /// follower 2 of an ISR installed at `t0`. Each step is a fetch at
-    /// `t0 + ms`: the follower's fetch offset, the leader's log end offset
-    /// when it arrived, and the whole follower state it leaves.
-    #[test]
-    fn follower_fetches_update_state_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("replica state tests: follower fetches update state as kafka does")]
+    fn bdd_verify_follower_fetches_update_state_as_kafka_does() {
         let t0 = Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let stats = |leo, last_fetch, last_fetch_leader_leo, last_caught_up| FollowerStats {
@@ -829,6 +826,17 @@ mod tests {
             check!(s.per_follower.get(&NodeId(2)) == Some(&expected), "{label}");
         }
     }
+
+    /// Kafka's `Replica.updateFetchStateOrThrow`, fetch by fetch, for
+    /// follower 2 of an ISR installed at `t0`. Each step is a fetch at
+    /// `t0 + ms`: the follower's fetch offset, the leader's log end offset
+    /// when it arrived, and the whole follower state it leaves.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/replica_state.feature",
+        name = "tests: follower fetches update state as kafka does"
+    )]
+    fn follower_fetches_update_state_as_kafka_does() {}
 
     /// A replica outside the ISR that this leader has not heard from starts
     /// from Kafka's empty state: its first fetch proves nothing unless it

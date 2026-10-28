@@ -14,8 +14,11 @@ use {
     assert2::check,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn full_mode_checks_the_body_and_id_mode_does_not() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "schema validation full mode: full mode checks the body and id mode does not"
+)]
+async fn bdd_verify_full_mode_checks_the_body_and_id_mode_does_not() {
     let (_registry, broker, client, _dir, id_mode) =
         mock_topic_fixture("validated", VALIDATED).await;
     let full_mode = create_topic()
@@ -57,3 +60,11 @@ async fn full_mode_checks_the_body_and_id_mode_does_not() {
 
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/schema_validation/full_mode.feature",
+    name = "full mode checks the body and id mode does not"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_mode_checks_the_body_and_id_mode_does_not() {}

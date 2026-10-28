@@ -159,12 +159,11 @@ fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> Joi
     }
 }
 
-/// A single-member classic consumer group. The test drives `JoinGroup`,
-/// including the two-step `MEMBER_ID_REQUIRED` flow, then a leader
-/// `SyncGroup`, then asserts that `DescribeGroups` reports the protocol name
-/// and the per-member metadata.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_groups_reports_member_metadata_and_protocol_name() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe groups metadata: describe groups reports member metadata and protocol name"
+)]
+async fn bdd_verify_describe_groups_reports_member_metadata_and_protocol_name() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-describe-metadata";
     let client = connect_owned(bootstrap, "describe-metadata-member", "client build").await;
@@ -243,19 +242,23 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
     assert_described_group(&resp);
 }
 
-/// cp and JVM cross-validation. The test drives the SAME classic flow, but
-/// with the EXACT `ConsumerProtocolSubscription` and
-/// `ConsumerProtocolAssignment` bytes that a real `RangeAssignor`
-/// console-consumer exchanged with
-/// `mirror.gcr.io/confluentinc/cp-kafka:7.4.0`. `describe_groups_jvm.rs`
-/// captured them into `real_kafka_classic.json`.
-///
-/// Krabka's `DescribeGroups` must reproduce real Kafka's semantics:
-/// `protocol_type == "consumer"`, `protocol_data == "range"`, and a byte-exact
-/// `member_metadata` echo of the realistic subscription, not only of the
-/// arbitrary blob that the test above pins.
+/// A single-member classic consumer group. The test drives `JoinGroup`,
+/// including the two-step `MEMBER_ID_REQUIRED` flow, then a leader
+/// `SyncGroup`, then asserts that `DescribeGroups` reports the protocol name
+/// and the per-member metadata.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_groups_metadata.feature",
+    name = "describe groups reports member metadata and protocol name"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_groups_matches_real_kafka_range_subscription() {
+async fn describe_groups_reports_member_metadata_and_protocol_name() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "describe groups metadata: describe groups matches real kafka range subscription"
+)]
+async fn bdd_verify_describe_groups_matches_real_kafka_range_subscription() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-describe-real-kafka";
     let client = connect_owned(bootstrap, "describe-real-kafka-member", "client build").await;
@@ -340,3 +343,22 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
         m.member_assignment.as_ref()
     );
 }
+
+/// cp and JVM cross-validation. The test drives the SAME classic flow, but
+/// with the EXACT `ConsumerProtocolSubscription` and
+/// `ConsumerProtocolAssignment` bytes that a real `RangeAssignor`
+/// console-consumer exchanged with
+/// `mirror.gcr.io/confluentinc/cp-kafka:7.4.0`. `describe_groups_jvm.rs`
+/// captured them into `real_kafka_classic.json`.
+///
+/// Krabka's `DescribeGroups` must reproduce real Kafka's semantics:
+/// `protocol_type == "consumer"`, `protocol_data == "range"`, and a byte-exact
+/// `member_metadata` echo of the realistic subscription, not only of the
+/// arbitrary blob that the test above pins.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_groups_metadata.feature",
+    name = "describe groups matches real kafka range subscription"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_groups_matches_real_kafka_range_subscription() {}

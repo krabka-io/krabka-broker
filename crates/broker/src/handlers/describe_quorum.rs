@@ -143,10 +143,11 @@ mod tests {
         krabka_protocol::{Decode as _, Encode as _, owned::describe_quorum_response},
     };
 
-    /// Each whole-request refusal carries Kafka's `Errors.message()` for
-    /// its code, as `DescribeQuorumRequest.getTopLevelErrorResponse` sets.
-    #[test]
-    fn top_level_error_response_carries_kafkas_message() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers describe quorum tests: top level error response carries kafkas message"
+    )]
+    fn bdd_verify_top_level_error_response_carries_kafkas_message() {
         for (error_code, message) in [
             (
                 codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -169,6 +170,15 @@ mod tests {
             );
         }
     }
+
+    /// Each whole-request refusal carries Kafka's `Errors.message()` for
+    /// its code, as `DescribeQuorumRequest.getTopLevelErrorResponse` sets.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/describe_quorum.feature",
+        name = "tests: top level error response carries kafkas message"
+    )]
+    fn top_level_error_response_carries_kafkas_message() {}
 
     /// The refusal survives the wire at v2+, where `ErrorMessage` exists,
     /// with the message intact rather than null.

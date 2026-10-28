@@ -292,10 +292,11 @@ mod tests {
         assert!(group_version_disabled(&disabled));
     }
 
-    /// Kafka's `throwIfConsumerGroupHeartbeatRequestIsInvalid`, row by row:
-    /// (label, version, request, whole expected refusal or `None`).
-    #[test]
-    fn validate_request_follows_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers consumer group heartbeat tests: validate request follows kafka"
+    )]
+    fn bdd_verify_validate_request_follows_kafka() {
         use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
 
         let join = ConsumerGroupHeartbeatRequest {
@@ -463,6 +464,15 @@ mod tests {
         }
     }
 
+    /// Kafka's `throwIfConsumerGroupHeartbeatRequestIsInvalid`, row by row:
+    /// (label, version, request, whole expected refusal or `None`).
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/consumer_group_heartbeat.feature",
+        name = "tests: validate request follows kafka"
+    )]
+    fn validate_request_follows_kafka() {}
+
     #[test]
     fn error_response_preserves_error_code() {
         let resp = ConsumerGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None);
@@ -591,13 +601,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka's `getOrMaybeCreateConsumerGroup` and `consumerGroupLeave`: only a
-    /// join creates a consumer group, a missing group answers
-    /// `GROUP_ID_NOT_FOUND` on any other epoch, and a share or streams group is
-    /// not a consumer group. Each row sends one heartbeat for its own group id
-    /// and compares the whole response; `None` expects an accepted join.
-    #[tokio::test]
-    async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers consumer group heartbeat tests: handle creates consumer group only on join as kafka does"
+    )]
+    async fn bdd_verify_handle_creates_consumer_group_only_on_join_as_kafka_does() {
         let LiveBrokerFixture {
             handle: broker_handle,
             directory: _dir,
@@ -690,6 +698,19 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// Kafka's `getOrMaybeCreateConsumerGroup` and `consumerGroupLeave`: only a
+    /// join creates a consumer group, a missing group answers
+    /// `GROUP_ID_NOT_FOUND` on any other epoch, and a share or streams group is
+    /// not a consumer group. Each row sends one heartbeat for its own group id
+    /// and compares the whole response; `None` expects an accepted join.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/consumer_group_heartbeat.feature",
+        name = "tests: handle creates consumer group only on join as kafka does"
+    )]
+    #[tokio::test]
+    async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {}
 
     #[test]
     fn subscribed_names_describe_denied_table() { subscribed_names_describe_denied_cases(); }

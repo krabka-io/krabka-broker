@@ -46,13 +46,23 @@ const TOPIC: &str = "tiered-delete-records-itest";
 /// segment, so the floor lands between two remote segments.
 const DELETE_THROUGH: i64 = 40;
 
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage topic rlmm rlmm delete records: delete records puts the tiered prefix out of range and frees it"
+)]
+fn bdd_verify_delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it() {
+    run_broker_test(delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case());
+}
+
 /// A fetch below the offset an operator passed to `DeleteRecords` is
 /// `OFFSET_OUT_OF_RANGE` on a tiered topic, and the remote copies below the
 /// new floor are freed.
-#[test]
-fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it() {
-    run_broker_test(delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case());
-}
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_delete_records.feature",
+    name = "delete records puts the tiered prefix out of range and frees it"
+)]
+fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it() {}
 
 async fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case() {
     let (broker, _log_dir, remote_dir) = start_broker_with_topic_rlmm().await;

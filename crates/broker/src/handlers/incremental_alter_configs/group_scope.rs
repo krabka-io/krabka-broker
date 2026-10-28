@@ -123,13 +123,11 @@ mod tests {
         }
     }
 
-    /// Kafka's `ControllerConfigurationValidator` accepts every key of
-    /// `GroupConfig.CONFIG_DEF`, whatever the group coordinators apply, and the
-    /// controller stores the whole map: the documented
-    /// `kafka-configs.sh --alter --entity-type groups --add-config
-    /// consumer.session.timeout.ms=...` flow of KIP-848 and KIP-932.
-    #[test]
-    fn group_config_stores_every_key_kafka_4_3_1_accepts() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs group scope tests: group config stores every key kafka 4 3 1 accepts"
+    )]
+    fn bdd_verify_group_config_stores_every_key_kafka_4_3_1_accepts() {
         let keys = [
             ("consumer.session.timeout.ms", "50000"),
             ("consumer.heartbeat.interval.ms", "6000"),
@@ -167,6 +165,18 @@ mod tests {
         );
     }
 
+    /// Kafka's `ControllerConfigurationValidator` accepts every key of
+    /// `GroupConfig.CONFIG_DEF`, whatever the group coordinators apply, and the
+    /// controller stores the whole map: the documented
+    /// `kafka-configs.sh --alter --entity-type groups --add-config
+    /// consumer.session.timeout.ms=...` flow of KIP-848 and KIP-932.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
+        name = "tests: group config stores every key kafka 4 3 1 accepts"
+    )]
+    fn group_config_stores_every_key_kafka_4_3_1_accepts() {}
+
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
         let resource =
@@ -188,18 +198,24 @@ mod tests {
         ));
     }
 
-    #[yare::parameterized(
-        latest = { "latest", codes::NONE },
-        earliest = { "earliest", codes::NONE },
-        by_duration = { "by_duration:PT1H", codes::NONE },
-        negative_duration = { "by_duration:-PT1H", codes::INVALID_CONFIG },
-        missing_duration = { "by_duration:", codes::INVALID_CONFIG },
-        unknown_strategy = { "none", codes::INVALID_CONFIG },
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs group scope tests: group config takes every share offset reset strategy kafka accepts for {example}"
     )]
-    fn group_config_takes_every_share_offset_reset_strategy_kafka_accepts(
-        value: &str,
-        want_code: i16,
+    fn bdd_verify_group_config_takes_every_share_offset_reset_strategy_kafka_accepts(
+        example: String,
     ) {
+        type Example<'a> = (&'a str, i16);
+        let (value, want_code): Example<'_> = match example.as_str() {
+            "latest" => ("latest", codes::NONE),
+            "earliest" => ("earliest", codes::NONE),
+            "by duration" => ("by_duration:PT1H", codes::NONE),
+            "negative duration" => ("by_duration:-PT1H", codes::INVALID_CONFIG),
+            "missing duration" => ("by_duration:", codes::INVALID_CONFIG),
+            "unknown strategy" => ("none", codes::INVALID_CONFIG),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
         // `ShareGroupAutoOffsetResetStrategy` accepts `latest`, `earliest`,
         // and `by_duration:<ISO-8601 duration>`, and refuses anything else.
         let resource =
@@ -230,6 +246,15 @@ mod tests {
         }
     }
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
+        name = "tests: group config takes every share offset reset strategy kafka accepts"
+    )]
+    fn group_config_takes_every_share_offset_reset_strategy_kafka_accepts(example: String) {
+        let _ = example;
+    }
+
     #[test]
     fn group_config_rejects_values_outside_broker_bounds() {
         let resource =
@@ -245,11 +270,11 @@ mod tests {
         assert!(records.is_empty());
     }
 
-    /// Kafka's controller order for a `GROUP` resource: the operations merge,
-    /// then the group name, then `GroupConfig.validate`. Each row is the whole
-    /// outcome.
-    #[test]
-    fn group_resources_follow_kafkas_merge_and_validation_order() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers incremental alter configs group scope tests: group resources follow kafkas merge and validation order"
+    )]
+    fn bdd_verify_group_resources_follow_kafkas_merge_and_validation_order() {
         let set = |key: &str, value: &str| make_set_cfg(key, value);
         let append = |key: &str| AlterableConfig {
             name: key.into(),
@@ -307,4 +332,14 @@ mod tests {
             );
         }
     }
+
+    /// Kafka's controller order for a `GROUP` resource: the operations merge,
+    /// then the group name, then `GroupConfig.validate`. Each row is the whole
+    /// outcome.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
+        name = "tests: group resources follow kafkas merge and validation order"
+    )]
+    fn group_resources_follow_kafkas_merge_and_validation_order() {}
 }

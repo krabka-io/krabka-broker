@@ -558,12 +558,9 @@ mod tests {
         assert2::assert!(result.is_ok() == expect_ok, "{source}: {result:?}");
     }
 
-    /// Each of the five `MetadataLogConfig` keys takes the domain Kafka's
-    /// `ConfigDef` gives it, in whole bytes or whole milliseconds. A value
-    /// that is accepted lands in its own field and leaves the other four at
-    /// Kafka's defaults. A value that is refused names its field.
-    #[test]
-    fn metadata_log_keys_take_kafkas_domains() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("file config validate tests: metadata log keys take kafkas domains")]
+    fn bdd_verify_metadata_log_keys_take_kafkas_domains() {
         struct Case {
             line: &'static str,
             expected: Result<krabka_raft::MetadataLogConfig, &'static str>,
@@ -739,6 +736,17 @@ mod tests {
             }
         }
     }
+
+    /// Each of the five `MetadataLogConfig` keys takes the domain Kafka's
+    /// `ConfigDef` gives it, in whole bytes or whole milliseconds. A value
+    /// that is accepted lands in its own field and leaves the other four at
+    /// Kafka's defaults. A value that is refused names its field.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/file_config/validate.feature",
+        name = "tests: metadata log keys take kafkas domains"
+    )]
+    fn metadata_log_keys_take_kafkas_domains() {}
 
     #[test]
     fn existing_file_inputs_reject_invalid_refined_values() {

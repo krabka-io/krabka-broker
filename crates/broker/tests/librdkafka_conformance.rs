@@ -148,9 +148,11 @@ fn max_sent_version(trace: &str, request: &str) -> Option<u32> {
         .max()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn round_trip_group_join_and_api_versions_with_kcat() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "librdkafka conformance: round trip group join and api versions with kcat"
+)]
+async fn bdd_verify_round_trip_group_join_and_api_versions_with_kcat() {
     let (broker, _dir) = start_host_broker().await;
     let bootstrap = broker0_advertised();
     let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
@@ -244,35 +246,20 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
     broker.shutdown().await;
 }
 
-/// What the 1.x client cannot reach, driven by the librdkafka 2.15.0 image.
-///
-/// Three things the older row says nothing about, all read out of the client's
-/// own `protocol` debug trace, which is where a client's negotiated versions
-/// and the requests it actually chose to send are observable:
-///
-///   - KIP-848: with `group.protocol=consumer` the client subscribes through
-///     `ConsumerGroupHeartbeat` and sends neither `JoinGroup` nor `SyncGroup`.
-///   - KIP-516: the consumer's `Fetch` is at v13 or above, the versions from
-///     which the request carries topic ids in place of topic names, so a
-///     krabka `Fetch` reply is being resolved by id for this client.
-///   - KIP-98: an idempotent produce opens with `InitProducerId`.
-///   - KIP-714: with a `client_metrics_enable` broker the client opens the
-///     telemetry handshake with `GetTelemetrySubscriptions`. The broker
-///     advertises keys 71 and 72 only behind a configured receiver, so this
-///     also establishes that the client reads the advertised set: the same
-///     client against the default broker of the test above opens no handshake.
-///     `PushTelemetry` is not asserted: krabka answers a subscription-less
-///     handshake with a 300s push interval, and no subscription can be
-///     configured from here -- `AdminClient::incremental_alter_configs` is
-///     topic-typed, and the `CLIENT_METRICS` resource type it would need is
-///     what `tests/client_telemetry.rs` reaches through the raw protocol.
-///
-/// KIP-951 is left out: the leader hint rides a `Produce` or `Fetch` response
-/// on a leader change, and kcat's trace names neither the hint nor a metadata
-/// refresh caused by one, so a single-broker run has no observable to assert.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/librdkafka_conformance.feature",
+    name = "round trip group join and api versions with kcat"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn round_trip_group_join_and_api_versions_with_kcat() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "librdkafka conformance: next gen group topic ids and telemetry with librdkafka 2x"
+)]
+async fn bdd_verify_next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
     // A receiver has to be configured, or the broker withholds the KIP-714
     // keys and librdkafka opens no telemetry handshake at all.
     let (broker, _dir) = start_host_broker_with(|config| config.client_metrics_enable = true).await;
@@ -374,3 +361,38 @@ async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
 
     broker.shutdown().await;
 }
+
+/// What the 1.x client cannot reach, driven by the librdkafka 2.15.0 image.
+///
+/// Three things the older row says nothing about, all read out of the client's
+/// own `protocol` debug trace, which is where a client's negotiated versions
+/// and the requests it actually chose to send are observable:
+///
+///   - KIP-848: with `group.protocol=consumer` the client subscribes through
+///     `ConsumerGroupHeartbeat` and sends neither `JoinGroup` nor `SyncGroup`.
+///   - KIP-516: the consumer's `Fetch` is at v13 or above, the versions from
+///     which the request carries topic ids in place of topic names, so a
+///     krabka `Fetch` reply is being resolved by id for this client.
+///   - KIP-98: an idempotent produce opens with `InitProducerId`.
+///   - KIP-714: with a `client_metrics_enable` broker the client opens the
+///     telemetry handshake with `GetTelemetrySubscriptions`. The broker
+///     advertises keys 71 and 72 only behind a configured receiver, so this
+///     also establishes that the client reads the advertised set: the same
+///     client against the default broker of the test above opens no handshake.
+///     `PushTelemetry` is not asserted: krabka answers a subscription-less
+///     handshake with a 300s push interval, and no subscription can be
+///     configured from here -- `AdminClient::incremental_alter_configs` is
+///     topic-typed, and the `CLIENT_METRICS` resource type it would need is
+///     what `tests/client_telemetry.rs` reaches through the raw protocol.
+///
+/// KIP-951 is left out: the leader hint rides a `Produce` or `Fetch` response
+/// on a leader change, and kcat's trace names neither the hint nor a metadata
+/// refresh caused by one, so a single-broker run has no observable to assert.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/librdkafka_conformance.feature",
+    name = "next gen group topic ids and telemetry with librdkafka 2x"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {}

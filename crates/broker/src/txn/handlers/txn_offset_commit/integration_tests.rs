@@ -939,13 +939,11 @@ struct StreamsCommitRow {
     expected: i16,
 }
 
-/// Kafka's `StreamsGroup.validateOffsetCommit` with `isTransactional`: a
-/// commit skips the member check only when it names no member id, the
-/// unknown generation and no group instance id. A streams actor that exited
-/// is respawned to validate the commit instead of refusing it with
-/// `UNKNOWN_SERVER_ERROR`.
-#[tokio::test]
-async fn txn_offset_commit_to_a_streams_group_follows_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "txn handlers txn offset commit integration tests: txn offset commit to a streams group follows kafka"
+)]
+async fn bdd_verify_txn_offset_commit_to_a_streams_group_follows_kafka() {
     let rows = [
         StreamsCommitRow {
             name: "no member, generation or instance id",
@@ -1033,6 +1031,19 @@ async fn txn_offset_commit_to_a_streams_group_follows_kafka() {
 
     handle.shutdown().await;
 }
+
+/// Kafka's `StreamsGroup.validateOffsetCommit` with `isTransactional`: a
+/// commit skips the member check only when it names no member id, the
+/// unknown generation and no group instance id. A streams actor that exited
+/// is respawned to validate the commit instead of refusing it with
+/// `UNKNOWN_SERVER_ERROR`.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/txn/handlers/txn_offset_commit/integration_tests.feature",
+    name = "txn offset commit to a streams group follows kafka"
+)]
+#[tokio::test]
+async fn txn_offset_commit_to_a_streams_group_follows_kafka() {}
 
 /// The transaction the coordinator holds for one verification case: its state,
 /// its producer epoch, and whether it holds the group's offsets partition.

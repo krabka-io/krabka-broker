@@ -70,8 +70,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen regex tests: bytes match kafka schema"
+    )]
+    fn bdd_verify_bytes_match_kafka_schema() {
         let want = wire_bytes(&[
             "0000",             // value version 0
             "030261036263",     // Topics, compact array of compact strings
@@ -81,6 +84,13 @@ mod tests {
         ]);
         assert!(&value().encode()[..] == &want[..]);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/regex.feature",
+        name = "tests: bytes match kafka schema"
+    )]
+    fn bytes_match_kafka_schema() {}
 
     #[test]
     fn roundtrip() {

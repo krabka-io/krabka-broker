@@ -340,17 +340,12 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Kafka matches the destination against the configured absolute paths by
-    /// string equality (`LogManager.isLogDirOnline`) and refuses a partition
-    /// whose future directory name passes 255 characters before it reads the
-    /// destination (`ReplicaManager.alterReplicaLogDirs`). A destination that
-    /// names a configured directory reaches the hosted-replica check, which
-    /// answers `REPLICA_NOT_AVAILABLE` for a partition this broker does not
-    /// host.
-    // The cases spell POSIX paths and one is a symbolic link.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn destination_and_topic_name_validation_matches_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers alter replica log dirs tests: destination and topic name validation matches kafka"
+    )]
+    async fn bdd_verify_destination_and_topic_name_validation_matches_kafka() {
         let version = 2;
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = fs::canonicalize(extra.path()).expect("canonical extra dir");
@@ -445,6 +440,22 @@ mod tests {
         }
         broker_handle.shutdown().await;
     }
+
+    /// Kafka matches the destination against the configured absolute paths by
+    /// string equality (`LogManager.isLogDirOnline`) and refuses a partition
+    /// whose future directory name passes 255 characters before it reads the
+    /// destination (`ReplicaManager.alterReplicaLogDirs`). A destination that
+    /// names a configured directory reaches the hosted-replica check, which
+    /// answers `REPLICA_NOT_AVAILABLE` for a partition this broker does not
+    /// host.
+    #[cfg(unix)]
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/alter_replica_log_dirs.feature",
+        name = "tests: destination and topic name validation matches kafka"
+    )]
+    #[tokio::test]
+    async fn destination_and_topic_name_validation_matches_kafka() {}
 
     fn host_orders(broker: &Broker) -> Arc<Partition> {
         let primary = broker.config.log_dir.clone();

@@ -33,8 +33,11 @@ async fn describe_topic(
         .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client admin controller bootstrap: controller bootstrap routes supported and rejects unsupported admin rpc"
+)]
+async fn bdd_verify_controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc() {
     let StartedBroker { broker, dir: _dir } = start_broker().await;
     let broker_bootstrap = broker.listen_addr().to_string();
     let mut broker_admin = AdminClient::connect(slice::from_ref(&broker_bootstrap))
@@ -105,8 +108,19 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
     broker.shutdown().await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_admin_controller_bootstrap.feature",
+    name = "controller bootstrap routes supported and rejects unsupported admin rpc"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_bootstrap_rejects_broker_endpoint() {
+async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "client admin controller bootstrap: controller bootstrap rejects broker endpoint"
+)]
+async fn bdd_verify_controller_bootstrap_rejects_broker_endpoint() {
     let StartedBroker { broker, dir: _dir } = start_broker().await;
     let result = AdminClient::connect_controller(&[broker.listen_addr().to_string()]).await;
 
@@ -121,3 +135,11 @@ async fn controller_bootstrap_rejects_broker_endpoint() {
     ));
     broker.shutdown().await;
 }
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/client_admin_controller_bootstrap.feature",
+    name = "controller bootstrap rejects broker endpoint"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_bootstrap_rejects_broker_endpoint() {}

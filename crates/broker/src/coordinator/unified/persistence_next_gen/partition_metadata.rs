@@ -153,14 +153,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn value_bytes_match_kafka_schema() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen partition metadata tests: value bytes match kafka schema"
+    )]
+    fn bdd_verify_value_bytes_match_kafka_schema() {
         assert!(PartitionMetadataValue::decode(GOLDEN).unwrap() == golden_value());
         assert!(&golden_value().encode()[..] == GOLDEN);
     }
 
-    #[test]
-    fn value_decode_refuses_what_kafka_refuses() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/partition_metadata.feature",
+        name = "tests: value bytes match kafka schema"
+    )]
+    fn value_bytes_match_kafka_schema() {}
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "coordinator unified persistence next gen partition metadata tests: value decode refuses what kafka refuses"
+    )]
+    fn bdd_verify_value_decode_refuses_what_kafka_refuses() {
         struct Row<'a> {
             name: &'static str,
             bytes: &'a [u8],
@@ -186,4 +199,11 @@ mod tests {
             check!(PartitionMetadataValue::decode(bytes).is_err(), "{name}");
         }
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/partition_metadata.feature",
+        name = "tests: value decode refuses what kafka refuses"
+    )]
+    fn value_decode_refuses_what_kafka_refuses() {}
 }

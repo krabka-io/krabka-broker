@@ -462,9 +462,9 @@ mod tests {
         ]
     }
 
-    /// Cases of Kafka's `PersisterStateBatchCombinerTest`, including issue #935.
-    #[test]
-    fn combine_matches_kafka_combiner() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then("share coordinator state tests: combine matches kafka combiner")]
+    fn bdd_verify_combine_matches_kafka_combiner() {
         let batches = CombinerBatches::default();
         for CombinerRow {
             name,
@@ -483,6 +483,14 @@ mod tests {
         }
     }
 
+    /// Cases of Kafka's `PersisterStateBatchCombinerTest`, including issue #935.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/state.feature",
+        name = "tests: combine matches kafka combiner"
+    )]
+    fn combine_matches_kafka_combiner() {}
+
     fn snapshot(start: i64, batches: Vec<StateBatch>) -> ShareSnapshotValue {
         ShareSnapshotValue {
             snapshot_epoch: 1,
@@ -496,8 +504,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn snapshot_then_update_merges_as_kafka() {
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "share coordinator state tests: snapshot then update merges as kafka"
+    )]
+    fn bdd_verify_snapshot_then_update_merges_as_kafka() {
         let mut s = SharePartitionState::from_snapshot(
             &snapshot(0, vec![
                 batch().call(),
@@ -530,6 +541,13 @@ mod tests {
         };
         assert!(s == expected);
     }
+
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/state.feature",
+        name = "tests: snapshot then update merges as kafka"
+    )]
+    fn snapshot_then_update_merges_as_kafka() {}
 
     /// An update with `-1` keeps the stored start offset and leader epoch.
     #[test]

@@ -298,12 +298,11 @@ fn runtime_file_config_accepts_a_zero_classic_group_initial_rebalance_delay() {
     assert!(cfg.validate().is_ok());
 }
 
-/// Kafka's defaults are `sasl.server.max.receive.size` = 524288 and
-/// `connection.failed.authentication.delay.ms` = 100. The delay is
-/// `atLeast(0)`, so zero is a value and turns the delay off, and a negative
-/// one is an error.
-#[test]
-fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "file config runtime config tests: the sasl receive limit and failed authentication delay follow kafka"
+)]
+fn bdd_verify_the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
     let defaults = BrokerConfig::default();
     assert!(defaults.sasl_server_max_receive.bytes_i64() == 524_288);
     assert!(defaults.connection_failed_authentication_delay == millis(100));
@@ -341,13 +340,22 @@ fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
     );
 }
 
-/// The loader records which Kafka keys the `[runtime]` table named, whatever
-/// their values, so `DescribeConfigs` reports a supplied setting at
-/// `STATIC_BROKER_CONFIG` even at Kafka's default. A table that names none
-/// records none, a field that is not a Kafka key records nothing, and a second
-/// table applied afterwards, as the command-line overlay is, adds to the first.
-#[test]
-fn the_runtime_table_records_the_kafka_keys_it_named() {
+/// Kafka's defaults are `sasl.server.max.receive.size` = 524288 and
+/// `connection.failed.authentication.delay.ms` = 100. The delay is
+/// `atLeast(0)`, so zero is a value and turns the delay off, and a negative
+/// one is an error.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/file_config/runtime_config/tests.feature",
+    name = "the sasl receive limit and failed authentication delay follow kafka"
+)]
+fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "file config runtime config tests: the runtime table records the kafka keys it named"
+)]
+fn bdd_verify_the_runtime_table_records_the_kafka_keys_it_named() {
     let recorded = |sources: &[&str]| -> Vec<&'static str> {
         let mut cfg = BrokerConfig::default();
         for source in sources {
@@ -387,6 +395,18 @@ fn the_runtime_table_records_the_kafka_keys_it_named() {
         )
     );
 }
+
+/// The loader records which Kafka keys the `[runtime]` table named, whatever
+/// their values, so `DescribeConfigs` reports a supplied setting at
+/// `STATIC_BROKER_CONFIG` even at Kafka's default. A table that names none
+/// records none, a field that is not a Kafka key records nothing, and a second
+/// table applied afterwards, as the command-line overlay is, adds to the first.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/file_config/runtime_config/tests.feature",
+    name = "the runtime table records the kafka keys it named"
+)]
+fn the_runtime_table_records_the_kafka_keys_it_named() {}
 
 /// The five keys of Kafka's `MetadataLogConfig` set the whole of
 /// `BrokerConfig::metadata_log` together, and the loader records each Kafka

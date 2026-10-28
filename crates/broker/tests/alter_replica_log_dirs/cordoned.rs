@@ -104,11 +104,11 @@ fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
     }
 }
 
-/// The issue's table: cordon the second directory, then `DescribeLogDirs` v5
-/// flags it and v4 has no field to carry the flag; a move into it is 39, and
-/// the same move succeeds once it is uncordoned.
-#[tokio::test]
-async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "alter replica log dirs cordoned: a cordoned dir is flagged and refuses replica moves"
+)]
+async fn bdd_verify_a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
     let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).call().await;
     let (first, second) = (canonical(primary.path()), canonical(extra.path()));
     let extra_str = fs::canonicalize(extra.path())
@@ -159,11 +159,20 @@ async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
     handle.shutdown().await;
 }
 
-/// `kafka-configs --alter --add-config cordoned.log.dirs=/nope` on
-/// `apache/kafka:4.3.1` fails with `InvalidRequestException` and Kafka's
-/// `requirement failed` message, and nothing is cordoned.
+/// The issue's table: cordon the second directory, then `DescribeLogDirs` v5
+/// flags it and v4 has no field to carry the flag; a move into it is 39, and
+/// the same move succeeds once it is uncordoned.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/cordoned.feature",
+    name = "a cordoned dir is flagged and refuses replica moves"
+)]
 #[tokio::test]
-async fn an_unknown_cordoned_dir_is_refused() {
+async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then("alter replica log dirs cordoned: an unknown cordoned dir is refused")]
+async fn bdd_verify_an_unknown_cordoned_dir_is_refused() {
     let (handle, _primary, _extra, addr) = start_two_dir_broker().await;
     let refused = set_broker_config(addr, 1, "cordoned.log.dirs", "/nope").await;
     check!(
@@ -179,3 +188,14 @@ async fn an_unknown_cordoned_dir_is_refused() {
     );
     handle.shutdown().await;
 }
+
+/// `kafka-configs --alter --add-config cordoned.log.dirs=/nope` on
+/// `apache/kafka:4.3.1` fails with `InvalidRequestException` and Kafka's
+/// `requirement failed` message, and nothing is cordoned.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/alter_replica_log_dirs/cordoned.feature",
+    name = "an unknown cordoned dir is refused"
+)]
+#[tokio::test]
+async fn an_unknown_cordoned_dir_is_refused() {}

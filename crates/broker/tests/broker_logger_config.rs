@@ -98,20 +98,11 @@ fn describe_request(resource_name: &str) -> DescribeConfigsRequest {
     }
 }
 
-/// `BROKER_LOGGER` ROUND-TRIP:
-///
-/// 1. A `DEBUG` event on a `krabka_broker::` target is dropped, because the
-///    broker starts at `INFO`.
-/// 2. `IncrementalAlterConfigs` SETs `krabka_broker=DEBUG` on this node's
-///    `BROKER_LOGGER` resource.
-/// 3. `DescribeConfigs` reports `krabka_broker` at `DEBUG` and `root` at
-///    `INFO`, both at `DYNAMIC_BROKER_LOGGER_CONFIG`.
-/// 4. The same `DEBUG` event is now emitted.
-/// 5. `ListConfigResources` v1 lists the node as a `BROKER_LOGGER` resource.
-/// 6. A describe aimed at another node's id is refused: the resource is
-///    node-local, so no node answers for another one's loggers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "broker logger config: broker logger alter moves the live filter and the describe agrees"
+)]
+async fn bdd_verify_broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
     // The controller the broker will run with, plus a capturing subscriber
     // over the same live filter. Held for the whole test so a rebuild of the
     // callsite interest cache always sees this dispatcher registered.
@@ -229,3 +220,23 @@ async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {
     );
     check!(refused.configs.is_empty());
 }
+
+/// `BROKER_LOGGER` ROUND-TRIP:
+///
+/// 1. A `DEBUG` event on a `krabka_broker::` target is dropped, because the
+///    broker starts at `INFO`.
+/// 2. `IncrementalAlterConfigs` SETs `krabka_broker=DEBUG` on this node's
+///    `BROKER_LOGGER` resource.
+/// 3. `DescribeConfigs` reports `krabka_broker` at `DEBUG` and `root` at
+///    `INFO`, both at `DYNAMIC_BROKER_LOGGER_CONFIG`.
+/// 4. The same `DEBUG` event is now emitted.
+/// 5. `ListConfigResources` v1 lists the node as a `BROKER_LOGGER` resource.
+/// 6. A describe aimed at another node's id is refused: the resource is
+///    node-local, so no node answers for another one's loggers.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/broker_logger_config.feature",
+    name = "broker logger alter moves the live filter and the describe agrees"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_logger_alter_moves_the_live_filter_and_the_describe_agrees() {}

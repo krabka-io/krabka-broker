@@ -11,19 +11,9 @@ use crate::jvm_acceptance::{
     nc_check_connectivity, prepare_jks_truststore, provision_ssl_topic, start_sasl_ssl_broker,
 };
 
-/// End-to-end `SASL_SSL` drive of the JVM tools. This is the
-/// production-shape auth path: a TLS handshake, then a SCRAM-SHA-512 SASL
-/// exchange over the encrypted channel. It mirrors
-/// `jvm_sasl_scram_sha512_produce_consume`, but swaps the `SASL_PLAINTEXT`
-/// listener for `SASL_SSL` and gives the JVM client a JKS truststore.
-///
-/// The test uses cp-kafka:7.5.0, so admin's `kafka-configs --alter
-/// --entity-type users --add-config 'SCRAM-SHA-512=[...]'` translates to
-/// KIP-554's `AlterUserScramCredentials (api_key 51)` rather than the legacy
-/// `IncrementalAlterConfigs (44)` path that the broker does not implement.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn jvm_sasl_ssl_full_stack() {
+#[cfg(test)]
+#[rstest_bdd_macros::then("jvm acceptance tls sasl ssl stack: jvm sasl ssl full stack")]
+async fn bdd_verify_jvm_sasl_ssl_full_stack() {
     const TOPIC: &str = "krabka-sasl-ssl-itest";
 
     let (broker, _dir) = start_sasl_ssl_broker(ADMIN, ADMIN_PASS).await;
@@ -48,3 +38,22 @@ async fn jvm_sasl_ssl_full_stack() {
 
     broker.shutdown().await;
 }
+
+/// End-to-end `SASL_SSL` drive of the JVM tools. This is the
+/// production-shape auth path: a TLS handshake, then a SCRAM-SHA-512 SASL
+/// exchange over the encrypted channel. It mirrors
+/// `jvm_sasl_scram_sha512_produce_consume`, but swaps the `SASL_PLAINTEXT`
+/// listener for `SASL_SSL` and gives the JVM client a JKS truststore.
+///
+/// The test uses cp-kafka:7.5.0, so admin's `kafka-configs --alter
+/// --entity-type users --add-config 'SCRAM-SHA-512=[...]'` translates to
+/// KIP-554's `AlterUserScramCredentials (api_key 51)` rather than the legacy
+/// `IncrementalAlterConfigs (44)` path that the broker does not implement.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_tls/sasl_ssl_stack.feature",
+    name = "jvm sasl ssl full stack"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_sasl_ssl_full_stack() {}

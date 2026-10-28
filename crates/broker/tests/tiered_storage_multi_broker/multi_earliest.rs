@@ -205,8 +205,11 @@ impl Archived {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi earliest: a tiered partition reads back from earliest after its leader restarts"
+)]
+async fn bdd_verify_a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {
     let mut cluster = Box::pin(Archived::start().evicted(LEADER).call()).await;
 
     // Restart the preferred leader on the log it left: it opens a log whose
@@ -226,8 +229,19 @@ async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts()
     Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a tiered partition reads back from earliest after its leader restarts"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
+async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi earliest: a follower left with a raised floor takes its leaders back"
+)]
+async fn bdd_verify_a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
     let mut cluster = Box::pin(Archived::start().evicted(FOLLOWER).call()).await;
 
     // Leave the follower's log on the floor an older broker established: the
@@ -269,17 +283,19 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
     Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
-/// An archive an lz4 producer wrote reads back from the earliest offset
-/// (#1448).
-///
-/// Broker 2 leads and has evicted the first archived segments, so the read
-/// starts in the remote band. Before the fix the remote read decoded the
-/// archived batch and the response writer framed it by its uncompressed
-/// length, so the frame announced more bytes than it carried: the consumer
-/// waited on a fetch that was never answered and read nothing back, as the
-/// soak's lz4 read-back did. Kafka serves the segment's own bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a follower left with a raised floor takes its leaders back"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_compressed_archive_reads_back_from_earliest() {
+async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "tiered storage multi broker multi earliest: a compressed archive reads back from earliest"
+)]
+async fn bdd_verify_a_compressed_archive_reads_back_from_earliest() {
     let cluster = Box::pin(
         Archived::start()
             .evicted(LEADER)
@@ -291,6 +307,23 @@ async fn a_compressed_archive_reads_back_from_earliest() {
     cluster.reads_back_everything(end).await;
     Box::pin(cluster.shutdown()).await;
 }
+
+/// An archive an lz4 producer wrote reads back from the earliest offset
+/// (#1448).
+///
+/// Broker 2 leads and has evicted the first archived segments, so the read
+/// starts in the remote band. Before the fix the remote read decoded the
+/// archived batch and the response writer framed it by its uncompressed
+/// length, so the frame announced more bytes than it carried: the consumer
+/// waited on a fetch that was never answered and read nothing back, as the
+/// soak's lz4 read-back did. Kafka serves the segment's own bytes.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_earliest.feature",
+    name = "a compressed archive reads back from earliest"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_compressed_archive_reads_back_from_earliest() {}
 
 /// Produce one acknowledged record per index, each its own batch, compressed
 /// with `compression`.

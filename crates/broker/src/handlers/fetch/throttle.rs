@@ -314,22 +314,36 @@ mod tests {
         std::{sync::Arc, time::Duration},
     };
 
+    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "handlers fetch throttle tests: an empty fetch response is charged kafkas size for {example}"
+    )]
+    fn bdd_verify_an_empty_fetch_response_is_charged_kafkas_size(example: String) {
+        type Example = (i16, u64);
+        let (version, size): Example = match example.as_str() {
+            "v0" => (0, 8),
+            "v1" => (1, 12),
+            "v4" => (4, 12),
+            "v7" => (7, 18),
+            "v12" => (12, 16),
+            _ => panic!("unknown BDD example: {example}"),
+        };
+
+        let response = FetchResponse::default();
+        assert2::assert!(fetch_response_size(&response, version) == size);
+    }
+
     /// Kafka's `FetchResponse.sizeOf`, which `FetchContext.getResponseSize`
     /// charges to the consumer byte rate, is `4 + data.size(version)`. An
     /// empty response's body is the response array (4 bytes at v0), then
     /// `ThrottleTimeMs` from v1, `ErrorCode` and `SessionId` from v7, and the
     /// compact encoding with its tagged-field byte from v12.
-    #[yare::parameterized(
-        v0 = { 0, 8 },
-        v1 = { 1, 12 },
-        v4 = { 4, 12 },
-        v7 = { 7, 18 },
-        v12 = { 12, 16 },
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/fetch/throttle.feature",
+        name = "tests: an empty fetch response is charged kafkas size"
     )]
-    fn an_empty_fetch_response_is_charged_kafkas_size(version: i16, size: u64) {
-        let response = FetchResponse::default();
-        assert2::assert!(fetch_response_size(&response, version) == size);
-    }
+    fn an_empty_fetch_response_is_charged_kafkas_size(example: String) { let _ = example; }
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
