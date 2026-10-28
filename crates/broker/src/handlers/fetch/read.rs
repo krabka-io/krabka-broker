@@ -340,7 +340,8 @@ async fn run_blocking_read(
         |_| true,
         move |log| {
             let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
-            Ok::<_, LogError>((plan, aborted_candidates(log, &read)))
+            let aborted = aborted_candidates(log, &read, &plan);
+            Ok::<_, LogError>((plan, aborted))
         },
     )
     .await
@@ -374,24 +375,30 @@ fn read_task_panicked(cause: &impl fmt::Display) -> BrokerError {
 #[cfg(test)]
 fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError> {
     let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
-    let candidates = aborted_candidates(log, read);
+    let candidates = aborted_candidates(log, read, &plan);
     let (records, served_upper_bound) = run_read(&plan, read)?;
     let aborted = aborted_served(candidates, read, served_upper_bound);
     Ok(RawServed { records, aborted })
 }
 
 /// The aborted transactions a `read_committed` fetch may have to report:
-/// every one that overlaps the whole range it may serve,
-/// `[fetch_offset, effective_lso)`, taken under the log mutex together with
-/// the plan. The plan's files outlive a segment that retention removes while
-/// the read runs, but the segment's transaction index goes with it, so a scan
-/// after the read could miss aborted transactions in bytes the read serves.
-/// None for any other fetch.
-fn aborted_candidates(log: &Log, read: &BlockingRead) -> Vec<AbortedTxn> {
+/// every one that overlaps the range the read may serve, from `fetch_offset`
+/// to where the plan says the read cannot reach or the last stable offset,
+/// whichever is lower, taken under the log mutex together with the plan. The
+/// plan's files outlive a segment that retention removes while the read
+/// runs, but the segment's transaction index goes with it, so a scan after
+/// the read could miss aborted transactions in bytes the read serves. The
+/// plan's bound keeps the scan to the segment or two the read may touch: a
+/// small fetch into a long transactional backlog does not walk the backlog's
+/// indexes on every call. None for any other fetch.
+fn aborted_candidates(log: &Log, read: &BlockingRead, plan: &RawReadPlan) -> Vec<AbortedTxn> {
     if !read.read_committed_aborts {
         return Vec::new();
     }
-    log.aborted_in_range(read.fetch_offset, read.effective_lso)
+    log.aborted_in_range(
+        read.fetch_offset,
+        plan.offset_bound().min(read.effective_lso),
+    )
 }
 
 /// The aborted transactions a `read_committed` fetch reports beside the

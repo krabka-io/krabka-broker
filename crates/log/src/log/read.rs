@@ -498,6 +498,20 @@ impl RawReadPlan {
     #[must_use]
     pub fn may_block(&self) -> bool { self.may_block }
 
+    /// The offset the read cannot reach: the end of the last segment the plan
+    /// may walk, or the read's limit, whichever is lower; the read's own
+    /// offset when there is nothing to walk. A caller that needs the log's
+    /// view of the bytes the read may serve, such as the aborted transactions
+    /// a `read_committed` fetch reports beside them, takes it for this range
+    /// under the lock with the plan: bounded by the segment or two the read
+    /// may touch, not by the whole log behind it.
+    #[must_use]
+    pub fn offset_bound(&self) -> Offset {
+        self.views.last().map_or(self.fetch_offset, |view| {
+            (view.last() + 1).min(self.limit_offset)
+        })
+    }
+
     /// Whether the log has cut a segment file since the plan was taken. The
     /// bytes a read copied by then may mix what stood before the cut with
     /// what was written after it, so the read serves nothing, and the next

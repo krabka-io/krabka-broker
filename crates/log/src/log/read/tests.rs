@@ -1056,6 +1056,41 @@ fn a_plan_taken_before_a_truncation_reads_nothing_after_it() {
     check!(!fresh.bytes.is_empty());
 }
 
+/// The offset a plan's read cannot reach follows the segments it may walk:
+/// the end of the last of them, the limit when that is lower, and the read's
+/// own offset when there is nothing to walk.
+#[test]
+fn a_plan_bounds_the_offsets_its_read_can_reach() {
+    let dir = tempdir().unwrap();
+    let log = one_batch_per_segment(dir.path(), 12);
+    let end = log.log_end_offset();
+
+    check!(
+        log.plan_raw_read(Offset(0), end, bytes(1))
+            .unwrap()
+            .offset_bound()
+            == Offset(1)
+    );
+    check!(
+        log.plan_raw_read(Offset(0), end, mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == end
+    );
+    check!(
+        log.plan_raw_read(Offset(0), Offset(5), mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == Offset(5)
+    );
+    check!(
+        log.plan_raw_read(end, end, mebibytes(1))
+            .unwrap()
+            .offset_bound()
+            == end
+    );
+}
+
 /// Planning stops once the views it holds can fill the budget, so a read
 /// of a few bytes from a log of many small segments views one or two
 /// segments, not all of them, and a read with no limit views what it needs.
