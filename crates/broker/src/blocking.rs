@@ -120,6 +120,9 @@ where
 /// disk, or that fills a socket buffer of several MiB, keeps a producer's
 /// request unread for as long as it runs. With the core handed away, the
 /// thread that takes it parks on the driver and serves those events.
+///
+/// Only the `sendfile` drain calls it, so it exists where that does.
+#[krabka_macros::sendfile_cfg]
 pub fn run_in_place<R>(work: impl FnOnce() -> R) -> R {
     match Placement::for_current_runtime() {
         Placement::InPlace => task::block_in_place(work),
