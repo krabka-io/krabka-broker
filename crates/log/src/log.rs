@@ -41,6 +41,8 @@ mod direct_writes;
 mod faults;
 mod maintenance;
 mod open;
+#[cfg(not(target_os = "wasi"))]
+mod page_cache;
 mod pending_transactions;
 #[cfg(test)]
 mod preallocation;
@@ -128,6 +130,11 @@ pub struct Log {
     writeback_unsynced: u64,
     #[cfg(not(target_os = "wasi"))]
     writeback_jobs: VecDeque<rollover_flush::FlushTicket>,
+    /// Bytes of the active segment, from its start, that a background sync
+    /// has been handed so far; the next one covers from here. Only whole
+    /// pages are handed over. See `Log::pace_writeback`.
+    #[cfg(not(target_os = "wasi"))]
+    writeback_handed: u64,
     roll_jitter: Option<RollJitter>,
     pending_deletes: Vec<PendingDelete>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any

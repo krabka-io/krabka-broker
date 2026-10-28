@@ -3,6 +3,7 @@
 #[cfg(not(target_os = "wasi"))]
 use crate::{
     io::{IoTarget, LogIo},
+    log::page_cache,
     producer_snapshot::PreparedSnapshot,
 };
 #[cfg(not(target_os = "wasi"))]
@@ -50,8 +51,20 @@ enum Job {
     /// A sealed segment's files and the producer snapshot at its end.
     Rollover(Flush),
     /// The active segment's `.log` file, synced so that the page cache holds
-    /// little dirty data for it. See `Log::pace_writeback`.
-    Writeback { file: Arc<File>, io: Arc<dyn LogIo> },
+    /// little dirty data for it, and the whole pages the sync hands over,
+    /// recorded against the page-cache budget afterwards. See
+    /// `Log::pace_writeback` and [`page_cache::Ledger`].
+    Writeback {
+        file: Arc<File>,
+        io: Arc<dyn LogIo>,
+        /// The `len` bytes of the file from `offset` this job hands over.
+        offset: u64,
+        len: u64,
+        /// The page-cache budget the range counts against, in bytes. `None`
+        /// records nothing.
+        budget: Option<u64>,
+        ledger: Arc<page_cache::Ledger>,
+    },
 }
 
 #[cfg(not(target_os = "wasi"))]
@@ -59,7 +72,20 @@ impl Job {
     fn run(self) -> io::Result<()> {
         match self {
             Self::Rollover(flush) => flush.run(),
-            Self::Writeback { file, io } => io.sync_data(&file),
+            Self::Writeback {
+                file,
+                io,
+                offset,
+                len,
+                budget,
+                ledger,
+            } => {
+                io.sync_data(&file)?;
+                if let Some(budget) = budget {
+                    ledger.retain(file, io, offset, len, budget);
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -145,32 +171,50 @@ impl Flusher {
         self.shared.finish_through(ticket)
     }
 
+    /// The executor this log's jobs run on, started on the first call.
+    #[cfg(not(target_os = "wasi"))]
+    fn executor(&mut self) -> io::Result<Arc<executor::Executor>> {
+        if let Some(executor) = &self.executor {
+            return Ok(Arc::clone(executor));
+        }
+        let executor = executor::Executor::shared()?;
+        self.executor = Some(Arc::clone(&executor));
+        Ok(executor)
+    }
+
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;
-        let executor = if let Some(executor) = &self.executor {
-            Arc::clone(executor)
-        } else {
-            let executor = executor::Executor::shared()?;
-            self.executor = Some(Arc::clone(&executor));
-            executor
-        };
-        Ok(executor.reserve(bytes))
+        Ok(self.executor()?.reserve(bytes))
     }
 
     #[cfg(not(target_os = "wasi"))]
     pub fn submit(&self, flush: Flush) -> io::Result<()> { self.enqueue(Job::Rollover(flush)) }
 
     /// Queue a sync of the active segment's `.log` file behind the jobs
-    /// already queued. Unlike a rollover flush it holds no snapshot memory, so
-    /// it reserves nothing; it does start the executor when no rollover has.
+    /// already queued, handing over its `len` whole pages from `offset` to
+    /// the executor's page-cache ledger under `budget` once synced. Unlike a
+    /// rollover flush it holds no snapshot memory, so it reserves nothing; it
+    /// does start the executor when no rollover has.
     #[cfg(not(target_os = "wasi"))]
-    pub fn submit_writeback(&mut self, file: Arc<File>, io: Arc<dyn LogIo>) -> io::Result<()> {
+    pub fn submit_writeback(
+        &mut self,
+        file: Arc<File>,
+        io: Arc<dyn LogIo>,
+        offset: u64,
+        len: u64,
+        budget: Option<u64>,
+    ) -> io::Result<()> {
         self.check()?;
-        if self.executor.is_none() {
-            self.executor = Some(executor::Executor::shared()?);
-        }
-        self.enqueue(Job::Writeback { file, io })
+        let ledger = Arc::clone(self.executor()?.page_cache());
+        self.enqueue(Job::Writeback {
+            file,
+            io,
+            offset,
+            len,
+            budget,
+            ledger,
+        })
     }
 
     #[cfg(not(target_os = "wasi"))]

@@ -384,6 +384,22 @@ pub struct LogConfig {
     #[default(DEFAULT_WRITEBACK_WINDOW)]
     pub writeback_window: ByteSize,
 
+    /// The most page cache the segments written through it keep, over every
+    /// log in the process. Each background sync of an active segment records
+    /// the whole pages it covered, and while the recorded bytes exceed this,
+    /// the oldest recorded pages of any log are dropped from the page cache
+    /// (`posix_fadvise(POSIX_FADV_DONTNEED)`), off the appending thread. A
+    /// consumer further behind than this reads from the disk. Without it, a
+    /// container's memory limit is what evicts the pages, and at that limit
+    /// the kernel reclaims a page inside every append that writes one: in
+    /// 10 GiB containers taking 50K 1 KiB records/s at RF3, that doubled the
+    /// publish p50 for minutes at a time. `None` keeps every page until the
+    /// kernel evicts it. Logs with different values each trim the shared
+    /// record to their own. Segments written through `O_DIRECT` keep no page
+    /// cache and are not counted. Default `None`; the broker sets half of
+    /// its memory limit.
+    pub page_cache_budget: Option<ByteSize>,
+
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     #[default(true)]
     pub validate_on_open: bool,
@@ -545,6 +561,7 @@ mod tests {
                     segment_allocation: SegmentAllocation::OnWrite,
                     tail_cache_size: mebibytes(8),
                     writeback_window: mebibytes(2),
+                    page_cache_budget: None,
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

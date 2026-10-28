@@ -3,7 +3,7 @@
 // Only `pace_writeback` reads a byte count, and `wasm32-wasip1` has no
 // `pace_writeback`.
 #[cfg(not(target_os = "wasi"))]
-use krabka_units::prelude::ByteSizeExt as _;
+use {super::page_cache, krabka_units::prelude::ByteSizeExt};
 use {
     super::{Log, PendingDelete, RollJitter},
     crate::{
@@ -233,18 +233,23 @@ impl Log {
     /// This is what bounds the dirty data the kernel holds for the segment,
     /// to about two windows: see [`crate::LogConfig::writeback_window`]. The
     /// wait is the only time an append stops for it, and it ends when a sync
-    /// of one window's bytes ends. A segment written through `O_DIRECT` has
-    /// no dirty pages, and `flush_on_append` syncs every append, so neither
-    /// counts bytes here. `wasm32-wasip1` has no flush pool and paces nothing.
+    /// of one window's bytes ends. Each sync also hands the segment's whole
+    /// pages written since the last one to the page-cache ledger, which
+    /// drops the oldest pages of the process's logs beyond
+    /// [`crate::LogConfig::page_cache_budget`]. A segment written through
+    /// `O_DIRECT` has no dirty pages, and `flush_on_append` syncs every
+    /// append, so neither counts bytes here. `wasm32-wasip1` has no flush
+    /// pool and paces nothing.
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
-        let window = {
+        let (window, budget) = {
             let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
-            if config.flush_on_append {
+            let window = if config.flush_on_append {
                 0
             } else {
                 config.writeback_window.bytes_u64()
-            }
+            };
+            (window, config.page_cache_budget.map(ByteSizeExt::bytes_u64))
         };
         let active = self.active.as_ref().ok_or_else(super::no_active_segment)?;
         if window == 0 || active.writes_direct() {
@@ -263,9 +268,19 @@ impl Log {
         {
             self.rollover_flusher.finish_through(oldest)?;
         }
+        // Whole pages only: the page the next append writes into is never
+        // dropped from under it, and no page is handed over twice.
+        let end = (active.size().bytes_u64() & !(page_cache::PAGE - 1)).max(self.writeback_handed);
+        let offset = self.writeback_handed;
+        self.writeback_handed = end;
         let file = active.log_file_handle();
-        self.rollover_flusher
-            .submit_writeback(file, Arc::clone(&self.io))?;
+        self.rollover_flusher.submit_writeback(
+            file,
+            Arc::clone(&self.io),
+            offset,
+            end - offset,
+            budget,
+        )?;
         self.writeback_jobs
             .push_back(self.rollover_flusher.ticket());
         Ok(())

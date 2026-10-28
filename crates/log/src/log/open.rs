@@ -232,6 +232,8 @@ impl Log {
             writeback_unsynced: 0,
             #[cfg(not(target_os = "wasi"))]
             writeback_jobs: VecDeque::new(),
+            #[cfg(not(target_os = "wasi"))]
+            writeback_handed: 0,
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,

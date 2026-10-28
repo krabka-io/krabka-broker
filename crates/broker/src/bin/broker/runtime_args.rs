@@ -92,6 +92,7 @@ pub struct RuntimeArgs {
     pub log_writeback_window: Option<ByteSize>,
     pub log_flush_start_offset_checkpoint_interval: Option<Time>,
     pub log_timestamp_scan_window: Option<ByteSize>,
+    pub log_page_cache_budget: Option<ByteSize>,
     pub log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
     pub message_max_bytes: Option<ByteSize>,
@@ -375,6 +376,7 @@ mod tests {
         log-writeback-window KRABKA_LOG_WRITEBACK_WINDOW None ---------++--\n\
         log-flush-start-offset-checkpoint-interval KRABKA_LOG_FLUSH_START_OFFSET_CHECKPOINT_INTERVAL None -------+-----\n\
         log-timestamp-scan-window KRABKA_LOG_TIMESTAMP_SCAN_WINDOW None ---------++--\n\
+        log-page-cache-budget KRABKA_LOG_PAGE_CACHE_BUDGET None ---------++--\n\
         log-delivery-clock-uncertainty KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY None -------+-----\n\
         message-max-bytes KRABKA_MESSAGE_MAX_BYTES None +-------++---\n\
         fetch-max-bytes KRABKA_FETCH_MAX_BYTES None +-------++---\n\
