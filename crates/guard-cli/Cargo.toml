@@ -34,7 +34,7 @@ clap = { workspace = true, features = ["env"] }
 hex = { workspace = true }
 serde = { workspace = true }
 # `cli_main!` writes the binary's `main`.
-krabka-macros = { version = "1.1.0", path = "../macros" }
+krabka-macros = { version = "1.1.1", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 toml = { workspace = true }
 tracing = { workspace = true }
@@ -44,7 +44,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 assert2 = { workspace = true }
 # Broker integration fixtures and value checks stay out of the production graph.
-krabka-broker = { version = "1.1.0", path = "../broker", features = ["test-helpers"] }
+krabka-broker = { version = "1.1.1", path = "../broker", features = ["test-helpers"] }
 krabka-security = { version = "0.7.0" }
 # Signing goes through `FileEd25519Signer`, so `ring` is here only to mint the
 # PKCS#8 key pair that a signature case hands to `--sign-with`.
