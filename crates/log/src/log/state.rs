@@ -25,7 +25,7 @@ use {
     std::{
         iter,
         path::Path,
-        sync::{Arc, PoisonError},
+        sync::{Arc, PoisonError, atomic::Ordering},
         time::{Instant, SystemTime},
     },
     tracing::instrument,
@@ -345,6 +345,8 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn reset_to(&mut self, new_base: Offset) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
+        // A read planned before the reset must not serve what it finds now.
+        self.truncations.fetch_add(1, Ordering::SeqCst);
         self.roll_jitter = None;
         if new_base < 0 {
             return Err(LogError::OffsetMismatch {

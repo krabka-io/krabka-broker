@@ -40,6 +40,22 @@ pub struct AbortedTxn {
     pub last_stable_offset: Offset,
 }
 
+impl AbortedTxn {
+    /// Whether the transaction's records overlap the offsets `[start, end)`:
+    /// the test [`TxnIndex::aborted_in_range`] applies, so a caller that
+    /// collected the transactions of a wider range can narrow them to the
+    /// bytes it served without going back to the index.
+    #[must_use]
+    pub fn overlaps(&self, start: Offset, end: Offset) -> bool {
+        krabka_verified::aborted_transaction_overlaps(
+            self.start_offset.0,
+            self.last_offset.0,
+            start.0,
+            end.0,
+        )
+    }
+}
+
 /// On-disk byte layout of one `AbortedTxn` entry. `zerocopy` reinterprets it
 /// in place from the file bytes.
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]

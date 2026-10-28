@@ -24,7 +24,7 @@ use {
     std::{
         collections::{BTreeMap, HashMap, VecDeque},
         path::PathBuf,
-        sync::{Arc, RwLock},
+        sync::{Arc, RwLock, atomic::AtomicU64},
         time::{Instant, SystemTime},
     },
 };
@@ -135,6 +135,14 @@ pub struct Log {
     /// pages are handed over. See `Log::pace_writeback`.
     #[cfg(not(target_os = "wasi"))]
     writeback_handed: u64,
+    /// How many times this log has cut a segment file in place
+    /// ([`Log::truncate_to`]). A read planned under the lock and run without
+    /// it ([`Log::plan_raw_read`]) takes the count and reads nothing if the
+    /// count has moved by the time it has its bytes, since a file cut and
+    /// written again under it can give it a header from before the cut with
+    /// bytes from after. Shared with the plans, so they can ask without the
+    /// lock.
+    truncations: Arc<AtomicU64>,
     roll_jitter: Option<RollJitter>,
     pending_deletes: Vec<PendingDelete>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
