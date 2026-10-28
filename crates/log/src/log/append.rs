@@ -690,8 +690,8 @@ impl Log {
         #[cfg(not(target_os = "wasi"))]
         {
             self.writeback_unsynced = 0;
-            self.writeback_handed = 0;
             self.writeback_jobs.clear();
+            self.writeback_handed = 0;
         }
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;

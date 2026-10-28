@@ -75,6 +75,20 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves
   write-back to the kernel, as before. Partitions with `preallocate=true`
   write through `O_DIRECT` and are unchanged.
+- The broker keeps the page cache its partitions written through the page
+  cache hold under `log_page_cache_budget`, by default half of its cgroup's
+  memory limit (half of the machine's memory without one). Each background
+  write-out records the pages it covered, and beyond the budget the oldest
+  recorded pages of any partition are dropped from the page cache
+  (`posix_fadvise(POSIX_FADV_DONTNEED)`), off the appending thread. Before,
+  the container's memory limit was what evicted them, and at the limit the
+  kernel reclaims a page inside every append that writes one: in 10 GiB
+  containers taking 50K 1 KiB records/s at RF3, the publish p50 doubled for
+  minutes at a time and the aggregate p99 went from 3 ms to 9–25 ms, while
+  the same cells through `O_DIRECT` were steady. A consumer further behind
+  than the budget reads from the disk, as it did once the kernel had evicted
+  the range. Set the budget above the machine's memory to leave eviction to
+  the kernel, as before.
 - A consumer fetch parked below `fetch.min.bytes` is answered early, with no
   records, when a partition its fetch session forgot in the last 100 ms
   receives records. The Java consumer leaves a partition out of its next fetch

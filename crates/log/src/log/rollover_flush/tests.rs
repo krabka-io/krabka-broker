@@ -633,10 +633,13 @@ fn a_ticket_waits_only_for_the_flushes_before_it() {
     assert!(matches!(await_progress(&later), Ok(Ok(()))));
 }
 
-/// Performs every `sync_data` and counts the ones on the `.log` file.
+/// Performs every `sync_data` and counts the ones on the `.log` file, and
+/// records the `(offset, len)` of every range dropped from the page cache
+/// instead of dropping it.
 #[derive(Debug, Default)]
 struct CountingIo {
     syncs: AtomicUsize,
+    drops: Mutex<Vec<(u64, u64)>>,
 }
 
 impl LogIo for CountingIo {
@@ -648,13 +651,24 @@ impl LogIo for CountingIo {
         self.syncs.fetch_add(1, Ordering::SeqCst);
         file.sync_data()
     }
+
+    fn drop_cached(&self, _file: &File, offset: u64, len: u64) {
+        self.drops.lock().unwrap().push((offset, len));
+    }
 }
 
-/// A log with `window` as its writeback window and a private flush pool,
-/// after `appends` appends of one 1 KiB record each.
-fn appended_through_page_cache(dir: &Path, window: u32, appends: usize) -> (Log, Arc<CountingIo>) {
+/// A log with `window` as its writeback window, `budget` as its page-cache
+/// budget and a private flush pool, after `appends` appends of one 1 KiB
+/// record each.
+fn appended_through_page_cache(
+    dir: &Path,
+    window: u32,
+    budget: Option<u32>,
+    appends: usize,
+) -> (Log, Arc<CountingIo>) {
     let mut log = Log::open(dir, LogConfig {
         writeback_window: bytes(window),
+        page_cache_budget: budget.map(bytes),
         retention: None,
         ..LogConfig::default()
     })
@@ -682,17 +696,54 @@ fn appended_through_page_cache(dir: &Path, window: u32, appends: usize) -> (Log,
 fn appends_through_the_page_cache_start_a_sync_every_writeback_window() {
     let dir = tempdir().unwrap();
     // 32 KiB of records through a 4 KiB window: at least 7 windows filled.
-    let (log, io) = appended_through_page_cache(dir.path(), 4096, 32);
+    let (log, io) = appended_through_page_cache(dir.path(), 4096, None, 32);
     log.rollover_flusher.finish().unwrap();
     let syncs = io.syncs.load(Ordering::SeqCst);
     assert!((7..=8).contains(&syncs), "{syncs} syncs");
+    // Without a budget, no page is recorded or dropped.
+    assert!(io.drops.lock().unwrap().is_empty());
+    let ledger = log.rollover_flusher.executor.as_ref().unwrap().page_cache();
+    assert!(ledger.recorded_bytes() == 0);
 }
 
 /// A window of zero leaves write-back to the kernel.
 #[test]
 fn a_zero_writeback_window_starts_no_sync() {
     let dir = tempdir().unwrap();
-    let (log, io) = appended_through_page_cache(dir.path(), 0, 32);
+    let (log, io) = appended_through_page_cache(dir.path(), 0, Some(4096), 32);
     log.rollover_flusher.finish().unwrap();
     assert!(io.syncs.load(Ordering::SeqCst) == 0);
+    assert!(io.drops.lock().unwrap().is_empty());
+}
+
+/// Every sync hands the whole pages it covered to the page-cache ledger,
+/// and the ledger drops the oldest pages beyond the budget, from the start
+/// of the segment, in order, and never a page the next append writes into.
+#[test]
+fn a_page_cache_budget_drops_the_oldest_synced_pages() {
+    let dir = tempdir().unwrap();
+    // 32 KiB of records through 4 KiB windows under an 8 KiB budget.
+    let (log, io) = appended_through_page_cache(dir.path(), 4096, Some(8192), 32);
+    log.rollover_flusher.finish().unwrap();
+    let drops = io.drops.lock().unwrap().clone();
+    let handed = log.writeback_handed;
+    assert!(
+        handed % 4096 == 0 && handed >= 28 * 1024,
+        "{handed} bytes handed over"
+    );
+    let dropped: u64 = drops.iter().map(|(_, len)| len).sum();
+    assert!(
+        dropped == handed - 8192,
+        "{dropped} of {handed} dropped: {drops:?}"
+    );
+    let mut next = 0;
+    for (offset, len) in drops {
+        assert!(
+            offset == next && len % 4096 == 0,
+            "{offset}+{len} after {next}"
+        );
+        next = offset + len;
+    }
+    let ledger = log.rollover_flusher.executor.as_ref().unwrap().page_cache();
+    assert!(ledger.recorded_bytes() == 8192);
 }

@@ -181,6 +181,20 @@ pub trait LogIo: Debug + Send + Sync {
         advise_will_need(file, offset, len);
     }
 
+    /// Drop the page cache's copy of the `len` bytes of a `.log` file from
+    /// `offset`, which the kernel has written out.
+    ///
+    /// This is `posix_fadvise(POSIX_FADV_DONTNEED)`. The kernel frees the
+    /// clean pages inside the range and keeps one it is still writing, so a
+    /// range whose write-out has not finished is dropped only in part, and no
+    /// data is lost either way; a later read of the range comes from the
+    /// disk. A failure changes nothing a reader can observe, so it is
+    /// dropped. The targets without `posix_fadvise` do nothing, and
+    /// `wasm32-wasip1`, which has no flush pool, has no caller. See
+    /// `log::page_cache`.
+    #[cfg(not(target_os = "wasi"))]
+    fn drop_cached(&self, file: &File, offset: u64, len: u64) { drop_cached(file, offset, len); }
+
     /// Whether the page cache holds the byte at `offset` of `file`, asked
     /// without waiting for the disk. The fetch path asks it before it walks a
     /// run's batch headers one small read at a time: on bytes that are not in
@@ -404,6 +418,16 @@ fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
     let _ = (offset, len);
     file.sync_data()
 }
+
+fn drop_cached(file: &File, offset: u64, len: u64) {
+    if let Some(len) = NonZeroU64::new(len) {
+        // A refused hint leaves the pages as they were.
+        let _ = fadvise(file, offset, Some(len), Advice::DontNeed);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "wasi")))]
+fn drop_cached(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 /// `preadv2(RWF_NOWAIT)` of one byte: it fails with `EAGAIN` instead of
 /// reading from the disk when the page cache does not hold the byte. Linux
