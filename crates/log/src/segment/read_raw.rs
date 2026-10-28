@@ -6,7 +6,12 @@
 //! `read_raw_desc` module.
 
 use {
-    super::{RawSegmentRead, Segment},
+    super::{
+        RawSegmentRead, Segment,
+        header_walk::HeaderWalk,
+        io::SourceIo,
+        read_source::{ReadSource, relative_target},
+    },
     crate::{
         config::{DEFAULT_READ_AHEAD_MAX, DEFAULT_READ_BUFFER_CAP},
         error::LogError,
@@ -118,6 +123,7 @@ impl Segment {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn raw_start_position(
         &self,
         fetch_offset: Offset,
@@ -128,21 +134,25 @@ impl Segment {
             self.read_log_range(pos, buf, len)
         })
     }
+}
 
+/// The verbatim byte-copy read of a [`ReadSource`]. Provided for every
+/// source, so it runs the same over a live segment under the log lock and
+/// over a view of one after the lock is released.
+pub trait RawReadSource: ReadSource {
     /// [`Segment::raw_start_position`] over the positional reads of
     /// `read_range`.
-    pub(super) fn raw_start_position_with(
+    fn raw_start_position_with(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         operation: &str,
         read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
     ) -> Result<Option<u64>, LogError> {
-        if fetch_offset > self.last_offset || fetch_offset >= limit_offset {
+        if fetch_offset > self.last() || fetch_offset >= limit_offset {
             return Ok(None);
         }
-        let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
-            .map_err(|_| LogError::Corrupt(format!("{operation} target offset out of range")))?;
+        let target_rel = relative_target(self.base(), fetch_offset, operation)?;
         self.read_start_position_with(target_rel, read_range)
             .map(Some)
     }
@@ -150,7 +160,11 @@ impl Segment {
     /// [`Segment::read_raw`] under the log's configured read policy: the
     /// initial allocation is capped at `read_buffer_cap`, and the readahead
     /// hint reaches at most `read_ahead_max` past the read's own window.
-    pub(crate) fn read_raw_with_policy(
+    ///
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or
+    /// the requested offset violates the segment state.
+    fn read_raw_with_policy(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
@@ -158,7 +172,12 @@ impl Segment {
         read_buffer_cap: ByteSize,
         read_ahead_max: ByteSize,
     ) -> Result<RawSegmentRead, LogError> {
-        let Some(start_pos) = self.raw_start_position(fetch_offset, limit_offset, "read_raw")?
+        let Some(start_pos) = self.raw_start_position_with(
+            fetch_offset,
+            limit_offset,
+            "read_raw",
+            |pos, buf, len| self.read_log_range(pos, buf, len),
+        )?
         else {
             return Ok(RawSegmentRead::empty());
         };
@@ -195,7 +214,7 @@ impl Segment {
         // batch remains. The returned Bytes retains this allocation, so
         // reserve at most what read_log_range can actually read.
         let available =
-            usize::try_from(self.log_size.saturating_sub(start_pos)).unwrap_or(usize::MAX);
+            usize::try_from(self.log_size().saturating_sub(start_pos)).unwrap_or(usize::MAX);
         let mut buf: Vec<u8> =
             Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()).min(available));
         self.read_log_range(start_pos, &mut buf, first_read)?;
@@ -231,6 +250,8 @@ impl Segment {
         })
     }
 }
+
+impl<S: ReadSource + ?Sized> RawReadSource for S {}
 
 #[cfg(test)]
 mod tests {

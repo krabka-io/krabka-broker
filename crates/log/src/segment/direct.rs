@@ -911,6 +911,7 @@ fn to_u64(n: usize) -> u64 { n as u64 }
 /// nothing, and eviction drops the oldest chunk. A chunk that is not on the
 /// disk yet is never evicted, so a read below [`Self::start`] can always go to
 /// the file.
+#[derive(Debug, Clone)]
 pub struct TailCache {
     cap: usize,
     start: u64,

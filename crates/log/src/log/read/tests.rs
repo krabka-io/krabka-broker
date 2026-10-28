@@ -21,12 +21,13 @@ use {
     },
     assert2::check,
     krabka_protocol::records::RecordBatch,
-    krabka_units::prelude::{gibibytes, kibibytes, mebibytes},
+    krabka_units::prelude::{bytes, gibibytes, kibibytes, mebibytes},
     std::{
         fmt,
         fs::{self, File},
         path::Path,
         sync::Arc,
+        thread,
         time::SystemTime,
     },
     tempfile::tempdir,
@@ -865,4 +866,184 @@ fn reads_from_every_offset_cross_gaps_empty_segments_and_seams() {
 fn descriptor_reads_from_every_offset_cross_gaps_empty_segments_and_seams() {
     let GappedLog { dir: _dir, log } = gapped_log();
     check_gapped_reads(&log, descriptor_bases, |bases| bases);
+}
+
+/// One raw read for the comparison of the planned and the direct paths:
+/// the offset and budget it was asked for, the bytes it returned, and the
+/// lengths of the regions the descriptor path described.
+type RawReadSample = (i64, u64, Vec<u8>, Vec<usize>);
+
+/// The lengths of the regions a plan describes, on the platforms with
+/// `sendfile`; nothing where the descriptor path does not exist.
+#[krabka_macros::sendfile_cfg]
+fn described_lengths(plan: &RawReadPlan) -> Vec<usize> {
+    plan.read_regions()
+        .unwrap()
+        .regions
+        .iter()
+        .map(|region| region.len)
+        .collect()
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+)))]
+fn described_lengths(plan: &RawReadPlan) -> Vec<usize> {
+    let _ = plan;
+    Vec::new()
+}
+
+/// Every raw read of `log` from every offset, under three budgets, through
+/// both verbatim paths, as `(offset, budget, bytes, region lengths)`.
+fn every_raw_read(log: &Log, limit: Offset) -> Vec<RawReadSample> {
+    let mut reads = Vec::new();
+    for offset in log.log_start_offset().0..=limit.0 {
+        for budget in [bytes(1), bytes(150), mebibytes(1)] {
+            let raw = log
+                .read_raw(Offset(offset), limit, budget)
+                .unwrap()
+                .bytes
+                .to_vec();
+            let regions =
+                described_lengths(&log.plan_raw_read(Offset(offset), limit, budget).unwrap());
+            reads.push((offset, budget.bytes_u64(), raw, regions));
+        }
+    }
+    reads
+}
+
+/// The same reads, each planned under the log and run on another thread
+/// with no access to the log at all.
+fn every_planned_read(log: &Log, limit: Offset) -> Vec<RawReadSample> {
+    let mut plans = Vec::new();
+    for offset in log.log_start_offset().0..=limit.0 {
+        for budget in [bytes(1), bytes(150), mebibytes(1)] {
+            plans.push((
+                offset,
+                budget.bytes_u64(),
+                log.plan_raw_read(Offset(offset), limit, budget).unwrap(),
+            ));
+        }
+    }
+    thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                plans
+                    .into_iter()
+                    .map(|(offset, budget, plan)| {
+                        let raw = plan.read_bytes().unwrap().bytes.to_vec();
+                        (offset, budget, raw, described_lengths(&plan))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .join()
+            .unwrap()
+    })
+}
+
+/// A read planned under the log and run on another thread, with the log
+/// out of reach, returns what the log's own read returns: the same bytes
+/// and the same regions, from every offset across gaps, empty segments,
+/// seams and the active segment, under a budget that clips to one batch,
+/// one that spans a seam and one that takes everything.
+#[test]
+fn a_planned_read_run_without_the_log_reads_what_the_log_reads() {
+    let GappedLog { dir: _dir, log } = gapped_log();
+    let limit = log.log_end_offset();
+
+    let planned = every_planned_read(&log, limit);
+
+    check!(planned == every_raw_read(&log, limit));
+    check!(planned.iter().any(|(_, _, bytes, _)| !bytes.is_empty()));
+}
+
+/// A plan is of the moment it was taken: appends after it, to the active
+/// segment and across a roll, do not reach the read it runs, which stops at
+/// the end the plan saw.
+#[test]
+fn a_plan_reads_up_to_the_end_it_saw() {
+    let TempLog { dir: _dir, mut log } = test_log();
+    append_samples(&mut log, 3, 2);
+    let end = log.log_end_offset();
+    let before = log
+        .read_raw(Offset(0), Offset(1_000), mebibytes(1))
+        .unwrap();
+
+    let plan = log
+        .plan_raw_read(Offset(0), Offset(1_000), mebibytes(1))
+        .unwrap();
+    append_samples(&mut log, 2, 2);
+    check!(log.roll().unwrap());
+    append_samples(&mut log, 1, 2);
+    let after = plan.read_bytes().unwrap();
+
+    check!(after.bytes == before.bytes);
+    check!(after.last_offset == Some(end - 1));
+    check!(log.log_end_offset() > end);
+}
+
+/// A plan says it may block exactly when the log says a read from its
+/// offset may: a sealed segment's bytes may be on the disk, the active
+/// segment's recent bytes are in the page cache.
+#[test]
+fn a_plan_may_block_when_the_read_would() {
+    let dir = tempdir().unwrap();
+    let mut log = segmented_log(dir.path(), bytes(100));
+    for off in 0..6 {
+        log.append(&mut test_batch_at(off)).unwrap();
+    }
+    check!(log.segments.len() >= 2);
+    let end = log.log_end_offset();
+    let active = log.active.as_ref().unwrap().base_offset();
+
+    let verdicts: Vec<_> = (0..end.0)
+        .map(|offset| {
+            let plan = log
+                .plan_raw_read(Offset(offset), end, mebibytes(1))
+                .unwrap();
+            (offset, plan.may_block(), log.read_may_block(Offset(offset)))
+        })
+        .collect();
+
+    check!(verdicts.iter().all(|(_, planned, read)| planned == read));
+    check!(
+        verdicts
+            .iter()
+            .any(|(offset, planned, _)| *offset < active.0 && *planned)
+    );
+    check!(
+        verdicts
+            .iter()
+            .any(|(offset, planned, _)| *offset >= active.0 && !*planned)
+    );
+}
+
+/// Planning stops once the views it holds can fill the budget, so a read
+/// of a few bytes from a log of many small segments views one or two
+/// segments, not all of them, and a read with no limit views what it needs.
+#[test]
+fn a_plan_views_only_the_segments_its_budget_can_reach() {
+    let dir = tempdir().unwrap();
+    let mut log = segmented_log(dir.path(), bytes(100));
+    for off in 0..12 {
+        log.append(&mut test_batch_at(off)).unwrap();
+    }
+    let end = log.log_end_offset();
+    let segments = log.segments.len() + 1;
+    check!(segments >= 6);
+
+    let one_batch = log.plan_raw_read(Offset(0), end, bytes(1)).unwrap();
+    let everything = log.plan_raw_read(Offset(0), end, mebibytes(1)).unwrap();
+    let from_the_tail = log.plan_raw_read(Offset(11), end, mebibytes(1)).unwrap();
+
+    check!(one_batch.views.len() == 1);
+    check!(everything.views.len() == segments);
+    check!(from_the_tail.views.len() == 1);
+    check!(everything.read_bytes().unwrap().last_offset == Some(Offset(11)));
 }

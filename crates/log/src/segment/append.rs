@@ -403,10 +403,13 @@ mod tests {
         super::*,
         crate::{
             name::log_path,
-            segment::test_support::{
-                DENSE_INDEX, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH,
-                SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, TempSegment,
-                sample_batch, seeded_fixture, segment_at, test_batch_at, test_segment,
+            segment::{
+                io::SourceIo as _,
+                test_support::{
+                    DENSE_INDEX, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH,
+                    SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, TempSegment,
+                    sample_batch, seeded_fixture, segment_at, test_batch_at, test_segment,
+                },
             },
         },
         krabka_protocol::records::RecordBatch,
