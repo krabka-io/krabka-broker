@@ -9,6 +9,8 @@
 //! only after it reads the segment before it to the end. Only the first batch
 //! of a read can be larger than its budget.
 
+#[cfg(not(target_os = "wasi"))]
+use super::page_cache;
 use {
     super::Log,
     crate::{error::LogError, segment::Segment},
@@ -16,7 +18,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::{HEADER_LEN, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt, bytes},
-    std::sync::PoisonError,
+    std::{ops::Range, sync::PoisonError},
     tracing::{field, instrument},
 };
 #[krabka_macros::sendfile_cfg]
@@ -49,6 +51,12 @@ fn batch_header() -> ByteSize { size_from_len(HEADER_LEN) }
 /// between them. Kafka's `LocalLog.read` never leaves the segment that it
 /// found data in.
 fn emptied(segment: &Segment, next: Offset) -> bool { next > segment.last_offset() }
+
+/// How far behind a cold fetch of up to `max_size` bytes the pages its
+/// reader's previous fetch brought in can start: twice the size, since only
+/// a fetch's first batch may be larger than the size it asked for. See
+/// `Log::drop_cold`.
+fn cold_lookback(max_size: ByteSize) -> u64 { max_size.bytes_u64().saturating_mul(2) }
 
 /// Whether a run of `len` bytes fits the `remaining` budget of a read that
 /// already has its first batch.
@@ -241,15 +249,15 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawReadDesc, LogError> {
-        let read_ahead_max = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .read_ahead_max;
+        let (read_ahead_max, budget) = {
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            (config.read_ahead_max, config.page_cache_budget)
+        };
         self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawReadDesc::empty(fetch_offset));
         }
+        let lookback = cold_lookback(max_size);
         // A segment whose run would be walked on bytes that are not in the
         // page cache is not described (`Segment::read_raw_desc_if_cached`). The walk
         // stops there, so the fetch sends the runs before it, or, when it
@@ -265,16 +273,24 @@ impl Log {
             fetch_offset,
             limit_offset,
             max_size,
-            |segment, next, budget| {
+            |segment, next, remaining| {
                 if stopped.get() {
                     return Ok(None);
                 }
-                let Some(read) =
-                    segment.read_raw_desc_if_cached(next, limit_offset, budget, read_ahead_max)?
+                let Some(read) = segment.read_raw_desc_if_cached(
+                    next,
+                    limit_offset,
+                    remaining,
+                    read_ahead_max,
+                )?
                 else {
                     stopped.set(true);
                     return Ok(None);
                 };
+                if let Some(region) = &read.region {
+                    let end = region.offset.saturating_add(region.len as u64);
+                    self.drop_cold(segment, budget, region.offset..end, lookback, false);
+                }
                 Ok(read.region.map(|region| RawChunk {
                     len: region.len,
                     data: region,
@@ -293,6 +309,85 @@ impl Log {
             regions,
             total,
         })
+    }
+
+    /// The position in `segment`'s `.log` file before which a fetch is cold:
+    /// the page-cache budget no longer holds those bytes, so the pages a fetch
+    /// of them reads in would stay in the cgroup until its limit evicted
+    /// them. `None` when no fetch of the segment is cold: there is no budget.
+    ///
+    /// The budget's ledger drops a file's oldest pages first, so the pages of
+    /// a file it holds are the newest of those handed over, and everything
+    /// before the oldest of them is cold. A sealed segment with no page in the
+    /// ledger is cold throughout: its pages were handed over and dropped, or
+    /// it was written before this process opened the log. (The partial
+    /// write-back window at its end was never handed over and may still be
+    /// cached; a fetch of it counts as cold all the same, and a second reader
+    /// of those few pages reads the disk.) The active segment is cold up to
+    /// where its background syncs have handed pages over, once the ledger
+    /// holds none of them, and hot from there: those pages are its newest.
+    #[cfg(not(target_os = "wasi"))]
+    fn cold_before(&self, segment: &Segment, budget: Option<ByteSize>) -> Option<u64> {
+        budget?;
+        let retained_from = self
+            .rollover_flusher
+            .page_cache_retained_from(segment.log_file());
+        Some(match retained_from {
+            Some(from) => from,
+            None if segment.is_sealed() => u64::MAX,
+            None => self.writeback_handed,
+        })
+    }
+
+    /// Drop from the page cache what a fetch of `range` of `segment`'s `.log`
+    /// file leaves there, when the range is cold: see [`Self::cold_before`].
+    /// A `sendfile` fetch sends its bytes after this returns, so it drops the
+    /// pages behind it, where its reader's previous fetch was, back to
+    /// `lookback` bytes before the range. A fetch that already `held` its
+    /// bytes, having copied them, drops its own pages as well. Whole pages
+    /// only, so the page a `sendfile` range starts in stays for the send.
+    ///
+    /// A consumer catching up on a backlog thus leaves at most a fetch or two
+    /// of pages behind, instead of filling the cgroup to its limit and making
+    /// every append reclaim: see [`page_cache`].
+    #[cfg(not(target_os = "wasi"))]
+    fn drop_cold(
+        &self,
+        segment: &Segment,
+        budget: Option<ByteSize>,
+        range: Range<u64>,
+        lookback: u64,
+        held: bool,
+    ) {
+        let Some(cold_before) = self.cold_before(segment, budget) else {
+            return;
+        };
+        if range.end > cold_before {
+            return;
+        }
+        let from = range.start.saturating_sub(lookback) & !(page_cache::PAGE - 1);
+        let to = if held {
+            range.end
+        } else {
+            range.start & !(page_cache::PAGE - 1)
+        };
+        if to > from {
+            segment.drop_cached(from, to - from);
+        }
+    }
+
+    /// WASI has no flush pool, no page-cache ledger and no fetch that is cold.
+    #[cfg(target_os = "wasi")]
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    fn drop_cold(
+        &self,
+        segment: &Segment,
+        budget: Option<ByteSize>,
+        range: Range<u64>,
+        lookback: u64,
+        held: bool,
+    ) {
+        let _ = (segment, budget, range, lookback, held);
     }
 
     /// Reject an offset no local segment can answer.
@@ -427,29 +522,37 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawRead, LogError> {
-        let (read_buffer_cap, read_ahead_max) = {
+        let (read_buffer_cap, read_ahead_max, budget) = {
             let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
-            (config.read_buffer_cap, config.read_ahead_max)
+            (
+                config.read_buffer_cap,
+                config.read_ahead_max,
+                config.page_cache_budget,
+            )
         };
         self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawRead::empty(fetch_offset));
         }
+        let lookback = cold_lookback(max_size);
 
         let RawChunks { cursor, mut chunks } = self.raw_chunks(
             fetch_offset,
             limit_offset,
             max_size,
-            |segment, next, budget| {
+            |segment, next, remaining| {
                 let read = segment.read_raw_with_policy(
                     next,
                     limit_offset,
-                    budget,
+                    remaining,
                     read_buffer_cap,
                     read_ahead_max,
                 )?;
                 if read.is_empty() {
                     return Ok(None);
+                }
+                if let Some(file_range) = &read.file_range {
+                    self.drop_cold(segment, budget, file_range.clone(), lookback, true);
                 }
                 Ok(Some(RawChunk {
                     len: read.bytes.len(),

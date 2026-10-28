@@ -21,11 +21,21 @@
 //! it does once the kernel has evicted the range. A recorded range holds its
 //! segment's file open, so a segment that retention deleted keeps its blocks
 //! until its ranges leave the ledger: at most the budget's worth.
+//!
+//! The pages a fetch reads in are not recorded: a consumer catching up on a
+//! backlog would otherwise push the producer's newest pages out of the
+//! budget. Left alone they fill the cgroup to its limit all the same, and
+//! every append then reclaims inside the kernel again: on the OMB 100 GB
+//! backlog workload the publish p99 went from 3 ms to 40 ms (RF1) and 120 ms
+//! (RF3) for as long as the consumer read from the disk. So a fetch of bytes
+//! the ledger no longer holds drops the pages behind it instead
+//! (`Log::drop_cold`), and [`Ledger::retained_from`] tells it which bytes
+//! those are.
 
 use {
     crate::io::LogIo,
     std::{
-        collections::VecDeque,
+        collections::{HashMap, VecDeque},
         fs::File,
         sync::{Arc, Mutex, MutexGuard, PoisonError},
     },
@@ -49,12 +59,20 @@ struct Range {
     len: u64,
 }
 
+/// The identity of a file in the record: its handle's address, which the
+/// ranges that hold the handle keep from being reused.
+fn key(file: &Arc<File>) -> usize { Arc::as_ptr(file).addr() }
+
 #[derive(Debug, Default)]
 struct State {
     /// Oldest first.
     ranges: VecDeque<Range>,
     /// The sum of the ranges' lengths.
     bytes: u64,
+    /// For each file with a range in `ranges`, the offset of its oldest one.
+    /// A file's ranges are recorded in offset order and leave oldest first,
+    /// so this is where its recorded bytes start.
+    oldest: HashMap<usize, u64>,
 }
 
 impl State {
@@ -68,6 +86,7 @@ impl State {
             last.len += len;
             return;
         }
+        self.oldest.entry(key(&file)).or_insert(offset);
         self.ranges.push_back(Range {
             file,
             io,
@@ -89,6 +108,7 @@ impl State {
             if excess >= front.len {
                 self.bytes -= front.len;
                 if let Some(range) = self.ranges.pop_front() {
+                    self.forget_oldest(&range);
                     taken.push(range);
                 }
             } else {
@@ -101,9 +121,20 @@ impl State {
                 front.offset += excess;
                 front.len -= excess;
                 self.bytes -= excess;
+                self.oldest.insert(key(&front.file), front.offset);
             }
         }
         taken
+    }
+
+    /// `dropped` has left `ranges`: its file's oldest range is now the next
+    /// of its ranges, when one is left.
+    fn forget_oldest(&mut self, dropped: &Range) {
+        let file = key(&dropped.file);
+        match self.ranges.iter().find(|range| key(&range.file) == file) {
+            Some(next) => self.oldest.insert(file, next.offset),
+            None => self.oldest.remove(&file),
+        };
     }
 }
 
@@ -135,6 +166,15 @@ impl Ledger {
         for range in dropped {
             range.io.drop_cached(&range.file, range.offset, range.len);
         }
+    }
+
+    /// The offset of the oldest recorded page of `file`, or `None` when none
+    /// of its pages is recorded: every page handed over has been dropped, or
+    /// none has been handed over. The recorded pages of a file are the newest
+    /// of those handed over, so the ledger holds nothing of the file before
+    /// this offset.
+    pub fn retained_from(&self, file: &Arc<File>) -> Option<u64> {
+        self.lock().oldest.get(&key(file)).copied()
     }
 
     /// The bytes recorded and not yet dropped.
@@ -267,6 +307,37 @@ mod tests {
         }
         retain(&ledger, &io, &file, 3 * half, half, 0);
         assert!(drops(&io) == vec![(fd, 0, MAX_RANGE), (fd, MAX_RANGE, MAX_RANGE)]);
+        assert!(ledger.recorded_bytes() == 0);
+    }
+
+    /// A file's oldest recorded offset follows the drops: it moves with a
+    /// trimmed front, to the next range when a whole range leaves, and is
+    /// gone with the file's last range. A file never recorded has none.
+    #[test]
+    fn the_oldest_recorded_offset_of_a_file_follows_the_drops() {
+        let (ledger, io, first) = fixture();
+        let second = Arc::new(tempfile().unwrap());
+        assert!(ledger.retained_from(&first).is_none());
+        retain(&ledger, &io, &first, 0, 2 * PAGE, u64::MAX);
+        retain(&ledger, &io, &second, 0, PAGE, u64::MAX);
+        retain(&ledger, &io, &first, 4 * PAGE, 2 * PAGE, u64::MAX);
+        assert!(ledger.retained_from(&first) == Some(0));
+        assert!(ledger.retained_from(&second) == Some(0));
+        // Three pages over: the first file's front range goes whole, and its
+        // oldest offset skips the second file's range to its own next one;
+        // the second file's one page goes too, and its oldest offset moves to
+        // the page just recorded.
+        retain(&ledger, &io, &second, PAGE, PAGE, 3 * PAGE);
+        assert!(ledger.retained_from(&first) == Some(4 * PAGE));
+        assert!(ledger.retained_from(&second) == Some(PAGE));
+        // One page over: the first file's front range is trimmed.
+        retain(&ledger, &io, &second, 2 * PAGE, PAGE, 3 * PAGE);
+        assert!(ledger.retained_from(&first) == Some(5 * PAGE));
+        assert!(ledger.retained_from(&second) == Some(PAGE));
+        // Everything out: neither file has a recorded page.
+        retain(&ledger, &io, &first, 6 * PAGE, PAGE, 0);
+        assert!(ledger.retained_from(&first).is_none());
+        assert!(ledger.retained_from(&second).is_none());
         assert!(ledger.recorded_bytes() == 0);
     }
 

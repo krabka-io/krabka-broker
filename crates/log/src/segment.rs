@@ -44,7 +44,7 @@ use {
         io::LogIo,
         name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
     },
-    std::{sync::atomic::AtomicBool, time::SystemTime},
+    std::{ops::Range, sync::atomic::AtomicBool, time::SystemTime},
 };
 
 /// A single log segment: the `.log` data file paired with its sparse
@@ -136,6 +136,10 @@ pub struct RawSegmentRead {
     pub last_offset: Offset,
     /// Verbatim `.log` bytes: one or more complete v2 batches.
     pub bytes: Bytes,
+    /// The positions of `bytes` in the `.log` file when they were read from
+    /// it, so the log can drop the pages of a cold read; `None` when they
+    /// came from a direct-mode segment's memory, or the read is empty.
+    pub(crate) file_range: Option<Range<u64>>,
 }
 
 #[krabka_macros::sendfile_cfg]
@@ -188,6 +192,7 @@ impl RawSegmentRead {
             start_offset: Offset(0),
             last_offset: Offset(-1),
             bytes: Bytes::new(),
+            file_range: None,
         }
     }
 
