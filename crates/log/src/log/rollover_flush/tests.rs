@@ -801,19 +801,20 @@ fn pacing_restarts_from_a_cut_or_reset_active_segment() {
     assert!(log.writeback_handed >= 32 * 1024);
 
     log.truncate_to(Offset(0)).unwrap();
-    assert!(log.writeback_handed == 0);
-    let before = io.syncs.load(Ordering::SeqCst);
-    for _ in 0..8 {
-        log.append(&mut kib_batch()).unwrap();
-    }
-    log.rollover_flusher.finish().unwrap();
-    assert!(
-        io.syncs.load(Ordering::SeqCst) > before,
-        "a window after the cut is written out"
-    );
+    a_window_is_written_out_after(&mut log, &io, "the cut");
 
     log.reset_to(Offset(1_000)).unwrap();
-    assert!(log.writeback_handed == 0);
+    a_window_is_written_out_after(&mut log, &io, "the reset");
+}
+
+/// Right after `what` the pacing has handed nothing over, and the next 8 KiB
+/// of appends through 4 KiB windows start a write-out of the active segment.
+fn a_window_is_written_out_after(log: &mut Log, io: &CountingIo, what: &str) {
+    assert!(
+        log.writeback_handed == 0,
+        "{} handed over after {what}",
+        log.writeback_handed
+    );
     let before = io.syncs.load(Ordering::SeqCst);
     for _ in 0..8 {
         log.append(&mut kib_batch()).unwrap();
@@ -821,7 +822,7 @@ fn pacing_restarts_from_a_cut_or_reset_active_segment() {
     log.rollover_flusher.finish().unwrap();
     assert!(
         io.syncs.load(Ordering::SeqCst) > before,
-        "a window after the reset is written out"
+        "a window after {what} is written out"
     );
 }
 
