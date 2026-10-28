@@ -36,13 +36,20 @@ def _impl(ctx):
     if not cargo:
         fail("the Bazel image graph contains no Cargo packages")
 
+    # rules_rs resolves features once for the whole workspace: every member's
+    # optional features, its dev-dependencies and every platform in
+    # `PLATFORM_TRIPLES` are unified, and each crate in the image is built
+    # with that union. It is wider than the x86_64 non-dev graph a
+    # `cargo build` of the broker resolves: `krabka-telemetry`'s
+    # `heap-profiling` turns on flate2's miniz backend, and compio-buf's
+    # `arrayvec` comes in from another platform. The listing cargo deny vets
+    # is the same union, so every package the image carries is one `cargo deny
+    # --all-features check` has passed.
     deny_output = _capture(ctx, "cargo", [
         "deny",
         "--manifest-path",
         "Cargo.toml",
-        "--target",
-        "x86_64-unknown-linux-gnu",
-        "--exclude-dev",
+        "--all-features",
         "list",
         "--format",
         "tsv",
@@ -50,7 +57,7 @@ def _impl(ctx):
     deny = set([line.split("\t")[0] for line in deny_output.split("\n")[1:] if line])
     missing = [package for package in cargo if package not in deny]
     if missing:
-        fail("Cargo packages in the Bazel image graph are missing from cargo deny's x86_64 non-dev graph:\n{}".format("\n".join(missing)))
+        fail("Cargo packages in the Bazel image graph are missing from cargo deny's all-features graph:\n{}".format("\n".join(missing)))
 
     components = []
     for purl in purls:

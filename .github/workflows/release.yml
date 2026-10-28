@@ -213,10 +213,13 @@ jobs:
       - name: install cargo-deny
         run: cargo install cargo-deny --version 0.20.2 --locked
 
+      # `--all-features`, every platform, dev-dependencies included: the union
+      # rules_rs builds the image's crates with (see `sbom.axl`), so the SBOM
+      # names nothing this check did not vet. `ci.yml`'s `delivery` job runs
+      # the same two commands on every push to `main`.
       - name: validate dependency policy and build SBOM
         run: |
-          cargo deny --manifest-path Cargo.toml \
-            --target x86_64-unknown-linux-gnu --exclude-dev check
+          cargo deny --manifest-path Cargo.toml --all-features check
           aspect sbom --output sbom.cdx.json
 
       # Bind promotion to the digest recorded by the successful main push run.

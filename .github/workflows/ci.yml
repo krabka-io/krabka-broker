@@ -1497,6 +1497,20 @@ jobs:
       # one shipped. `release.yml` builds the ARM64 half with the same config.
       - name: test the delivery image
         run: bazel test --config=release --config=docker //packaging:image_docker_test
+
+      # What `release.yml` runs before it signs this image: the dependency
+      # policy over the graph rules_rs resolves (every feature, platform and
+      # dev-dependency unified, see `sbom.axl`), and the SBOM over the image's
+      # Bazel graph, which refuses a package that listing does not know. Here
+      # so a crate the policy does not cover fails the push to `main` rather
+      # than the release of a tag already on it (1.1.0's did).
+      - name: install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: validate dependency policy and build SBOM
+        run: |
+          cargo deny --manifest-path Cargo.toml --all-features check
+          aspect sbom --output sbom.cdx.json
+
       - name: push
         run: bazel run --config=release //packaging:push -- --tag "${GITHUB_SHA}"
 
