@@ -175,13 +175,22 @@ impl SegmentReadView {
     /// `None` when no fetch of it is.
     pub fn cold_before(&self) -> Option<u64> { self.cold_before }
 
+    /// Whether the read starts in bytes the page-cache budget no longer
+    /// holds: its index floor, at or before where it starts, lies before the
+    /// position the segment turns cold at. Such a read waits for the disk,
+    /// whatever the segment's own verdict on its recent bytes.
+    pub fn starts_cold(&self) -> bool {
+        self.cold_before
+            .is_some_and(|cold| self.floor_position() < cold)
+    }
+
+    /// The `.log` position of the index floor of the view's target, or 0.
+    fn floor_position(&self) -> u64 { self.hint.floor.map_or(0, |entry| u64::from(entry.position)) }
+
     /// The bytes from the index floor of the view's target to the end of
     /// the segment: at least what a read from the target can take from it,
     /// since the read starts at or after the floor.
-    pub fn bytes_from_floor(&self) -> u64 {
-        let floor = self.hint.floor.map_or(0, |entry| u64::from(entry.position));
-        self.log_size.saturating_sub(floor)
-    }
+    pub fn bytes_from_floor(&self) -> u64 { self.log_size.saturating_sub(self.floor_position()) }
 
     /// Drop the `len` bytes of the `.log` file from `offset` from the page
     /// cache, in whole pages: [`LogIo::drop_cached`]. A fetch of bytes the

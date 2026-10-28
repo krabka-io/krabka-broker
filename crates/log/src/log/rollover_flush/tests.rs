@@ -769,6 +769,27 @@ fn cold_log(dir: &Path) -> (Log, Arc<CountingIo>) {
     (log, io)
 }
 
+/// A read that starts in pages the budget has dropped waits for the disk,
+/// whatever the active segment says of its recent bytes: its plan says it
+/// may block while the segment's own verdict says it may not. The newest
+/// bytes, which the ledger holds, stay hot.
+#[test]
+fn a_plan_blocks_for_a_cold_start_of_the_active_segment() {
+    let dir = tempdir().unwrap();
+    let (log, _io) = cold_log(dir.path());
+    assert!(!log.read_may_block(Offset(0)));
+    assert!(
+        log.plan_raw_read(Offset(0), Offset(64), bytes(4096))
+            .unwrap()
+            .may_block()
+    );
+    assert!(
+        !log.plan_raw_read(Offset(63), Offset(64), bytes(4096))
+            .unwrap()
+            .may_block()
+    );
+}
+
 /// A fetch of bytes the budget has dropped drops the pages behind it, where
 /// its reader's previous fetch was, and a byte-copy fetch its own pages too,
 /// so a consumer reading an old backlog leaves no page cache in its wake. A
